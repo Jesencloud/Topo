@@ -45,7 +45,7 @@ Built with a hybrid architecture of **Python logic** and a custom **Rust scannin
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/lmole.git
+git clone https://github.com/Jesencloud/lmole.git
 cd lmole
 
 # Create a symbolic link to your local bin directory
@@ -80,7 +80,7 @@ Alternatively, use CLI commands for quick actions:
 
 ## 🤝 Contribution & Credits
 
-*   **Inspired by**: [Mole](https://github.com/original-mole-repo) (macOS)
+*   **Inspired by**: [Mole](https://github.com/tw93/mole) (macOS)
 *   **Core Logic**: Python 3
 *   **Scanning Engine**: Rust (lmo-core)
 
