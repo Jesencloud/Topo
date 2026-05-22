@@ -1,6 +1,8 @@
 import os
 import argparse
 import sys
+import time
+from pathlib import Path
 from .clean.system import clean_package_manager, clean_journal
 from .clean.dev import clean_developer_tools
 from .clean.user import clean_user_data
@@ -12,6 +14,16 @@ from .core.analyze import run_deep_analysis
 from .purge.manager import PurgeManager
 from .ui.menu import interactive_select
 from .ui.tui import main_menu
+
+# ANSI Colors
+BLUE = "\033[1;34m"
+CYAN = "\033[1;36m"
+MAGENTA = "\033[1;35m"
+YELLOW = "\033[1;33m"
+WHITE = "\033[1;37m"
+GRAY = "\033[1;90m"
+RESET = "\033[0m"
+BOLD = "\033[1m"
 
 def run_clean(dry_run=False):
     from .core.file_ops import bytes_to_human
@@ -130,11 +142,10 @@ def run_uninstall():
     manager = UninstallManager()
     
     while True:
-        print("\033[1;95m➤ Uninstall Mode\033[0m")
         apps = manager.run_full_scan()
         
         if not apps:
-            print("   No uninstallable apps found.")
+            print("\n   \033[1;31mNo applications found to uninstall.\033[0m")
             input("\nPress Enter to return to menu...")
             return
 
@@ -144,46 +155,106 @@ def run_uninstall():
         if not selected_indices:
             return # Back to main menu
 
-        # Replicating Screenshot Header
+        # --- MOLE STYLE PREVIEW ---
         os.system('clear')
-        print(f"\033[1;35m☉ Selected {len(selected_indices)} apps:\033[0m")
-        for i, idx in enumerate(selected_indices):
-            app = apps[idx]
-            last_val = selector._format_time_ago(app['install_time']).replace(" ago", "")
-            print(f"{i+1}. {app['name']:<20} {app['size_str']:>10} | Last: {last_val}")
+        total_estimated_size = 0
+        from .core.file_ops import bytes_to_human
         
-        print(f"\n\033[1;35mFiles to be removed:\033[0m\n")
-        
-        # Confirmation
-        confirm = input("➤ Confirm uninstallation? (y/N): ").lower()
-        if confirm != 'y':
-            continue
-
-        total_freed_all = 0
-        removed_names = []
+        print(f"\n \033[1;35m☉ Reviewing uninstallation plan:\033[0m\n")
         
         for idx in selected_indices:
             app = apps[idx]
-            print(f"\033[1;35m☉ {app['name']}\033[0m , {app['size_str']}")
+            # Check if running for the [Running] tag
+            is_running = False
+            # Check keywords and some common process names
+            procs_to_check = app.get('keywords', []) + [app['id'].split('.')[-1].lower(), app['name'].lower()]
+            for proc in procs_to_check:
+                if not proc: continue
+                try:
+                    res = subprocess.run(["pgrep", "-x", proc], capture_output=True)
+                    if res.returncode == 0:
+                        is_running = True; break
+                except: pass
+            
+            running_tag = f" \033[1;33m[Running]\033[0m" if is_running else ""
+            print(f"  \033[1;32m✓\033[0m {BOLD}{app['name']}{RESET}{running_tag}")
+            total_estimated_size += app['size_bytes']
+            
+            # Show paths with Mole-style icons
+            for p in app['data_paths']:
+                if p.exists():
+                    try:
+                        rel_p = f"~/{p.relative_to(Path.home())}"
+                        print(f"    \033[1;34m✓\033[0m {GRAY}{rel_p}{RESET}")
+                    except:
+                        print(f"    \033[1;34m✓\033[0m {GRAY}{p}{RESET}")
+        
+        # --- MOLE STYLE CONFIRMATION LINE ---
+        app_text = "app" if len(selected_indices) == 1 else "apps"
+        size_display = bytes_to_human(total_estimated_size)
+        
+        print(f"\n \033[1;35m→\033[0m Remove {len(selected_indices)} {app_text}, {size_display}  \033[1;32mEnter\033[0m confirm, \033[1;90mESC\033[0m cancel: ", end="", flush=True)
+
+        # Capture single key
+        import tty, termios
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        try:
+            tty.setraw(sys.stdin.fileno())
+            ch = sys.stdin.read(1)
+            # Handle ESC (\x1b)
+            if ch == '\x1b':
+                # Check if it's a sequence or just ESC
+                # Non-blocking read to see if there's more
+                import select
+                if select.select([sys.stdin], [], [], 0)[0]:
+                    ch = 'ESC_SEQ' # It's an arrow key or something else
+                else:
+                    ch = 'ESC'
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        
+        if ch not in ('\r', '\n', 'y', 'Y'):
+            print(f"\n\n {GRAY}Uninstallation cancelled.{RESET}")
+            time.sleep(1)
+            continue
+
+        # --- EXECUTION ---
+        total_freed_all = 0
+        removed_names = []
+        
+        os.system('clear')
+        print(f"\033[1;35m🚀 Executing uninstallation...\033[0m\n")
+
+        for idx in selected_indices:
+            app = apps[idx]
+            print(f"\033[1;35m☉\033[0m {BOLD}{app['name']}{RESET}")
             
             success, freed_bytes, details = manager.uninstall_app(idx)
             if success:
                 total_freed_all += freed_bytes
                 removed_names.append(app['name'])
                 for is_ok, path in details:
-                    icon = "\033[0;32m✓\033[0m" if is_ok else "\033[1;35m☉\033[0m"
-                    print(f"  {icon} {path}")
-            print(f"\033[0;32m[✓]\033[0m {app['name']}\n")
+                    # Using icons and colors from the screenshot
+                    if is_ok:
+                        print(f"  \033[0;32m✓\033[0m {path}")
+                    else:
+                        # Non-file actions (like stopping processes)
+                        print(f"  \033[1;35m☉\033[0m {path}")
+                print(f"\033[0;32m[✓]\033[0m {app['name']} removed.\n")
+            else:
+                print(f"\033[1;31m[✗]\033[0m {app['name']} uninstallation failed.\n")
 
-        # Final Summary (Matching Screenshot)
-        from .core.file_ops import bytes_to_human
+        # Final Summary (Pixel-perfect matching of the screenshot)
         print("=" * 70)
         print("\033[1;34mUninstall complete\033[0m")
         names_str = ", ".join(removed_names)
         print(f"Removed {len(removed_names)} app(s), freed \033[1;32m{bytes_to_human(total_freed_all)}\033[0m: {names_str}")
         print("=" * 70)
 
-        choice = input("\nPress Enter to return to application list, any other key to exit... ")
+        # Match the specific prompt style from screenshot
+        print(f"\n{GRAY}Press Enter to return to application list, any other key to exit... {RESET}", end="", flush=True)
+        choice = input()
         if choice != "":
             break
 

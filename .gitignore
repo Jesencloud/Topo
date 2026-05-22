@@ -27,3 +27,4 @@ lmo-core/target/
 # --- 敏感信息 ---
 .env
 .python-version
+daily_report.md

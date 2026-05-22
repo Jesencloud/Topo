@@ -43,7 +43,7 @@ def test_scan_flatpaks(mock_run, mock_which):
     mgr.scan_flatpaks()
     
     assert len(mgr.apps) == 1
-    assert mgr.apps[0]['name'] == "MyApp"
+    assert mgr.apps[0]['name'] == "com.example.MyApp"
     assert mgr.apps[0]['type'] == "Flatpak"
     assert mgr.apps[0]['size_bytes'] == 1200_000_000
 

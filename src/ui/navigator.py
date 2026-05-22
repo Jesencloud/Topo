@@ -8,8 +8,11 @@ import time
 GRAY = "\033[1;90m"
 RESET = "\033[0m"
 WHITE = "\033[1;37m"
-
+BOLD = "\033[1m"
 BLUE = "\033[1;34m"
+CYAN = "\033[1;36m"
+MAGENTA = "\033[1;35m"
+YELLOW = "\033[1;33m"
 
 def draw_bar(percentage: float, width: int = 20, color: str = BLUE) -> str:
     safe_percent = max(0.0, min(100.0, percentage))
@@ -188,10 +191,10 @@ class UninstallSelector:
         self.title = title
         self.items = items
         self.selected_index = 0
-        self.selected_items = set()
+        self.selected_ids = set() # Store unique IDs instead of indices
         self.sort_key = 'size_bytes'
         self.sort_reverse = True
-        self.page_size = 15
+        self.page_size = 10
         self.current_page = 0
         self._sort_items()
 
@@ -206,7 +209,7 @@ class UninstallSelector:
         return f"{int(diff/31536000)}y ago"
 
     def _sort_items(self):
-        self.selected_items.clear()
+        # We no longer clear selections when sorting!
         if self.sort_key == 'name':
             self.items.sort(key=lambda x: x['name'].lower(), reverse=not self.sort_reverse)
         else:
@@ -221,15 +224,39 @@ class UninstallSelector:
         for i in range(start, end):
             item = self.items[i]
             is_hover = i == self.selected_index
-            is_selected = i in self.selected_items
-            cursor = "\033[1;36m>\033[0m" if is_hover else " "
-            circle = "[\033[1;32mX\033[0m]" if is_selected else " O "
-            style = "\033[1;36m" if is_hover else ""
+            is_selected = item['id'] in self.selected_ids
+            
+            # Numeric Hotkey UI
+            page_idx = (i - start) + 1
+            num_key = "0" if page_idx == 10 else str(page_idx)
+            
+            cursor = "\033[1;36m▶\033[0m" if is_hover else " "
+            checkbox = "[\033[1;32mX\033[0m]" if is_selected else f"[{num_key}]"
+            
+            # Name Styling: Bold Magenta if selected, otherwise Cyan if hovered, else default
+            if is_selected:
+                name_style = "\033[1;35m" # Bold Magenta
+            elif is_hover:
+                name_style = "\033[1;36m" # Cyan
+            else:
+                name_style = ""
+            
             time_str = self._format_time_ago(item['install_time'])
-            print(f"{cursor} {circle} {style}{item['name']:<35}{RESET} {item['size_str']:>10} | {time_str}")
+            print(f"{cursor} {checkbox} {name_style}{item['name']:<35}{RESET} {item['size_str']:>10} | {time_str}")
+        
         print("-" * 80)
+        total_pages = (len(self.items) + self.page_size - 1) // self.page_size
         order_icon = "↑" if not self.sort_reverse else "↓"
-        print(f"{GRAY} ↑↓ | Space Select | Enter | S Size | N Name | T Time | O {order_icon} | Q Exit{RESET}")
+        print(f" Page {self.current_page + 1}/{total_pages} | {GRAY}Keys 1-0: Select | ↑↓: Move | Space: Select | Enter: Confirm{RESET}")
+        print(f"{GRAY} S: Size | N: Name | T: Time | O: {order_icon} | Q: Exit{RESET}")
+        
+        # Selection summary (persists across sorts/pages)
+        if self.selected_ids:
+            print(f"\n \033[1;35m☉ Selected Apps to Remove:\033[0m")
+            # Show actual items based on their saved IDs
+            for item in self.items:
+                if item['id'] in self.selected_ids:
+                    print(f"   \033[1;35m•\033[0m {item['name']}")
 
     def run(self):
         if not self.items: return []
@@ -247,17 +274,68 @@ class UninstallSelector:
                         self.selected_index += 1
                         if self.selected_index >= (self.current_page + 1) * self.page_size: self.current_page += 1
                 elif key == Navigator.SPACE:
-                    if self.selected_index in self.selected_items: self.selected_items.remove(self.selected_index)
-                    else: self.selected_items.add(self.selected_index)
+                    item_id = self.items[self.selected_index]['id']
+                    if item_id in self.selected_ids: self.selected_ids.remove(item_id)
+                    else: self.selected_ids.add(item_id)
+                elif key.isdigit():
+                    num = int(key)
+                    page_offset = 9 if num == 0 else num - 1
+                    idx = self.current_page * self.page_size + page_offset
+                    if idx < len(self.items):
+                        item_id = self.items[idx]['id']
+                        if item_id in self.selected_ids: self.selected_ids.remove(item_id)
+                        else: self.selected_ids.add(item_id)
                 elif key.lower() == 's': self.sort_key = 'size_bytes'; self.sort_reverse = not self.sort_reverse; self._sort_items()
                 elif key.lower() == 'n': self.sort_key = 'name'; self.sort_reverse = not self.sort_reverse; self._sort_items()
                 elif key.lower() == 't': self.sort_key = 'install_time'; self.sort_reverse = not self.sort_reverse; self._sort_items()
                 elif key.lower() == 'o': self.sort_reverse = not self.sort_reverse; self._sort_items()
                 elif key == Navigator.ENTER:
-                    if not self.selected_items: return [self.selected_index]
-                    return list(self.selected_items)
+                    if not self.selected_ids: 
+                        return [self.selected_index]
+                    # Map IDs back to indices for the manager to process
+                    return [i for i, item in enumerate(self.items) if item['id'] in self.selected_ids]
                 elif key.lower() == 'q': return []
         finally: Navigator.show_cursor()
+
+class ConfirmSelector:
+    def __init__(self, message):
+        self.message = message
+        self.options = ["Yes", "No"]
+        self.selected_index = 1 # Default to No for safety
+
+    def render(self):
+        # Print message and the two buttons
+        print(f"\n  {BOLD}{self.message}{RESET}")
+        
+        btns = []
+        for i, opt in enumerate(self.options):
+            if i == self.selected_index:
+                # Highlighted selection: White text on Magenta background
+                btns.append(f"\033[1;37m\033[45m {opt} \033[0m")
+            else:
+                btns.append(f"  {GRAY}{opt}{RESET}  ")
+        
+        print("  " + "   ".join(btns))
+        print(f"{GRAY}   ←/→: Select | Enter: Confirm | Y/N: Quick Keys{RESET}")
+
+    def run(self):
+        Navigator.hide_cursor()
+        try:
+            while True:
+                self.render()
+                key = Navigator.get_key()
+                if key in (Navigator.LEFT, Navigator.RIGHT):
+                    self.selected_index = 1 - self.selected_index
+                elif key.lower() == 'y': return True
+                elif key.lower() == 'n': return False
+                elif key == Navigator.ENTER:
+                    return self.selected_index == 0
+                
+                # ANSI move up 4 lines and clear to re-render local prompt without flickering
+                print("\033[4A\033[J", end="")
+        finally: 
+            Navigator.show_cursor()
+            print()
 
 class CleanSelector:
     def __init__(self, title, items):

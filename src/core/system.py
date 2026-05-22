@@ -1,6 +1,7 @@
 import os
 import subprocess
 import shutil
+import sys
 from pathlib import Path
 
 def get_os_id():

@@ -16,12 +16,12 @@ def show_banner():
     cmd_name = os.path.basename(sys.argv[0])
     if cmd_name in ("lmo.py", "python3", "main.py"): cmd_name = "lmole"
     
-    banner = f"""{BLUE} _                      _      
-| |                    | |     
-| |  _ __ ___    ___   | |  ___
-| | | '_ ` _ \\  / _ \\  | | / _ \\
-| |____ | | | | | | (_) | | |  __/
-|______||_| |_| |_|\\___/|_| \\___|{RESET}"""
+    banner = f"""{BLUE} _                           _      
+| |                         | |     
+| |   _ __ ___     ___      | |   ___
+| |  | '_ ` _ \\   / _ \\     | |  / _ \\
+| |____  | | | | | | | (_) |    | | |  __/
+|______| |_| |_| |_|  \\___/     |_|  \\___|{RESET}"""
     
     print(banner)
     print(f"{WHITE}      v0.5.0 | {cmd_name} - Linux System Optimizer{RESET}")

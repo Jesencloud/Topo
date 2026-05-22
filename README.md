@@ -76,6 +76,25 @@ Alternatively, use CLI commands for quick actions:
 *   `lmole analyze` - Enter deep disk analysis mode
 *   `lmole uninstall` - Enter application uninstallation mode
 
+ _                      _      
+| |                    | |     
+| |  _ __ ___    ___   | |  ___
+| | | '_ ` _ \  / _ \  | | / _ \
+| |____ | | | | | | (_) | | |  __/
+|______||_| |_| |_|\___/|_| \___|
+      v0.5.0 | lmole - Linux System Optimizer
+
+ Main Menu
+--------------------------------------------------
+ > 1. Clean        One-key safe disk cleanup
+   2. Uninstall    Remove apps completely
+   3. Optimize     Check and maintain system
+   4. Analyze      Explore disk usage
+   5. Status       Monitor system health
+--------------------------------------------------
+ ↑/↓: Navigate | Enter: Select | Q: Quit
+
+
 ---
 
 ## 🤝 Contribution & Credits
