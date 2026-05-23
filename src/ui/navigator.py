@@ -14,11 +14,23 @@ CYAN = "\033[1;36m"
 MAGENTA = "\033[1;35m"
 YELLOW = "\033[1;33m"
 
-def draw_bar(percentage: float, width: int = 20, color: str = BLUE) -> str:
+def draw_bar(percentage: float, width: int = 20, force_color: str = None) -> str:
     safe_percent = max(0.0, min(100.0, percentage))
     filled = int(width * safe_percent / 100)
     empty = width - filled
-    return f"{WHITE}[{color}{'█' * filled}{RESET}{'░' * empty}{WHITE}]{RESET}"
+    
+    # Dynamic color logic if no specific color is forced
+    if force_color:
+        color = force_color
+    else:
+        if safe_percent < 50:
+            color = "\033[1;32m" # GREEN
+        elif safe_percent < 80:
+            color = "\033[1;33m" # YELLOW
+        else:
+            color = "\033[1;31m" # RED
+            
+    return f"{WHITE}[{color}{'■' * filled}{RESET}{GRAY}{'□' * empty}{WHITE}]{RESET}"
 
 class Navigator:
     """Handles raw terminal input and basic TUI navigation."""
@@ -103,9 +115,13 @@ class AnalyzeSelector:
         for i, item in enumerate(self.items):
             is_hover = i == self.selected_index
             cursor = "\033[1;36m▶\033[0m" if is_hover else " "
-            bar = draw_bar(item['percent'], color=item['color'])
+            
+            # Pass color only if it's the root view (which defines 'color'), 
+            # otherwise let the dynamic coloring take over
+            bar = draw_bar(item['percent'], force_color=item.get('color'))
+            
             style = "\033[1;37m" if is_hover else ""
-            print(f"{cursor} {i+1}. {bar}  {item['percent']:>5.1f}%  |  📁 {style}{item['name']:<20}{RESET} {WHITE}{bytes_to_human(item['size']):>10}{RESET}")
+            print(f"{cursor} {i+1:2}. {bar}  {item['percent']:>5.1f}%  |  📁 {style}{item['name']:<20}{RESET} {WHITE}{bytes_to_human(item['size']):>10}{RESET}")
 
         print("\n" + "-" * 75)
         order_icon = "↓" if self.sort_reverse else "↑"
