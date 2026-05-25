@@ -6,13 +6,16 @@ Today's session focused on advanced TUI interaction, responsive design, and perf
 
 ### 1. Interaction & Workflow
 *   **Integrated Numeric Checkboxes**: Re-engineered the "Analyze Disk" selection UI to merge indices into the selection brackets (e.g., `[1]`, `[12]`). Numbers are dynamically replaced with a green `[✓]` upon selection, mirroring the elite `Uninstall` module.
-*   **Multi-Digit Selection**: Implemented an intelligent digit buffering system. Users can now select any item (1-50) by quickly typing its index (e.g., press `1` then `4` to select item 14), enabling lightning-fast navigation for power users.
+*   **Multi-Digit Selection**: Implemented an intelligent digit buffering system. Users can now select any item (1-50) by quickly typing its index (e.g., press `1` then `4` to select item 14). The logic was further hardened with **Raw-Mode Buffering**, ensuring lightning-fast, non-blocking capture of numeric sequences across all terminals.
 *   **Zero-Latency Navigation**: Optimized the directory traversal engine with a **State Snapshot Stack**. Returning to parent directories is now instantaneous and completely bypasses the Rust engine scan, as previous results are cached in memory.
 *   **Selection Summary**: Added a persistent **"☉ Selected Items to Remove"** summary at the bottom of the analysis views (Main and Top Files), providing clear visibility of the removal queue in the signature Mole purple style.
 *   **Auto-Back Logic**: Enhanced the cleaning workflow to automatically return to the parent directory when the current folder becomes empty after deletion, reducing manual keypresses.
 
 ### 2. Layout & Accessibility
-*   **Responsive TUI Design**: Implemented a fully adaptive layout for the "Analyze Disk" module. The UI dynamically detects terminal width, automatically shrinking or hiding progress bars and truncating filenames to prevent line wrapping on small screens.
+*   **CLI Interface Modernization**: Re-engineered the `lmole --help` output with a professional, categorized sub-command structure. Added descriptive help strings and clear usage examples for all core modules.
+*   **Direct Command Execution**: Fixed a critical logic gap in CLI mode. Sub-commands like `lmole analyze`, `lmole status`, and `lmole uninstall` are now fully operational, allowing users to jump directly into specific interactive modules from their terminal.
+*   **Responsive TUI Design**: Implemented a fully adaptive layout for the "Analyze Disk" module.
+ The UI dynamically detects terminal width, automatically shrinking or hiding progress bars and truncating filenames to prevent line wrapping on small screens.
 *   **Navigation Stability**: Performed a deep-level stabilization of the arrow key capture logic. Refined the raw-mode input buffer to ensure 100% reliable 3-byte escape sequence capture across GNOME Terminal, xterm, and SSH sessions.
 *   **Back Navigation Overhaul**: Added support for **B** and **H** (Vim-style) keys for returning to previous folders, alongside a clearer `← Back` UI hint.
 *   **Search Revert**: Decoupled the experimental real-time search from the `Uninstall` module to restore rock-solid stability to the core navigation system while keeping the visual and alignment improvements.
