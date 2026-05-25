@@ -168,20 +168,35 @@ def get_gpu_info():
     return None
 
 def get_top_processes():
-    """Get top 3 processes by memory usage."""
+    """Get top 3 applications by aggregated memory usage."""
     try:
         # Use ps to get command and resident memory (rss)
-        cmd = ["ps", "-eo", "comm,rss", "--sort=-rss", "--no-headers"]
+        cmd = ["ps", "-eo", "comm,rss", "--no-headers"]
         res = subprocess.run(cmd, capture_output=True, text=True)
         if res.returncode == 0:
-            lines = res.stdout.strip().split('\n')[:3]
-            procs = []
+            lines = res.stdout.strip().split('\n')
+            agg_mem = {}
             for line in lines:
                 parts = line.split()
                 if len(parts) >= 2:
                     name = parts[0]
-                    mem_gb = int(parts[1]) / (1024 * 1024)
+                    try:
+                        rss = int(parts[1])
+                        agg_mem[name] = agg_mem.get(name, 0) + rss
+                    except ValueError:
+                        continue
+            
+            # Sort by aggregated memory usage and take top 3
+            sorted_procs = sorted(agg_mem.items(), key=lambda x: x[1], reverse=True)[:3]
+            
+            procs = []
+            for name, total_rss in sorted_procs:
+                mem_gb = total_rss / (1024 * 1024)
+                if mem_gb >= 0.1:
                     procs.append(f"{name} ({mem_gb:.1f}GB)")
+                else:
+                    mem_mb = total_rss / 1024
+                    procs.append(f"{name} ({int(mem_mb)}MB)")
             return procs
     except: pass
     return []
