@@ -176,14 +176,17 @@ class AnalyzeSelector:
                     else: self.selected_items.add(self.selected_index)
                 elif key.isdigit() and self.can_select:
                     num_str = key
-                    import select
-                    while True:
-                        r, _, _ = select.select([sys.stdin], [], [], 0.4)
-                        if r:
-                            next_char = sys.stdin.read(1)
-                            if next_char.isdigit(): num_str += next_char
+                    fd = sys.stdin.fileno(); old_settings = termios.tcgetattr(fd)
+                    try:
+                        tty.setraw(fd)
+                        while True:
+                            r, _, _ = select.select([sys.stdin], [], [], 0.4)
+                            if r:
+                                next_char = sys.stdin.read(1)
+                                if next_char.isdigit(): num_str += next_char
+                                else: break
                             else: break
-                        else: break
+                    finally: termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
                     try:
                         num = int(num_str); idx = 9 if num_str == '0' else num - 1
                         if 0 <= idx < len(self.items):
@@ -313,12 +316,26 @@ class UninstallSelector:
                     if item_id in self.selected_ids: self.selected_ids.remove(item_id)
                     else: self.selected_ids.add(item_id)
                 elif key.isdigit() and total_len > 0:
-                    num = int(key); page_offset = 9 if num == 0 else num - 1
-                    idx = self.current_page * self.page_size + page_offset
-                    if idx < total_len:
-                        item_id = self.items[idx]['id']
-                        if item_id in self.selected_ids: self.selected_ids.remove(item_id)
-                        else: self.selected_ids.add(item_id)
+                    num_str = key
+                    fd = sys.stdin.fileno(); old_settings = termios.tcgetattr(fd)
+                    try:
+                        tty.setraw(fd)
+                        while True:
+                            r, _, _ = select.select([sys.stdin], [], [], 0.4)
+                            if r:
+                                next_char = sys.stdin.read(1)
+                                if next_char.isdigit(): num_str += next_char
+                                else: break
+                            else: break
+                    finally: termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                    try:
+                        num = int(num_str); page_offset = 9 if num_str == '0' else num - 1
+                        idx = self.current_page * self.page_size + page_offset
+                        if idx < total_len:
+                            item_id = self.items[idx]['id']
+                            if item_id in self.selected_ids: self.selected_ids.remove(item_id)
+                            else: self.selected_ids.add(item_id)
+                    except: pass
                 elif key.lower() == 's': self.sort_key = 'size_bytes'; self.sort_reverse = not self.sort_reverse; self._sort_items()
                 elif key.lower() == 'n': self.sort_key = 'name'; self.sort_reverse = not self.sort_reverse; self._sort_items()
                 elif key.lower() == 't': self.sort_key = 'install_time'; self.sort_reverse = not self.sort_reverse; self._sort_items()
