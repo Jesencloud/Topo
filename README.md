@@ -1,6 +1,9 @@
-# 🦔 topo
+<div align="center">
+  <h1>🦡 topo</h1>
+  <p><em>High-performance system optimization and cleanup for Linux.</em></p>
+</div>
 
-**topo** (Topo) is a high-performance system optimization and cleanup tool designed specifically for the Linux platform. Inspired by the minimalist philosophy of the famous `Mole` tool on macOS, `topo` provides a fast, safe, and intuitive experience for maintaining system health and reclaiming disk space.
+**topo** (Topo) is inspired by the minimalist philosophy of the famous `Mole` tool on macOS, providing a fast, safe, and intuitive experience for maintaining system health and reclaiming disk space.
 
 Built with a hybrid architecture of **Python logic** and a custom **Rust scanning engine**, `topo` is up to 10x faster than traditional shell-based tools for large-scale filesystem analysis.
 
@@ -45,7 +48,7 @@ Built with a hybrid architecture of **Python logic** and a custom **Rust scannin
 
 ```bash
 # Clone the repository
-git clone https://github.com/Jesencloud/topo.git
+git clone https://github.com/Jesencloud/Topo.git
 cd topo
 
 # Create a symbolic link to your local bin directory

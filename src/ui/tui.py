@@ -16,13 +16,14 @@ def show_banner():
     cmd_name = os.path.basename(sys.argv[0])
     if cmd_name in ("lmo.py", "python3", "main.py"): cmd_name = "topo"
     
-    banner = f"""{BLUE}  _____ ___  ___ ___ 
- |_   _/ _ \| _ \ _ \\
-   | || (_) |  _/(_) |
-   |_| \___/|_| \___/
-             v0.5.0
-
-      ( θ _ θ )  ~ topo is digging deeper...{RESET}"""
+    banner = f"""{BLUE}
+  ████████  ██████  ██████   ██████ 
+     ██    ██    ██ ██   ██ ██    ██
+     ██    ██    ██ ██████  ██    ██
+     ██    ██    ██ ██      ██    ██
+     ██     ██████  ██       ██████ 
+{RESET}
+ {CYAN}●{RESET} {BOLD}{cmd_name}{RESET} {GRAY}is digging deeper...{RESET}"""
 
     print(banner)
     
