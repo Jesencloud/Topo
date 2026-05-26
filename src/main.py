@@ -102,9 +102,11 @@ Examples:
             elif choice == "2":
                 run_uninstall()
             elif choice == "3":
-                print("\033[1;90m🔒 Authorizing optimization tasks (Ctrl+C to skip)...\033[0m")
-                ensure_sudo_session()
-                optimize_system(args.dry_run)
+                print("\033[1;90m🔒 Authorizing optimization tasks (Ctrl+C to cancel)...\033[0m")
+                if ensure_sudo_session():
+                    optimize_system(args.dry_run)
+                else:
+                    print("\033[1;33m⚠️  Optimization cancelled by user.\033[0m")
                 input("\nPress Enter to return to menu...")
             elif choice == "4":
                 run_deep_analysis()
@@ -137,9 +139,11 @@ Examples:
         show_status()
 
     if args.command == "optimize":
-        print("\033[1;90m🔒 Authorizing optimization tasks (Ctrl+C to skip)...\033[0m")
-        ensure_sudo_session()
-        optimize_system(args.dry_run)
+        print("\033[1;90m🔒 Authorizing optimization tasks (Ctrl+C to cancel)...\033[0m")
+        if ensure_sudo_session():
+            optimize_system(args.dry_run)
+        else:
+            print("\033[1;33m⚠️  Optimization cancelled by user.\033[0m")
 
     if args.command == "link":
         run_install_link()
