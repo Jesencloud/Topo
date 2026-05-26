@@ -3,6 +3,13 @@
   <p><em>High-performance system optimization and cleanup for Linux.</em></p>
 </div>
 
+<p align="center">
+  <a href="https://github.com/Jesencloud/Topo/stargazers"><img src="https://img.shields.io/github/stars/Jesencloud/Topo?style=flat-square" alt="Stars"></a>
+  <a href="https://github.com/Jesencloud/Topo/releases"><img src="https://img.shields.io/github/v/tag/Jesencloud/Topo?label=version&style=flat-square" alt="Version"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square" alt="License"></a>
+  <a href="https://github.com/Jesencloud/Topo/commits"><img src="https://img.shields.io/github/commit-activity/m/Jesencloud/Topo?style=flat-square" alt="Commits"></a>
+</p>
+
 **topo** (Topo) is inspired by the minimalist philosophy of the famous `Mole` tool on macOS, providing a fast, safe, and intuitive experience for maintaining system health and reclaiming disk space.
 
 Built with a hybrid architecture of **Python logic** and a custom **Rust scanning engine**, `topo` is up to 10x faster than traditional shell-based tools for large-scale filesystem analysis.
@@ -44,12 +51,12 @@ Built with a hybrid architecture of **Python logic** and a custom **Rust scannin
 *   Linux OS (Fedora, Ubuntu, Debian, Arch, etc.)
 
 ### Quick Installation (Recommended)
-`topo` is designed as a standalone tool. Simply link the launcher to your local bin path:
+`Topo` is designed as a standalone tool. Simply link the launcher to your local bin path:
 
 ```bash
 # Clone the repository
 git clone https://github.com/Jesencloud/Topo.git
-cd topo
+cd Topo
 
 # Create a symbolic link to your local bin directory
 # (Ensure ~/.local/bin is in your PATH)

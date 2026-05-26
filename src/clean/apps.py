@@ -51,20 +51,33 @@ def clean_app_generic(name, paths, process_names=None, dry_run=False):
             except:
                 continue
     
-    if found:
+    if found and (total_freed > 0 or dry_run):
         status = "would be cleaned" if dry_run else "cache cleaned"
-        print(f"  \033[0;32m✓\033[0m {name} {status}")
+        size_info = f" ({get_size_str(total_freed)})" if total_freed > 0 else ""
+        print(f"  \033[0;32m✓\033[0m {name}{size_info} {status}")
         return total_freed, items_cleaned
     return 0, 0
+
+def get_size_str(b):
+    from ..core.file_ops import bytes_to_human
+    return bytes_to_human(b)
 
 def clean_flatpak_unused(dry_run=False):
     """Removes unused Flatpak runtimes which can be very large."""
     if shutil.which("flatpak"):
-        print("  \033[0;32m✓\033[0m Cleaning unused Flatpak runtimes...")
-        if not dry_run:
-            # flatpak uninstall --unused -y
-            run_command(["flatpak", "uninstall", "--unused", "-y"], use_sudo=False, capture=True)
-        return 0, 1
+        if dry_run:
+            print("  \033[0;32m✓\033[0m Flatpak runtimes would be checked")
+            return 0, 0
+            
+        # Capture to see if something was actually done
+        res = run_command(["flatpak", "uninstall", "--unused", "-y"], use_sudo=False, capture=True)
+        if res and res.stdout:
+            # Simple heuristic: if it mentions 'Uninstalling', something was done
+            if "Uninstalling" in res.stdout:
+                from .system import parse_size_from_text
+                freed = parse_size_from_text(res.stdout)
+                print(f"  \033[0;32m✓\033[0m Cleaned unused Flatpak runtimes" + (f" ({get_size_str(freed)})" if freed > 0 else ""))
+                return freed, 1
     return 0, 0
 
 def clean_apps_deep(dry_run=False):

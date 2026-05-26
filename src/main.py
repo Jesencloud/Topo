@@ -20,6 +20,8 @@ BLUE = "\033[1;34m"
 CYAN = "\033[1;36m"
 MAGENTA = "\033[1;35m"
 YELLOW = "\033[1;33m"
+GREEN = "\033[1;32m"
+RED = "\033[1;31m"
 WHITE = "\033[1;37m"
 GRAY = "\033[1;90m"
 RESET = "\033[0m"
@@ -40,6 +42,14 @@ def run_clean(dry_run=False):
 
     mode_label = "\033[1;36m[PREVIEW]\033[0m" if dry_run else "\033[1;95m[EXECUTING]\033[0m"
     print(f"{mode_label} Starting system cleanup...\n")
+
+    # Pre-authorize sudo to avoid interrupting the progress list
+    if not dry_run:
+        print(f" {GRAY}🔒 Authorizing system-level tasks...{RESET}")
+        if not ensure_sudo_session():
+            print(f" {YELLOW}⚠️  Note: Some system caches will be skipped due to lack of permission.{RESET}\n")
+        else:
+            print(f" {GREEN}✓{RESET} Authorization successful.\n")
 
     total_size = 0
     total_items = 0
@@ -78,6 +88,7 @@ def run_clean(dry_run=False):
 
 from .manage.uninstall import UninstallManager
 from .manage.self_uninstall import run_self_uninstall
+from .manage.install import run_install_link
 from .ui.navigator import PaginatedSelector, UninstallSelector
 
 # ANSI Colors
@@ -289,6 +300,7 @@ Examples:
     subparsers.add_parser("status", help="Monitor system health and resource usage")
     
     # --- Management ---
+    subparsers.add_parser("link", help="Create a symbolic link in ~/.local/bin for 'topo' command")
     wl_parser = subparsers.add_parser("whitelist", help="Manage path protection whitelist")
     wl_parser.add_argument("action", choices=["add", "remove", "list"], nargs="?", default="list", help="Whitelist action")
     wl_parser.add_argument("path", nargs="?", help="Target path for add/remove")
@@ -380,6 +392,9 @@ Examples:
         print("🔒 Authorizing optimization tasks...")
         ensure_sudo_session()
         optimize_system(args.dry_run)
+
+    if args.command == "link":
+        run_install_link()
 
     if args.command == "remove":
         run_self_uninstall(args.dry_run)

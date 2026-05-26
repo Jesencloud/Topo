@@ -9,9 +9,10 @@ def clean_trash(dry_run=False):
     trash_root = Path.home() / ".local/share/Trash"
     total_cleaned = get_size(trash_root) if trash_root.exists() else 0
     
-    print("  \033[0;32m✓\033[0m Trash")
+    if total_cleaned > 0 or dry_run:
+        print(f"  \033[0;32m✓\033[0m Trash" + (f" ({bytes_to_human(total_cleaned)})" if total_cleaned > 0 else ""))
     
-    if not dry_run:
+    if not dry_run and total_cleaned > 0:
         # Method 1: Using gio (Standard)
         if shutil.which("gio"):
             subprocess.run(["gio", "trash", "--empty"], capture_output=True)
@@ -75,7 +76,6 @@ def clean_user_caches(dry_run=False):
     return total_size, total_items, categories
 
 def clean_system_temp(dry_run=False):
-    print("  \033[0;32m✓\033[0m Temp files")
     total_size = 0
     total_items = 0
     for temp_dir in [Path("/tmp"), Path("/var/tmp")]:
@@ -92,6 +92,10 @@ def clean_system_temp(dry_run=False):
                         total_items += 1
                 except: continue
         except: continue
+    
+    if total_size > 0 or dry_run:
+        print(f"  \033[0;32m✓\033[0m Temp files ({bytes_to_human(total_size)})")
+        
     return total_size, total_items, 1
 
 def clean_user_data(dry_run=False):

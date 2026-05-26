@@ -10,20 +10,21 @@ WHITE = "\033[1;37m"
 GRAY = "\033[1;90m"
 RESET = "\033[0m"
 BOLD = "\033[1m"
+PURPLE = "\033[1;95m"
 
 def show_banner():
     # Detect the calling command name
     cmd_name = os.path.basename(sys.argv[0])
-    if cmd_name in ("lmo.py", "python3", "main.py"): cmd_name = "topo"
+    if cmd_name in ("python3", "main.py", "topo"): cmd_name = "Topo"
     
-    banner = f"""{BLUE}
+    banner = f"""{PURPLE}
   ████████  ██████  ██████   ██████ 
      ██    ██    ██ ██   ██ ██    ██
      ██    ██    ██ ██████  ██    ██
      ██    ██    ██ ██      ██    ██
      ██     ██████  ██       ██████ 
 {RESET}
- {CYAN}●{RESET} {BOLD}{cmd_name}{RESET} {GRAY}is digging deeper...{RESET}"""
+ {CYAN}●{RESET} {BOLD}{cmd_name}{RESET} {GRAY}is digging deeper 🦡 🦡 🦡{RESET}"""
 
     print(banner)
     

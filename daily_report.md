@@ -1,3 +1,26 @@
+# Daily Modification Report - 2026-05-26
+
+## Project: topo (Topo) - CLI Optimization & Silent Execution
+
+Today's session focused on refining the CLI experience, streamlining the installation process, and perfecting the "silent-on-zero-gain" philosophy for automated tasks.
+
+### 1. Command Line Experience
+*   **Installation Automation (`topo link`)**: Implemented a new `topo link` sub-command. This feature automatically creates a system-wide symbolic link in `~/.local/bin/topo`, creates the directory if missing, and verifies if it exists in the user's `$PATH`, drastically simplifying the onboarding process.
+*   **Command Renaming Experiment**: Explored the extreme-efficiency concept of renaming the command to `po` for faster muscle memory. Ultimately, reverted to `topo` to preserve brand identity and avoid potential namespace collisions in the Linux ecosystem, establishing a "brand first, alias later" philosophy.
+*   **Sudo Authorization Polish**: Re-engineered the passwordless sudo setup (`topo authorize`) to ensure the generated rule file strictly matches the project name (`/etc/sudoers.d/topo`).
+
+### 2. TUI & Visual Identity
+*   **Banner Capitalization**: Updated the dynamic TUI banner to properly capitalize the brand name (`Topo`) when launched directly via source scripts (e.g., `main.py`).
+*   **Badger Ascendancy**: Officially adopted the Badger (`🦡`) emoji across the project (README and TUI Banner) to better represent Topo's identity as a hardcore, high-performance Linux digging tool, differentiating it from the macOS Mole's hedgehog (`🦔`).
+*   **Legacy Cleanup**: Purged historical references to `lmole` (specifically the `lmo.py` trigger) from the core UI detection logic, solidifying the Topo brand.
+
+### 3. Cleanup Engine (Silent Execution)
+*   **Zero-Gain Silence**: Re-engineered the core cleanup functions (`clean_trash`, `clean_system_temp`, `clean_flatpak_unused`, `clean_package_manager`, `clean_journal`) to adopt a strict "silent on zero" policy. Tasks that reclaim `0 B` of space are now completely hidden from the execution log.
+*   **Output Parsing Integration**: Implemented a regex-based `parse_size_from_text` utility to capture and interpret the stdout of system commands (like `dnf clean` and `journalctl`). Topo now accurately reports the exact space freed by these external processes instead of blindly printing a success checkmark.
+*   **Sudo Prompt Pre-emption**: Moved the `ensure_sudo_session()` check to the absolute beginning of the `run_clean` task. This prevents the system password prompt from interrupting the flow of the progress list, ensuring a seamless, automated visual experience once the task begins.
+
+---
+
 # Daily Modification Report - 2026-05-25
 
 ## Project: topo (Topo) - Extreme UX & Interaction Refinement
