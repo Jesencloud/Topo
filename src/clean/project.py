@@ -59,61 +59,63 @@ class Scanner:
             pass
         return artifacts
 
-class PurgeManager:
-    def __init__(self):
-        self.scanner = Scanner(get_purge_paths())
-        self.results: List[Dict[str, Any]] = []
+from ..ui.navigator import PaginatedSelector
 
-    def run_scan(self):
-        """Orchestrates the scanning process."""
-        print("🔍 Scanning for projects and heavy artifacts...")
+def run_purge(dry_run=False):
+    while True:
+        print("\033[1;95m➤ Project Purge\033[0m")
+        manager = PurgeManager()
+        results = manager.run_scan()
         
-        # 1. Discover projects
-        projects = list(self.scanner.scan_for_projects())
-        
-        # 2. Find artifacts in projects
-        all_artifacts = []
-        for project in projects:
-            artifacts = self.scanner.scan_artifacts(project)
-            all_artifacts.extend(artifacts)
-        
-        if not all_artifacts:
+        if not results:
             print("✨ No heavy artifacts found. Your projects are clean!")
-            return []
+            input("\nPress Enter to return to menu...")
+            return
 
-        # 3. Calculate sizes in parallel
-        print(f"📊 Found {len(all_artifacts)} potential targets. Calculating sizes...")
-        with ThreadPoolExecutor(max_workers=8) as executor:
-            sizes = list(executor.map(get_size, all_artifacts))
-
-        # 4. Filter out empty ones and prepare results
-        self.results = []
-        for path, size in zip(all_artifacts, sizes):
-            if size > 0:
-                self.results.append({
-                    "path": path,
-                    "size": size,
-                    "human_size": bytes_to_human(size),
-                    "project": path.parent.name
-                })
+        selector = PaginatedSelector("Select Project Artifacts to Purge", results)
+        action = selector.run()
         
-        # Sort by size (largest first)
-        self.results.sort(key=lambda x: x['size'], reverse=True)
-        return self.results
+        if action == "MANAGE_PATHS":
+            from .core.config import add_purge_path, remove_purge_path, get_purge_paths
+            while True:
+                os.system('clear')
+                print("\n\033[1;36m⚙️  topo Purge Settings\033[0m")
+                print("-" * 50)
+                paths = get_purge_paths()
+                print(f"Current Purge Search Paths:")
+                for i, p in enumerate(paths):
+                    print(f"  [{i+1}] {p}")
+                
+                print("\nOptions: [A] Add Path | [R] Remove Path | [B] Back to Scan")
+                c = input("➤ ").lower()
+                if c == 'a':
+                    new_p = input("Enter new search path: ")
+                    if add_purge_path(new_p): print(f"✅ Added: {new_p}")
+                    input("\nPress Enter...")
+                elif c == 'r':
+                    try:
+                        idx = int(input("Enter index to remove: ")) - 1
+                        if 0 <= idx < len(paths):
+                            remove_purge_path(paths[idx])
+                            print(f"✅ Removed path.")
+                        else: print("❌ Invalid index.")
+                    except: print("❌ Invalid input.")
+                    input("\nPress Enter...")
+                elif c == 'b':
+                    break
+            continue # Re-scan with new paths
 
-    def execute_purge(self, selected_indices: List[int]):
-        """Deletes selected artifacts."""
-        freed_space = 0
-        count = 0
-        
-        for idx in selected_indices:
-            item = self.results[idx]
-            success, msg = safe_remove(item['path'])
-            if success:
-                print(f"✅ Removed {item['path'].relative_to(Path.home())} ({item['human_size']})")
-                freed_space += item['size']
-                count += 1
+        if action and isinstance(action, list):
+            selected = action
+            if dry_run:
+                total_size = sum(results[i]['size'] for i in selected)
+                from .core.file_ops import bytes_to_human
+                print(f"\n🧪 [DRY RUN] Would remove {len(selected)} items, freeing {bytes_to_human(total_size)}")
             else:
-                print(f"❌ Failed to remove {item['path']}: {msg}")
-        
-        return count, bytes_to_human(freed_space)
+                count, total_freed = manager.execute_purge(selected)
+                print(f"\n✨ Purge complete: {count} items removed, {total_freed} space freed.")
+            input("\nPress Enter to return to menu...")
+            break
+        else:
+            break
+
