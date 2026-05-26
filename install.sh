@@ -45,10 +45,11 @@ else
     git clone --quiet --depth 1 "$REPO_URL" "$INSTALL_DIR"
 fi
 
-# 4. Clean up development artifacts (keep it professional)
+# 4. Clean up non-runtime artifacts (keep it lean and legal)
 echo -e "  ${GRAY}🧹 Refining installation directory...${NC}"
 cd "$INSTALL_DIR"
-rm -rf tests/ daily_report.md pytest.ini topo.py .gitignore
+# Keep LICENSE for compliance, but remove everything else non-essential
+rm -rf tests/ daily_report.md pytest.ini topo.py .gitignore README.md topo-core/
 
 # 5. Run the linking script
 echo -e "\n${CYAN}☉ Configuring system...${NC}"
