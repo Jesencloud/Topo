@@ -45,26 +45,31 @@ else
     git clone --quiet --depth 1 "$REPO_URL" "$INSTALL_DIR"
 fi
 
-# 4. Clean up non-runtime artifacts (keep it lean and legal)
+# 4. Clean up and provision binaries
 echo -e "  ${GRAY}🧹 Refining installation directory...${NC}"
 cd "$INSTALL_DIR"
 
-# Detect architecture for binary cleanup
 ARCH=$(uname -m)
 BIN_DIR="src/core/bin"
+RAW_URL="https://raw.githubusercontent.com/Jesencloud/Topo/main/src/core/bin"
 
-# If we only have the generic one, treat it as x86_64 (our current default)
-if [ -f "$BIN_DIR/topo-core" ] && [ ! -f "$BIN_DIR/topo-core-x86_64" ]; then
-    mv "$BIN_DIR/topo-core" "$BIN_DIR/topo-core-x86_64"
-fi
+# Ensure binary directory exists
+mkdir -p "$BIN_DIR"
 
 if [[ "$ARCH" == "x86_64" ]]; then
-    echo -e "  ${GRAY}Detected x86_64, removing ARM64 binaries...${NC}"
+    if [ ! -f "$BIN_DIR/topo-core-x86_64" ]; then
+        echo -e "  ${GRAY}↓ Fetching x86_64 engine...${NC}"
+        curl -fsSL "$RAW_URL/topo-core-x86_64" -o "$BIN_DIR/topo-core-x86_64"
+    fi
     rm -f "$BIN_DIR/topo-core-aarch64"
 elif [[ "$ARCH" == "aarch64" ]] || [[ "$ARCH" == "arm64" ]]; then
-    echo -e "  ${GRAY}Detected ARM64, removing x86_64 binaries...${NC}"
+    if [ ! -f "$BIN_DIR/topo-core-aarch64" ]; then
+        echo -e "  ${YELLOW}↓ ARM64 detected. Fetching optimized engine...${NC}"
+        curl -fsSL "$RAW_URL/topo-core-aarch64" -o "$BIN_DIR/topo-core-aarch64" || echo -e "  ${RED}⚠ Warning: Could not download ARM64 engine. You may need to build it manually.${NC}"
+    fi
     rm -f "$BIN_DIR/topo-core-x86_64"
 fi
+chmod +x $BIN_DIR/topo-core-* 2>/dev/null || true
 
 # Keep LICENSE for compliance, but remove everything else non-essential
 rm -rf tests/ daily_report.md pytest.ini topo.py .gitignore README.md topo-core/
