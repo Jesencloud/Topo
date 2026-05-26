@@ -332,6 +332,8 @@ class UninstallManager:
                         except:
                             removed_details.append((True, str(p)))
         
+        return success, app_freed_bytes, removed_details
+
 from ..ui.navigator import UninstallSelector
 
 def run_uninstall():

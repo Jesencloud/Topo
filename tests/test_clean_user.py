@@ -22,6 +22,11 @@ def test_clean_trash_execution_gio(mock_run, mock_which, test_env):
     """Verify trash cleanup using 'gio' command."""
     mock_which.side_effect = lambda x: "/usr/bin/gio" if x == "gio" else None
     
+    # Create a dummy file to ensure total_cleaned > 0
+    trash_dir = test_env / ".local/share/Trash/files"
+    trash_dir.mkdir(parents=True, exist_ok=True)
+    (trash_dir / "test.txt").write_text("content")
+    
     # We don't care about the return size here as much as the command call
     clean_trash(dry_run=False)
     
