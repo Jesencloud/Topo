@@ -58,12 +58,20 @@ RELEASE_URL="https://github.com/Jesencloud/Topo/releases/latest/download"
 mkdir -p "$BIN_DIR"
 
 if [[ "$ARCH" == "x86_64" ]]; then
-    echo -e "  ${GRAY}↓ Fetching x86_64 engine from latest release...${NC}"
-    curl -fsSL "$RELEASE_URL/topo-core-x86_64" -o "$BIN_DIR/topo-core-x86_64" || echo -e "  ${RED}⚠ Warning: Could not download x86_64 engine.${NC}"
+    if [ ! -f "$BIN_DIR/topo-core-x86_64" ]; then
+        echo -e "  ${GRAY}↓ Fetching x86_64 engine from latest release...${NC}"
+        curl -fsSL "$RELEASE_URL/topo-core-x86_64" -o "$BIN_DIR/topo-core-x86_64" || echo -e "  ${RED}⚠ Warning: Could not download x86_64 engine.${NC}"
+    else
+        echo -e "  ${GREEN}✓${NC} ${GRAY}Using bundled x86_64 engine.${NC}"
+    fi
     rm -f "$BIN_DIR/topo-core-aarch64"
 elif [[ "$ARCH" == "aarch64" ]] || [[ "$ARCH" == "arm64" ]]; then
-    echo -e "  ${YELLOW}↓ ARM64 detected. Fetching optimized engine from latest release...${NC}"
-    curl -fsSL "$RELEASE_URL/topo-core-aarch64" -o "$BIN_DIR/topo-core-aarch64" || echo -e "  ${RED}⚠ Warning: Could not download ARM64 engine.${NC}"
+    if [ ! -f "$BIN_DIR/topo-core-aarch64" ]; then
+        echo -e "  ${YELLOW}↓ ARM64 detected. Fetching optimized engine from latest release...${NC}"
+        curl -fsSL "$RELEASE_URL/topo-core-aarch64" -o "$BIN_DIR/topo-core-aarch64" || echo -e "  ${RED}⚠ Warning: Could not download ARM64 engine.${NC}"
+    else
+        echo -e "  ${GREEN}✓${NC} ${GRAY}Using bundled ARM64 engine.${NC}"
+    fi
     rm -f "$BIN_DIR/topo-core-x86_64"
 fi
 chmod +x $BIN_DIR/topo-core-* 2>/dev/null || true
