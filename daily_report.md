@@ -1,23 +1,31 @@
 # Daily Modification Report - 2026-05-26
 
-## Project: topo (Topo) - CLI Optimization & Silent Execution
+## Project: topo (Topo) - Professional Distribution & Modular Refactoring
 
-Today's session focused on refining the CLI experience, streamlining the installation process, and perfecting the "silent-on-zero-gain" philosophy for automated tasks.
+Today's session transformed Topo into a production-ready tool with a streamlined codebase, professional release workflow, and enhanced lifecycle management.
 
-### 1. Command Line Experience
-*   **Installation Automation (`topo link`)**: Implemented a new `topo link` sub-command. This feature automatically creates a system-wide symbolic link in `~/.local/bin/topo`, creates the directory if missing, and verifies if it exists in the user's `$PATH`, drastically simplifying the onboarding process.
-*   **Command Renaming Experiment**: Explored the extreme-efficiency concept of renaming the command to `po` for faster muscle memory. Ultimately, reverted to `topo` to preserve brand identity and avoid potential namespace collisions in the Linux ecosystem, establishing a "brand first, alias later" philosophy.
-*   **Sudo Authorization Polish**: Re-engineered the passwordless sudo setup (`topo authorize`) to ensure the generated rule file strictly matches the project name (`/etc/sudoers.d/topo`).
+### 1. Architectural Refactoring (The "Slim main" Initiative)
+*   **Decoupled CLI Entry**: Drastically reduced `src/main.py` from 410 lines to under 160 lines. Extracted heavy business logic into dedicated runners.
+*   **Consolidated Cleaning Modules**: 
+    -   Relocated App Uninstallation logic to `src/clean/app_manager.py`.
+    -   Merged Project Purge logic into `src/clean/project.py`.
+    -   Renamed Self-Uninstall to `src/manage/remove.py` for clarity.
+*   **Legacy Cleanup**: Permanently removed the obsolete `topo.py` root script and purged all historical `lmole` references.
 
-### 2. TUI & Visual Identity
-*   **Banner Capitalization**: Updated the dynamic TUI banner to properly capitalize the brand name (`Topo`) when launched directly via source scripts (e.g., `main.py`).
-*   **Badger Ascendancy**: Officially adopted the Badger (`🦡`) emoji across the project (README and TUI Banner) to better represent Topo's identity as a hardcore, high-performance Linux digging tool, differentiating it from the macOS Mole's hedgehog (`🦔`).
-*   **Legacy Cleanup**: Purged historical references to `lmole` (specifically the `lmo.py` trigger) from the core UI detection logic, solidifying the Topo brand.
+### 2. Lifecycle & Distribution
+*   **One-Line Installer (`install.sh`)**: Implemented a sophisticated `curl | bash` installer that handles prerequisites, performs shallow clones, and executes "Smart Refinement" to delete non-runtime files (tests, reports, Rust sources).
+*   **Automated Release Workflow**: Configured GitHub Actions to cross-compile x86_64 and ARM64 binaries on every version tag. Topo now pulls optimized engines from GitHub Release Assets rather than storing them in the Git history.
+*   **Smart Update Command**: Introduced `topo update`, enabling users to refresh their entire installation (including binaries) with a single command.
+*   **Installation Automation**: Added `topo link` to safely manage symbolic links in `~/.local/bin`.
 
-### 3. Cleanup Engine (Silent Execution)
-*   **Zero-Gain Silence**: Re-engineered the core cleanup functions (`clean_trash`, `clean_system_temp`, `clean_flatpak_unused`, `clean_package_manager`, `clean_journal`) to adopt a strict "silent on zero" policy. Tasks that reclaim `0 B` of space are now completely hidden from the execution log.
-*   **Output Parsing Integration**: Implemented a regex-based `parse_size_from_text` utility to capture and interpret the stdout of system commands (like `dnf clean` and `journalctl`). Topo now accurately reports the exact space freed by these external processes instead of blindly printing a success checkmark.
-*   **Sudo Prompt Pre-emption**: Moved the `ensure_sudo_session()` check to the absolute beginning of the `run_clean` task. This prevents the system password prompt from interrupting the flow of the progress list, ensuring a seamless, automated visual experience once the task begins.
+### 3. Engine & Performance
+*   **Multi-Arch Native Support**: Established full parity for **ARM64** (Apple Silicon, Raspberry Pi) and **x86_64**. The system dynamically detects CPU architecture and provisions the correct Rust engine.
+*   **Intelligent Silence Policy**: Re-engineered all cleanup functions to adopt a "zero-gain silence" rule. If no space is freed, the task remains invisible to keep terminal output clean.
+*   **Sudo Pre-authorization**: Moved administrative checks to the task start, ensuring the "One-Key Clean" process is never interrupted by password prompts once execution begins.
+
+### 4. Visual Identity & Documentation
+*   **New Identity**: Formally adopted the **Badger (`🦡`)** as Topo's mascot and updated the Cyber-Block TUI banner with capitalized branding.
+*   **Documentation Overhaul**: Rewrote `README.md` to focus on the new automated installation method and highlighted advanced technical advantages like Multi-Arch and Zero-Interruption UI.
 
 ---
 
