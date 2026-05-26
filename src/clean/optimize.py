@@ -5,9 +5,13 @@ import time
 import sqlite3
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 from ..core.system import run_command, has_sudo
 from ..core.file_ops import get_size, bytes_to_human
 from ..core.constants import GREEN, YELLOW, BLUE, GRAY, RESET, BOLD
+
+# Lock to ensure parallel tasks don't corrupt the terminal output
+print_lock = threading.Lock()
 
 def opt_log(message, success=True, skipped=False):
     if skipped:
@@ -16,7 +20,10 @@ def opt_log(message, success=True, skipped=False):
     else:
         icon = f"{GREEN}✓{RESET}"
         msg = f"{message}"
-    print(f"  {icon} {msg}")
+    
+    with print_lock:
+        # Use a single print statement within a lock to ensure atomicity
+        print(f"  {icon} {msg}")
 
 def vacuum_single_db(db_file):
     """Worker function to vacuum a single database only if worth it."""
