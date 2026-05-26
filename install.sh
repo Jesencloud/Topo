@@ -35,18 +35,23 @@ REPO_URL="https://github.com/Jesencloud/Topo.git"
 # 3. Clone or update repository
 echo -e "\n${CYAN}☉ Fetching Topo...${NC}"
 if [ -d "$INSTALL_DIR" ]; then
-    echo -e "  ${GRAY}↺ Updating existing installation in ${INSTALL_DIR}...${NC}"
+    echo -e "  ${GRAY}↺ Updating Topo in ${INSTALL_DIR}...${NC}"
     cd "$INSTALL_DIR"
-    git fetch --quiet origin main
+    # To keep things clean, we reset and pull
+    git fetch --quiet --depth 1 origin main
     git reset --hard origin/main --quiet
 else
-    echo -e "  ${GRAY}↓ Downloading Topo to ${INSTALL_DIR}...${NC}"
-    git clone --quiet "$REPO_URL" "$INSTALL_DIR"
+    echo -e "  ${GRAY}↓ Downloading Topo (Production Build)...${NC}"
+    git clone --quiet --depth 1 "$REPO_URL" "$INSTALL_DIR"
 fi
 
-# 4. Run the linking script
-echo -e "\n${CYAN}☉ Configuring system...${NC}"
+# 4. Clean up development artifacts (keep it professional)
+echo -e "  ${GRAY}🧹 Refining installation directory...${NC}"
 cd "$INSTALL_DIR"
+rm -rf tests/ daily_report.md pytest.ini topo.py .gitignore
+
+# 5. Run the linking script
+echo -e "\n${CYAN}☉ Configuring system...${NC}"
 chmod +x topo
 ./topo link
 
