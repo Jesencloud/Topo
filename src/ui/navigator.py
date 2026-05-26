@@ -85,7 +85,7 @@ class InteractiveMenu:
             style = "\033[1;36m" if i == self.selected_index else ""
             print(f"{prefix}{style}{label:<15}{RESET} {desc}")
         print("-" * 50)
-        print(f"{GRAY} ↑/↓: Navigate | Enter: Select | Q: Quit{RESET}")
+        print(f"{GRAY} ↑/↓: Navigate | Enter: Select | ESC: Quit{RESET}")
 
     def run(self):
         Navigator.hide_cursor()
@@ -96,7 +96,7 @@ class InteractiveMenu:
                 if key == Navigator.UP: self.selected_index = (self.selected_index - 1) % len(self.options)
                 elif key == Navigator.DOWN: self.selected_index = (self.selected_index + 1) % len(self.options)
                 elif key == Navigator.ENTER: return self.selected_index
-                elif key.lower() == Navigator.Q: return None
+                elif key.lower() == Navigator.Q or key == Navigator.ESC: return None
         finally: Navigator.show_cursor()
 
 class AnalyzeSelector:
@@ -147,9 +147,9 @@ class AnalyzeSelector:
                 item = self.items[i]
                 print(f"   \033[1;35m•\033[0m {item.get('icon', '📁')} {item['name']}")
         if self.can_select:
-            print(f"\033[1;90m ↑↓←→ | Num Select | Space Select | A All | ← Back | Enter Open/In | D Delete | R Refresh | S Sort {order_icon} | Q Exit\033[0m")
+            print(f"\033[1;90m ↑↓←→ | Num Select | Space Select | A All | ← Back | Enter Open/In | D Delete | R Refresh | S Sort {order_icon} | ESC Exit\033[0m")
         else:
-            print(f"\033[1;90m ↑↓→ | Enter Explore | R Refresh | S Sort {order_icon} | Q Exit\033[0m")
+            print(f"\033[1;90m ↑↓→ | Enter Explore | R Refresh | S Sort {order_icon} | ESC Exit\033[0m")
 
     def run(self):
         if not self.items: return None, None
@@ -198,7 +198,7 @@ class AnalyzeSelector:
                     if len(self.selected_items) == len(self.items): self.selected_items.clear()
                     else: self.selected_items = set(range(len(self.items)))
                 elif key.lower() == 'f': return "SWITCH_FILES", None
-                elif key.lower() == 'q': return "QUIT", None
+                elif key.lower() == 'q' or key == Navigator.ESC: return "QUIT", None
         finally: Navigator.show_cursor()
 
 class PaginatedSelector:
@@ -217,7 +217,7 @@ class PaginatedSelector:
             print(f"{cursor} {checkbox} {style}{item['human_size']:>8} | {item['project']:<15} | {item['path'].name}{RESET}")
         print("-" * 60); total_pages = (len(self.items) + self.page_size - 1) // self.page_size
         print(f" Page {self.current_page + 1}/{total_pages} | Items: {len(self.items)} | Selected: {len(self.selected_items)}")
-        print(f"{GRAY} ↑/↓: Move | Space: Select | A: All | P: Purge | M: Edit Paths | Q: Back{RESET}")
+        print(f"{GRAY} ↑/↓: Move | Space: Select | A: All | P: Purge | M: Edit Paths | ESC: Back{RESET}")
     def run(self):
         Navigator.hide_cursor()
         try:
@@ -241,7 +241,7 @@ class PaginatedSelector:
                 elif key.lower() == 'p':
                     if not self.selected_items: continue
                     return list(self.selected_items)
-                elif key.lower() == 'q': return []
+                elif key.lower() == 'q' or key == Navigator.ESC: return []
         finally: Navigator.show_cursor()
 
 class UninstallSelector:
@@ -279,7 +279,7 @@ class UninstallSelector:
                 print(f"{cursor} {checkbox} {name_style}{name_padded}{RESET}     {item['size_str']:>12} | {time_str}")
             print("-" * 80); order_icon = "↑" if not self.sort_reverse else "↓"
             print(f" Page {self.current_page + 1}/{total_pages} | {GRAY}Keys 1-0: Select | ↑↓: Move | Space: Select | Enter: Confirm{RESET}")
-            print(f"{GRAY} S: Size | N: Name | T: Time | O: {order_icon} | Q: Exit{RESET}")
+            print(f"{GRAY} S: Size | N: Name | T: Time | O: {order_icon} | ESC: Exit{RESET}")
         if self.selected_ids:
             print(f"\n \033[1;35m☉ Selected Apps to Remove:\033[0m")
             count = 0
@@ -335,7 +335,7 @@ class UninstallSelector:
                         if total_len > 0: return [self.selected_index]
                         continue
                     return [i for i, item in enumerate(self.items) if item['id'] in self.selected_ids]
-                elif key.lower() == 'q': return []
+                elif key.lower() == 'q' or key == Navigator.ESC: return []
         finally: Navigator.show_cursor()
 
 class TopFilesSelector:
@@ -361,7 +361,7 @@ class TopFilesSelector:
             print(f"\n \033[1;35m☉ Selected Large Files to Remove:\033[0m")
             for i in sorted(list(self.selected_items)):
                 item = self.items[i]; print(f"   \033[1;35m•\033[0m 📄 {Path(item['path']).name}")
-        print(f"{GRAY} ↑/↓: Move | Space: Toggle | Enter: Delete Selected | Q: Back{RESET}")
+        print(f"{GRAY} ↑/↓: Move | Space: Toggle | Enter: Delete Selected | ESC: Back{RESET}")
     def run(self):
         if not self.items: return []
         Navigator.hide_cursor()
@@ -378,7 +378,7 @@ class TopFilesSelector:
                 elif key == Navigator.ENTER:
                     if not self.selected_items: continue
                     return list(self.selected_items)
-                elif key.lower() == 'q': return []
+                elif key.lower() == 'q' or key == Navigator.ESC: return []
         finally: Navigator.show_cursor()
 
 class ConfirmSelector:
@@ -419,7 +419,7 @@ class CleanSelector:
             size_str = bytes_to_human(item['size']) if item['size'] > 0 else "Scan Result"
             print(f"{cursor} {checkbox} \033[1;36m{name_padded}{RESET} |     {size_str:>12} | {GRAY}{item['desc']}{RESET}")
         print("-" * 65); print(f" Total Selected: \033[1;32m{bytes_to_human(total_freed)}\033[0m")
-        print(f"\n{GRAY} ↑/↓: Move | Space: Toggle | Enter: Clean Selected | Q: Cancel{RESET}")
+        print(f"\n{GRAY} ↑/↓: Move | Space: Toggle | Enter: Clean Selected | ESC: Cancel{RESET}")
     def run(self):
         Navigator.hide_cursor()
         try:
@@ -433,5 +433,5 @@ class CleanSelector:
                 elif key == Navigator.ENTER:
                     if not self.selected_items: continue
                     return list(self.selected_items)
-                elif key.lower() == 'q': return []
+                elif key.lower() == 'q' or key == Navigator.ESC: return []
         finally: Navigator.show_cursor()
