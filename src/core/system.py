@@ -54,11 +54,18 @@ def has_sudo():
     return res and res.returncode == 0
 
 def ensure_sudo_session():
-    """Ask for sudo password once to refresh the system-level sudo timestamp."""
+    """Force a fresh sudo password prompt by invalidating cached credentials."""
     global SUDO_CANCELLED
+    
+    # Check if a permanent NOPASSWD rule exists first, so we don't annoy users who explicitly set it up
+    if run_command(["-n", "true"], use_sudo=True, capture=True).returncode == 0:
+        return True
+
     try:
-        # sudo -v (validate) updates the user's cached credentials.
-        # It doesn't run a command, just refreshes the timer.
+        # Invalidate the current user's cached credentials (force prompt)
+        subprocess.run(["sudo", "-k"], capture_output=True)
+        
+        # sudo -v (validate) asks for the password and updates the timestamp
         res = subprocess.run(["sudo", "-v"], capture_output=False)
         if res.returncode != 0:
             SUDO_CANCELLED = True
