@@ -1,0 +1,23 @@
+name: topo
+base: core22
+version: '0.5.0'
+summary: High-performance Linux System Optimizer
+description: |
+  Topo is a professional-grade system cleanup and maintenance tool.
+  Inspired by Mole, it combines Python logic with a Rust scanning engine.
+
+grade: stable
+confinement: classic # Required for system-wide optimization tasks
+
+parts:
+  topo:
+    plugin: dump
+    source: .
+    stage-packages:
+      - python3
+      - git
+      - procps
+
+apps:
+  topo:
+    command: topo
