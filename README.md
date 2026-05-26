@@ -37,27 +37,24 @@ Built with a hybrid architecture of **Python logic** and a custom **Rust scannin
 
 ## 🚀 Technical Advantages
 
-*   **Rust Engine**: Core scanning logic implemented in `topo-core` (Rust), utilizing parallel I/O to analyze tens of thousands of files in milliseconds.
-*   **Modern TUI**: A clean terminal user interface with full keyboard navigation and numeric hotkeys for rapid selection.
-*   **Safe by Design**: Built-in global whitelist protection ensures critical system paths are never touched. Enforces strict **Home Directory Isolation** for manual cleanup tasks.
-*   **Cloud & AI Ready**: Native support for cleaning Docker resources and massive AI model repositories (Ollama, Hugging Face).
+*   **Multi-Arch Rust Engine**: Core scanning logic implemented in Rust, utilizing parallel I/O for extreme performance. Supports both **x86_64** and **ARM64** (Apple Silicon, Raspberry Pi, Cloud ARM) with automatic binary provisioning.
+*   **Zero-Interruption Experience**: Smart `sudo` pre-authorization allows the cleaning process to run completely unattended once started—no more mid-task password prompts.
+*   **Intelligent Silence**: Topo follows a "silent on zero-gain" philosophy. If a task reclaims 0 B, it stays hidden, keeping your terminal output clean and high-signal.
+*   **Production-Ready Installer**: The `install.sh` script handles everything: architecture detection, dependency checks, and a "lean" installation that excludes development artifacts.
+*   **Safe by Design**: Features global whitelist protection and strict **Home Directory Isolation** to prevent accidental deletion of critical system files.
 
 ---
 
 ## 🛠️ Installation & Usage
 
-### Prerequisites
-*   Python 3.10+
-*   Linux OS (Fedora, Ubuntu, Debian, Arch, etc.)
-
-### Quick Installation (Recommended)
-You can install or update `topo` using our automated installation script:
+### Quick Installation
+Deploy the latest stable version of `topo` with a single command:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Jesencloud/Topo/main/install.sh | bash
 ```
 
-This script will safely download the tool to `~/.topo` and automatically configure the `topo` command in your terminal.
+This script will automatically detect your hardware, provision the correct optimized engine to `~/.topo`, and set up the `topo` command in your terminal.
 
 ---
 
