@@ -60,10 +60,18 @@ curl -fsSL https://raw.githubusercontent.com/Jesencloud/Topo/main/install.sh | b
 This script will safely download the tool to `~/.topo` and automatically configure the `topo` command in your terminal.
 
 ### Build Rust Engine (Optional)
-The project includes pre-compiled binaries. To build the engine manually:
+The project includes pre-compiled binaries for **x86_64**. To support **ARM64** or build manually:
+
+#### Option A: Use GitHub Actions (Easiest)
+Our repository is equipped with CI/CD. Simply push any change to the `topo-core/` directory, and GitHub will automatically build both x86 and ARM binaries. You can find them in the "Actions" tab under "Artifacts".
+
+#### Option B: Manual Build
 ```bash
 cd topo-core && cargo build --release
-cp target/release/topo-core ../src/core/bin/topo-core
+# For x86_64
+cp target/release/topo-core ../src/core/bin/topo-core-x86_64
+# For ARM64 (on an ARM machine)
+cp target/release/topo-core ../src/core/bin/topo-core-aarch64
 ```
 
 ---
