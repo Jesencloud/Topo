@@ -25,7 +25,7 @@ def run_clean(dry_run=False):
     if not dry_run:
         print(f" {GRAY}🔒 Authorizing system-level tasks (Ctrl+C to skip)...{RESET}")
         if not ensure_sudo_session():
-            print(f" {YELLOW}⚠️  Note: Some system caches will be skipped due to lack of permission.{RESET}\n")
+            print(f" {YELLOW}⚠️  System tasks skipped. Continuing with User-Level cleanup only...{RESET}\n")
         else:
             print(f" {GREEN}✓{RESET} Authorization successful.\n")
 
