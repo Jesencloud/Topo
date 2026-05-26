@@ -51,17 +51,13 @@ Built with a hybrid architecture of **Python logic** and a custom **Rust scannin
 *   Linux OS (Fedora, Ubuntu, Debian, Arch, etc.)
 
 ### Quick Installation (Recommended)
-`Topo` is designed as a standalone tool. Simply link the launcher to your local bin path:
+You can install or update `topo` using our automated installation script:
 
 ```bash
-# Clone the repository
-git clone https://github.com/Jesencloud/Topo.git
-cd Topo
-
-# Create a symbolic link to your local bin directory
-# (Ensure ~/.local/bin is in your PATH)
-ln -s $(pwd)/topo ~/.local/bin/topo
+curl -fsSL https://raw.githubusercontent.com/Jesencloud/Topo/main/install.sh | bash
 ```
+
+This script will safely download the tool to `~/.topo` and automatically configure the `topo` command in your terminal.
 
 ### Build Rust Engine (Optional)
 The project includes pre-compiled binaries. To build the engine manually:
