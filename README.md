@@ -63,17 +63,21 @@ It adopts a **Zero-Interruption** policy: administrative tasks are pre-authorize
 
 ```bash
 $ topo clean
-
 [EXECUTING] Starting system cleanup...
 
-  ✓ Package Manager Cache (DNF/APT)                          1.2 GB
-  ✓ System Journal Logs                                      450 MB
-  ✓ User Trash                                               2.8 GB
-  ✓ Browser & App Caches                                     8.4 GB
-  ✓ AI/LLM Models (Ollama/HF)                                12.5 GB
+ 🔒 Authorizing system-level tasks...
+ ✓ Authorization successful.
+
+➤ User Data Cleanup
+➤ Deep App Cleanup
+  ◎ Brave Browser is running · cleanup skipped
+➤ Developer Tools & AI Models
+  ✓ npm cache (9.6 KB) cleaned
 
 ============================================================
-Space freed: 25.3 GB | Free space now: 184.2 GB
+Cleanup complete
+Space freed: 9.6 KB | Items: 1 | Categories: 3
+Free space now: 482.8 GB
 ============================================================
 ```
 
@@ -101,14 +105,18 @@ Uninstalling: Visual Studio Code
 Powered by a dedicated Rust engine, Topo scans hundreds of thousands of files in milliseconds.
 
 ```bash
-Analyze Disk  ~  |  Total: 450.8 GB
+Analyze Disk
+Select a category to explore:
 
- ▶  1. ███████████████████  58.2%  |  📁 workspace                   262.4 GB
-    2. █████████░░░░░░░░░░  22.1%  |  📁 .cache                       98.6 GB
-    3. ███░░░░░░░░░░░░░░░░   8.3%  |  📁 Downloads                    34.2 GB
-    4. █░░░░░░░░░░░░░░░░░░   4.2%  |  📁 .local                       18.5 GB
+▶   1. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬  100.0%  |  📁 Root (/)                                          23.5 GB
+    2. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬   35.7%  |  📁 System                                             8.4 GB
+    3. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    7.3%  |  📁 Home                                               1.7 GB
+    4. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    0.8%  |  👀 System Logs                                      189.8 MB
+    5. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    0.1%  |  👀 Cargo Cache                                       30.8 MB
+    6. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    0.0%  |  📁 Applications                                       1.3 MB
 
-  ↑↓ Navigate  |  Enter Open  |  Space Select  |  D Delete  |  Q Quit
+------------------------------------------------------------------------------------------------------------
+ ↑↓→ | Enter Explore | R Refresh | S Sort ↓ | Q Exit
 ```
 
 ## Technical Advantages
