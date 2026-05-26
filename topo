@@ -2,11 +2,11 @@
 import sys
 import os
 
-# 获取脚本的真实物理路径
+# Get the real physical path of the script
 REAL_PATH = os.path.realpath(__file__)
 REAL_DIR = os.path.dirname(REAL_PATH)
 
-# 将项目根目录加入 Python 搜索路径，这样 src 就能作为一个 package 被识别
+# Add project root to Python search path so src is recognized as a package
 sys.path.insert(0, REAL_DIR)
 
 try:

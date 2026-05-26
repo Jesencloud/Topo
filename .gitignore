@@ -1,4 +1,4 @@
-# --- Python 核心 ---
+# --- Python Core ---
 __pycache__/
 *.py[cod]
 *$py.class
@@ -10,10 +10,10 @@ venv/
 .ruff_cache/
 .mypy_cache/
 
-# --- Rust (lmo-core 引擎) ---
-lmo-core/target/
+# --- Rust (topo-core engine) ---
+topo-core/target/
 
-# --- 操作系统与编辑器 ---
+# --- OS & Editors ---
 .DS_Store
 .DS_Store?
 ._*
@@ -24,6 +24,6 @@ lmo-core/target/
 *.tmp
 *.log
 
-# --- 敏感信息 ---
+# --- Sensitive Info ---
 .env
 .python-version
