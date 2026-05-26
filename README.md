@@ -11,10 +11,6 @@
   <a href="https://github.com/Jesencloud/Topo"><img src="https://img.shields.io/badge/platform-linux-lightgrey?style=flat-square&logo=linux" alt="Linux"></a>
 </p>
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/Jesencloud/Topo/main/daily_report.md" alt="Topo - Professional Linux Optimizer" width="1000" style="display:none" />
-</p>
-
 > The most elegant way to keep your Linux system lean and mean. Inspired by the minimalist philosophy of [Mole](https://github.com/tw93/mole) on macOS.
 
 ## Features
