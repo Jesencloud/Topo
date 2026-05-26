@@ -47,6 +47,15 @@ def run_self_uninstall(dry_run=False):
             "type": "dir"
         })
 
+    # Internal installation directory (from install.sh)
+    internal_dir = Path.home() / ".topo"
+    if internal_dir.exists():
+        to_remove.append({
+            "path": internal_dir,
+            "desc": "Main program files",
+            "type": "dir"
+        })
+
     if not to_remove:
         print(f" {GREEN}✓{RESET} No system integration found to remove.")
         return
@@ -95,6 +104,5 @@ def run_self_uninstall(dry_run=False):
             print(f"  \033[1;31m✗\033[0m Failed to remove {p}: {e}")
 
     print("\n" + "=" * 70)
-    print(f" \033[1;34mtopo has been removed from your system paths.{RESET}")
-    print(f" {GRAY}Note: The source code in {os.path.dirname(os.path.dirname(os.path.dirname(__file__)))} was not deleted.{RESET}")
+    print(f" \033[1;34mtopo has been removed from your system.{RESET}")
     print("=" * 70 + "\n")
