@@ -1,13 +1,13 @@
 import os
 import sys
-from ..core.constants import BLUE, CYAN, MAGENTA, YELLOW, WHITE, GRAY, RESET, BOLD, PURPLE
+from ..core.constants import EARTH, CYAN, RESET, BOLD, GRAY
 
 def show_banner():
     # Detect the calling command name
     cmd_name = os.path.basename(sys.argv[0])
     if cmd_name in ("python3", "main.py", "topo"): cmd_name = "Topo"
-    
-    banner = f"""{PURPLE}
+
+    banner = f"""{EARTH}
   ████████  ██████  ██████   ██████ 
      ██    ██    ██ ██   ██ ██    ██
      ██    ██    ██ ██████  ██    ██

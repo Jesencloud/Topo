@@ -92,3 +92,4 @@ GRAY = "\033[1;90m"
 RESET = "\033[0m"
 BOLD = "\033[1m"
 PURPLE = "\033[1;95m"
+EARTH = "\033[38;5;100m" # Yellow4 / Olive (Matches logo #8B8B00)
