@@ -11,28 +11,37 @@ GRAY='\033[1;90m'
 NC='\033[0m' # No Color
 BOLD='\033[1m'
 
-echo -e "${CYAN}"
-echo "  ████████  ██████  ██████   ██████ "
-echo "     ██    ██    ██ ██   ██ ██    ██"
-echo "     ██    ██    ██ ██████  ██    ██"
-echo "     ██    ██    ██ ██      ██    ██"
-echo "     ██     ██████  ██       ██████ "
-echo -e "${NC}"
-echo -e " ${CYAN}●${NC} ${BOLD}Topo${NC} ${GRAY}is digging deeper 🦡 🦡 🦡${NC}\n"
+MINIMAL=false
+if [[ "$1" == "--minimal" ]]; then
+    MINIMAL=true
+fi
+
+if [ "$MINIMAL" = false ]; then
+    echo -e "${CYAN}"
+    echo "  ████████  ██████  ██████   ██████ "
+    echo "     ██    ██    ██ ██   ██ ██    ██"
+    echo "     ██    ██    ██ ██████  ██    ██"
+    echo "     ██    ██    ██ ██      ██    ██"
+    echo "     ██     ██████  ██       ██████ "
+    echo -e "${NC}"
+    echo -e " ${CYAN}●${NC} ${BOLD}Topo${NC} ${GRAY}is digging deeper 🦡 🦡 🦡${NC}\n"
+fi
 
 # 1. Check prerequisites
-echo -e "${CYAN}☉ Checking prerequisites...${NC}"
+if [ "$MINIMAL" = false ]; then
+    echo -e "${CYAN}☉ Checking prerequisites...${NC}"
+fi
 
 HAS_GIT=false
 if command -v git >/dev/null 2>&1; then
-    echo -e "  ${GREEN}✓ git installed${NC}"
+    if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓ git installed${NC}"; fi
     HAS_GIT=true
 else
-    echo -e "  ${YELLOW}ℹ git not found, will use direct download fallback${NC}"
+    if [ "$MINIMAL" = false ]; then echo -e "  ${YELLOW}ℹ git not found, will use direct download fallback${NC}"; fi
 fi
 
 command -v python3 >/dev/null 2>&1 || { echo -e "  ${RED}✗ Error: python3 is required but not installed.${NC}"; exit 1; }
-echo -e "  ${GREEN}✓ python3 installed${NC}"
+if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓ python3 installed${NC}"; fi
 
 # 2. Define paths
 INSTALL_DIR="$HOME/.topo"
@@ -40,19 +49,23 @@ REPO_URL="https://github.com/Jesencloud/Topo.git"
 TARBALL_URL="https://github.com/Jesencloud/Topo/archive/refs/heads/main.tar.gz"
 
 # 3. Clone or download source
-echo -e "\n${CYAN}☉ Fetching Topo...${NC}"
+if [ "$MINIMAL" = false ]; then
+    echo -e "\n${CYAN}☉ Fetching Topo...${NC}"
+fi
+
 if [ "$HAS_GIT" = true ]; then
     if [ -d "$INSTALL_DIR" ]; then
-        echo -e "  ${GRAY}↺ Updating Topo in ${INSTALL_DIR}...${NC}"
+        if [ "$MINIMAL" = false ]; then echo -e "  ${GRAY}↺ Updating Topo in ${INSTALL_DIR}...${NC}"; fi
         cd "$INSTALL_DIR"
+        # To keep things clean, we reset and pull
         git fetch --quiet --depth 1 origin main
         git reset --hard origin/main --quiet
     else
-        echo -e "  ${GRAY}↓ Downloading Topo via Git...${NC}"
+        if [ "$MINIMAL" = false ]; then echo -e "  ${GRAY}↓ Downloading Topo via Git...${NC}"; fi
         git clone --quiet --depth 1 "$REPO_URL" "$INSTALL_DIR"
     fi
 else
-    echo -e "  ${GRAY}↓ Downloading Topo archive...${NC}"
+    if [ "$MINIMAL" = false ]; then echo -e "  ${GRAY}↓ Downloading Topo archive...${NC}"; fi
     mkdir -p "$INSTALL_DIR"
     # Download and extract, stripping the top-level directory (Topo-main)
     curl -fsSL "$TARBALL_URL" | tar -xzC "$INSTALL_DIR" --strip-components=1
@@ -61,7 +74,9 @@ else
 fi
 
 # 4. Clean up and provision binaries
-echo -e "  ${GRAY}🧹 Refining installation directory...${NC}"
+if [ "$MINIMAL" = false ]; then
+    echo -e "  ${GRAY}🧹 Refining installation directory...${NC}"
+fi
 cd "$INSTALL_DIR"
 
 ARCH=$(uname -m)
@@ -74,18 +89,18 @@ mkdir -p "$BIN_DIR"
 
 if [[ "$ARCH" == "x86_64" ]]; then
     if [ ! -f "$BIN_DIR/topo-core-x86_64" ]; then
-        echo -e "  ${GRAY}↓ Fetching x86_64 engine from latest release...${NC}"
+        if [ "$MINIMAL" = false ]; then echo -e "  ${GRAY}↓ Fetching x86_64 engine from latest release...${NC}"; fi
         curl -fsSL "$RELEASE_URL/topo-core-x86_64" -o "$BIN_DIR/topo-core-x86_64" || echo -e "  ${RED}⚠ Warning: Could not download x86_64 engine.${NC}"
     else
-        echo -e "  ${GREEN}✓${NC} ${GRAY}Using bundled x86_64 engine.${NC}"
+        if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓${NC} ${GRAY}Using bundled x86_64 engine.${NC}"; fi
     fi
     rm -f "$BIN_DIR/topo-core-aarch64"
 elif [[ "$ARCH" == "aarch64" ]] || [[ "$ARCH" == "arm64" ]]; then
     if [ ! -f "$BIN_DIR/topo-core-aarch64" ]; then
-        echo -e "  ${YELLOW}↓ ARM64 detected. Fetching optimized engine from latest release...${NC}"
+        if [ "$MINIMAL" = false ]; then echo -e "  ${YELLOW}↓ ARM64 detected. Fetching optimized engine from latest release...${NC}"; fi
         curl -fsSL "$RELEASE_URL/topo-core-aarch64" -o "$BIN_DIR/topo-core-aarch64" || echo -e "  ${RED}⚠ Warning: Could not download ARM64 engine.${NC}"
     else
-        echo -e "  ${GREEN}✓${NC} ${GRAY}Using bundled ARM64 engine.${NC}"
+        if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓${NC} ${GRAY}Using bundled ARM64 engine.${NC}"; fi
     fi
     rm -f "$BIN_DIR/topo-core-x86_64"
 fi
@@ -95,7 +110,9 @@ chmod +x $BIN_DIR/topo-core-* 2>/dev/null || true
 rm -rf tests/ daily_report.md pytest.ini topo.py .gitignore README.md topo-core/
 
 # 5. Run the linking script
-echo -e "\n${CYAN}☉ Configuring system...${NC}"
+if [ "$MINIMAL" = false ]; then
+    echo -e "\n${CYAN}☉ Configuring system...${NC}"
+fi
 chmod +x topo
 
 # Pass --silent if this was an update to avoid redundant success banners
@@ -106,4 +123,6 @@ else
 fi
 
 # Note: The ./topo link command already prints the success message.
-echo -e "\n${GRAY}Note: If you want to uninstall later, run '${NC}topo remove${GRAY}'${NC}"
+if [ "$MINIMAL" = false ]; then
+    echo -e "\n${GRAY}Note: If you want to uninstall later, run '${NC}topo remove${GRAY}'${NC}"
+fi

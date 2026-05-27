@@ -19,6 +19,10 @@ from .manage.install import run_install_link
 from .manage.update import run_update
 from .ui.tui import main_menu
 
+# Get version from root VERSION file
+VERSION_FILE = Path(__file__).parent.parent / "VERSION"
+TOPO_VERSION = VERSION_FILE.read_text().strip() if VERSION_FILE.exists() else "0.5.0"
+
 def main():
     parser = argparse.ArgumentParser(
         description="topo - High-performance Linux System Optimizer (Inspired by Mole)",
@@ -61,7 +65,7 @@ Examples:
 
     # --- Global Options ---
     parser.add_argument("--dry-run", action="store_true", help="Preview changes without deleting")
-    parser.add_argument("--version", action="version", version="topo 0.5.0")
+    parser.add_argument("--version", action="version", version=f"topo {TOPO_VERSION}")
     
     args = parser.parse_args()
 
@@ -121,7 +125,7 @@ Examples:
         return
 
     # CLI Mode Execution
-    print(f"\033[1;34mtopo 0.5.0 (Python Edition)\033[0m")
+    print(f"\033[1;34mtopo {TOPO_VERSION} (Python Edition)\033[0m")
     os_id = get_os_id()
     print(f"System: {os_id}\n")
 
