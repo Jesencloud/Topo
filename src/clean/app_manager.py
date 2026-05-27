@@ -420,6 +420,14 @@ def run_uninstall():
             time.sleep(1)
             continue
 
+        # --- SUDO AUTHORIZATION ---
+        print(f"\n\n {GRAY}🔒 Authorizing system-level tasks (Ctrl+C to cancel)...{RESET}")
+        from ..core.system import ensure_sudo_session
+        if not ensure_sudo_session():
+            print(f" \033[1;33m⚠️  Uninstallation cancelled by user.\033[0m")
+            time.sleep(1)
+            continue
+
         # --- EXECUTION ---
         total_freed_all = 0
         removed_names = []

@@ -3,10 +3,11 @@ import sys
 from pathlib import Path
 from ..core.constants import CYAN, GREEN, YELLOW, GRAY, RESET, BOLD, BLUE
 
-def run_install_link():
+def run_install_link(silent=False):
     """Creates a symbolic link for topo in ~/.local/bin."""
 
-    print(f"\n {CYAN}☉ Setting up system-wide 'topo' command...{RESET}\n")
+    if not silent:
+        print(f"\n {CYAN}☉ Setting up system-wide 'topo' command...{RESET}\n")
 
     # 1. Paths
     repo_root = Path(__file__).parent.parent.parent
@@ -15,31 +16,40 @@ def run_install_link():
     target_link = target_dir / "topo"
 
     if not source_script.exists():
-        print(f" {YELLOW}✗{RESET} Error: Could not find launcher script at {source_script}")
+        if not silent:
+            print(f" {YELLOW}✗{RESET} Error: Could not find launcher script at {source_script}")
         return
 
     # 2. Ensure target dir exists
     if not target_dir.exists():
         try:
             target_dir.mkdir(parents=True, exist_ok=True)
-            print(f"  {GREEN}✓{RESET} Created directory: {GRAY}~/.local/bin{RESET}")
+            if not silent:
+                print(f"  {GREEN}✓{RESET} Created directory: {GRAY}~/.local/bin{RESET}")
         except Exception as e:
-            print(f" {YELLOW}✗{RESET} Error creating directory {target_dir}: {e}")
+            if not silent:
+                print(f" {YELLOW}✗{RESET} Error creating directory {target_dir}: {e}")
             return
 
     # 3. Create/Update link
     try:
         if target_link.exists() or target_link.is_symlink():
             target_link.unlink()
-            print(f"  {GRAY}↺{RESET} Removed existing link at {target_link}")
+            if not silent:
+                print(f"  {GRAY}↺{RESET} Removed existing link at {target_link}")
         
         target_link.symlink_to(source_script.absolute())
-        print(f"  {GREEN}✓{RESET} Created symbolic link: {BOLD}{target_link}{RESET}")
+        if not silent:
+            print(f"  {GREEN}✓{RESET} Created symbolic link: {BOLD}{target_link}{RESET}")
     except Exception as e:
-        print(f" {YELLOW}✗{RESET} Error creating symbolic link: {e}")
+        if not silent:
+            print(f" {YELLOW}✗{RESET} Error creating symbolic link: {e}")
         return
 
     # 4. Success message & Path check
+    if silent:
+        return
+
     print("\n" + "=" * 70)
     print(f" {BLUE}Success! 'topo' is now available.{RESET}")
     

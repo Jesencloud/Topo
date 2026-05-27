@@ -48,12 +48,13 @@ class Navigator:
     LEFT = '\x1b[D'
     ENTER = '\r'
     ESC = '\x1b'
+    DEL = '\x1b[3~'
     SPACE = ' '
     Q = 'q'
 
     @staticmethod
     def get_key():
-        """The original stable key reader, fixed for isolated ESC keys."""
+        """The original stable key reader, fixed for isolated ESC and longer sequences."""
         fd = sys.stdin.fileno()
         old_settings = termios.tcgetattr(fd)
         try:
@@ -62,10 +63,13 @@ class Navigator:
             ch_bytes = os.read(fd, 1)
             ch = ch_bytes.decode('utf-8', 'ignore')
             if ch == '\x1b':
-                # Check if it's an arrow key sequence or just a lone ESC
-                r, _, _ = select.select([fd], [], [], 0.1)
+                # Check if it's an escape sequence or just a lone ESC
+                r, _, _ = select.select([fd], [], [], 0.05)
                 if r:
-                    ch += os.read(fd, 2).decode('utf-8', 'ignore')
+                    # Read remaining characters in the sequence
+                    # Arrow keys are 2 more, Del is 3 more
+                    seq = os.read(fd, 3).decode('utf-8', 'ignore')
+                    ch += seq
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
         return ch
@@ -153,7 +157,7 @@ class AnalyzeSelector:
                 item = self.items[i]
                 print(f"   \033[1;35m•\033[0m {item.get('icon', '📁')} {item['name']}")
         if self.can_select:
-            print(f"\033[1;90m ↑↓←→ | Num Select | Space Select | A All | ← Back | Enter Open/In | D Delete | R Refresh | S Sort {order_icon} | ESC Exit\033[0m")
+            print(f"\033[1;90m ↑↓←→ | Num Select | Space Select | A All | ← Back | Enter Open/In | Del Delete | R Refresh | S Sort {order_icon} | ESC Exit\033[0m")
         else:
             print(f"\033[1;90m ↑↓→ | Enter Explore | R Refresh | S Sort {order_icon} | ESC Exit\033[0m")
 
@@ -190,7 +194,7 @@ class AnalyzeSelector:
                             else: self.selected_items.add(idx)
                     except: pass
                 elif key in (Navigator.ENTER, Navigator.RIGHT): return "DRILL_DOWN", self.selected_index
-                elif key.lower() == 'd' and self.can_select:
+                elif key == Navigator.DEL and self.can_select:
                     if not self.selected_items: continue
                     return "DELETE_BATCH", list(self.selected_items)
                 elif key.lower() == 's': self.sort_reverse = not self.sort_reverse; self._sort_items()
@@ -348,7 +352,7 @@ class UninstallSelector:
                 elif key.lower() == 'n': self.sort_key = 'name'; self.sort_reverse = not self.sort_reverse; self._sort_items()
                 elif key.lower() == 't': self.sort_key = 'install_time'; self.sort_reverse = not self.sort_reverse; self._sort_items()
                 elif key.lower() == 'o': self.sort_reverse = not self.sort_reverse; self._sort_items()
-                elif key == Navigator.ENTER:
+                elif key == Navigator.ENTER or key == Navigator.DEL:
                     if not self.selected_ids:
                         if total_len > 0: return [self.selected_index]
                         continue
@@ -393,7 +397,7 @@ class TopFilesSelector:
                 elif key == Navigator.SPACE:
                     if self.selected_index in self.selected_items: self.selected_items.remove(self.selected_index)
                     else: self.selected_items.add(self.selected_index)
-                elif key == Navigator.ENTER:
+                elif key == Navigator.ENTER or key == Navigator.DEL:
                     if not self.selected_items: continue
                     return list(self.selected_items)
                 elif key == Navigator.ESC: return []
@@ -448,7 +452,7 @@ class CleanSelector:
                 elif key == Navigator.SPACE:
                     if self.selected_index in self.selected_items: self.selected_items.remove(self.selected_index)
                     else: self.selected_items.add(self.selected_index)
-                elif key == Navigator.ENTER:
+                elif key == Navigator.ENTER or key == Navigator.DEL:
                     if not self.selected_items: continue
                     return list(self.selected_items)
                 elif key == Navigator.ESC: return []

@@ -97,7 +97,13 @@ rm -rf tests/ daily_report.md pytest.ini topo.py .gitignore README.md topo-core/
 # 5. Run the linking script
 echo -e "\n${CYAN}☉ Configuring system...${NC}"
 chmod +x topo
-./topo link
+
+# Pass --silent if this was an update to avoid redundant success banners
+if [ -d "$INSTALL_DIR" ]; then
+    ./topo link --silent
+else
+    ./topo link
+fi
 
 # Note: The ./topo link command already prints the success message.
 echo -e "\n${GRAY}Note: If you want to uninstall later, run '${NC}topo remove${GRAY}'${NC}"

@@ -48,7 +48,9 @@ Examples:
     subparsers.add_parser("status", help="Monitor system health and resource usage")
     
     # --- Management ---
-    subparsers.add_parser("link", help="Create a symbolic link in ~/.local/bin for 'topo' command")
+    link_parser = subparsers.add_parser("link", help="Create a symbolic link in ~/.local/bin for 'topo' command")
+    link_parser.add_argument("--silent", action="store_true", help="Suppress success banner")
+    
     wl_parser = subparsers.add_parser("whitelist", help="Manage path protection whitelist")
     wl_parser.add_argument("action", choices=["add", "remove", "list"], nargs="?", default="list", help="Whitelist action")
     wl_parser.add_argument("path", nargs="?", help="Target path for add/remove")
@@ -146,7 +148,7 @@ Examples:
             print("\033[1;33m⚠️  Optimization cancelled by user.\033[0m")
 
     if args.command == "link":
-        run_install_link()
+        run_install_link(silent=args.silent)
 
     if args.command == "update":
         run_update()
