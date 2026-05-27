@@ -235,9 +235,14 @@ def run_deep_analysis():
             ScanCache._data.pop(str(target_to_scan), None)
             needs_scan = True
         elif action == "OPEN":
-            subprocess.run(["xdg-open", str(results[idx]['path'])], capture_output=True)
+            path = results[idx]['path']
+            parent = path.parent if path.exists() else path
+            subprocess.run(["xdg-open", str(parent)], capture_output=True)
         elif action == "OPEN_BATCH":
-            for i in idx: subprocess.run(["xdg-open", str(results[i]['path'])], capture_output=True)
+            # Open the containing folder for all selected items (avoid duplicates)
+            parents = {results[i]['path'].parent for i in idx}
+            for p in parents:
+                subprocess.run(["xdg-open", str(p)], capture_output=True)
         elif action == "SWITCH_FILES":
             _render_top_files(data)
         elif action == "DELETE" or action == "DELETE_BATCH":
@@ -316,7 +321,16 @@ def run_deep_analysis():
                 current_target = target
                 needs_scan = True
             else:
-                print(f"\n   📄 {item['name']} is a file. Use 'O' to open."); time.sleep(1.2)
+                # If it's a file, check if it's an archive to prevent accidental extraction
+                target = results[idx]['path']
+                ext = target.suffix.lower()
+                archives = {'.zip', '.tar', '.gz', '.7z', '.rar', '.xz', '.bz2', '.tgz', '.tbz2', '.txz', '.deb', '.rpm'}
+                
+                if ext in archives:
+                    print(f"\n   📦 {target.name} is an archive. Auto-open disabled to prevent extraction.")
+                    print(f"      Use 'F' to locate it in your file manager."); time.sleep(2.0)
+                else:
+                    subprocess.run(["xdg-open", str(target)], capture_output=True)
 
 def _render_top_files(data):
     top_files = data.get("top_files", [])

@@ -144,7 +144,7 @@ class AnalyzeSelector:
             else: checkbox_str = f" {i+1:2}. "
             bar = draw_bar(item['percent'], width=bar_w, force_color=item.get('color'))
             bar_str = f"{bar}  " if bar_w > 0 else ""
-            style = "\033[1;37m" if is_hover else ""
+            style = "\033[1;35m" if is_hover else ""
             name_padded = pad_and_truncate(item['name'], name_w)
             icon = item.get('icon', '📁'); age_hint = item.get('age_hint', '')
             age_str = f" {GRAY}{age_hint}{RESET}" if age_hint else ""
@@ -157,9 +157,9 @@ class AnalyzeSelector:
                 item = self.items[i]
                 print(f"   \033[1;35m•\033[0m {item.get('icon', '📁')} {item['name']}")
         if self.can_select:
-            print(f"\033[1;90m ↑↓←→ | Num Select | Space Select | A All | ← Back | Enter Open/In | Del Delete | R Refresh | S Sort {order_icon} | ESC Exit\033[0m")
+            print(f"\033[1;90m ↑↓←→ | Num Select | Space Select | A All | ← Back | Enter Open | F Folder | L Largest | Del Delete | R Refresh | S Sort {order_icon} | ESC Exit\033[0m")
         else:
-            print(f"\033[1;90m ↑↓→ | Enter Explore | R Refresh | S Sort {order_icon} | ESC Exit\033[0m")
+            print(f"\033[1;90m ↑↓→ | Enter Open | F Folder | L Largest | R Refresh | S Sort {order_icon} | ESC Exit\033[0m")
 
     def run(self):
         if not self.items: return None, None
@@ -199,7 +199,7 @@ class AnalyzeSelector:
                     return "DELETE_BATCH", list(self.selected_items)
                 elif key.lower() == 's': self.sort_reverse = not self.sort_reverse; self._sort_items()
                 elif key.lower() == 'r': return "REFRESH", None
-                elif key.lower() == 'o':
+                elif key.lower() == 'f':
                     if self.can_select:
                         if self.selected_items: return "OPEN_BATCH", list(self.selected_items)
                         return "OPEN", self.selected_index
@@ -207,7 +207,7 @@ class AnalyzeSelector:
                 elif key.lower() == 'a' and self.can_select:
                     if len(self.selected_items) == len(self.items): self.selected_items.clear()
                     else: self.selected_items = set(range(len(self.items)))
-                elif key.lower() == 'f': return "SWITCH_FILES", None
+                elif key.lower() == 'l': return "SWITCH_FILES", None
                 elif key == Navigator.ESC: return "QUIT", None
         finally: Navigator.show_cursor()
 
