@@ -1,10 +1,10 @@
-name: Build & Release Rust Core
+name: Build & Release Topo
 
 on:
   push:
     tags:
-      - 'v*' # Trigger on version tags like v0.5.0
-  workflow_dispatch: # Allow manual trigger
+      - 'v*'
+  workflow_dispatch:
 
 jobs:
   build:

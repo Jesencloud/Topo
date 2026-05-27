@@ -60,6 +60,7 @@ class Scanner:
         return artifacts
 
 from ..ui.navigator import PaginatedSelector
+from ..core.analyze import ScanCache
 
 def run_purge(dry_run=False):
     while True:
@@ -113,6 +114,7 @@ def run_purge(dry_run=False):
                 print(f"\n🧪 [DRY RUN] Would remove {len(selected)} items, freeing {bytes_to_human(total_size)}")
             else:
                 count, total_freed = manager.execute_purge(selected)
+                if count > 0: ScanCache.clear()
                 print(f"\n✨ Purge complete: {count} items removed, {total_freed} space freed.")
             input("\nPress Enter to return to menu...")
             break

@@ -76,7 +76,6 @@ def clean_flatpak_unused(dry_run=False):
     return 0, 0
 
 def clean_apps_deep(dry_run=False):
-    print("\033[1;95m➤ Deep App Cleanup\033[0m")
     total_size = 0
     total_items = 0
     total_categories = 0

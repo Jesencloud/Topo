@@ -42,7 +42,8 @@ def clean_journal(dry_run=False):
             print(f"  \033[0;32m✓\033[0m journal logs would be vacuumed")
             return 0, 0, 1
             
-        res = run_command(["journalctl", "--vacuum-time=7d"], use_sudo=True, capture=True)
+        # More aggressive vacuuming: keep only last 1MB of logs
+        res = run_command(["journalctl", "--vacuum-size=1M"], use_sudo=True, capture=True)
         if res and res.stdout:
             freed = parse_size_from_text(res.stdout)
             if freed > 0:

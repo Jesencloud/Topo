@@ -15,9 +15,9 @@ def parse_size_from_text(text: str) -> int:
     if match:
         val = float(match.group(1))
         unit = match.group(2).upper()
-        if 'G' in unit: val *= 1000 * 1000 * 1000
-        elif 'M' in unit: val *= 1000 * 1000
-        elif 'K' in unit: val *= 1000
+        if 'G' in unit: val *= 1024 * 1024 * 1024
+        elif 'M' in unit: val *= 1024 * 1024
+        elif 'K' in unit: val *= 1024
         return int(val)
     return 0
 

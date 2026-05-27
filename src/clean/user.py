@@ -99,8 +99,17 @@ def clean_system_temp(dry_run=False):
     return total_size, total_items, 1
 
 def clean_user_data(dry_run=False):
-    print("\033[1;95m➤ User Data Cleanup\033[0m")
-    s1, i1, c1 = clean_trash(dry_run)
-    s2, i2, c2 = clean_user_caches(dry_run)
-    s3, i3, c3 = clean_system_temp(dry_run)
-    return s1+s2+s3, i1+i2+i3, c1+c2+c3
+    total_size = 0
+    total_items = 0
+    categories = 0
+    
+    s, i, c = clean_trash(dry_run)
+    total_size += s; total_items += i; categories += c
+    
+    s, i, c = clean_user_caches(dry_run)
+    total_size += s; total_items += i; categories += c
+    
+    s, i, c = clean_system_temp(dry_run)
+    total_size += s; total_items += i; categories += c
+    
+    return total_size, total_items, categories

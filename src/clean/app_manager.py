@@ -335,6 +335,7 @@ class UninstallManager:
         return success, app_freed_bytes, removed_details
 
 from ..ui.navigator import UninstallSelector
+from ..core.analyze import ScanCache
 
 def run_uninstall():
     manager = UninstallManager()
@@ -455,6 +456,7 @@ def run_uninstall():
                 print(f"\033[1;31m[✗]\033[0m {app['name']} uninstallation failed.\n")
 
         # Final Summary (Pixel-perfect matching of the screenshot)
+        if total_freed_all > 0: ScanCache.clear()
         print("=" * 70)
         print("\033[1;34mUninstall complete\033[0m")
         names_str = ", ".join(removed_names)

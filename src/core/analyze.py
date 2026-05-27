@@ -32,6 +32,8 @@ class ScanCache:
     def get(cls, path: Path): return cls._data.get(str(path))
     @classmethod
     def set(cls, path: Path, data): cls._data[str(path)] = data
+    @classmethod
+    def clear(cls): cls._data.clear()
 
 def get_age_hint(path: Path) -> str:
     """Calculates and formats the age of a file or directory."""
@@ -167,14 +169,12 @@ def run_deep_analysis():
                     {"name": "Old Downloads (90d+)", "path": home / "Downloads", "is_smart": True},
                     {"name": "Docker Data", "path": home / ".docker"},
                     {"name": "Docker System", "path": Path("/var/lib/docker")},
-                    {"name": "System Logs", "path": Path("/var/log")},
                     {"name": "Apt Cache", "path": Path("/var/cache/apt/archives")},
                     {"name": "Pacman Cache", "path": Path("/var/cache/pacman/pkg")},
                     {"name": "Dnf Cache", "path": Path("/var/cache/dnf")},
                     {"name": "User Trash", "path": home / ".local/share/Trash"},
                     {"name": "Pip Cache", "path": home / ".cache/pip"},
                     {"name": "Npm Cache", "path": home / ".npm"},
-                    {"name": "Cargo Cache", "path": home / ".cargo"},
                     {"name": "Snap Data", "path": home / "snap"},
                     {"name": "Flatpak Data", "path": home / ".local/share/flatpak"},
                     {"name": "Ollama Models", "path": home / ".ollama" / "models"},
