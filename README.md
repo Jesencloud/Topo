@@ -19,9 +19,10 @@
 
 ## Features
 
-- **All-in-one toolkit**: Combines DNF/APT cleaner, App Uninstaller, Disk Analyzer, and iStat-style Monitor in a **single tool**.
-- **Deep cleaning**: Reclaims gigabytes by purging caches, journal logs, browser leftovers, and massive **AI/LLM models**.
-- **Smart uninstaller**: Removes applications plus their hidden config remnants in `~/.config` and `~/.local`.
+- **All-in-one toolkit**: Combines package managers (DNF/APT/Pacman), App Uninstaller, Disk Analyzer, and Monitor in a **single tool**.
+- **Intelligent cleanup**: Features a proactive detection engine that auto-discovers unknown apps, AppImage remnants, and orphaned data.
+- **AI Developer ready**: Reclaims gigabytes with age-aware purging for Hugging Face, Ollama, PyTorch, and CUDA caches.
+- **Cross-distro support**: Deep cleans Ubuntu Snaps, Multipass, Flatpaks, and Fedora Podman/Docker environments.
 - **Disk insights**: Ultra-fast disk explorer powered by a **Rust scanning engine** with parallel I/O.
 - **Live monitoring**: Real-time dashboard showing CPU, GPU, memory, and top resource-consuming processes.
 
@@ -137,6 +138,8 @@ Select a category to explore:
 ## Technical Advantages
 
 - **Multi-Arch Native**: Optimized binaries for both **x86_64** and **ARM64** (Apple Silicon, Raspberry Pi).
+- **Self-Learning Registry**: Automatically learns your installed apps to provide process-safe, high-precision cleaning without relying solely on hardcoded lists.
+- **Terminal History Protection**: Uses the Alternate Screen Buffer to ensure your terminal session history is perfectly preserved upon exit.
 - **Intelligent Silence**: "Silent on zero-gain" policy—only shows what actually matters.
 - **Zero-Latency UI**: Built-in **ScanCache** for instant directory navigation.
 - **Hybrid Power**: High-level flexibility of Python combined with the raw speed of Rust.
