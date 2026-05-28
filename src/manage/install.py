@@ -1,7 +1,8 @@
 import os
-import sys
 from pathlib import Path
-from ..core.constants import CYAN, GREEN, YELLOW, GRAY, RESET, BOLD, BLUE
+
+from ..core.constants import BLUE, BOLD, CYAN, GRAY, GREEN, RESET, YELLOW
+
 
 def run_install_link(silent=False):
     """Creates a symbolic link for topo in ~/.local/bin."""
@@ -37,7 +38,7 @@ def run_install_link(silent=False):
             target_link.unlink()
             if not silent:
                 print(f"  {GRAY}↺{RESET} Removed existing link at {target_link}")
-        
+
         target_link.symlink_to(source_script.absolute())
         if not silent:
             print(f"  {GREEN}✓{RESET} Created symbolic link: {BOLD}{target_link}{RESET}")
@@ -52,16 +53,16 @@ def run_install_link(silent=False):
 
     print("\n" + "=" * 70)
     print(f" {BLUE}Success! 'topo' is now available.{RESET}")
-    
+
     path_env = os.environ.get("PATH", "")
     if str(target_dir) not in path_env:
         print(f"\n {YELLOW}ℹ  ~/.local/bin is not in your PATH. Attempting auto-fix...{RESET}")
-        
+
         added = False
         # Potential shell config files
         shell_configs = [Path.home() / ".bashrc", Path.home() / ".zshrc"]
         export_line = 'export PATH="$HOME/.local/bin:$PATH"'
-        
+
         for config in shell_configs:
             if config.exists():
                 try:
@@ -71,14 +72,15 @@ def run_install_link(silent=False):
                             f.write(f"\n# Added by topo\n{export_line}\n")
                         print(f"  {GREEN}✓{RESET} Added to {GRAY}{config.name}{RESET}")
                         added = True
-                except: pass
-        
+                except Exception:
+                    pass
+
         if added:
             print(f"\n {BOLD}Please restart your terminal or run:{RESET}")
             print(f" {GRAY}source ~/.bashrc{RESET} (or your shell config)")
         else:
             print(f"\n {YELLOW}⚠️  Manual action required:{RESET}")
-            print(f" Add this line to your .bashrc or .zshrc:")
+            print(" Add this line to your .bashrc or .zshrc:")
             print(f" {GRAY}{export_line}{RESET}")
     else:
         print(f" You can now run {BOLD}topo{RESET} from any directory.")

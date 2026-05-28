@@ -1,12 +1,15 @@
 import json
-import os
 from pathlib import Path
-from typing import List, Any, Dict
+from typing import Any
+
+
 def get_config_dir() -> Path:
     return Path.home() / ".config" / "topo"
 
+
 def get_config_file() -> Path:
     return get_config_dir() / "config.json"
+
 
 DEFAULT_CONFIG = {
     "purge_search_paths": [
@@ -20,15 +23,17 @@ DEFAULT_CONFIG = {
     ],
     "use_trash": True,
     "min_age_days": 7,
-    "theme_color": "cyan"
+    "theme_color": "cyan",
 }
+
 
 def _ensure_config():
     config_dir = get_config_dir()
     if not config_dir.exists():
         config_dir.mkdir(parents=True, exist_ok=True)
 
-def load_config() -> Dict[str, Any]:
+
+def load_config() -> dict[str, Any]:
     _ensure_config()
     config_file = get_config_file()
     if not config_file.exists():
@@ -36,24 +41,26 @@ def load_config() -> Dict[str, Any]:
         return DEFAULT_CONFIG
 
     try:
-        with open(config_file, "r") as f:
+        with open(config_file) as f:
             user_config = json.load(f)
             # Merge with defaults to ensure all keys exist
             config = DEFAULT_CONFIG.copy()
             config.update(user_config)
             return config
-    except:
+    except Exception:
         return DEFAULT_CONFIG
 
-def save_config(config: Dict[str, Any]):
+
+def save_config(config: dict[str, Any]):
     _ensure_config()
     with open(get_config_file(), "w") as f:
         json.dump(config, f, indent=4)
 
 
-def get_purge_paths() -> List[str]:
+def get_purge_paths() -> list[str]:
     config = load_config()
     return config.get("purge_search_paths", DEFAULT_CONFIG["purge_search_paths"])
+
 
 def add_purge_path(path_str: str) -> bool:
     path = str(Path(path_str).expanduser().resolve())
@@ -65,6 +72,7 @@ def add_purge_path(path_str: str) -> bool:
         save_config(config)
         return True
     return False
+
 
 def remove_purge_path(path_str: str) -> bool:
     path = str(Path(path_str).expanduser().resolve())

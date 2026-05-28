@@ -1,29 +1,26 @@
-import os
 import argparse
 import sys
-import time
-import subprocess
-from pathlib import Path
 from contextlib import contextmanager
+from pathlib import Path
 
-from .clean.runner import run_clean
-from .clean.project import run_purge
 from .clean.app_manager import run_uninstall
 from .clean.optimize import optimize_system
-from .core.system import get_os_id, ensure_sudo_session, setup_passwordless_sudo
-from .core.status import show_status
+from .clean.project import run_purge
+from .clean.runner import run_clean
 from .core.analyze import run_deep_analysis
+from .core.status import show_status
+from .core.system import ensure_sudo_session, get_os_id, setup_passwordless_sudo
 from .core.whitelist import add_to_whitelist, remove_from_whitelist
-from .core.constants import BLUE, CYAN, MAGENTA, YELLOW, GREEN, RED, WHITE, GRAY, RESET, BOLD
-from .manage.remove import run_remove
 from .manage.install import run_install_link
+from .manage.remove import run_remove
 from .manage.update import run_update
-from .ui.tui import main_menu
 from .ui.navigator import Navigator
+from .ui.tui import main_menu
 
 # Get version from root VERSION file
 VERSION_FILE = Path(__file__).parent.parent / "VERSION"
 TOPO_VERSION = VERSION_FILE.read_text().strip() if VERSION_FILE.exists() else "0.5.0"
+
 
 @contextmanager
 def alternate_screen():
@@ -39,6 +36,7 @@ def alternate_screen():
         sys.stdout.write("\033[?1049l")
         sys.stdout.flush()
 
+
 def main():
     parser = argparse.ArgumentParser(
         description="topo - High-performance Linux System Optimizer (Inspired by Mole)",
@@ -52,9 +50,9 @@ Examples:
   topo update          Upgrade to the latest version
   topo whitelist list  View currently protected paths
   topo --dry-run clean Preview files to be cleaned without deleting
-"""
+""",
     )
-    
+
     # Use a subparser for better help organization
     subparsers = parser.add_subparsers(dest="command", metavar="COMMAND")
 
@@ -66,15 +64,23 @@ Examples:
     subparsers.add_parser("optimize", help="Run system maintenance (fstrim, databases, etc.)")
     subparsers.add_parser("analyze", help="Interactive disk usage explorer")
     subparsers.add_parser("status", help="Monitor system health and resource usage")
-    
+
     # --- Management ---
-    link_parser = subparsers.add_parser("link", help="Create a symbolic link in ~/.local/bin for 'topo' command")
+    link_parser = subparsers.add_parser(
+        "link", help="Create a symbolic link in ~/.local/bin for 'topo' command"
+    )
     link_parser.add_argument("--silent", action="store_true", help="Suppress success banner")
-    
+
     wl_parser = subparsers.add_parser("whitelist", help="Manage path protection whitelist")
-    wl_parser.add_argument("action", choices=["add", "remove", "list"], nargs="?", default="list", help="Whitelist action")
+    wl_parser.add_argument(
+        "action",
+        choices=["add", "remove", "list"],
+        nargs="?",
+        default="list",
+        help="Whitelist action",
+    )
     wl_parser.add_argument("path", nargs="?", help="Target path for add/remove")
-    
+
     subparsers.add_parser("authorize", help="Setup passwordless sudo for faster cleanup")
     subparsers.add_parser("remove", help="Uninstall topo from the system")
     subparsers.add_parser("all", help="Run all cleanup and purge tasks sequentially")
@@ -82,7 +88,7 @@ Examples:
     # --- Global Options ---
     parser.add_argument("--dry-run", action="store_true", help="Preview changes without deleting")
     parser.add_argument("--version", action="version", version=f"topo {TOPO_VERSION}")
-    
+
     args = parser.parse_args()
 
     # Authorization setup command
@@ -104,6 +110,7 @@ Examples:
                 print(f"❌ Path not found in whitelist: {args.path}")
         elif args.action == "list" or not args.action:
             from .core.whitelist import get_whitelist
+
             w = get_whitelist()
             print("\033[1;36m🛡️  Current Whitelist:\033[0m")
             if not w:
@@ -121,21 +128,26 @@ Examples:
                 choice = main_menu()
                 if choice == "1":
                     run_clean(args.dry_run)
-                    if not Navigator.wait_for_return(): break
+                    if not Navigator.wait_for_return():
+                        break
                 elif choice == "2":
                     run_uninstall()
                 elif choice == "3":
-                    print("\033[1;90m🔒 Authorizing optimization tasks (Ctrl+C to cancel)...\033[0m")
+                    print(
+                        "\033[1;90m🔒 Authorizing optimization tasks (Ctrl+C to cancel)...\033[0m"
+                    )
                     if ensure_sudo_session():
                         optimize_system(args.dry_run)
                     else:
                         print("\033[1;33m⚠️  Optimization cancelled by user.\033[0m")
-                    if not Navigator.wait_for_return(): break
+                    if not Navigator.wait_for_return():
+                        break
                 elif choice == "4":
                     run_deep_analysis()
                 elif choice == "5":
                     show_status()
-                    if not Navigator.wait_for_return(): break
+                    if not Navigator.wait_for_return():
+                        break
                 elif choice == "0" or choice.lower() == "q":
                     break
         return
@@ -179,6 +191,7 @@ Examples:
 
     if args.command == "remove":
         run_remove(args.dry_run)
+
 
 if __name__ == "__main__":
     main()

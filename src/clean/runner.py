@@ -1,13 +1,22 @@
 import os
 import shutil
-from ..core.system import ensure_sudo_session
-from ..core.file_ops import bytes_to_human
+
 from ..core.analyze import ScanCache
-from .system import clean_package_manager, clean_journal
-from .user import clean_user_data
+from ..core.constants import (
+    CYAN,
+    GRAY,
+    GREEN,
+    PURPLE,
+    RESET,
+    YELLOW,
+)
+from ..core.file_ops import bytes_to_human
+from ..core.system import ensure_sudo_session
 from .apps import clean_apps_deep, proactive_app_detection
 from .dev import clean_developer_tools
-from ..core.constants import CYAN, GREEN, YELLOW, GRAY, RESET, BLUE, BOLD, MAGENTA, RED, WHITE, PURPLE
+from .system import clean_journal, clean_package_manager
+from .user import clean_user_data
+
 
 def run_clean(dry_run=False):
     # 0. Proactive Detection (Auto-Discovery) - Run immediately to build registry
@@ -26,26 +35,29 @@ def run_clean(dry_run=False):
         else:
             print(f" {GREEN}✓{RESET} Authorization successful.\n")
 
-    total_size = 0; total_items = 0; total_categories = 0
+    total_size = 0
+    total_items = 0
+    total_categories = 0
     category_results = []
-    
-    import io; import contextlib
+
+    import contextlib
+    import io
 
     # Define the grouped categories
     execution_groups = [
-        ("\033[1;95m➤ System & Package Manager\033[0m", [
-            ("Package Manager Cache", clean_package_manager), 
-            ("System Journal Logs", clean_journal)
-        ]),
-        ("\033[1;95m➤ User Data Cleanup\033[0m", [
-            ("User Data & Trash", clean_user_data)
-        ]),
-        ("\033[1;95m➤ Deep App Cleanup\033[0m", [
-            ("Deep App Caches", clean_apps_deep)
-        ]),
-        ("\033[1;95m➤ Developer Tools & AI Models\033[0m", [
-            ("Developer Artifacts", clean_developer_tools)
-        ])
+        (
+            "\033[1;95m➤ System & Package Manager\033[0m",
+            [
+                ("Package Manager Cache", clean_package_manager),
+                ("System Journal Logs", clean_journal),
+            ],
+        ),
+        ("\033[1;95m➤ User Data Cleanup\033[0m", [("User Data & Trash", clean_user_data)]),
+        ("\033[1;95m➤ Deep App Cleanup\033[0m", [("Deep App Caches", clean_apps_deep)]),
+        (
+            "\033[1;95m➤ Developer Tools & AI Models\033[0m",
+            [("Developer Artifacts", clean_developer_tools)],
+        ),
     ]
 
     for header, tasks in execution_groups:
@@ -53,9 +65,12 @@ def run_clean(dry_run=False):
         with contextlib.redirect_stdout(f):
             for cat_name, func in tasks:
                 s, i, c = func(dry_run=dry_run)
-                total_size += s; total_items += i; total_categories += c
-                if s > 0 or i > 0: category_results.append((cat_name, s, i))
-        
+                total_size += s
+                total_items += i
+                total_categories += c
+                if s > 0 or i > 0:
+                    category_results.append((cat_name, s, i))
+
         output = f.getvalue()
         if output.strip():
             print(header)
@@ -74,12 +89,15 @@ def run_clean(dry_run=False):
 
     size_label = "\nTotal space freed" if not dry_run else "\nTotal space that can be freed"
     print(f"{size_label}: \033[1;32m{bytes_to_human(total_size)}\033[0m | Items: {total_items}")
-    
+
     if not dry_run:
         movies = total_size / (8 * 1024 * 1024 * 1024)
-        if movies >= 0.1: print(f"Equivalent to ~{movies:.1f} 4K movies of storage.")
+        if movies >= 0.1:
+            print(f"Equivalent to ~{movies:.1f} 4K movies of storage.")
         print(f"Free space now: {bytes_to_human(free_now)}")
-    
+
     print("=" * 60)
-    if dry_run: print(f"\n{GRAY}ℹ️  Run without --dry-run to actually delete these files.{RESET}")
-    else: ScanCache.clear()
+    if dry_run:
+        print(f"\n{GRAY}ℹ️  Run without --dry-run to actually delete these files.{RESET}")
+    else:
+        ScanCache.clear()

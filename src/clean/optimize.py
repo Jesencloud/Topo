@@ -1,17 +1,19 @@
-import shutil
-import subprocess
 import os
-import time
+import shutil
 import sqlite3
-from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import subprocess
 import threading
-from ..core.system import run_command, has_sudo
-from ..core.file_ops import get_size, bytes_to_human
-from ..core.constants import GREEN, YELLOW, BLUE, GRAY, RESET, BOLD
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+
+from ..core.constants import BLUE, BOLD, GRAY, GREEN, RESET
+from ..core.file_ops import bytes_to_human, get_size
+from ..core.system import has_sudo, run_command
 
 # Lock to ensure parallel tasks don't corrupt the terminal output
 print_lock = threading.Lock()
+
 
 def opt_log(message, success=True, skipped=False):
     if skipped:
@@ -20,10 +22,11 @@ def opt_log(message, success=True, skipped=False):
     else:
         icon = f"{GREEN}✓{RESET}"
         msg = f"{message}"
-    
+
     with print_lock:
         # Use a single print statement within a lock to ensure atomicity
         print(f"  {icon} {msg}")
+
 
 def vacuum_single_db(db_file):
     """Worker function to vacuum a single database only if worth it."""
@@ -36,24 +39,25 @@ def vacuum_single_db(db_file):
         freelist_count = cursor.fetchone()[0]
         cursor.execute("PRAGMA page_size")
         page_size = cursor.fetchone()[0]
-        
+
         if page_count == 0:
             conn.close()
             return 0
-            
+
         free_ratio = freelist_count / page_count
         free_bytes = freelist_count * page_size
-        
+
         if free_ratio > 0.1 or free_bytes > 5 * 1024 * 1024:
             old_size = get_size(db_file)
             conn.execute("VACUUM")
             conn.close()
             return old_size - get_size(db_file)
-        
+
         conn.close()
         return 0
-    except:
+    except Exception:
         return 0
+
 
 def run_vacuum_all(dry_run=False):
     """Task to optimize all browser databases."""
@@ -64,73 +68,102 @@ def run_vacuum_all(dry_run=False):
         "~/.config/BraveSoftware/Brave-Browser/Default/History",
         "~/.config/microsoft-edge/Default/History",
     ]
-    
+
     db_files = []
     for pattern in targets:
         path_obj = Path(pattern).expanduser()
         parent = path_obj.parent
-        if not parent.exists(): continue
+        if not parent.exists():
+            continue
         for f in parent.glob(path_obj.name):
-            if f.is_file(): db_files.append(f)
-    
-    if not db_files: return None
-    if dry_run: return f"Found {len(db_files)} database(s) to optimize"
+            if f.is_file():
+                db_files.append(f)
+
+    if not db_files:
+        return None
+    if dry_run:
+        return f"Found {len(db_files)} database(s) to optimize"
 
     total_saved = 0
     # Nested pool or just direct execution since we are already in a pool
     for db in db_files:
         total_saved += vacuum_single_db(db)
-    
+
     saved_str = f" (compressed {bytes_to_human(total_saved)})" if total_saved > 0 else ""
     return f"Optimized {len(db_files)} browser database(s){saved_str}"
 
+
 def run_fstrim():
-    if not shutil.which("fstrim"): return None
+    if not shutil.which("fstrim"):
+        return None
     run_command(["fstrim", "-av"], use_sudo=True, capture=True)
     return "SSD partitions trimmed (fstrim)"
 
+
 def run_fccache():
-    if not shutil.which("fc-cache"): return None
+    if not shutil.which("fc-cache"):
+        return None
     run_command(["fc-cache"], capture=True)
     return "System font cache refreshed"
 
+
 def run_dns_flush():
     dns_cmd = None
-    if shutil.which("resolvectl"): dns_cmd = ["resolvectl", "flush-caches"]
-    elif shutil.which("nscd"): dns_cmd = ["nscd", "-i", "hosts"]
-    if not dns_cmd: return None
+    if shutil.which("resolvectl"):
+        dns_cmd = ["resolvectl", "flush-caches"]
+    elif shutil.which("nscd"):
+        dns_cmd = ["nscd", "-i", "hosts"]
+    if not dns_cmd:
+        return None
     run_command(dns_cmd, use_sudo=True, capture=True)
     return "DNS resolver cache flushed"
 
+
 def run_zombie_cleanup(dry_run=False):
     autostart_dir = Path.home() / ".config" / "autostart"
-    if not autostart_dir.exists(): return None
+    if not autostart_dir.exists():
+        return None
     zombies = 0
     for desktop_file in autostart_dir.glob("*.desktop"):
         try:
             is_zombie = False
-            with open(desktop_file, 'r') as f:
+            with open(desktop_file) as f:
                 for line in f:
-                    if line.startswith('Exec='):
-                        line_content = line.split('=', 1)[1].strip()
-                        if not line_content: continue
+                    if line.startswith("Exec="):
+                        line_content = line.split("=", 1)[1].strip()
+                        if not line_content:
+                            continue
                         cmd = line_content.split()[0]
-                        if cmd.startswith('/') and not os.path.exists(cmd): is_zombie = True
-                        elif not cmd.startswith('/') and not shutil.which(cmd): is_zombie = True
+                        if (
+                            cmd.startswith("/")
+                            and not os.path.exists(cmd)
+                            or not cmd.startswith("/")
+                            and not shutil.which(cmd)
+                        ):
+                            is_zombie = True
                         break
             if is_zombie:
-                if not dry_run: desktop_file.unlink()
+                if not dry_run:
+                    desktop_file.unlink()
                 zombies += 1
-        except: continue
-    if zombies > 0: return f"Removed {zombies} zombie autostart entries"
+        except Exception:
+            continue
+    if zombies > 0:
+        return f"Removed {zombies} zombie autostart entries"
     return None
 
+
 def run_memory_opt():
-    if not has_sudo(): return None
+    if not has_sudo():
+        return None
     subprocess.Popen(["sync"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    subprocess.run(["sudo", "bash", "-c", "echo 1 > /proc/sys/vm/drop_caches"], 
-                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(
+        ["sudo", "bash", "-c", "echo 1 > /proc/sys/vm/drop_caches"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
     return "PageCache released (Memory relief)"
+
 
 def run_thumbnail_cleanup():
     thumb_cache = os.path.expanduser("~/.cache/thumbnails")
@@ -139,13 +172,14 @@ def run_thumbnail_cleanup():
         return "Desktop thumbnail cache cleared"
     return None
 
+
 def optimize_system(dry_run=False):
-    os.system('clear')
+    os.system("clear")
     print(f"{BLUE}{BOLD}System Optimization{RESET}")
     print(f"{GRAY}Running maintenance tasks in parallel...{RESET}\n")
-    
+
     start_time = time.time()
-    
+
     tasks = []
     if not dry_run:
         tasks = [
@@ -155,23 +189,20 @@ def optimize_system(dry_run=False):
             run_memory_opt,
             run_thumbnail_cleanup,
             lambda: run_vacuum_all(dry_run),
-            lambda: run_zombie_cleanup(dry_run)
+            lambda: run_zombie_cleanup(dry_run),
         ]
     else:
-        tasks = [
-            lambda: run_vacuum_all(True),
-            lambda: run_zombie_cleanup(True)
-        ]
+        tasks = [lambda: run_vacuum_all(True), lambda: run_zombie_cleanup(True)]
 
     with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
         futures = {executor.submit(task): task for task in tasks}
-        
+
         for future in as_completed(futures):
             try:
                 result = future.result()
                 if result:
                     opt_log(result, skipped=dry_run)
-            except Exception as e:
+            except Exception:
                 # Silently skip failed maintenance tasks
                 pass
 

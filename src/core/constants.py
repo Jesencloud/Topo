@@ -1,39 +1,38 @@
 from pathlib import Path
-import os
 
 # Canonical purge targets (heavy project build artifacts)
 PURGE_TARGETS = {
     "node_modules",
-    "target",        # Rust, Maven
-    "build",         # Gradle, various
-    "dist",          # JS builds
-    "venv",          # Python
-    ".venv",         # Python
-    ".pytest_cache", # Python (pytest)
-    ".mypy_cache",   # Python (mypy)
-    ".tox",          # Python (tox virtualenvs)
-    ".nox",          # Python (nox virtualenvs)
-    ".ruff_cache",   # Python (ruff)
-    ".gradle",       # Gradle local
-    "__pycache__",   # Python
-    ".next",         # Next.js
-    ".nuxt",         # Nuxt.js
-    ".output",       # Nuxt.js
-    "vendor",        # PHP Composer
-    "bin",           # .NET build output (guarded)
-    "obj",           # C# / Unity
-    ".turbo",        # Turborepo cache
-    ".parcel-cache" # Parcel bundler
-    ".dart_tool",    # Flutter/Dart build cache
-    ".zig-cache",    # Zig
-    "zig-out",       # Zig
-    ".angular",      # Angular
-    ".svelte-kit",   # SvelteKit
-    ".astro",        # Astro
-    "coverage",      # Code coverage reports
-    ".cxx",          # React Native Android NDK build cache
-    ".expo",         # Expo
-    ".build",        # Swift Package Manager
+    "target",  # Rust, Maven
+    "build",  # Gradle, various
+    "dist",  # JS builds
+    "venv",  # Python
+    ".venv",  # Python
+    ".pytest_cache",  # Python (pytest)
+    ".mypy_cache",  # Python (mypy)
+    ".tox",  # Python (tox virtualenvs)
+    ".nox",  # Python (nox virtualenvs)
+    ".ruff_cache",  # Python (ruff)
+    ".gradle",  # Gradle local
+    "__pycache__",  # Python
+    ".next",  # Next.js
+    ".nuxt",  # Nuxt.js
+    ".output",  # Nuxt.js
+    "vendor",  # PHP Composer
+    "bin",  # .NET build output (guarded)
+    "obj",  # C# / Unity
+    ".turbo",  # Turborepo cache
+    ".parcel-cache"  # Parcel bundler
+    ".dart_tool",  # Flutter/Dart build cache
+    ".zig-cache",  # Zig
+    "zig-out",  # Zig
+    ".angular",  # Angular
+    ".svelte-kit",  # SvelteKit
+    ".astro",  # Astro
+    "coverage",  # Code coverage reports
+    ".cxx",  # React Native Android NDK build cache
+    ".expo",  # Expo
+    ".build",  # Swift Package Manager
 }
 
 # Monorepo indicators (higher priority)
@@ -85,58 +84,53 @@ HOME = Path.home()
 # Format: "Friendly Name": {"paths": [Path...], "procs": [process_names...]}
 APP_DEFS = {
     "Discord": {
-        "paths": [HOME / ".config/discord/Cache", HOME / ".config/discord/Code Cache", HOME / ".config/discord/GPUCache"],
-        "procs": ["discord"]
+        "paths": [
+            HOME / ".config/discord/Cache",
+            HOME / ".config/discord/Code Cache",
+            HOME / ".config/discord/GPUCache",
+        ],
+        "procs": ["discord"],
     },
     "Telegram": {
-        "paths": [HOME / ".local/share/TelegramDesktop/tdata/user_data/Cache", HOME / ".local/share/TelegramDesktop/tdata/user_data/temp"],
-        "procs": ["Telegram"]
+        "paths": [
+            HOME / ".local/share/TelegramDesktop/tdata/user_data/Cache",
+            HOME / ".local/share/TelegramDesktop/tdata/user_data/temp",
+        ],
+        "procs": ["Telegram"],
     },
     "Slack": {
         "paths": [HOME / ".config/Slack/Cache", HOME / ".config/Slack/Service Worker/CacheStorage"],
-        "procs": ["slack"]
+        "procs": ["slack"],
     },
-    "Spotify": {
-        "paths": [HOME / ".cache/spotify/Data"],
-        "procs": ["spotify"]
-    },
+    "Spotify": {"paths": [HOME / ".cache/spotify/Data"], "procs": ["spotify"]},
     "Google Chrome": {
-        "paths": [HOME / ".config/google-chrome/Default/Cache", HOME / ".config/google-chrome/Default/Code Cache"],
-        "procs": ["google-chrome"]
+        "paths": [
+            HOME / ".config/google-chrome/Default/Cache",
+            HOME / ".config/google-chrome/Default/Code Cache",
+        ],
+        "procs": ["google-chrome"],
     },
     "Brave Browser": {
         "paths": [HOME / ".config/BraveSoftware/Brave-Browser/Default/Cache"],
-        "procs": ["brave"]
+        "procs": ["brave"],
     },
     "Microsoft Edge": {
         "paths": [HOME / ".config/microsoft-edge/Default/Cache"],
-        "procs": ["microsoft-edge"]
+        "procs": ["microsoft-edge"],
     },
-    "Zoom": {
-        "paths": [HOME / ".zoom/data"],
-        "procs": ["zoom"]
-    },
-    "Microsoft Teams": {
-        "paths": [HOME / ".config/Microsoft/Teams/Cache"],
-        "procs": ["teams"]
-    },
-    "VLC": {
-        "paths": [HOME / ".cache/vlc"],
-        "procs": ["vlc"]
-    },
-    "OBS Studio": {
-        "paths": [HOME / ".config/obs-studio/logs"],
-        "procs": ["obs"]
-    },
+    "Zoom": {"paths": [HOME / ".zoom/data"], "procs": ["zoom"]},
+    "Microsoft Teams": {"paths": [HOME / ".config/Microsoft/Teams/Cache"], "procs": ["teams"]},
+    "VLC": {"paths": [HOME / ".cache/vlc"], "procs": ["vlc"]},
+    "OBS Studio": {"paths": [HOME / ".config/obs-studio/logs"], "procs": ["obs"]},
     "WeChat": {
         "paths": [
             HOME / ".var/app/com.tencent.WeChat/cache",
             HOME / ".var/app/com.tencent.WeChat/config/xwechat",
             HOME / ".xwechat",
-            HOME / "Documents/WeChat Files"
+            HOME / "Documents/WeChat Files",
         ],
-        "procs": ["wechat", "wechat-uos", "wechat-universal", "WeChat.exe", "wechat.exe"]
-    }
+        "procs": ["wechat", "wechat-uos", "wechat-universal", "WeChat.exe", "wechat.exe"],
+    },
 }
 
 # Dev tool caches
@@ -167,4 +161,4 @@ GRAY = "\033[1;90m"
 RESET = "\033[0m"
 BOLD = "\033[1m"
 PURPLE = "\033[1;95m"
-EARTH = "\033[38;5;100m" # Yellow4 / Olive (Matches logo #8B8B00)
+EARTH = "\033[38;5;100m"  # Yellow4 / Olive (Matches logo #8B8B00)

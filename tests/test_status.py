@@ -1,7 +1,7 @@
-import pytest
-import os
-from unittest.mock import patch, mock_open
-from src.core.status import get_mem_info, get_uptime, get_cpu_temp
+from unittest.mock import mock_open, patch
+
+from src.core.status import get_cpu_temp, get_mem_info, get_uptime
+
 
 def test_get_mem_info():
     mock_data = """MemTotal:       16000000 kB
@@ -15,18 +15,23 @@ MemAvailable:    8000000 kB
         assert "16." in total
         assert percent == 50.0
 
+
 def test_get_uptime():
-    mock_data = "3660.00 7000.00" # 3660 seconds = 1h 1m
+    mock_data = "3660.00 7000.00"  # 3660 seconds = 1h 1m
     with patch("builtins.open", mock_open(read_data=mock_data)):
         uptime = get_uptime()
         assert uptime == "1h 1m"
 
+
 def test_get_cpu_temp():
-    mock_data = "45000" # 45.0 C
-    with patch("pathlib.Path.exists", return_value=True):
-        with patch("builtins.open", mock_open(read_data=mock_data)):
-            temp = get_cpu_temp()
-            assert temp == "45.0°C"
+    mock_data = "45000"  # 45.0 C
+    with (
+        patch("pathlib.Path.exists", return_value=True),
+        patch("builtins.open", mock_open(read_data=mock_data)),
+    ):
+        temp = get_cpu_temp()
+        assert temp == "45.0°C"
+
 
 def test_get_cpu_temp_missing():
     with patch("pathlib.Path.exists", return_value=False):

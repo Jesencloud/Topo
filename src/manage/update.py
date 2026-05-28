@@ -1,14 +1,14 @@
 import subprocess
-import os
-import sys
 from pathlib import Path
-from ..core.constants import CYAN, GRAY, RESET, BOLD, RED, GREEN
+
+from ..core.constants import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
+
 
 def run_update():
     """Updates topo by re-running the official installation script with version check."""
-    
+
     # 1. Get current local version
-    # Since we are running from src/manage/update.py, 
+    # Since we are running from src/manage/update.py,
     # the VERSION file should be in the root of the installation (~/.topo/VERSION)
     install_dir = Path(__file__).parent.parent.parent
     version_file = install_dir / "VERSION"
@@ -21,7 +21,9 @@ def run_update():
     # 2. Fetch remote version
     remote_version_url = "https://raw.githubusercontent.com/Jesencloud/Topo/main/VERSION"
     try:
-        remote_version = subprocess.check_output(["curl", "-fsSL", remote_version_url], text=True).strip()
+        remote_version = subprocess.check_output(
+            ["curl", "-fsSL", remote_version_url], text=True
+        ).strip()
     except Exception as e:
         print(f" {RED}❌ Failed to check remote version: {e}{RESET}")
         return
@@ -37,14 +39,14 @@ def run_update():
     # 4. Run update script in minimal mode
     # We pass --minimal as an argument to bash -s
     install_cmd = "curl -fsSL https://raw.githubusercontent.com/Jesencloud/Topo/main/install.sh | bash -s -- --minimal"
-    
+
     try:
         process = subprocess.run(install_cmd, shell=True)
-        
+
         if process.returncode == 0:
             print(f"\n {GREEN}✨ Topo has been successfully updated to v{remote_version}!{RESET}")
         else:
             print(f"\n {RED}❌ Update failed with exit code {process.returncode}{RESET}")
-            
+
     except Exception as e:
         print(f"\n {RED}❌ Error during update: {e}{RESET}")
