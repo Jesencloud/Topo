@@ -38,18 +38,17 @@ class UninstallManager:
     def _get_app_localized_name(self, desktop_file: Path, name: str) -> str:
         """Tries to find Name[zh_CN] or Name in .desktop file."""
         localized_name = ""
+        english_name = ""
         try:
             with open(desktop_file, errors="ignore") as f:
                 for line in f:
                     if line.startswith("Name[zh_CN]="):
                         return line.split("=")[1].strip()
-                    if line.startswith("Name="):
-                        localized_name = line.split("=")[1].strip()
-                    if localized_name:
-                        return localized_name
+                    if line.startswith("Name=") and not english_name:
+                        english_name = line.split("=")[1].strip()
         except Exception:
             pass
-        return localized_name or name
+        return english_name or name
 
     def _get_app_keywords(self, desktop_file: Path) -> list[str]:
         """Extracts potential folder name keywords from Exec and Icon fields."""

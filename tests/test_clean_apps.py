@@ -1,7 +1,29 @@
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
+from pathlib import Path
+from src.clean.apps import clean_app_generic, proactive_app_detection, clean_generic_xdg_caches, clean_orphaned_remnants
 
-from src.clean.apps import clean_app_generic
+def test_proactive_app_detection():
+    with patch("src.clean.apps.DETECTED_APPS_FILE", Path("/tmp/nonexistent")):
+        with patch("pathlib.Path.exists", return_value=False):
+            detected = proactive_app_detection()
+            assert isinstance(detected, dict)
 
+def test_clean_generic_xdg_caches(test_env):
+    with patch("pathlib.Path.home", return_value=test_env):
+        with patch("src.clean.apps.clean_path_by_age", return_value=(100, 1)):
+            cache_dir = test_env / ".cache/dummy_cache"
+            cache_dir.mkdir(parents=True)
+            size, items = clean_generic_xdg_caches(dry_run=True)
+            assert items >= 0
+
+def test_clean_orphaned_remnants(test_env):
+    with patch("pathlib.Path.home", return_value=test_env):
+        with patch("src.clean.apps.clean_path_by_age", return_value=(100, 1)):
+            config_dir = test_env / ".config/orphan_app"
+            config_dir.mkdir(parents=True)
+            with patch("shutil.which", return_value=None):
+                size, items = clean_orphaned_remnants(dry_run=True)
+                assert items >= 0
 
 def test_clean_app_generic_dry_run(test_env):
     """Verify that dry_run calculates size but doesn't delete."""
