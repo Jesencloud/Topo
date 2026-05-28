@@ -16,17 +16,6 @@ if [[ "$1" == "--minimal" ]]; then
     MINIMAL=true
 fi
 
-if [ "$MINIMAL" = false ]; then
-    echo -e "${CYAN}"
-    echo "  ████████  ██████  ██████   ██████ "
-    echo "     ██    ██    ██ ██   ██ ██    ██"
-    echo "     ██    ██    ██ ██████  ██    ██"
-    echo "     ██    ██    ██ ██      ██    ██"
-    echo "     ██     ██████  ██       ██████ "
-    echo -e "${NC}"
-    echo -e " ${CYAN}●${NC} ${BOLD}Topo${NC} ${GRAY}is digging deeper 🦡 🦡 🦡${NC}\n"
-fi
-
 # 1. Check prerequisites
 if [ "$MINIMAL" = false ]; then
     echo -e "${CYAN}☉ Checking prerequisites...${NC}"
@@ -41,7 +30,18 @@ else
 fi
 
 command -v python3 >/dev/null 2>&1 || { echo -e "  ${RED}✗ Error: python3 is required but not installed.${NC}"; exit 1; }
-if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓ python3 installed${NC}"; fi
+if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓ python3 installed${NC}\n"; fi
+
+if [ "$MINIMAL" = false ]; then
+    echo -e "${CYAN}"
+    echo "  ████████  ██████  ██████   ██████ "
+    echo "     ██    ██    ██ ██   ██ ██    ██"
+    echo "     ██    ██    ██ ██████  ██    ██"
+    echo "     ██    ██    ██ ██      ██    ██"
+    echo "     ██     ██████  ██       ██████ "
+    echo -e "${NC}"
+    echo -e " ${CYAN}●${NC} ${BOLD}Topo${NC} ${GRAY}is digging deeper 🦡 🦡 🦡${NC}\n"
+fi
 
 # 2. Define paths
 INSTALL_DIR="$HOME/.topo"

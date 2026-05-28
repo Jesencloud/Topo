@@ -154,9 +154,11 @@ Examples:
 
     # CLI Mode Execution
     if args.command not in ("analyze", "uninstall", "purge"):
-        print(f"\033[1;34mtopo {TOPO_VERSION} (Python Edition)\033[0m")
-        os_id = get_os_id()
-        print(f"System: {os_id}")
+        # Suppress version banner for silent link command to keep installation log clean
+        if not (args.command == "link" and args.silent):
+            print(f"\033[1;34mtopo {TOPO_VERSION} (Python Edition)\033[0m")
+            os_id = get_os_id()
+            print(f"System: {os_id}")
 
     if args.command in ("clean", "all"):
         run_clean(args.dry_run)
