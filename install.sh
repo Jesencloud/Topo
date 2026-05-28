@@ -124,5 +124,5 @@ fi
 
 # Note: The ./topo link command already prints the success message.
 if [ "$MINIMAL" = false ]; then
-    echo -e "\n${GRAY}Type '${NC}topo --help${GRAY}' to explore all available commands.${NC}"
+    echo -e "\n${GRAY}Type '${NC}topo${GRAY}' to start the interactive TUI, or '${NC}topo --help${GRAY}' to explore all commands.${NC}"
 fi
