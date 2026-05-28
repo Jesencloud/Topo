@@ -32,17 +32,18 @@ def test_find_residue_paths(test_env):
 def test_run_full_scan_rpm(mock_run, mock_which):
     mock_which.side_effect = lambda x: "/usr/bin/rpm" if x == "rpm" else None
     # Name\tSize\tInstallTime
-    mock_run.return_value = MagicMock(returncode=0, stdout="bash\t1024000\t1700000000\n")
+    # Make size > 100MB (104857600) to pass the new user app filter
+    mock_run.return_value = MagicMock(returncode=0, stdout="heavy-app\t150000000\t1700000000\n")
 
     mgr = UninstallManager()
     with patch("src.clean.app_manager.get_os_id", return_value="fedora"):
         apps = mgr.run_full_scan()
 
     assert len(apps) >= 1
-    bash_app = next((a for a in apps if a["id"] == "bash"), None)
-    assert bash_app is not None
-    assert bash_app["size_bytes"] == 1024000
-    assert bash_app["install_time"] == 1700000000
+    heavy_app = next((a for a in apps if a["id"] == "heavy-app"), None)
+    assert heavy_app is not None
+    assert heavy_app["size_bytes"] == 150000000
+    assert heavy_app["install_time"] == 1700000000
 
 
 @patch("shutil.which")

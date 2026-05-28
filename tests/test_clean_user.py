@@ -1,6 +1,6 @@
 from unittest.mock import patch
 
-from src.clean.user import clean_trash, clean_user_caches
+from src.clean.user import clean_trash
 
 
 def test_clean_trash_dry_run(test_env):
@@ -33,22 +33,3 @@ def test_clean_trash_execution_gio(mock_run, mock_which, test_env):
         clean_trash(dry_run=False)
 
     mock_run.assert_called_with(["gio", "trash", "--empty"], capture_output=True)
-
-
-def test_clean_user_caches_dry_run(test_env):
-    """Verify user cache cleanup dry-run."""
-    # Use a path that is actually scanned (Spotify)
-    cache_dir = test_env / ".cache/spotify/Data"
-    cache_dir.mkdir(parents=True)
-    (cache_dir / "thumb.png").write_bytes(b"0" * 500)
-
-    # This should find the file and report 500 bytes
-    with (
-        patch("pathlib.Path.home", return_value=test_env),
-        patch("src.clean.user.is_app_running", return_value=False),
-    ):
-        size, items, cats = clean_user_caches(dry_run=True)
-
-    assert size >= 500
-    assert items >= 1
-    assert (cache_dir / "thumb.png").exists()

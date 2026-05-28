@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from ..core.analyze import ScanCache
-from ..core.constants import BOLD, GRAY, GREEN, MAGENTA, RESET, YELLOW
+from ..core.constants import BOLD, GRAY, GREEN, MAGENTA, RESET
 from ..core.file_ops import bytes_to_human, safe_remove
 from ..core.system import get_os_id, run_command
 from ..ui.navigator import Navigator, UninstallSelector

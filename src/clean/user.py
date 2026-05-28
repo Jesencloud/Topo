@@ -2,7 +2,6 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from ..clean.apps import is_app_running
 from ..core.file_ops import bytes_to_human, get_size, safe_remove
 
 
@@ -50,54 +49,6 @@ def clean_trash(dry_run=False):
     return total_size, total_items, (1 if total_items > 0 else 0)
 
 
-def clean_user_caches(dry_run=False):
-    """Clean known heavy application caches."""
-    total_size = 0
-    total_items = 0
-    categories = 0
-
-    # Applications and their cache paths + process names
-    app_caches = [
-        ("Spotify", [Path.home() / ".cache/spotify/Data"], ["spotify"]),
-        ("Discord", [Path.home() / ".config/discord/Cache"], ["discord"]),
-        (
-            "Telegram",
-            [Path.home() / ".local/share/TelegramDesktop/tdata/user_data/Cache"],
-            ["Telegram"],
-        ),
-    ]
-
-    for name, paths, procs in app_caches:
-        for path in paths:
-            if path.exists():
-                # Safety: Check if app is running
-                if procs and any(is_app_running(p) for p in procs):
-                    print(f"  \033[0;90m◎\033[0m {name} is running · cleanup skipped")
-                    continue
-
-                size = get_size(path)
-                if dry_run:
-                    if size > 0:
-                        print(
-                            f"  \033[0;32m✓\033[0m {name} cache ({bytes_to_human(size)}) would be cleaned"
-                        )
-                        total_size += size
-                        total_items += 1
-                else:
-                    try:
-                        for item in path.iterdir():
-                            s = get_size(item)
-                            if safe_remove(item, use_trash=False)[0]:
-                                total_size += s
-                                total_items += 1
-                    except Exception:
-                        pass
-        if total_items > 0:
-            categories += 1
-
-    return total_size, total_items, categories
-
-
 def clean_system_temp(dry_run=False):
     """Clean system temporary files."""
     total_size = 0
@@ -135,11 +86,6 @@ def clean_user_data(dry_run=False):
     categories = 0
 
     s, i, c = clean_trash(dry_run)
-    total_size += s
-    total_items += i
-    categories += c
-
-    s, i, c = clean_user_caches(dry_run)
     total_size += s
     total_items += i
     categories += c
