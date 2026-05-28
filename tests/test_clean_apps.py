@@ -8,6 +8,44 @@ def test_proactive_app_detection():
             detected = proactive_app_detection()
             assert isinstance(detected, dict)
 
+def test_proactive_app_detection_health_check(test_env):
+    mock_registry = test_env / "detected_apps.json"
+    mock_registry.write_text('{"dead_app": {"paths": ["/tmp/nonexistent"], "procs": ["dead_app"]}}')
+    
+    with patch("src.clean.apps.DETECTED_APPS_FILE", mock_registry):
+        with patch("shutil.which", return_value=None):
+            with patch("pathlib.Path.exists", return_value=False):
+                with patch("pathlib.Path.iterdir", return_value=[]):
+                    detected = proactive_app_detection()
+                    assert "dead_app" not in detected
+
+def test_proactive_app_detection_write_error(test_env):
+    # Mock finding a new app but fail to write the registry
+    with patch("shutil.which", return_value="/usr/bin/new_app"):
+        with patch("pathlib.Path.iterdir") as mock_iter:
+            m_dir = MagicMock()
+            m_dir.is_dir.return_value = True
+            m_dir.name = "new_app"
+            mock_iter.return_value = [m_dir]
+            with patch("builtins.open", side_effect=Exception("Write failed")):
+                detected = proactive_app_detection()
+                assert "new_app" in detected
+
+def test_clean_flatpak_unused():
+    from src.clean.apps import clean_flatpak_unused
+    with patch("shutil.which", return_value="/usr/bin/flatpak"):
+        # Dry run
+        size, items = clean_flatpak_unused(dry_run=True)
+        assert size == 0
+        assert items == 0
+        
+        # Real run
+        with patch("src.clean.apps.run_command") as mock_run:
+            mock_run.return_value = MagicMock(stdout="Uninstalling\nfreed 1 GB")
+            size, items = clean_flatpak_unused(dry_run=False)
+            assert items == 1
+            assert size > 0
+
 def test_clean_generic_xdg_caches(test_env):
     with patch("pathlib.Path.home", return_value=test_env):
         with patch("src.clean.apps.clean_path_by_age", return_value=(100, 1)):
