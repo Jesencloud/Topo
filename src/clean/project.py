@@ -70,7 +70,7 @@ def run_purge(dry_run=False):
         
         if not results:
             print("✨ No heavy artifacts found. Your projects are clean!")
-            input("\nPress Enter to return to menu...")
+            Navigator.wait_for_return()
             return
 
         selector = PaginatedSelector("Select Project Artifacts to Purge", results)
@@ -116,8 +116,9 @@ def run_purge(dry_run=False):
                 count, total_freed = manager.execute_purge(selected)
                 if count > 0: ScanCache.clear()
                 print(f"\n✨ Purge complete: {count} items removed, {total_freed} space freed.")
-            input("\nPress Enter to return to menu...")
-            break
+            if not Navigator.wait_for_return():
+                break
+            continue
         else:
             break
 

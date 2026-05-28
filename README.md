@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img src="topo.png" alt="Topo - Clean Your Linux" width="800" />
+  <img src="assets/topo.png" alt="Topo - Clean Your Linux" width="800" />
 </p>
 
 > The most elegant way to keep your Linux system lean and mean. Inspired by the minimalist philosophy of [Mole](https://github.com/tw93/mole) on macOS.
@@ -37,7 +37,7 @@ curl -fsSL https://raw.githubusercontent.com/Jesencloud/Topo/main/install.sh | b
 
 **Run**
 <p align="center">
-  <img src="topo_home.png" alt="Topo - Clean Your Linux" width="800" />
+  <img src="assets/topo_home.png" alt="Topo - Clean Your Linux" width="800" />
 </p>
 
 ```bash

@@ -10,9 +10,10 @@ Today's session focused on expanding Topo's diagnostic capabilities and achievin
 *   **Architecture Parity Verification**: Successfully conducted ARM64 cross-architecture testing using Podman and QEMU, confirming that all TUI and installation logic is 100% compatible with aarch64 environments.
 
 ### 2. Interaction & TUI Refinement
-*   **Post-Task Exit Logic**: Replaced blocking `input()` calls with a non-blocking `wait_for_return()` helper. Users can now press **Enter** to return to the menu or **ESC** to exit the program instantly.
-*   **Professional Silent Exit**: Removed all conversational "Goodbye!" messages. Topo now exits cleanly and silently to the shell prompt, matching the behavior of elite system utilities like `htop` or `vim`.
-*   **Intelligent Header Silence**: Implemented stdout redirection in the Clean runner. Category headers are now only printed if their sub-tasks actually reclaim space, ensuring a zero-clutter log.
+*   **Unified Return/Exit Prompts**: Standardized all post-task prompts to "**Press Enter to return, ESC to exit...**" using a new `Navigator.wait_for_return()` helper. This ensures consistent, non-blocking single-key interaction across the entire application (Clean, Uninstall, Purge, Status).
+*   **Terminal History Preservation**: Implemented the **Alternate Screen Buffer** (`\033[?1049h`) for all interactive modes. Topo now runs in a temporary terminal layer, ensuring that your previous shell history and output are perfectly restored upon exit.
+*   **Professional Silent Exit**: Removed all conversational "Goodbye!" messages. Topo now exits cleanly and silently to the shell prompt.
+*   **Intelligent Header Silence**: Implemented stdout redirection in the Clean runner. Category headers are now only printed if their sub-tasks actually reclaim space.
 
 ### 3. Intelligent Cleanup Engine (Architecture 2.0)
 *   **Proactive App Detection**: Implemented a self-learning engine that automatically identifies newly installed software and registers their cache/config paths for high-precision cleaning.
@@ -28,7 +29,7 @@ Today's session focused on expanding Topo's diagnostic capabilities and achievin
 ### 4. Architecture & Maintenance
 *   **Logic Decoupling**: Centralized all cleaning constants and下沉 core file operations (process checks, registry) to `src/core/file_ops.py` to eliminate circular dependencies.
 *   **Three-Layer Filtering**: Established a robust cleaning hierarchy: High-Precision (Predefined) → Heuristic (Pattern-based) → Orphan Detection (Binary-cross-referencing).
-*   **Documentation Alignment**: Updated `README.md` with the new `topo_home.png` screenshot and refreshed all terminal mocks. Optimized ASCII banner alignment in `src/ui/tui.py`.
+*   **Documentation Alignment**: Updated `README.md` with the new `assets/topo_home.png` screenshot and refreshed all terminal mocks. Optimized ASCII banner alignment in `src/ui/tui.py`.
 
 ---
 
@@ -40,7 +41,7 @@ Today's session focused on solidifying Topo's brand identity, achieving 100% par
 
 ### 1. Visual Identity & Branding
 *   **Earth Theme Transition**: Officially adopted **Yellow4 / Earth (#8B8B00)** as the primary brand color. Updated the TUI banner and `src/core/constants.py` to reflect this "deep digging" aesthetic.
-*   **Professional Logo Integration**: Added a high-quality badger logo (`topo.png`) to the repository and redesigned the `README.md` header to be centered and visually stunning, matching the original Mole project.
+*   **Professional Logo Integration**: Added a high-quality badger logo (`assets/topo.png`) to the repository and redesigned the `README.md` header to be centered and visually stunning, matching the original Mole project.
 *   **README Overhaul**: Completely rewritten the documentation to include centered badges, realistic terminal output mocks, and detailed technical advantage highlights.
 
 ### 2. Interaction & UX Refinement

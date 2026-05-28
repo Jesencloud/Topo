@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import List, Dict, Any
 from ..core.system import run_command, get_os_id
 from ..core.file_ops import get_size, safe_remove, bytes_to_human
+from ..core.constants import GRAY, RESET, BOLD, CYAN, MAGENTA, YELLOW, GREEN, RED
 
 class UninstallManager:
     def __init__(self):
@@ -334,7 +335,7 @@ class UninstallManager:
         
         return success, app_freed_bytes, removed_details
 
-from ..ui.navigator import UninstallSelector
+from ..ui.navigator import UninstallSelector, Navigator
 from ..core.analyze import ScanCache
 
 def run_uninstall():
@@ -345,7 +346,7 @@ def run_uninstall():
         
         if not apps:
             print("\n   \033[1;31mNo applications found to uninstall.\033[0m")
-            input("\nPress Enter to return to menu...")
+            Navigator.wait_for_return()
             return
 
         selector = UninstallSelector("Select Application to Uninstall", apps)
@@ -376,9 +377,6 @@ def run_uninstall():
                 except: pass
             
             running_tag = f" \033[1;33m[Running]\033[0m" if is_running else ""
-            BOLD = "\033[1m"
-            RESET = "\033[0m"
-            GRAY = "\033[1;90m"
             print(f"  \033[1;32m✓\033[0m {BOLD}{app['name']}{RESET}{running_tag}")
             total_estimated_size += app['size_bytes']
             
@@ -463,9 +461,7 @@ def run_uninstall():
         print(f"Removed {len(removed_names)} app(s), freed \033[1;32m{bytes_to_human(total_freed_all)}\033[0m: {names_str}")
         print("=" * 70)
 
-        # Match the specific prompt style from screenshot
-        print(f"\n{GRAY}Press Enter to return to application list, any other key to exit... {RESET}", end="", flush=True)
-        choice = input()
-        if choice != "":
+        # Standardized return/exit prompt
+        if not Navigator.wait_for_return():
             break
 

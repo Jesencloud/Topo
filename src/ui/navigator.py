@@ -75,6 +75,17 @@ class Navigator:
         return ch
 
     @staticmethod
+    def wait_for_return():
+        """Standardized non-blocking return/exit prompt."""
+        print(f"\n\033[1;90mPress Enter to return, ESC to exit... \033[0m", end="", flush=True)
+        while True:
+            key = Navigator.get_key()
+            if key in (Navigator.ENTER, '\r', '\n'):
+                print(); return True
+            if key == Navigator.ESC:
+                print(); return False
+
+    @staticmethod
     def hide_cursor(): print("\x1b[?25l", end="")
     @staticmethod
     def show_cursor(): print("\x1b[?25h", end="")

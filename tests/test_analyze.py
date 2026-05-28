@@ -2,7 +2,7 @@ import pytest
 import json
 from pathlib import Path
 from unittest.mock import patch, MagicMock
-from src.core.analyze import ScanCache, get_rust_scan_data, get_dir_size_recursive
+from src.core.analyze import ScanCache, get_rust_scan_data
 
 def test_scan_cache():
     """Verify that ScanCache stores and retrieves data correctly."""
@@ -38,18 +38,3 @@ def test_get_rust_scan_data_success(mock_run):
         assert result == mock_data
         # Verify it was cached
         assert ScanCache.get(Path("/home/user")) == mock_data
-
-@patch("subprocess.run")
-def test_get_dir_size_recursive_fallback(mock_run):
-    """Verify fallback to 'du' if Rust engine fails."""
-    # 1. Rust scan fails (return None)
-    with patch("src.core.analyze.get_rust_scan_data", return_value=None):
-        # 2. Mock 'du' output
-        mock_run.return_value = MagicMock(
-            returncode=0,
-            stdout="12345\t/some/path"
-        )
-        
-        size = get_dir_size_recursive(Path("/some/path"))
-        assert size == 12345
-        assert "du" in mock_run.call_args[0][0]

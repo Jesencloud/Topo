@@ -39,17 +39,6 @@ def alternate_screen():
         sys.stdout.write("\033[?1049l")
         sys.stdout.flush()
 
-def wait_for_return():
-    print(f"\n\033[1;90mPress Enter to return, ESC to exit... \033[0m", end="", flush=True)
-    while True:
-        key = Navigator.get_key()
-        if key in (Navigator.ENTER, '\n'):
-            print()
-            return True
-        if key == Navigator.ESC:
-            print()
-            return False
-
 def main():
     parser = argparse.ArgumentParser(
         description="topo - High-performance Linux System Optimizer (Inspired by Mole)",
@@ -132,7 +121,7 @@ Examples:
                 choice = main_menu()
                 if choice == "1":
                     run_clean(args.dry_run)
-                    if not wait_for_return(): break
+                    if not Navigator.wait_for_return(): break
                 elif choice == "2":
                     run_uninstall()
                 elif choice == "3":
@@ -141,12 +130,12 @@ Examples:
                         optimize_system(args.dry_run)
                     else:
                         print("\033[1;33m⚠️  Optimization cancelled by user.\033[0m")
-                    if not wait_for_return(): break
+                    if not Navigator.wait_for_return(): break
                 elif choice == "4":
                     run_deep_analysis()
                 elif choice == "5":
                     show_status()
-                    if not wait_for_return(): break
+                    if not Navigator.wait_for_return(): break
                 elif choice == "0" or choice.lower() == "q":
                     break
         return
