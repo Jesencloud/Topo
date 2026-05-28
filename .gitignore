@@ -10,20 +10,36 @@ venv/
 .ruff_cache/
 .mypy_cache/
 
+# --- Build & Distribution ---
+build/
+dist/
+*.egg-info/
+
+# --- Testing & Coverage ---
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+
 # --- Rust (topo-core engine) ---
 topo-core/target/
-pyproject.toml
 
 # --- OS & Editors ---
 .DS_Store
 .DS_Store?
 ._*
+.Spotlight-V100
+.Trashes
 .vscode/
 .idea/
 *~
 *.swp
 *.tmp
 *.log
+
+# --- Specific Topo Files ---
+topo-core/
 
 # --- Sensitive Info ---
 .env
