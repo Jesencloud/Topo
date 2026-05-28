@@ -4,6 +4,7 @@ import sys
 import time
 import subprocess
 from pathlib import Path
+from contextlib import contextmanager
 
 from .clean.runner import run_clean
 from .clean.project import run_purge
@@ -23,6 +24,20 @@ from .ui.navigator import Navigator
 # Get version from root VERSION file
 VERSION_FILE = Path(__file__).parent.parent / "VERSION"
 TOPO_VERSION = VERSION_FILE.read_text().strip() if VERSION_FILE.exists() else "0.5.0"
+
+@contextmanager
+def alternate_screen():
+    """Context manager to use the terminal's alternate screen buffer."""
+    # \033[?1049h: Switch to alternate screen
+    # \033[H: Move cursor to home position
+    sys.stdout.write("\033[?1049h\033[H")
+    sys.stdout.flush()
+    try:
+        yield
+    finally:
+        # \033[?1049l: Switch back to normal screen
+        sys.stdout.write("\033[?1049l")
+        sys.stdout.flush()
 
 def wait_for_return():
     print(f"\n\033[1;90mPress Enter to return, ESC to exit... \033[0m", end="", flush=True)
@@ -112,45 +127,50 @@ Examples:
 
     # If no command is provided, enter TUI
     if args.command is None:
-        while True:
-            choice = main_menu()
-            if choice == "1":
-                run_clean(args.dry_run)
-                if not wait_for_return(): break
-            elif choice == "2":
-                run_uninstall()
-            elif choice == "3":
-                print("\033[1;90m🔒 Authorizing optimization tasks (Ctrl+C to cancel)...\033[0m")
-                if ensure_sudo_session():
-                    optimize_system(args.dry_run)
-                else:
-                    print("\033[1;33m⚠️  Optimization cancelled by user.\033[0m")
-                if not wait_for_return(): break
-            elif choice == "4":
-                run_deep_analysis()
-            elif choice == "5":
-                show_status()
-                if not wait_for_return(): break
-            elif choice == "0" or choice.lower() == "q":
-                break
+        with alternate_screen():
+            while True:
+                choice = main_menu()
+                if choice == "1":
+                    run_clean(args.dry_run)
+                    if not wait_for_return(): break
+                elif choice == "2":
+                    run_uninstall()
+                elif choice == "3":
+                    print("\033[1;90m🔒 Authorizing optimization tasks (Ctrl+C to cancel)...\033[0m")
+                    if ensure_sudo_session():
+                        optimize_system(args.dry_run)
+                    else:
+                        print("\033[1;33m⚠️  Optimization cancelled by user.\033[0m")
+                    if not wait_for_return(): break
+                elif choice == "4":
+                    run_deep_analysis()
+                elif choice == "5":
+                    show_status()
+                    if not wait_for_return(): break
+                elif choice == "0" or choice.lower() == "q":
+                    break
         return
 
     # CLI Mode Execution
-    print(f"\033[1;34mtopo {TOPO_VERSION} (Python Edition)\033[0m")
-    os_id = get_os_id()
-    print(f"System: {os_id}")
+    if args.command not in ("analyze", "uninstall", "purge"):
+        print(f"\033[1;34mtopo {TOPO_VERSION} (Python Edition)\033[0m")
+        os_id = get_os_id()
+        print(f"System: {os_id}")
 
     if args.command in ("clean", "all"):
         run_clean(args.dry_run)
 
     if args.command in ("purge", "all"):
-        run_purge(args.dry_run)
+        with alternate_screen():
+            run_purge(args.dry_run)
 
     if args.command == "uninstall":
-        run_uninstall()
+        with alternate_screen():
+            run_uninstall()
 
     if args.command == "analyze":
-        run_deep_analysis()
+        with alternate_screen():
+            run_deep_analysis()
 
     if args.command == "status":
         show_status()
