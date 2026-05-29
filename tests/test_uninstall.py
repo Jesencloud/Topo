@@ -4,36 +4,54 @@ from src.clean.app_manager import UninstallManager, run_uninstall
 
 
 def test_run_uninstall_no_apps():
-    with patch(
-        "src.clean.app_manager.UninstallManager.run_full_scan", return_value=[]
-    ), patch("src.ui.navigator.Navigator.wait_for_return") as mock_wait:
+    with (
+        patch("src.clean.app_manager.UninstallManager.run_full_scan", return_value=[]),
+        patch("src.ui.navigator.Navigator.wait_for_return") as mock_wait,
+    ):
         run_uninstall()
         mock_wait.assert_called_once()
 
+
 def test_run_uninstall_escape_selector():
-    mock_apps = [{"id": "test", "name": "Test", "size_bytes": 100, "size_str": "100B", "type": "DNF"}]
-    with patch(
-        "src.clean.app_manager.UninstallManager.run_full_scan", return_value=mock_apps
-    ), patch("src.clean.app_manager.UninstallSelector.run", return_value=[]):
+    mock_apps = [
+        {"id": "test", "name": "Test", "size_bytes": 100, "size_str": "100B", "type": "DNF"}
+    ]
+    with (
+        patch("src.clean.app_manager.UninstallManager.run_full_scan", return_value=mock_apps),
+        patch("src.clean.app_manager.UninstallSelector.run", return_value=[]),
+    ):
         run_uninstall()
+
 
 @patch("sys.stdin.fileno", return_value=0)
 @patch("sys.stdin.read", return_value="\n")
 @patch("termios.tcgetattr", return_value=[])
 @patch("termios.tcsetattr")
 @patch("tty.setraw")
-def test_run_uninstall_execute_and_exit(mock_setraw, mock_setattr, mock_getattr, mock_read, mock_fileno):
-    mock_apps = [{"id": "test", "name": "Test", "size_bytes": 100, "size_str": "100B", "type": "DNF", "install_time": 0}]
-    with patch(
-        "src.clean.app_manager.UninstallManager.run_full_scan", return_value=mock_apps
-    ), patch("src.clean.app_manager.UninstallSelector.run", return_value=[0]), patch(
-        "src.clean.app_manager.UninstallManager.execute_uninstall"
-    ) as mock_exec, patch(
-        "src.ui.navigator.Navigator.wait_for_return", return_value=False
-    ), patch("subprocess.run") as mock_run:
+def test_run_uninstall_execute_and_exit(
+    mock_setraw, mock_setattr, mock_getattr, mock_read, mock_fileno
+):
+    mock_apps = [
+        {
+            "id": "test",
+            "name": "Test",
+            "size_bytes": 100,
+            "size_str": "100B",
+            "type": "DNF",
+            "install_time": 0,
+        }
+    ]
+    with (
+        patch("src.clean.app_manager.UninstallManager.run_full_scan", return_value=mock_apps),
+        patch("src.clean.app_manager.UninstallSelector.run", return_value=[0]),
+        patch("src.clean.app_manager.UninstallManager.execute_uninstall") as mock_exec,
+        patch("src.ui.navigator.Navigator.wait_for_return", return_value=False),
+        patch("subprocess.run") as mock_run,
+    ):
         mock_run.return_value = MagicMock(returncode=1)
         run_uninstall()
         mock_exec.assert_called_once()
+
 
 @patch("sys.stdin.fileno", return_value=0)
 @patch("sys.stdin.read", return_value="x")
@@ -41,22 +59,34 @@ def test_run_uninstall_execute_and_exit(mock_setraw, mock_setattr, mock_getattr,
 @patch("termios.tcsetattr")
 @patch("tty.setraw")
 def test_run_uninstall_cancel(mock_setraw, mock_setattr, mock_getattr, mock_read, mock_fileno):
-    mock_apps = [{"id": "test", "name": "Test", "size_bytes": 100, "size_str": "100B", "type": "DNF", "install_time": 0}]
+    mock_apps = [
+        {
+            "id": "test",
+            "name": "Test",
+            "size_bytes": 100,
+            "size_str": "100B",
+            "type": "DNF",
+            "install_time": 0,
+        }
+    ]
 
     # We need side_effect to stop the while True loop after one iteration
     def mock_scan_side_effect():
-        if not hasattr(mock_scan_side_effect, 'called'):
+        if not hasattr(mock_scan_side_effect, "called"):
             mock_scan_side_effect.called = True
             return mock_apps
         return []
 
-    with patch(
-        "src.clean.app_manager.UninstallManager.run_full_scan", side_effect=mock_scan_side_effect
-    ), patch("src.clean.app_manager.UninstallSelector.run", return_value=[0]), patch(
-        "src.clean.app_manager.UninstallManager.execute_uninstall"
-    ) as mock_exec, patch(
-        "src.ui.navigator.Navigator.wait_for_return", return_value=False
-    ), patch("subprocess.run") as mock_run:
+    with (
+        patch(
+            "src.clean.app_manager.UninstallManager.run_full_scan",
+            side_effect=mock_scan_side_effect,
+        ),
+        patch("src.clean.app_manager.UninstallSelector.run", return_value=[0]),
+        patch("src.clean.app_manager.UninstallManager.execute_uninstall") as mock_exec,
+        patch("src.ui.navigator.Navigator.wait_for_return", return_value=False),
+        patch("subprocess.run") as mock_run,
+    ):
         mock_run.return_value = MagicMock(returncode=1)
         run_uninstall()
         assert not mock_exec.called
@@ -145,6 +175,7 @@ def test_execute_uninstall_flatpak(mock_run, mock_run_cmd, test_env):
         ["flatpak", "uninstall", "-y", "com.example.MyApp"], capture=True
     )
 
+
 @patch("src.clean.app_manager.run_command")
 @patch("subprocess.run")
 def test_execute_uninstall_dnf(mock_run, mock_run_cmd, test_env):
@@ -175,6 +206,7 @@ def test_execute_uninstall_dnf(mock_run, mock_run_cmd, test_env):
     # Check that pkill was called since we mocked pgrep to succeed
     assert any("pkill" in str(call) for call in mock_run.call_args_list)
 
+
 def test_get_app_localized_name(test_env):
     mgr = UninstallManager()
     desktop_file = test_env / "test.desktop"
@@ -193,6 +225,7 @@ def test_get_app_localized_name(test_env):
     desktop_file.write_text("Exec=test\n")
     name = mgr._get_app_localized_name(desktop_file, "fallback")
     assert name == "fallback"
+
 
 def test_get_app_keywords(test_env):
     mgr = UninstallManager()

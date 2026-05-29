@@ -18,6 +18,7 @@ def test_clean_tool_cache_dry_run():
         assert items == 1
         assert not mock_run.called
 
+
 @patch("shutil.which")
 @patch("src.clean.dev.run_command")
 @patch("subprocess.run")
@@ -32,6 +33,7 @@ def test_clean_docker_execution(mock_sub_run, mock_run_cmd, mock_which):
         ["docker", "system", "prune", "-f", "--volumes"], use_sudo=True, capture=True
     )
 
+
 @patch("shutil.which")
 @patch("src.clean.dev.run_command")
 def test_clean_podman(mock_run_cmd, mock_which):
@@ -39,8 +41,9 @@ def test_clean_podman(mock_run_cmd, mock_which):
 
     with patch("src.clean.dev.clean_path_by_age", return_value=(100, 1)):
         size, items = clean_podman(dry_run=False)
-        assert items == 2 # 1 for prune, 1 for cache
+        assert items == 2  # 1 for prune, 1 for cache
         mock_run_cmd.assert_called_with(["podman", "system", "prune", "-f"], capture=True)
+
 
 @patch("shutil.which")
 @patch("src.clean.dev.run_command")
@@ -50,6 +53,7 @@ def test_clean_multipass(mock_run_cmd, mock_which):
     assert items == 1
     mock_run_cmd.assert_called_with(["multipass", "purge"], capture=True)
 
+
 @patch("src.clean.dev.clean_path_by_age")
 def test_clean_ai_models(mock_clean_age):
     mock_clean_age.return_value = (500, 2)
@@ -57,16 +61,18 @@ def test_clean_ai_models(mock_clean_age):
     assert size > 0
     assert items > 0
 
+
 @patch("shutil.which")
 @patch("src.clean.dev.clean_tool_cache")
 def test_clean_developer_tools(mock_clean_tool, mock_which):
-    mock_which.return_value = "/usr/bin/npm" # Mock npm presence
+    mock_which.return_value = "/usr/bin/npm"  # Mock npm presence
     mock_clean_tool.return_value = (100, 1)
 
-    with patch("src.clean.dev.get_size", return_value=2048), patch(
-        "pathlib.Path.exists", return_value=True
-    ), patch("shutil.rmtree"):
+    with (
+        patch("src.clean.dev.get_size", return_value=2048),
+        patch("pathlib.Path.exists", return_value=True),
+        patch("shutil.rmtree"),
+    ):
         size, items, cats = clean_developer_tools(dry_run=False)
         assert cats > 0
         assert size > 0
-

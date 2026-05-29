@@ -8,7 +8,7 @@ from typing import Any
 
 from ..ui.navigator import AnalyzeSelector, ConfirmSelector, TopFilesSelector
 from ..ui.tui import show_banner
-from .constants import BLUE, CYAN, MAGENTA, WHITE, YELLOW
+from .constants import BLUE, CYAN, MAGENTA, YELLOW
 from .file_ops import bytes_to_human, get_size, safe_remove
 
 
@@ -140,7 +140,6 @@ def run_deep_analysis(target_path: Path = None):
                         "color": MAGENTA,
                     },
                     {"name": "System", "path": Path("/usr"), "color": BLUE},
-                    {"name": "Root (/)", "path": Path("/"), "color": WHITE},
                 ]
                 for t in targets:
                     if t["path"].exists():
@@ -158,7 +157,7 @@ def run_deep_analysis(target_path: Path = None):
                                 "size": size,
                                 "percent": (size / total_used) * 100,
                                 "color": t["color"],
-                                "icon": "📁",
+                                "icon": "📊" if str(t["path"]) == "/" else "📁",
                                 "age_hint": get_age_hint(t["path"]),
                             }
                         )
@@ -173,7 +172,6 @@ def run_deep_analysis(target_path: Path = None):
                     {"name": "Apt Cache", "path": Path("/var/cache/apt/archives")},
                     {"name": "Pacman Cache", "path": Path("/var/cache/pacman/pkg")},
                     {"name": "Dnf Cache", "path": Path("/var/cache/dnf")},
-                    {"name": "User Trash", "path": home / ".local/share/Trash"},
                     {"name": "Snap Data", "path": home / "snap"},
                     {"name": "Flatpak Data", "path": home / ".local/share/flatpak"},
                     {"name": "Ollama Models", "path": home / ".ollama" / "models"},
@@ -277,6 +275,10 @@ def run_deep_analysis(target_path: Path = None):
                                 ScanCache.clear()
                         needs_scan = True
             elif item["path"].is_dir():
+                # Safety: Avoid entering / as it's too heavy and requires sudo for full scan
+                if str(item["path"]) == "/":
+                    continue
+
                 state_stack.append(
                     {
                         "target": current_target,
@@ -289,7 +291,18 @@ def run_deep_analysis(target_path: Path = None):
                 needs_scan = True
             elif item["path"].is_file():
                 p = item["path"]
-                archive_exts = {".zip", ".tar", ".gz", ".xz", ".bz2", ".7z", ".rar", ".deb", ".rpm", ".apk"}
+                archive_exts = {
+                    ".zip",
+                    ".tar",
+                    ".gz",
+                    ".xz",
+                    ".bz2",
+                    ".7z",
+                    ".rar",
+                    ".deb",
+                    ".rpm",
+                    ".apk",
+                }
                 is_archive = p.suffix.lower() in archive_exts
                 is_exec = os.access(p, os.X_OK)
 
@@ -298,9 +311,6 @@ def run_deep_analysis(target_path: Path = None):
                     subprocess.run(["xdg-open", str(p.parent)], capture_output=True)
                 else:
                     subprocess.run(["xdg-open", str(p)], capture_output=True)
-        elif action == "SWITCH_FILES":
-            _run_top_files_view(current_target or Path.home())
-            needs_scan = True
         elif action == "DELETE_BATCH":
             selected_idxs = idx  # action was DELETE_BATCH, idx contains the list
             total_selected_size = sum(results[i]["size"] for i in selected_idxs)
@@ -320,41 +330,3 @@ def run_deep_analysis(target_path: Path = None):
                 p = results[s_idx]["path"]
                 parent = p.parent if p.exists() else p
                 subprocess.run(["xdg-open", str(parent)], capture_output=True)
-
-
-def _run_top_files_view(root: Path):
-    root = Path(root).expanduser().resolve()
-    print(f"\n🚀 Rust Engine: Scanning for top files in {root}...")
-    data = get_rust_scan_data(root)
-    if not data:
-        print("   ❌ Rust engine failed.")
-        time.sleep(1.5)
-        return
-
-    top_files = data.get("top_files", [])
-    if not top_files:
-        print("   ℹ️ No large files found.")
-        time.sleep(1)
-        return
-
-    # Convert to expected format for selector
-    items = []
-    for f in top_files:
-        p = Path(f["path"])
-        items.append({"path": p, "size_bytes": f["size"], "age_hint": get_age_hint(p)})
-
-    selector = TopFilesSelector(f"Top 50 Largest Files in {root.name}", items)
-    selected_idxs = selector.run()
-
-    if selected_idxs:
-        total_selected = sum(items[i]["size_bytes"] for i in selected_idxs)
-        confirm_msg = (
-            f"Are you sure you want to delete {len(selected_idxs)} files "
-            f"({bytes_to_human(total_selected)})?"
-        )
-        confirm = ConfirmSelector(confirm_msg)
-        if confirm.run():
-            for idx in selected_idxs:
-                p = items[idx]["path"]
-                if safe_remove(p, use_trash=True)[0]:
-                    ScanCache.clear()

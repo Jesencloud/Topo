@@ -15,7 +15,9 @@ def test_clean_snaps(mock_run, mock_which):
     s, i, c = clean_snaps(dry_run=False)
     assert i == 1
     assert c == 1
-    mock_run.assert_any_call(["snap", "remove", "core22", "--revision", "1234"], use_sudo=True, capture=True)
+    mock_run.assert_any_call(
+        ["snap", "remove", "core22", "--revision", "1234"], use_sudo=True, capture=True
+    )
 
     s, i, c = clean_snaps(dry_run=True)
     assert c == 1

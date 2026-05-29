@@ -19,7 +19,8 @@ def test_register_cleaned_path():
     CLEANED_PATHS.clear()
     register_cleaned_path(Path("/tmp/test_path"))
     assert "/tmp/test_path" in CLEANED_PATHS
-    register_cleaned_path(None) # Should not fail
+    register_cleaned_path(None)  # Should not fail
+
 
 @patch("subprocess.run")
 def test_is_app_running(mock_run):
@@ -31,6 +32,7 @@ def test_is_app_running(mock_run):
 
     mock_run.side_effect = Exception("error")
     assert is_app_running("test_app") is False
+
 
 def test_whitelist_protection():
     """Verify that critical system paths are protected."""
@@ -75,20 +77,25 @@ def test_get_size_accurate(test_env):
 
     assert get_size(test_dir) == 1024
 
+
 def test_get_size_error_handling():
     # Non-existent path
     assert get_size(Path("/tmp/this_should_never_exist_12345")) == 0
 
     # Mock OSError during stat AND scandir
-    with patch("pathlib.Path.is_file", return_value=True), patch(
-        "pathlib.Path.stat", side_effect=OSError
+    with (
+        patch("pathlib.Path.is_file", return_value=True),
+        patch("pathlib.Path.stat", side_effect=OSError),
     ):
         assert get_size(Path("/tmp")) == 0
 
-    with patch("pathlib.Path.is_file", return_value=False), patch(
-        "pathlib.Path.is_symlink", return_value=False
-    ), patch("os.scandir", side_effect=OSError):
+    with (
+        patch("pathlib.Path.is_file", return_value=False),
+        patch("pathlib.Path.is_symlink", return_value=False),
+        patch("os.scandir", side_effect=OSError),
+    ):
         assert get_size(Path("/tmp")) == 0
+
 
 def test_bytes_to_human():
     # Note: bytes_to_human uses 1000 base
@@ -98,6 +105,7 @@ def test_bytes_to_human():
     assert bytes_to_human(1.2 * 1000**3) == "1.2 GB"
     assert bytes_to_human(5 * 1000**4) == "5.0 TB"
 
+
 def test_parse_size_from_text():
     # parse_size_from_text uses 1024 base
     assert parse_size_from_text("freed 1.5 GB of space") == int(1.5 * 1024**3)
@@ -105,6 +113,7 @@ def test_parse_size_from_text():
     assert parse_size_from_text("10 KB used") == int(10 * 1024)
     assert parse_size_from_text("no size here") == 0
     assert parse_size_from_text("") == 0
+
 
 def test_safe_remove_edge_cases(test_env):
     # Test non-existent file
@@ -134,6 +143,7 @@ def test_safe_remove_edge_cases(test_env):
         success, msg = safe_remove(test_file, use_trash=False)
         assert success is False
         assert "mocked error" in msg
+
 
 def test_clean_path_by_age(test_env):
     cache_dir = test_env / "cache"
