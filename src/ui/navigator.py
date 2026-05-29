@@ -221,11 +221,11 @@ class AnalyzeSelector:
                 print(f"   \033[1;35m•\033[0m {item.get('icon', '📁')} {item['name']}")
         if self.can_select:
             print(
-                f"\033[1;90m ↑↓←→ | Num Select | Space Select | A All | ← Back | Enter Open | F Folder | L Largest | Del Delete | R Refresh | S Sort {order_icon} | ESC Exit\033[0m"
+                f"\033[1;90m ↑↓←→ | Num Select | Space Select | A All | ← Back | Enter Open | F Folder | Del Delete | R Refresh | S Sort {order_icon} | ESC Exit\033[0m"
             )
         else:
             print(
-                f"\033[1;90m ↑↓→ | Enter Open | F Folder | L Largest | R Refresh | S Sort {order_icon} | ESC Exit\033[0m"
+                f"\033[1;90m ↑↓→ | Enter Open | F Folder | R Refresh | S Sort {order_icon} | ESC Exit\033[0m"
             )
 
     def run(self):
@@ -298,8 +298,6 @@ class AnalyzeSelector:
                         self.selected_items.clear()
                     else:
                         self.selected_items = set(range(len(self.items)))
-                elif key.lower() == "l":
-                    return "SWITCH_FILES", None
                 elif key == Navigator.ESC:
                     return "QUIT", None
         finally:
@@ -440,7 +438,7 @@ class UninstallSelector:
                 )
             print("-" * 80)
             order_icon = "↓" if self.sort_reverse else "↑"
-            footer = f" Page {self.current_page + 1}/{total_pages} | {GRAY}Space: Select | Enter: Confirm | S/N/T/O: Sort {order_icon} | ESC: Exit{RESET}"
+            footer = f" Page {self.current_page + 1}/{total_pages} | {GRAY}Space: Select | Enter: Confirm | S/N/T: Sort {order_icon} | ESC: Exit{RESET}"
             print(footer)
         if self.selected_ids:
             print("\n \033[1;35m☉ Selected Apps to Remove:\033[0m")
@@ -526,9 +524,6 @@ class UninstallSelector:
                     self._sort_items()
                 elif key.lower() == "t":
                     self.sort_key = "install_time"
-                    self.sort_reverse = not self.sort_reverse
-                    self._sort_items()
-                elif key.lower() == "o":
                     self.sort_reverse = not self.sort_reverse
                     self._sort_items()
                 elif key == Navigator.ENTER or key == Navigator.DEL:
