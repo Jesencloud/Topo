@@ -1,7 +1,6 @@
 from unittest.mock import MagicMock, patch
-
+from pathlib import Path
 from src.clean.app_manager import UninstallManager, run_uninstall
-
 
 def test_run_uninstall_no_apps():
     with (
@@ -27,9 +26,10 @@ def test_run_uninstall_escape_selector():
 @patch("sys.stdin.read", return_value="\n")
 @patch("termios.tcgetattr", return_value=[])
 @patch("termios.tcsetattr")
-@patch("tty.setraw")
+@patch("tty.setcbreak")
+@patch("src.ui.navigator.Navigator.raw_mode")
 def test_run_uninstall_execute_and_exit(
-    mock_setraw, mock_setattr, mock_getattr, mock_read, mock_fileno
+    mock_raw, mock_setcbreak, mock_setattr, mock_getattr, mock_read, mock_fileno
 ):
     mock_apps = [
         {
@@ -41,11 +41,16 @@ def test_run_uninstall_execute_and_exit(
             "install_time": 0,
         }
     ]
+    # Mock raw_mode to act as a proper context manager
+    mock_raw.return_value.__enter__.return_value = 0
+    
     with (
         patch("src.clean.app_manager.UninstallManager.run_full_scan", return_value=mock_apps),
         patch("src.clean.app_manager.UninstallSelector.run", return_value=[0]),
         patch("src.clean.app_manager.UninstallManager.execute_uninstall") as mock_exec,
         patch("src.ui.navigator.Navigator.wait_for_return", return_value=False),
+        patch("src.ui.navigator.Navigator.get_key", return_value="\n"),
+        patch("src.core.system.ensure_sudo_session", return_value=True),
         patch("subprocess.run") as mock_run,
     ):
         mock_run.return_value = MagicMock(returncode=1)
@@ -57,8 +62,11 @@ def test_run_uninstall_execute_and_exit(
 @patch("sys.stdin.read", return_value="x")
 @patch("termios.tcgetattr", return_value=[])
 @patch("termios.tcsetattr")
-@patch("tty.setraw")
-def test_run_uninstall_cancel(mock_setraw, mock_setattr, mock_getattr, mock_read, mock_fileno):
+@patch("tty.setcbreak")
+@patch("src.ui.navigator.Navigator.raw_mode")
+def test_run_uninstall_cancel(
+    mock_raw, mock_setcbreak, mock_setattr, mock_getattr, mock_read, mock_fileno
+):
     mock_apps = [
         {
             "id": "test",
@@ -69,6 +77,7 @@ def test_run_uninstall_cancel(mock_setraw, mock_setattr, mock_getattr, mock_read
             "install_time": 0,
         }
     ]
+    mock_raw.return_value.__enter__.return_value = 0
 
     # We need side_effect to stop the while True loop after one iteration
     def mock_scan_side_effect():
@@ -85,6 +94,7 @@ def test_run_uninstall_cancel(mock_setraw, mock_setattr, mock_getattr, mock_read
         patch("src.clean.app_manager.UninstallSelector.run", return_value=[0]),
         patch("src.clean.app_manager.UninstallManager.execute_uninstall") as mock_exec,
         patch("src.ui.navigator.Navigator.wait_for_return", return_value=False),
+        patch("src.ui.navigator.Navigator.get_key", return_value="\x1b"),
         patch("subprocess.run") as mock_run,
     ):
         mock_run.return_value = MagicMock(returncode=1)
@@ -125,7 +135,7 @@ def test_run_full_scan_rpm(mock_run, mock_which):
     mock_run.return_value = MagicMock(returncode=0, stdout="heavy-app\t150000000\t1700000000\n")
 
     mgr = UninstallManager()
-    with patch("src.clean.app_manager.get_os_id", return_value="fedora"):
+    with patch("src.core.system.get_os_id", return_value="fedora"):
         apps = mgr.run_full_scan()
 
     assert len(apps) >= 1
@@ -142,7 +152,7 @@ def test_run_full_scan_flatpaks(mock_run, mock_which):
     mock_run.return_value = MagicMock(returncode=0, stdout="MyApp\tcom.example.MyApp\t1.2 GB\n")
 
     mgr = UninstallManager()
-    with patch("src.clean.app_manager.get_os_id", return_value="fedora"):
+    with patch("src.core.system.get_os_id", return_value="fedora"):
         apps = mgr.run_full_scan()
 
     assert len(apps) >= 1
@@ -153,7 +163,7 @@ def test_run_full_scan_flatpaks(mock_run, mock_which):
     assert myapp["type"] == "Flatpak"
 
 
-@patch("src.clean.app_manager.run_command")
+@patch("src.core.system.run_command")
 @patch("subprocess.run")
 def test_execute_uninstall_flatpak(mock_run, mock_run_cmd, test_env):
     mgr = UninstallManager()
@@ -176,7 +186,7 @@ def test_execute_uninstall_flatpak(mock_run, mock_run_cmd, test_env):
     )
 
 
-@patch("src.clean.app_manager.run_command")
+@patch("src.core.system.run_command")
 @patch("subprocess.run")
 def test_execute_uninstall_dnf(mock_run, mock_run_cmd, test_env):
     mgr = UninstallManager()
