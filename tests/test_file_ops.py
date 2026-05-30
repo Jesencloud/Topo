@@ -137,7 +137,7 @@ def test_safe_remove_edge_cases(test_env):
         assert "Permanently deleted" in msg
 
     # Test Exception handling during removal
-    with patch("pathlib.Path.unlink", side_effect=Exception("mocked error")):
+    with patch("pathlib.Path.unlink", side_effect=OSError("mocked error")):
         test_file = test_env / "err_test.txt"
         test_file.write_text("dummy")
         success, msg = safe_remove(test_file, use_trash=False)
@@ -160,6 +160,42 @@ def test_safe_remove_deletes_symlink_not_target(test_env):
     assert not link.exists()
     assert target_dir.exists()
     assert target_file.exists()
+
+
+def test_safe_remove_deletes_broken_symlink(test_env):
+    link = test_env / "broken-link"
+    link.symlink_to(test_env / "missing-target")
+
+    success, msg = safe_remove(link, use_trash=False)
+
+    assert success is True
+    assert "Permanently deleted" in msg
+    assert not link.is_symlink()
+
+
+def test_safe_remove_respects_parent_whitelist(test_env):
+    parent = test_env / "protected"
+    parent.mkdir()
+    child = parent / "child.txt"
+    child.write_text("keep")
+
+    with patch("src.core.file_ops.is_protected", return_value=True):
+        success, msg = safe_remove(child, use_trash=False)
+
+    assert success is False
+    assert "whitelisted" in msg
+    assert child.exists()
+
+
+def test_safe_remove_reports_permission_error(test_env):
+    test_file = test_env / "readonly.txt"
+    test_file.write_text("data")
+
+    with patch("pathlib.Path.unlink", side_effect=PermissionError("denied")):
+        success, msg = safe_remove(test_file, use_trash=False)
+
+    assert success is False
+    assert "denied" in msg
 
 
 def test_clean_path_by_age(test_env):

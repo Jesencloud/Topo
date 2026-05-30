@@ -111,7 +111,7 @@ def safe_remove(path: str | Path, use_trash: bool = True) -> tuple[bool, str]:
         else:
             raw_path.unlink()
         return True, "Permanently deleted"
-    except Exception as e:
+    except OSError as e:
         return False, str(e)
 
 

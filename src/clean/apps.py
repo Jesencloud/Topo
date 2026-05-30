@@ -23,7 +23,7 @@ def proactive_app_detection():
         try:
             with open(DETECTED_APPS_FILE) as f:
                 detected = json.load(f)
-        except Exception:
+        except (OSError, json.JSONDecodeError):
             pass
 
     # 1. Health Check: Prune entries that no longer have a binary AND no longer have data
@@ -63,7 +63,7 @@ def proactive_app_detection():
                     detected[item.name] = {"paths": [str(item.resolve())], "procs": [name_lower]}
                     handled_names.add(name_lower)
                     new_found = True
-        except Exception:
+        except OSError:
             pass
 
     # Save if we found NEW things OR if we PRUNED old things
@@ -77,7 +77,7 @@ def proactive_app_detection():
                     f"  \033[1;90mℹ️  Updated local app registry ({len(detected)} apps known)\033[0m"
                 )
                 print(msg)
-        except Exception:
+        except OSError:
             pass
     return detected
 
@@ -112,7 +112,7 @@ def clean_app_generic(name, paths, process_names=None, dry_run=False):
                     if safe_remove(path, use_trash=False)[0]:
                         total_freed += size
                         items_cleaned += 1
-            except Exception:
+            except OSError:
                 continue
 
     if found and (total_freed > 0 or dry_run):
@@ -157,7 +157,7 @@ def clean_generic_xdg_caches(days=30, dry_run=False):
                 if not dry_run:
                     tag = "Generic Cache" if is_obvious_junk else "Stale App Data"
                     print(f"  \033[0;32m✓\033[0m {tag}: {item.name} ({bytes_to_human(s)})")
-    except Exception:
+    except OSError:
         pass
     if dry_run and total_size > 0:
         msg = (
@@ -207,7 +207,7 @@ def clean_orphaned_remnants(dry_run=False):
                         # Extract the path, removing args
                         path_part = exec_line[0].split("=")[1].split()[0].strip("\"'")
                         desktop_links[d.stem.lower()] = path_part
-        except Exception:
+        except OSError:
             pass
 
     for root in search_roots:
@@ -247,7 +247,7 @@ def clean_orphaned_remnants(dry_run=False):
                         if not dry_run:
                             msg = f"  \033[0;32m✓\033[0m Orphaned Remnant: {item.name} ({bytes_to_human(s)})"
                             print(msg)
-        except Exception:
+        except OSError:
             pass
     if dry_run and total_size > 0:
         msg = f"  \033[0;32m✓\033[0m Orphaned app remnants ({bytes_to_human(total_size)}) would be checked"

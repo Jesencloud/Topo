@@ -37,7 +37,7 @@ def test_proactive_app_detection_write_error(test_env):
     with (
         patch("shutil.which", return_value="/usr/bin/new_app"),
         patch("pathlib.Path.iterdir") as mock_iter,
-        patch("builtins.open", side_effect=Exception("Write failed")),
+        patch("builtins.open", side_effect=OSError("Write failed")),
     ):
         m_dir = MagicMock()
         m_dir.is_dir.return_value = True

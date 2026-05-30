@@ -37,12 +37,34 @@ def load_config() -> dict[str, Any]:
     try:
         with open(config_file) as f:
             user_config = json.load(f)
-            # Merge with defaults to ensure all keys exist
-            config = deepcopy(DEFAULT_CONFIG)
-            config.update(user_config)
-            return config
-    except Exception:
+            return normalize_config(user_config)
+    except (OSError, json.JSONDecodeError):
         return deepcopy(DEFAULT_CONFIG)
+
+
+def normalize_config(user_config: Any) -> dict[str, Any]:
+    config = deepcopy(DEFAULT_CONFIG)
+    if not isinstance(user_config, dict):
+        return config
+
+    purge_paths = user_config.get("purge_search_paths")
+    if isinstance(purge_paths, list) and all(isinstance(p, str) for p in purge_paths):
+        config["purge_search_paths"] = purge_paths
+
+    min_age_days = user_config.get("min_age_days")
+    if isinstance(min_age_days, int) and min_age_days >= 0:
+        config["min_age_days"] = min_age_days
+
+    for key in ("use_trash", "status_public_ip"):
+        value = user_config.get(key)
+        if isinstance(value, bool):
+            config[key] = value
+
+    theme_color = user_config.get("theme_color")
+    if isinstance(theme_color, str) and theme_color:
+        config["theme_color"] = theme_color
+
+    return config
 
 
 def save_config(config: dict[str, Any]):

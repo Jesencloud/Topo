@@ -1,5 +1,9 @@
+import json
 import os
 import shutil
+import socket
+import urllib.error
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -24,7 +28,7 @@ def get_mem_info():
             used = total - available
             percent = (used / total) * 100 if total > 0 else 0
             return bytes_to_human(used), bytes_to_human(total), percent
-    except Exception:
+    except (OSError, ValueError, IndexError):
         return "Unknown", "Unknown", 0
 
 
@@ -35,7 +39,7 @@ def get_uptime():
             hours = int(uptime_seconds // 3600)
             minutes = int((uptime_seconds % 3600) // 60)
             return f"{hours}h {minutes}m"
-    except Exception:
+    except (OSError, ValueError, IndexError):
         return "Unknown"
 
 
@@ -57,7 +61,7 @@ def get_battery_info():
                 full = int(f.read().strip())
             health = (full / design) * 100
             health_str = f" (Health: {health:.1f}%)"
-        except Exception:
+        except (OSError, ValueError, ZeroDivisionError):
             health_str = ""
 
         # Cycle count
@@ -67,11 +71,11 @@ def get_battery_info():
                 cycles = f.read().strip()
                 if cycles and cycles != "0":
                     cycles_str = f" | Cycles: {cycles}"
-        except Exception:
+        except OSError:
             pass
 
         return f"{capacity}%{health_str}{cycles_str}"
-    except Exception:
+    except OSError:
         return "N/A"
 
 
@@ -89,7 +93,7 @@ def get_network_traffic():
                 rx += int(parts[1])
                 tx += int(parts[9])
             return bytes_to_human(rx), bytes_to_human(tx)
-    except Exception:
+    except (OSError, ValueError, IndexError):
         return "N/A", "N/A"
 
 
@@ -97,13 +101,11 @@ def get_ip_info(include_public: bool | None = None):
     """Get local IP, and public IP only when explicitly enabled."""
     local_ip = "N/A"
     try:
-        import socket
-
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
         local_ip = s.getsockname()[0]
         s.close()
-    except Exception:
+    except OSError:
         pass
 
     if include_public is None:
@@ -115,16 +117,13 @@ def get_ip_info(include_public: bool | None = None):
 
 def _get_public_ip_info():
     try:
-        import json
-        import urllib.request
-
         with urllib.request.urlopen("http://ip-api.com/json/", timeout=2.0) as response:
             data = json.loads(response.read().decode())
             if data.get("status") == "success":
                 ip = data.get("query")
                 cc = data.get("countryCode", "")
                 return f"[{cc}] {ip}" if cc else ip
-    except Exception:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, urllib.error.URLError):
         pass
     return ""
 
@@ -148,7 +147,7 @@ def get_ssd_info():
             with open(drive_path / "model") as f:
                 model = f.read().strip()
             return model
-    except Exception:
+    except OSError:
         pass
     return "Generic Drive"
 
@@ -161,7 +160,7 @@ def get_cpu_temp():
             with open(temp_path) as f:
                 temp_mc = int(f.read().strip())
                 return f"{temp_mc / 1000:.1f}°C"
-    except Exception:
+    except (OSError, ValueError):
         pass
     return "N/A"
 
@@ -191,9 +190,9 @@ def get_fan_speed():
                                 entry = f"{name}: {rpm} RPM" if name else f"{rpm} RPM"
                                 if entry not in fans:
                                     fans.append(entry)
-                    except Exception:
+                    except OSError:
                         continue
-    except Exception:
+    except OSError:
         pass
     return ", ".join(fans) if fans else None
 
@@ -215,7 +214,7 @@ def get_gpu_info():
             if res.ok:
                 util, used, total, temp = res.stdout.strip().split(", ")
                 return f"NVIDIA: {util}% util | Mem: {int(used) / 1024:.1f}GB / {int(total) / 1024:.1f}GB | {temp}°C"
-        except Exception:
+        except (ValueError, IndexError):
             pass
 
     # 2. Check AMD/Intel (via sysfs)
@@ -252,7 +251,7 @@ def get_gpu_info():
                         vendor = f.read().strip()
                         if "0x8086" in vendor:  # Intel Vendor ID
                             return "Intel HD/UHD Graphics (Active)"
-    except Exception:
+    except (OSError, ValueError):
         pass
 
     return None
@@ -289,7 +288,7 @@ def get_top_processes():
                     mem_mb = total_rss / 1024
                     procs.append(f"{name} ({int(mem_mb)}MB)")
             return procs
-    except Exception:
+    except (OSError, ValueError):
         pass
     return []
 

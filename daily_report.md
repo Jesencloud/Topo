@@ -79,6 +79,14 @@ Today's session focused on reaching the pinnacle of TUI performance, achieving a
 *   **Command Layer Tests**: Added direct tests for successful, failed, and timed-out command results, and updated existing tests to assert the unified command layer instead of raw `subprocess.run()` details.
 *   **Verification**: Confirmed the command-layer refactor with `ruff check src tests` and the full pytest suite (`84 passed`).
 
+### 11. Exception, Deletion & Config Hardening
+*   **Config Schema Normalization**: Added `normalize_config()` to validate user config types and fall back to safe defaults when values like `purge_search_paths`, `use_trash`, `min_age_days`, or `status_public_ip` have invalid shapes.
+*   **Config Regression Tests**: Added tests proving invalid config values are rejected and valid values are preserved, preventing malformed JSON from producing surprising runtime behavior.
+*   **Expanded Removal Safety Tests**: Strengthened `safe_remove()` coverage for broken symlinks, parent-whitelist protection, and permission errors, expanding the deletion-layer test matrix beyond normal files and directory symlinks.
+*   **Narrower Exception Handling**: Replaced broad `except Exception` blocks in `apps.py`, `analyze.py`, `status.py`, `config.py`, and `file_ops.py` with expected exception classes such as `OSError`, `JSONDecodeError`, `ValueError`, `IndexError`, `UnicodeDecodeError`, and `URLError`.
+*   **Analyzer Parse Safety**: Made Rust scan JSON parsing fail closed on malformed output without hiding unrelated programming errors.
+*   **Verification**: Confirmed the hardening pass with `ruff check src tests` and the full pytest suite (`89 passed`).
+
 ---
 
 # Daily Modification Report - 2026-05-29

@@ -63,14 +63,14 @@ def get_rust_scan_data(path: Path) -> dict[str, Any] | None:
     if cached:
         return cached
 
-    try:
-        res = run_command([str(binary), str(path)], capture=True, timeout=300)
-        if res.ok:
+    res = run_command([str(binary), str(path)], capture=True, timeout=300)
+    if res.ok:
+        try:
             data = json.loads(res.stdout)
-            ScanCache.set(path, data)
-            return data
-    except Exception:
-        pass
+        except json.JSONDecodeError:
+            return None
+        ScanCache.set(path, data)
+        return data
     return None
 
 
@@ -106,7 +106,7 @@ def get_age_hint(path: Path) -> str:
         if days > 30:
             return f">{int(days / 30)}mo"
         return f">{int(days)}d"
-    except Exception:
+    except OSError:
         return ""
 
 
@@ -127,9 +127,9 @@ def get_old_items_info(dir_path: Path, days_threshold: int = 90) -> list[dict[st
                             "mtime": stat.st_mtime,
                         }
                     )
-            except Exception:
+            except OSError:
                 continue
-    except Exception:
+    except OSError:
         pass
     return sorted(old_items, key=lambda x: x["size"], reverse=True)
 
