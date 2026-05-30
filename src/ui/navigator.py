@@ -259,7 +259,7 @@ class AnalyzeSelector:
         columns = shutil.get_terminal_size().columns
         available = columns - (2 + 5 + 8 + 3 + 2 + 5 + 12 + 5)
         bar_w = 20 if available > 40 else 10 if available > 20 else 0
-        name_w = min(40, available - bar_w) if bar_w > 0 else max(15, available)
+        name_w = min(30, available - bar_w) if bar_w > 0 else max(15, available)
 
         total_len = len(self.items)
         total_pages = (total_len + self.page_size - 1) // self.page_size
@@ -286,7 +286,7 @@ class AnalyzeSelector:
             icon = item.get("icon", "📁")
             age_str = f" {GRAY}{item.get('age_hint', '')}{RESET}" if item.get("age_hint") else ""
             buf.append(
-                f"{cursor} {checkbox_str}{bar_str}{item['percent']:>5.1f}%  |  {icon} {style}{name_padded}{RESET}     {WHITE}{bytes_to_human(item['size']):>12}{RESET}{age_str}\033[K\n"
+                f"{cursor} {checkbox_str}{bar_str}{item['percent']:>5.1f}%  |  {icon} {style}{name_padded}{RESET}  {WHITE}{bytes_to_human(item['size']):>12}{RESET}{age_str}\033[K\n"
             )
 
         buf.append("\n" + "-" * (columns - 2) + "\033[K\n")
