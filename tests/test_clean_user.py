@@ -1,6 +1,9 @@
+import os
+import time
+from pathlib import Path
 from unittest.mock import patch
 
-from src.clean.user import clean_trash
+from src.clean.user import clean_system_temp, clean_trash
 
 
 def test_clean_trash_dry_run(test_env):
@@ -33,3 +36,40 @@ def test_clean_trash_execution_gio(mock_run, mock_which, test_env):
         clean_trash(dry_run=False)
 
     mock_run.assert_called_with(["gio", "trash", "--empty"], capture_output=True)
+
+
+def test_clean_system_temp_only_removes_stale_user_owned_items(test_env):
+    fake_tmp = test_env / "tmp"
+    fake_var_tmp = test_env / "var_tmp"
+    fake_tmp.mkdir()
+    fake_var_tmp.mkdir()
+
+    stale = fake_tmp / "stale-build"
+    fresh = fake_tmp / "fresh-build"
+    systemd = fake_tmp / "systemd-private-test"
+    hidden = fake_tmp / ".hidden-temp"
+    stale.write_text("old")
+    fresh.write_text("new")
+    systemd.write_text("skip")
+    hidden.write_text("skip")
+
+    old_time = time.time() - 5 * 86400
+    os.utime(stale, (old_time, old_time))
+
+    def fake_path(value):
+        if value == "/tmp":
+            return fake_tmp
+        if value == "/var/tmp":
+            return fake_var_tmp
+        return Path(value)
+
+    with patch("src.clean.user.Path", side_effect=fake_path):
+        size, items, categories = clean_system_temp(dry_run=False, min_age_days=3)
+
+    assert size == 3
+    assert items == 1
+    assert categories == 1
+    assert not stale.exists()
+    assert fresh.exists()
+    assert systemd.exists()
+    assert hidden.exists()

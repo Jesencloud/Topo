@@ -86,7 +86,7 @@ def clean_system_temp(dry_run=False, min_age_days=3):
                 if dry_run or safe_remove(item, use_trash=False)[0]:
                     total_size += size
                     total_items += 1
-        except Exception:
+        except OSError:
             continue
     if total_items > 0:
         status = "would be cleaned" if dry_run else "cleaned"

@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 from ..ui.navigator import draw_bar
+from .config import load_config
 from .file_ops import bytes_to_human
 
 
@@ -92,8 +93,8 @@ def get_network_traffic():
         return "N/A", "N/A"
 
 
-def get_ip_info():
-    """Get local and public IP with country flag."""
+def get_ip_info(include_public: bool | None = None):
+    """Get local IP, and public IP only when explicitly enabled."""
     local_ip = "N/A"
     try:
         import socket
@@ -105,23 +106,27 @@ def get_ip_info():
     except Exception:
         pass
 
-    public_info = ""
+    if include_public is None:
+        include_public = bool(load_config().get("status_public_ip", False))
+    public_info = _get_public_ip_info() if include_public else ""
+
+    return local_ip, public_info
+
+
+def _get_public_ip_info():
     try:
         import json
         import urllib.request
 
-        # Fast, no-key API for public IP and country info
         with urllib.request.urlopen("http://ip-api.com/json/", timeout=2.0) as response:
             data = json.loads(response.read().decode())
             if data.get("status") == "success":
                 ip = data.get("query")
                 cc = data.get("countryCode", "")
-                # Format: [CN] 1.2.3.4
-                public_info = f"[{cc}] {ip}" if cc else ip
+                return f"[{cc}] {ip}" if cc else ip
     except Exception:
         pass
-
-    return local_ip, public_info
+    return ""
 
 
 def get_ssd_info():

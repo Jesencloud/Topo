@@ -23,7 +23,7 @@ class UninstallManager:
         {
             "app", "apps", "data", "core", "bin", "cache", "config", "share",
             "gui", "lib", "tmp", "temp", "default", "common", "main", "client",
-            "desktop", "system", "settings", "local", "user",
+            "desktop", "system", "settings", "local", "user", "code", "go", "id",
         }
     )
 
@@ -64,7 +64,7 @@ class UninstallManager:
                         return line.split("=")[1].strip()
                     if line.startswith("Name=") and not english_name:
                         english_name = line.split("=")[1].strip()
-        except Exception:
+        except OSError:
             pass
         return english_name or name
 
@@ -81,7 +81,7 @@ class UninstallManager:
                         icon_name = line.split("=")[1].strip().lower()
                         if icon_name:
                             keywords.add(icon_name)
-        except Exception:
+        except OSError:
             pass
         return list(keywords)
 
@@ -122,7 +122,7 @@ class UninstallManager:
                                     "file "
                                 ):  # Filter out 'file X is not owned by any package'
                                     user_app_packages.add(line.strip())
-            except Exception:
+            except (OSError, subprocess.SubprocessError, ValueError):
                 pass
 
         # 2. DNF (RPM) Scan - Filtered by user_app_packages
@@ -156,7 +156,7 @@ class UninstallManager:
                                         "install_time": install_time,
                                     }
                                 )
-            except Exception:
+            except (OSError, subprocess.SubprocessError, ValueError):
                 pass
 
         # 3. Flatpak Scan
@@ -185,7 +185,7 @@ class UninstallManager:
                                     if p.exists():
                                         install_time = int(p.stat().st_mtime)
                                         break
-                            except Exception:
+                            except OSError:
                                 pass
 
                             id_lower = app_id.lower()
@@ -203,7 +203,7 @@ class UninstallManager:
                                     "install_time": install_time,
                                 }
                             )
-            except Exception:
+            except (OSError, subprocess.SubprocessError):
                 pass
 
         self.apps = sorted(apps, key=lambda x: x["size_bytes"], reverse=True)
@@ -251,7 +251,7 @@ class UninstallManager:
                                 if str(p) not in seen:
                                     paths.append(p)
                                     seen.add(str(p))
-            except Exception:
+            except OSError:
                 pass
 
         # 5. Wine prefix check (optional, if wechat/etc)
@@ -276,7 +276,7 @@ class UninstallManager:
                             ):
                                 paths.append(Path(entry.path))
                                 seen.add(str(entry.path))
-            except Exception:
+            except OSError:
                 pass
 
         return paths
@@ -288,7 +288,7 @@ class UninstallManager:
         if app["type"] == "Flatpak":
             import contextlib
 
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(OSError, subprocess.SubprocessError):
                 subprocess.run(["flatpak", "kill", app["id"]], capture_output=True)
 
         for proc in all_process_names:
@@ -297,7 +297,7 @@ class UninstallManager:
                 if res.returncode == 0:
                     subprocess.run(["pkill", "-9", "-x", proc], capture_output=True)
                     time.sleep(0.5)
-            except Exception:
+            except (OSError, subprocess.SubprocessError):
                 pass
 
         # 2. Binary uninstall
@@ -312,7 +312,7 @@ class UninstallManager:
             success, _ = safe_remove(p, use_trash=False)
             try:
                 removed_details.append((success, str(p.relative_to(Path.home()))))
-            except Exception:
+            except ValueError:
                 removed_details.append((success, str(p)))
 
         return removed_details
@@ -348,7 +348,7 @@ def run_uninstall():
                     if subprocess.run(["pgrep", "-x", proc], capture_output=True).returncode == 0:
                         is_running = True
                         break
-                except Exception:
+                except (OSError, subprocess.SubprocessError):
                     pass
             app_paths = manager.find_residue_paths(app["id"], app["name"], app["type"])
             all_targets.append((app, app_paths, is_running))
@@ -371,7 +371,7 @@ def run_uninstall():
                         try:
                             rel_p = f"~/{p.relative_to(Path.home())}"
                             buf.append(f"    \033[1;34m✓\033[0m {GRAY}{rel_p}{RESET}\033[K\n")
-                        except Exception:
+                        except ValueError:
                             buf.append(f"    \033[1;34m✓\033[0m {GRAY}{p}{RESET}\033[K\n")
 
                 buf.append("-" * 70 + "\033[K\n")

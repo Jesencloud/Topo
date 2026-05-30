@@ -127,6 +127,35 @@ def test_find_residue_paths(test_env):
         assert any("myapp" in str(p).lower() for p in paths)
 
 
+def test_find_residue_paths_ignores_generic_short_tail_tokens(test_env):
+    mgr = UninstallManager()
+
+    (test_env / ".cache/go").mkdir(parents=True)
+    (test_env / ".config/code").mkdir(parents=True)
+    (test_env / ".local/share/id").mkdir(parents=True)
+
+    with patch("pathlib.Path.home", return_value=test_env):
+        assert mgr.find_residue_paths("org.example.go", "Example Go", "Flatpak") == []
+        assert mgr.find_residue_paths("org.example.code", "Example Code", "Flatpak") == []
+        assert mgr.find_residue_paths("org.example.id", "Example Id", "Flatpak") == []
+
+
+def test_find_residue_paths_allows_specific_prefix_and_substring(test_env):
+    mgr = UninstallManager()
+
+    telegram_cache = test_env / ".cache/telegram-desktop"
+    myapp_state = test_env / ".local/share/vendor-myapp-state"
+    telegram_cache.mkdir(parents=True)
+    myapp_state.mkdir(parents=True)
+
+    with patch("pathlib.Path.home", return_value=test_env):
+        telegram_paths = mgr.find_residue_paths("org.telegram.desktop", "Telegram", "Flatpak")
+        myapp_paths = mgr.find_residue_paths("com.example.myapp", "MyApp", "Flatpak")
+
+    assert telegram_cache in telegram_paths
+    assert myapp_state in myapp_paths
+
+
 @patch("shutil.which")
 @patch("subprocess.run")
 def test_run_full_scan_rpm(mock_run, mock_which):

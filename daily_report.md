@@ -46,6 +46,15 @@ Today's session focused on reaching the pinnacle of TUI performance, achieving a
 *   **Unused Constant Cleanup**: Removed unused `PURGE_CONFIG_FILE` and `MIN_AGE_DAYS` constants while preserving actively used UI constants such as `EARTH`.
 *   **Verification**: Confirmed the cleanup with `ruff check src tests` and the full pytest suite (`70 passed`).
 
+### 7. Safety & Privacy Hardening
+*   **Safer Uninstall Residue Matching**: Hardened `find_residue_paths()` against accidental deletion by treating high-risk short or generic tokens such as `code`, `go`, and `id` as unsafe residue match keys. Added regression coverage to ensure Flatpak/RPM IDs like `org.example.go` do not match unrelated directories such as `~/.cache/go`.
+*   **Residue Matching Regression Tests**: Added tests that preserve legitimate app-specific matches such as `telegram-desktop` and `vendor-myapp-state` while blocking generic short-tail tokens.
+*   **Temporary Directory Safety Coverage**: Locked down the `/tmp` and `/var/tmp` cleanup policy with tests proving that only stale, user-owned entries are removed, while fresh files, hidden entries, and `systemd` private temp directories are skipped.
+*   **Exception Scope Reduction**: Narrowed broad exception handling in the uninstall and user-temp cleanup paths to expected operational failures (`OSError`, `subprocess.SubprocessError`, `ValueError`) instead of swallowing all program errors.
+*   **Status Privacy Default**: Added `status_public_ip: False` to configuration and changed `topo status` so it no longer contacts `ip-api.com` by default. Public IP lookup now requires explicit opt-in.
+*   **Public IP Test Coverage**: Added tests proving `get_ip_info()` does not call `urllib.request.urlopen` unless public IP lookup is enabled, preserving fast and private default status checks.
+*   **Verification**: Confirmed the safety and privacy changes with targeted Ruff checks and the full pytest suite (`75 passed`).
+
 ---
 
 # Daily Modification Report - 2026-05-29

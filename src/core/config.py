@@ -14,6 +14,7 @@ DEFAULT_CONFIG = {
     "purge_search_paths": DEFAULT_PURGE_SEARCH_PATHS,
     "use_trash": True,
     "min_age_days": 7,
+    "status_public_ip": False,
     "theme_color": "cyan",
 }
 
