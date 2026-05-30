@@ -1,7 +1,22 @@
 import subprocess
 from pathlib import Path
 
+from packaging.version import InvalidVersion, Version
+
 from ..core.constants import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
+
+
+def _parse_version(version_text: str) -> Version | None:
+    try:
+        return Version(version_text.strip())
+    except InvalidVersion:
+        return None
+
+
+def _should_update(local_version: str, remote_version: str) -> bool:
+    local = _parse_version(local_version)
+    remote = _parse_version(remote_version)
+    return local is not None and remote is not None and remote > local
 
 
 def run_update():
@@ -29,8 +44,22 @@ def run_update():
         return
 
     # 3. Compare and act
-    if local_version == remote_version:
+    local_parsed = _parse_version(local_version)
+    remote_parsed = _parse_version(remote_version)
+    if remote_parsed is None:
+        print(f" {RED}❌ Invalid remote version: {remote_version!r}{RESET}")
+        return
+    if local_parsed is None:
+        print(f" {RED}❌ Invalid local version: {local_version!r}{RESET}")
+        return
+    if remote_parsed == local_parsed:
         print(f" {GREEN}✓{RESET} {BOLD}Topo is already up to date!{RESET} (v{local_version})")
+        return
+    if remote_parsed < local_parsed:
+        print(
+            f" {GREEN}✓{RESET} {BOLD}Local Topo is newer than remote.{RESET} "
+            f"(local: v{local_version}, remote: v{remote_version})"
+        )
         return
 
     print(f" {YELLOW}⬆️  New version available: v{remote_version}{RESET}")

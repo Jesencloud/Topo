@@ -64,6 +64,13 @@ Today's session focused on reaching the pinnacle of TUI performance, achieving a
 *   **Regression Tests**: Added targeted tests for symlink deletion behavior, independent config defaults, XDG cache age thresholds, and developer-tool cleanup success accounting.
 *   **Verification**: Confirmed the changes with `ruff check src tests` and the full pytest suite (`77 passed`).
 
+### 9. Update Version Semantics
+*   **Semantic Version Comparison**: Replaced raw string equality checks in `topo update` with `packaging.version.Version`, so `1.10.0` is correctly treated as newer than `1.9.0`.
+*   **Downgrade Protection**: Prevented update execution when the remote version is older than the local installation, reporting that the local copy is already newer instead of treating any mismatch as an upgrade.
+*   **Invalid Remote Guard**: Added validation for malformed remote version strings such as `latest`; invalid values now abort safely instead of triggering the installer.
+*   **Update Regression Tests**: Added focused tests for newer, equal, older, and invalid remote versions, including assertions that the install script is not run for downgrade or invalid-version cases.
+*   **Verification**: Confirmed the update hardening with `ruff check src tests` and the full pytest suite (`81 passed`).
+
 ---
 
 # Daily Modification Report - 2026-05-29
