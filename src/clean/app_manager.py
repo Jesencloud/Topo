@@ -387,7 +387,9 @@ def run_uninstall():
                             if system.SUDO_CANCELLED:
                                 print(f"\n {YELLOW}⚠️  Uninstall cancelled by user.{RESET}")
                             else:
-                                print(f"\n {RED}✗{RESET} Authorization failed. Uninstall cancelled.")
+                                print(
+                                    f"\n {RED}✗{RESET} Authorization failed. Uninstall cancelled."
+                                )
                             if not Navigator.wait_for_return():
                                 preview_done = True
                                 break

@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock, patch
-from pathlib import Path
+
 from src.clean.app_manager import UninstallManager, run_uninstall
+
 
 def test_run_uninstall_no_apps():
     with (
@@ -43,7 +44,7 @@ def test_run_uninstall_execute_and_exit(
     ]
     # Mock raw_mode to act as a proper context manager
     mock_raw.return_value.__enter__.return_value = 0
-    
+
     with (
         patch("src.clean.app_manager.UninstallManager.run_full_scan", return_value=mock_apps),
         patch("src.clean.app_manager.UninstallSelector.run", return_value=[0]),
