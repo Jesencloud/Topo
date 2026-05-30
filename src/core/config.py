@@ -1,4 +1,5 @@
 import json
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -29,18 +30,19 @@ def load_config() -> dict[str, Any]:
     _ensure_config()
     config_file = get_config_file()
     if not config_file.exists():
-        save_config(DEFAULT_CONFIG)
-        return DEFAULT_CONFIG
+        config = deepcopy(DEFAULT_CONFIG)
+        save_config(config)
+        return config
 
     try:
         with open(config_file) as f:
             user_config = json.load(f)
             # Merge with defaults to ensure all keys exist
-            config = DEFAULT_CONFIG.copy()
+            config = deepcopy(DEFAULT_CONFIG)
             config.update(user_config)
             return config
     except Exception:
-        return DEFAULT_CONFIG
+        return deepcopy(DEFAULT_CONFIG)
 
 
 def save_config(config: dict[str, Any]):

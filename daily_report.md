@@ -55,6 +55,15 @@ Today's session focused on reaching the pinnacle of TUI performance, achieving a
 *   **Public IP Test Coverage**: Added tests proving `get_ip_info()` does not call `urllib.request.urlopen` unless public IP lookup is enabled, preserving fast and private default status checks.
 *   **Verification**: Confirmed the safety and privacy changes with targeted Ruff checks and the full pytest suite (`75 passed`).
 
+### 8. Deletion Safety & Command Reliability
+*   **Symlink-Safe Removal**: Fixed `safe_remove()` so symlink inputs delete only the symlink itself while still applying protection checks to the resolved target path. Added regression coverage proving symlink targets remain intact.
+*   **Unified Dangerous Delete Path**: Routed Cargo registry cleanup through `safe_remove()` instead of direct `shutil.rmtree(..., ignore_errors=True)`, keeping deletion safeguards centralized.
+*   **Conservative Cache Aging**: Adjusted generic XDG cache cleanup so obvious cache/log/temp directories still require at least 3 days of inactivity, avoiding same-session application cache deletion.
+*   **Command Success Accounting**: Updated Docker, Podman, and Multipass cleanup routines to report success and increment cleaned-item counters only when the underlying command exits successfully.
+*   **Config Default Isolation**: Changed `load_config()` to return deep copies of defaults, preventing callers from mutating shared default lists such as `purge_search_paths`.
+*   **Regression Tests**: Added targeted tests for symlink deletion behavior, independent config defaults, XDG cache age thresholds, and developer-tool cleanup success accounting.
+*   **Verification**: Confirmed the changes with `ruff check src tests` and the full pytest suite (`77 passed`).
+
 ---
 
 # Daily Modification Report - 2026-05-29

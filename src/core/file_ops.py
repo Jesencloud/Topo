@@ -80,33 +80,40 @@ def get_size_fast(path: str | Path) -> int:
 
 def safe_remove(path: str | Path, use_trash: bool = True) -> tuple[bool, str]:
     """Safe removal with trash support and protection checks."""
-    path = Path(path).expanduser().resolve()
-    if not path.exists():
+    raw_path = Path(path).expanduser()
+    try:
+        resolved_path = raw_path.resolve(strict=False)
+    except OSError:
+        resolved_path = raw_path.absolute()
+
+    if not raw_path.exists() and not raw_path.is_symlink():
         return False, "Path does not exist"
-    if is_protected(path):
+    if is_protected(resolved_path):
         return False, "Path is whitelisted"
 
     # Critical system paths protection
-    if path in [Path("/"), Path("/usr"), Path("/etc"), Path("/var"), Path.home()]:
+    if resolved_path in [Path("/"), Path("/usr"), Path("/etc"), Path("/var"), Path.home()]:
         return False, "Refusing to delete critical system path"
 
     try:
         if use_trash:
             if (
                 shutil.which("gio")
-                and subprocess.run(["gio", "trash", str(path)], capture_output=True).returncode == 0
+                and subprocess.run(["gio", "trash", str(raw_path)], capture_output=True).returncode == 0
             ):
                 return True, "Moved to trash (gio)"
             if (
                 shutil.which("trash-put")
-                and subprocess.run(["trash-put", str(path)], capture_output=True).returncode == 0
+                and subprocess.run(["trash-put", str(raw_path)], capture_output=True).returncode == 0
             ):
                 return True, "Moved to trash (trash-cli)"
 
-        if path.is_dir():
-            shutil.rmtree(path)
+        if raw_path.is_symlink() or raw_path.is_file():
+            raw_path.unlink()
+        elif raw_path.is_dir():
+            shutil.rmtree(raw_path)
         else:
-            path.unlink()
+            raw_path.unlink()
         return True, "Permanently deleted"
     except Exception as e:
         return False, str(e)

@@ -3,7 +3,13 @@ import subprocess
 from pathlib import Path
 
 from ..core.constants import DEV_CACHES
-from ..core.file_ops import bytes_to_human, clean_path_by_age, get_size_fast, register_cleaned_path
+from ..core.file_ops import (
+    bytes_to_human,
+    clean_path_by_age,
+    get_size_fast,
+    register_cleaned_path,
+    safe_remove,
+)
 from ..core.system import run_command
 
 
@@ -46,11 +52,12 @@ def clean_docker(dry_run=False):
                 use_sudo = False
         except Exception:
             pass
-        run_command(
+        res = run_command(
             ["docker", "system", "prune", "-f", "--volumes"], use_sudo=use_sudo, capture=True
         )
-        print("  \033[0;32m✓\033[0m Docker system pruned")
-        return 0, 1
+        if res and res.returncode == 0:
+            print("  \033[0;32m✓\033[0m Docker system pruned")
+            return 0, 1
     return 0, 0
 
 
@@ -63,9 +70,10 @@ def clean_podman(dry_run=False):
             print("  \033[0;32m✓\033[0m Podman (unused images/volumes) would be pruned")
             items += 1
         else:
-            run_command(["podman", "system", "prune", "-f"], capture=True)
-            print("  \033[0;32m✓\033[0m Podman system pruned")
-            items += 1
+            res = run_command(["podman", "system", "prune", "-f"], capture=True)
+            if res and res.returncode == 0:
+                print("  \033[0;32m✓\033[0m Podman system pruned")
+                items += 1
 
         # Clean storage cache
         cache_path = Path.home() / ".cache/containers"
@@ -85,9 +93,10 @@ def clean_multipass(dry_run=False):
         if dry_run:
             print("  \033[0;32m✓\033[0m Multipass deleted instances would be purged")
             return 0, 1
-        run_command(["multipass", "purge"], capture=True)
-        print("  \033[0;32m✓\033[0m Multipass purged")
-        return 0, 1
+        res = run_command(["multipass", "purge"], capture=True)
+        if res and res.returncode == 0:
+            print("  \033[0;32m✓\033[0m Multipass purged")
+            return 0, 1
     return 0, 0
 
 
@@ -142,14 +151,17 @@ def clean_developer_tools(dry_run=False):
         register_cleaned_path(cargo_path)
         size = get_size_fast(cargo_path)
         if size > 1024:
+            removed = dry_run
             if dry_run:
                 print(f"  \033[0;32m✓\033[0m Cargo cache ({bytes_to_human(size)}) would be cleaned")
             else:
-                shutil.rmtree(cargo_path, ignore_errors=True)
-                print(f"  \033[0;32m✓\033[0m Cargo cache ({bytes_to_human(size)}) cleaned")
-            total_size += size
-            total_items += 1
-            total_categories += 1
+                removed = safe_remove(cargo_path, use_trash=False)[0]
+                if removed:
+                    print(f"  \033[0;32m✓\033[0m Cargo cache ({bytes_to_human(size)}) cleaned")
+            if removed:
+                total_size += size
+                total_items += 1
+                total_categories += 1
 
     # 3. AI & Virtualization
     for func in [clean_ai_models, clean_docker, clean_podman, clean_multipass]:

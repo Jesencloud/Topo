@@ -1,4 +1,10 @@
-from src.core.config import add_purge_path, load_config, remove_purge_path, save_config
+from src.core.config import (
+    DEFAULT_CONFIG,
+    add_purge_path,
+    load_config,
+    remove_purge_path,
+    save_config,
+)
 
 
 def test_config_lifecycle(test_env):
@@ -31,3 +37,11 @@ def test_purge_paths_management(test_env):
 
     # Remove non-existent
     assert remove_purge_path("/non/existent/path") is False
+
+
+def test_load_config_returns_independent_defaults(test_env):
+    config = load_config()
+    config["purge_search_paths"].append("/tmp/mutated")
+
+    assert "/tmp/mutated" not in DEFAULT_CONFIG["purge_search_paths"]
+    assert "/tmp/mutated" not in load_config()["purge_search_paths"]

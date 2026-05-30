@@ -67,12 +67,13 @@ def test_clean_flatpak_unused():
 def test_clean_generic_xdg_caches(test_env):
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.clean.apps.clean_path_by_age", return_value=(100, 1)),
+        patch("src.clean.apps.clean_path_by_age", return_value=(100, 1)) as mock_clean_age,
     ):
         cache_dir = test_env / ".cache/dummy_cache"
         cache_dir.mkdir(parents=True)
         size, items = clean_generic_xdg_caches(dry_run=True)
         assert items >= 0
+        mock_clean_age.assert_called_with(cache_dir, days=3, dry_run=True)
 
 
 def test_clean_orphaned_remnants(test_env):

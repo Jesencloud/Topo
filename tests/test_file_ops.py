@@ -145,6 +145,23 @@ def test_safe_remove_edge_cases(test_env):
         assert "mocked error" in msg
 
 
+def test_safe_remove_deletes_symlink_not_target(test_env):
+    target_dir = test_env / "target"
+    target_dir.mkdir()
+    target_file = target_dir / "kept.txt"
+    target_file.write_text("keep")
+    link = test_env / "target-link"
+    link.symlink_to(target_dir, target_is_directory=True)
+
+    success, msg = safe_remove(link, use_trash=False)
+
+    assert success is True
+    assert "Permanently deleted" in msg
+    assert not link.exists()
+    assert target_dir.exists()
+    assert target_file.exists()
+
+
 def test_clean_path_by_age(test_env):
     cache_dir = test_env / "cache"
     cache_dir.mkdir()

@@ -26,6 +26,7 @@ def test_clean_docker_execution(mock_sub_run, mock_run_cmd, mock_which):
     """Verify docker cleanup logic and sudo detection."""
     mock_which.return_value = "/usr/bin/docker"
     mock_sub_run.return_value = MagicMock(returncode=1)
+    mock_run_cmd.return_value = MagicMock(returncode=0)
 
     size, items = clean_docker(dry_run=False)
     assert items == 1
@@ -38,6 +39,7 @@ def test_clean_docker_execution(mock_sub_run, mock_run_cmd, mock_which):
 @patch("src.clean.dev.run_command")
 def test_clean_podman(mock_run_cmd, mock_which):
     mock_which.return_value = "/usr/bin/podman"
+    mock_run_cmd.return_value = MagicMock(returncode=0)
 
     with patch("src.clean.dev.clean_path_by_age", return_value=(100, 1)):
         size, items = clean_podman(dry_run=False)
@@ -49,6 +51,7 @@ def test_clean_podman(mock_run_cmd, mock_which):
 @patch("src.clean.dev.run_command")
 def test_clean_multipass(mock_run_cmd, mock_which):
     mock_which.return_value = "/usr/bin/multipass"
+    mock_run_cmd.return_value = MagicMock(returncode=0)
     size, items = clean_multipass(dry_run=False)
     assert items == 1
     mock_run_cmd.assert_called_with(["multipass", "purge"], capture=True)
@@ -71,7 +74,7 @@ def test_clean_developer_tools(mock_clean_tool, mock_which):
     with (
         patch("src.clean.dev.get_size_fast", return_value=2048),
         patch("pathlib.Path.exists", return_value=True),
-        patch("shutil.rmtree"),
+        patch("src.clean.dev.safe_remove", return_value=(True, "deleted")),
     ):
         size, items, cats = clean_developer_tools(dry_run=False)
         assert cats > 0

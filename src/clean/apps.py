@@ -149,7 +149,8 @@ def clean_generic_xdg_caches(days=30, dry_run=False):
             if not item.is_dir() or str(item.resolve()) in CLEANED_PATHS:
                 continue
             is_obvious_junk = any(kw in item.name.lower() for kw in ["cache", "log", "tmp", "temp"])
-            s, i = clean_path_by_age(item, days=0 if is_obvious_junk else days, dry_run=dry_run)
+            age_days = min(days, 3) if is_obvious_junk else days
+            s, i = clean_path_by_age(item, days=age_days, dry_run=dry_run)
             if i > 0:
                 total_size += s
                 total_items += i
