@@ -322,8 +322,8 @@ def run_uninstall():
             preview_done = False
             while not preview_done:
                 buf = ["\033[H"]  # Go home
-                buf.append(f"\n \033[1;35m➔\033[0m {BOLD}Uninstallation Preview{RESET}\n")
-                buf.append("-" * 70 + "\n")
+                buf.append(f"\n \033[1;35m➔\033[0m {BOLD}Uninstallation Preview{RESET}\033[K\n")
+                buf.append("-" * 70 + "\033[K\n")
 
                 selected_apps = [apps[i] for i in selected_indices]
                 all_targets = []
@@ -343,7 +343,9 @@ def run_uninstall():
                             pass
 
                     running_tag = " \033[1;33m[Running]\033[0m" if is_running else ""
-                    buf.append(f"  \033[1;32m✓\033[0m {BOLD}{app['name']}{RESET}{running_tag}\n")
+                    buf.append(
+                        f"  \033[1;32m✓\033[0m {BOLD}{app['name']}{RESET}{running_tag}\033[K\n"
+                    )
                     total_estimated_size += app["size_bytes"]
 
                     # Show paths with Mole-style icons
@@ -352,19 +354,19 @@ def run_uninstall():
                     for p in app_paths:
                         try:
                             rel_p = f"~/{p.relative_to(Path.home())}"
-                            buf.append(f"    \033[1;34m✓\033[0m {GRAY}{rel_p}{RESET}\n")
+                            buf.append(f"    \033[1;34m✓\033[0m {GRAY}{rel_p}{RESET}\033[K\n")
                         except Exception:
-                            buf.append(f"    \033[1;34m✓\033[0m {GRAY}{p}{RESET}\n")
+                            buf.append(f"    \033[1;34m✓\033[0m {GRAY}{p}{RESET}\033[K\n")
 
-                buf.append("-" * 70 + "\n")
+                buf.append("-" * 70 + "\033[K\n")
                 app_text = "application" if len(selected_apps) == 1 else "applications"
                 size_display = bytes_to_human(total_estimated_size)
                 prompt = (
                     f"\n {MAGENTA}→{RESET} Remove {len(selected_apps)} {app_text}, {size_display} "
                     f" {GREEN}Enter{RESET} confirm, {GRAY}ESC{RESET} cancel: "
                 )
-                buf.append(prompt)
-                buf.append("\033[J")  # Clear any trails below
+                buf.append(prompt + "\033[K")
+                buf.append("\033[J")  # Clear everything else below
 
                 sys.stdout.write("".join(buf))
                 sys.stdout.flush()
