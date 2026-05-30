@@ -294,8 +294,8 @@ class AnalyzeSelector:
 
         if self.can_select:
             prompts = [
-                f" {page_info} ↑↓:Move | ←:Back | Enter/→:Enter | Spc/0-9:Toggle | A:Page",
-                f" {' ' * len(page_info)} Del:Trash | F:Open Folder | R:Reload | S:Sort {order_icon} | ESC:Exit"
+                f" {page_info} ↑↓:Move | ←:Back | Enter/→:Enter | Spc/0-9:Toggle | A:All",
+                f" {' ' * len(page_info)} Del:Delete | F:Open Folder | R:Reload | S:Sort {order_icon} | ESC:Exit"
             ]
         else:
             prompts = [

@@ -205,6 +205,9 @@ def run_deep_analysis(target_path: Path = None):
                                     "smart_items": smart_items,
                                 }
                             )
+
+                # Ensure total_scan_size matches the disk usage baseline for root view
+                total_scan_size = total_used
             else:
                 total_path_size = total_scan_size or 1
                 subdir_map = data.get("subdirs", {})
