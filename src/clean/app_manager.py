@@ -8,9 +8,9 @@ from pathlib import Path
 from typing import Any
 
 from ..core.analyze import ScanCache
-from ..core.constants import BOLD, GRAY, GREEN, MAGENTA, RESET
+from ..core.constants import BOLD, GRAY, GREEN, MAGENTA, RED, RESET, YELLOW
 from ..core.file_ops import bytes_to_human, safe_remove
-from ..core.system import get_os_id, run_command
+from ..core.system import SUDO_CANCELLED, ensure_sudo_session, get_os_id, run_command
 from ..ui.navigator import Navigator, UninstallSelector
 
 
@@ -378,9 +378,7 @@ def run_uninstall():
 
         if ch in ("\r", "\n"):
             # Ensure sudo session (require password)
-            from ..core.constants import GRAY, RED, YELLOW
             print(f"\n {GRAY}🔒 Authorizing removal (Ctrl+C to cancel)...{RESET}")
-            from ..core.system import SUDO_CANCELLED, ensure_sudo_session
 
             if not ensure_sudo_session():
                 if SUDO_CANCELLED:
