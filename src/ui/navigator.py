@@ -407,6 +407,11 @@ class AnalyzeSelector:
                             self.selected_items -= page_indices
                         else:
                             self.selected_items |= page_indices
+                    elif key in (Navigator.DEL, "\x1b[3~") and self.can_select:
+                        if self.selected_items:
+                            return "DELETE_BATCH", list(self.selected_items)
+                        elif total_len > 0:
+                            return "DELETE_BATCH", [self.selected_index]
                     elif key == Navigator.ESC and len(key) == 1:
                         return "QUIT", None
                     elif key == "MOUSE_EVENT":
