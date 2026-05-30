@@ -377,6 +377,17 @@ def run_uninstall():
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
         if ch in ("\r", "\n"):
+            # Ensure sudo session (require password)
+            print()  # Ensure sudo prompt is on a new line
+            from ..core.system import ensure_sudo_session
+
+            if not ensure_sudo_session():
+                from ..core.constants import RED
+                print(f"\n\n {RED}✗{RESET} Authorization failed. Uninstall cancelled.")
+                if not Navigator.wait_for_return():
+                    break
+                continue
+
             # --- EXECUTION ---
             print(f"\n\n {GRAY}🚀 Processing...{RESET}")
             removed_names = []
