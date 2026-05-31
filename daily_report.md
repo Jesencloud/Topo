@@ -30,6 +30,12 @@
 *   **Unified Enforcement**: Routed the protection through `is_protected()`, so `safe_remove()`, analyze deletion, uninstall residue cleanup, and cache cleanup all share the same sensitive-data guard.
 *   **Protection Tests**: Added regression coverage proving sensitive profile/config paths are blocked while ordinary app cache/config paths remain removable.
 
+### 5. Linux-Native Migration Guardrails
+*   **User Systemd Cleanup**: Added a Linux-native optimizer task that removes broken `~/.config/systemd/user/*.service` units when their `ExecStart` target no longer exists, with dry-run support.
+*   **Conservative Scope**: Limited service cleanup to user-owned systemd units and avoided system-level `/etc/systemd` or `/usr/lib/systemd` paths.
+*   **macOS-Only Regression Guard**: Added a source-level portability test that rejects direct use of macOS-only cleanup primitives such as `/Library`, LaunchAgent/LaunchDaemon, `osascript`, Spotlight, Homebrew Cask, Xcode, iOS backup, and DerivedData logic in `src/`.
+*   **Linux Counterpart Coverage**: Kept cleanup aligned with Linux primitives already used by Topo: XDG directories, Flatpak, Snap, APT/DNF/Pacman, Docker/Podman, journalctl, and gio/trash-cli.
+
 # Daily Modification Report - 2026-05-30
 
 ## Project: topo (Topo) - High-Performance Input & Flicker-Free UI

@@ -1,4 +1,5 @@
 import os
+import shlex
 import shutil
 import sqlite3
 import threading
@@ -7,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from ..core.constants import BLUE, BOLD, GRAY, GREEN, RESET
-from ..core.file_ops import bytes_to_human, get_size
+from ..core.file_ops import bytes_to_human, get_size, safe_remove
 from ..core.system import has_sudo, run_command
 
 # Lock to ensure parallel tasks don't corrupt the terminal output
@@ -155,6 +156,61 @@ def run_zombie_cleanup(dry_run=False):
     return None
 
 
+def run_systemd_user_service_cleanup(dry_run=False):
+    """Remove user service units whose ExecStart target no longer exists."""
+    user_systemd_dir = Path.home() / ".config" / "systemd" / "user"
+    if not user_systemd_dir.exists():
+        return None
+
+    broken_units = []
+    for service_file in user_systemd_dir.glob("*.service"):
+        try:
+            exec_target = _extract_service_exec_target(service_file)
+        except OSError:
+            continue
+        if exec_target and not _service_exec_target_exists(exec_target):
+            broken_units.append(service_file)
+
+    if not broken_units:
+        return None
+
+    if not dry_run:
+        removed = 0
+        for service_file in broken_units:
+            if safe_remove(service_file, use_trash=False)[0]:
+                removed += 1
+        if removed == 0:
+            return None
+        return f"Removed {removed} broken user systemd service(s)"
+
+    return f"Found {len(broken_units)} broken user systemd service(s)"
+
+
+def _extract_service_exec_target(service_file: Path) -> str:
+    for line in service_file.read_text(errors="ignore").splitlines():
+        line = line.strip()
+        if not line.startswith("ExecStart="):
+            continue
+        value = line.split("=", 1)[1].strip()
+        if not value:
+            return ""
+        try:
+            parts = shlex.split(value)
+        except ValueError:
+            parts = value.split()
+        if not parts:
+            return ""
+        command = parts[0].lstrip("-@+!")
+        return command
+    return ""
+
+
+def _service_exec_target_exists(command: str) -> bool:
+    if command.startswith("/"):
+        return Path(command).exists()
+    return shutil.which(command) is not None
+
+
 def run_memory_opt():
     if not has_sudo():
         return None
@@ -189,9 +245,14 @@ def optimize_system(dry_run=False):
             run_thumbnail_cleanup,
             lambda: run_vacuum_all(dry_run),
             lambda: run_zombie_cleanup(dry_run),
+            lambda: run_systemd_user_service_cleanup(dry_run),
         ]
     else:
-        tasks = [lambda: run_vacuum_all(True), lambda: run_zombie_cleanup(True)]
+        tasks = [
+            lambda: run_vacuum_all(True),
+            lambda: run_zombie_cleanup(True),
+            lambda: run_systemd_user_service_cleanup(True),
+        ]
 
     with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
         futures = {executor.submit(task): task for task in tasks}
