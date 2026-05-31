@@ -68,8 +68,11 @@ class UninstallManager:
         {
             "akmod",
             "cinnamon",
+            "gnome-control-center",
             "gnome-session",
+            "gnome-settings-daemon",
             "gnome-shell",
+            "gnome-software",
             "kernel",
             "kmod",
             "kwin",
@@ -85,6 +88,17 @@ class UninstallManager:
             "wireplumber",
             "xfce",
             "xorg",
+        }
+    )
+    _SYSTEM_COMPONENT_EXACT_IDS = frozenset(
+        {
+            "dconf",
+            "gdm",
+            "gnome-terminal",
+            "gvfs",
+            "nautilus",
+            "xdg-desktop-portal",
+            "xdg-desktop-portal-gnome",
         }
     )
 
@@ -124,7 +138,10 @@ class UninstallManager:
     @classmethod
     def _is_system_component(cls, app_id: str, app_name: str) -> bool:
         text = cls._app_text(app_id, app_name)
-        return any(token in text for token in cls._SYSTEM_COMPONENT_TOKENS)
+        app_id_lower = app_id.lower()
+        return app_id_lower in cls._SYSTEM_COMPONENT_EXACT_IDS or any(
+            token in text for token in cls._SYSTEM_COMPONENT_TOKENS
+        )
 
     def _parse_size_to_bytes(self, size_str: str) -> int:
         return parse_size_to_bytes(size_str)

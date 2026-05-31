@@ -195,7 +195,20 @@ def test_run_full_scan_skips_system_components(mock_run, mock_which):
     mock_which.side_effect = lambda x: "/usr/bin/rpm" if x == "rpm" else None
     mock_run.return_value = MagicMock(
         returncode=0,
-        stdout="nvidia-driver\t200000000\t1700000000\nkernel-core\t200000000\t1700000000\n",
+        stdout=(
+            "nvidia-driver\t200000000\t1700000000\n"
+            "kernel-core\t200000000\t1700000000\n"
+            "gdm\t200000000\t1700000000\n"
+            "gnome-control-center\t200000000\t1700000000\n"
+            "gnome-settings-daemon\t200000000\t1700000000\n"
+            "gnome-software\t200000000\t1700000000\n"
+            "gnome-terminal\t200000000\t1700000000\n"
+            "nautilus\t200000000\t1700000000\n"
+            "gvfs\t200000000\t1700000000\n"
+            "dconf\t200000000\t1700000000\n"
+            "xdg-desktop-portal\t200000000\t1700000000\n"
+            "xdg-desktop-portal-gnome\t200000000\t1700000000\n"
+        ),
     )
 
     mgr = UninstallManager()
@@ -203,6 +216,22 @@ def test_run_full_scan_skips_system_components(mock_run, mock_which):
         apps = mgr.run_full_scan()
 
     assert apps == []
+
+
+@patch("shutil.which")
+@patch("subprocess.run")
+def test_run_full_scan_keeps_user_gnome_apps(mock_run, mock_which):
+    mock_which.side_effect = lambda x: "/usr/bin/rpm" if x == "rpm" else None
+    mock_run.return_value = MagicMock(
+        returncode=0,
+        stdout="gnome-calculator\t200000000\t1700000000\n",
+    )
+
+    mgr = UninstallManager()
+    with patch("src.core.system.get_os_id", return_value="fedora"):
+        apps = mgr.run_full_scan()
+
+    assert [app["id"] for app in apps] == ["gnome-calculator"]
 
 
 @patch("shutil.which")
