@@ -32,6 +32,61 @@ class UninstallManager:
             "desktop", "system", "settings", "local", "user", "code", "go", "id",
         }
     )
+    _OFFICIAL_ONLY_TOKENS = frozenset(
+        {
+            "1password",
+            "anyconnect",
+            "bitwarden",
+            "clamav",
+            "crowdstrike",
+            "defender",
+            "eset",
+            "fcitx",
+            "fcitx5",
+            "forticlient",
+            "globalprotect",
+            "gnupg",
+            "gpg",
+            "ibus",
+            "input-method",
+            "inputmethod",
+            "keepass",
+            "keepassxc",
+            "openvpn",
+            "rime",
+            "security",
+            "sentinel",
+            "sophos",
+            "ssh",
+            "tailscale",
+            "vpn",
+            "wireguard",
+            "zerotier",
+        }
+    )
+    _SYSTEM_COMPONENT_TOKENS = frozenset(
+        {
+            "akmod",
+            "cinnamon",
+            "gnome-session",
+            "gnome-shell",
+            "kernel",
+            "kmod",
+            "kwin",
+            "mesa",
+            "mutter",
+            "networkmanager",
+            "nvidia-driver",
+            "pipewire",
+            "plasma",
+            "pulseaudio",
+            "systemd",
+            "wayland",
+            "wireplumber",
+            "xfce",
+            "xorg",
+        }
+    )
 
     def __init__(self):
         self.apps: list[dict[str, Any]] = []
@@ -56,6 +111,20 @@ class UninstallManager:
             return True
         # Distinctive tokens may appear anywhere in the folder name
         return len(token) >= 5 and token in entry_lower
+
+    @staticmethod
+    def _app_text(app_id: str, app_name: str) -> str:
+        return f"{app_id} {app_name}".lower()
+
+    @classmethod
+    def _requires_official_only_uninstall(cls, app_id: str, app_name: str) -> bool:
+        text = cls._app_text(app_id, app_name)
+        return any(token in text for token in cls._OFFICIAL_ONLY_TOKENS)
+
+    @classmethod
+    def _is_system_component(cls, app_id: str, app_name: str) -> bool:
+        text = cls._app_text(app_id, app_name)
+        return any(token in text for token in cls._SYSTEM_COMPONENT_TOKENS)
 
     def _parse_size_to_bytes(self, size_str: str) -> int:
         return parse_size_to_bytes(size_str)
@@ -151,6 +220,8 @@ class UninstallManager:
                             )
 
                             # SMART FILTER: Only include if it's a known user app or very large (> 100MB)
+                            if self._is_system_component(app_id, app_id):
+                                continue
                             if app_id in user_app_packages or size_bytes > 100 * 1024 * 1024:
                                 apps.append(
                                     {
@@ -197,6 +268,8 @@ class UninstallManager:
                             id_lower = app_id.lower()
                             if "org.freedesktop" in id_lower or "org.gnome.platform" in id_lower:
                                 continue
+                            if self._is_system_component(app_id, app_name):
+                                continue
 
                             size_bytes = self._parse_size_to_bytes(size_str)
                             apps.append(
@@ -212,11 +285,41 @@ class UninstallManager:
             except (OSError, subprocess.SubprocessError):
                 pass
 
+        # 4. Snap Scan
+        if shutil.which("snap"):
+            try:
+                res = system.run_command(["snap", "list"], capture=True, timeout=60)
+                if res.ok:
+                    for line in res.stdout.splitlines()[1:]:
+                        parts = line.split()
+                        if len(parts) < 2:
+                            continue
+                        app_id = parts[0]
+                        if app_id in {"core", "core18", "core20", "core22", "core24", "snapd"}:
+                            continue
+                        if self._is_system_component(app_id, app_id):
+                            continue
+                        apps.append(
+                            {
+                                "id": app_id,
+                                "name": app_id,
+                                "size_bytes": 0,
+                                "size_str": "N/A",
+                                "type": "Snap",
+                                "install_time": 0,
+                            }
+                        )
+            except (OSError, subprocess.SubprocessError):
+                pass
+
         self.apps = sorted(apps, key=lambda x: x["size_bytes"], reverse=True)
         return self.apps
 
     def find_residue_paths(self, app_id: str, app_name: str, app_type: str) -> list[Path]:
         """Finds all data/config/cache paths associated with an app."""
+        if self._requires_official_only_uninstall(app_id, app_name):
+            return []
+
         paths = []
         home_path = Path.home()
         seen = set()
@@ -318,6 +421,10 @@ class UninstallManager:
             # 2. Binary uninstall
             if app["type"] == "Flatpak":
                 res = system.run_command(["flatpak", "uninstall", "-y", app["id"]], capture=True)
+            elif app["type"] == "Snap":
+                res = system.run_command(
+                    ["snap", "remove", app["id"]], use_sudo=True, capture=True
+                )
             else:
                 res = system.run_command(
                     ["dnf", "remove", "-y", app["id"]], use_sudo=True, capture=True

@@ -157,6 +157,19 @@ def test_find_residue_paths_allows_specific_prefix_and_substring(test_env):
     assert myapp_state in myapp_paths
 
 
+def test_find_residue_paths_skips_official_only_apps(test_env):
+    mgr = UninstallManager()
+
+    vpn_config = test_env / ".config/tailscale"
+    input_config = test_env / ".config/fcitx5"
+    vpn_config.mkdir(parents=True)
+    input_config.mkdir(parents=True)
+
+    with patch("pathlib.Path.home", return_value=test_env):
+        assert mgr.find_residue_paths("tailscale", "Tailscale VPN", "DNF") == []
+        assert mgr.find_residue_paths("org.fcitx.Fcitx5", "Fcitx5", "Flatpak") == []
+
+
 @patch("shutil.which")
 @patch("subprocess.run")
 def test_run_full_scan_rpm(mock_run, mock_which):
@@ -178,6 +191,22 @@ def test_run_full_scan_rpm(mock_run, mock_which):
 
 @patch("shutil.which")
 @patch("subprocess.run")
+def test_run_full_scan_skips_system_components(mock_run, mock_which):
+    mock_which.side_effect = lambda x: "/usr/bin/rpm" if x == "rpm" else None
+    mock_run.return_value = MagicMock(
+        returncode=0,
+        stdout="nvidia-driver\t200000000\t1700000000\nkernel-core\t200000000\t1700000000\n",
+    )
+
+    mgr = UninstallManager()
+    with patch("src.core.system.get_os_id", return_value="fedora"):
+        apps = mgr.run_full_scan()
+
+    assert apps == []
+
+
+@patch("shutil.which")
+@patch("subprocess.run")
 def test_run_full_scan_flatpaks(mock_run, mock_which):
     mock_which.side_effect = lambda x: "/usr/bin/flatpak" if x == "flatpak" else None
     mock_run.return_value = MagicMock(returncode=0, stdout="MyApp\tcom.example.MyApp\t1.2 GB\n")
@@ -192,6 +221,29 @@ def test_run_full_scan_flatpaks(mock_run, mock_which):
     assert myapp is not None
     assert myapp["name"] == "MyApp"
     assert myapp["type"] == "Flatpak"
+
+
+@patch("src.clean.app_manager.system.run_command")
+@patch("shutil.which")
+def test_run_full_scan_snaps(mock_which, mock_run_cmd):
+    mock_which.side_effect = lambda x: "/usr/bin/snap" if x == "snap" else None
+    mock_run_cmd.return_value = MagicMock(
+        ok=True,
+        stdout="Name Version Rev Tracking Publisher Notes\nmy-snap 1.0 1 latest/stable test -\n",
+    )
+
+    apps = UninstallManager().run_full_scan()
+
+    assert apps == [
+        {
+            "id": "my-snap",
+            "name": "my-snap",
+            "size_bytes": 0,
+            "size_str": "N/A",
+            "type": "Snap",
+            "install_time": 0,
+        }
+    ]
 
 
 @patch("src.core.system.run_command")
@@ -215,6 +267,24 @@ def test_execute_uninstall_flatpak(mock_run, mock_run_cmd, test_env):
     mock_run_cmd.assert_called_with(
         ["flatpak", "uninstall", "-y", "com.example.MyApp"], capture=True
     )
+
+
+@patch("src.core.system.run_command")
+def test_execute_uninstall_snap(mock_run_cmd, test_env):
+    mgr = UninstallManager()
+    app = {
+        "name": "MySnap",
+        "id": "my-snap",
+        "type": "Snap",
+        "size_bytes": 0,
+    }
+    mock_run_cmd.return_value = MagicMock(ok=True)
+
+    with patch("pathlib.Path.home", return_value=test_env):
+        details = mgr.execute_uninstall(app, [])
+
+    assert details == []
+    mock_run_cmd.assert_any_call(["snap", "remove", "my-snap"], use_sudo=True, capture=True)
 
 
 @patch("src.core.system.run_command")

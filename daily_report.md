@@ -36,6 +36,12 @@
 *   **macOS-Only Regression Guard**: Added a source-level portability test that rejects direct use of macOS-only cleanup primitives such as `/Library`, LaunchAgent/LaunchDaemon, `osascript`, Spotlight, Homebrew Cask, Xcode, iOS backup, and DerivedData logic in `src/`.
 *   **Linux Counterpart Coverage**: Kept cleanup aligned with Linux primitives already used by Topo: XDG directories, Flatpak, Snap, APT/DNF/Pacman, Docker/Podman, journalctl, and gio/trash-cli.
 
+### 6. Official Uninstaller Rules
+*   **Official-Only Residue Policy**: Added uninstall rules that keep residue cleanup disabled for high-risk software classes such as VPN/security tools, input methods, password managers, SSH/GPG-related tools, and similar sensitive apps.
+*   **System Component Filtering**: Filtered driver, kernel, desktop-environment, audio/network, and display-stack packages out of the uninstall app list so system components are not presented as normal removable apps.
+*   **Snap Uninstall Support**: Added Snap app discovery and routed Snap removals through `snap remove` instead of any direct file deletion.
+*   **Uninstall Regression Tests**: Added coverage for official-only residue skipping, protected system package filtering, Snap scanning, and Snap removal command routing.
+
 # Daily Modification Report - 2026-05-30
 
 ## Project: topo (Topo) - High-Performance Input & Flicker-Free UI
