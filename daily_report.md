@@ -96,6 +96,7 @@
 *   **Launch Summary**: Summarized the safety guardrails, deletion history, Linux-native uninstall filtering, CACHEDIR.TAG support, release update channel, and multi-arch engine assets from the recent development reports.
 *   **User Guidance**: Documented install commands, verified environments, supported distro families, architecture targets, caution notes, and the next release priorities.
 *   **Bilingual Format**: Reworked the release note to lead with English release copy and include a focused Chinese summary for key changes.
+*   **Workflow Body Path**: Updated the release workflow so future tag releases automatically read `docs/releases/<tag>.md` as the GitHub Release body before attaching binary assets.
 
 # Daily Modification Report - 2026-05-30
 
