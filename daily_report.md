@@ -97,6 +97,7 @@
 *   **User Guidance**: Documented install commands, verified environments, supported distro families, architecture targets, caution notes, and the next release priorities.
 *   **Bilingual Format**: Reworked the release note to lead with English release copy and include a focused Chinese summary for key changes.
 *   **Workflow Body Path**: Updated the release workflow so future tag releases automatically read `docs/releases/<tag>.md` as the GitHub Release body before attaching binary assets.
+*   **Stable Default Install**: Changed `install.sh` so the default README install command resolves and installs the latest GitHub Release, while `--ref main` remains available for development installs.
 
 # Daily Modification Report - 2026-05-30
 

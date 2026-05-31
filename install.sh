@@ -12,7 +12,7 @@ NC='\033[0m' # No Color
 BOLD='\033[1m'
 
 MINIMAL=false
-TARGET_REF="main"
+TARGET_REF=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --minimal)
@@ -58,6 +58,35 @@ if ! python3 -c "import packaging" >/dev/null 2>&1; then
     exit 1
 fi
 if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓ python packaging installed${NC}"; fi
+
+if [ -z "$TARGET_REF" ]; then
+    if [ "$MINIMAL" = false ]; then echo -e "  ${GRAY}↺ Resolving latest stable release...${NC}"; fi
+    TARGET_REF=$(python3 - <<'PY'
+import json
+import sys
+import urllib.request
+
+try:
+    with urllib.request.urlopen(
+        "https://api.github.com/repos/Jesencloud/Topo/releases/latest",
+        timeout=15,
+    ) as response:
+        tag = json.load(response).get("tag_name", "")
+except Exception:
+    tag = ""
+
+if not isinstance(tag, str) or not tag.strip():
+    sys.exit(1)
+print(tag.strip())
+PY
+    ) || {
+        echo -e "  ${RED}✗ Error: failed to resolve the latest Topo release.${NC}"
+        echo -e "  ${GRAY}Install a specific version with:${NC} ${BOLD}bash install.sh --version v0.6.0${NC}"
+        echo -e "  ${GRAY}Install the development branch with:${NC} ${BOLD}bash install.sh --ref main${NC}"
+        exit 1
+    }
+fi
+if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓ target release ${TARGET_REF}${NC}"; fi
 
 # 2. Define paths
 INSTALL_DIR="$HOME/.topo"
