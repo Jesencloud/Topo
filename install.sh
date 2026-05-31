@@ -12,9 +12,27 @@ NC='\033[0m' # No Color
 BOLD='\033[1m'
 
 MINIMAL=false
-if [[ "$1" == "--minimal" ]]; then
-    MINIMAL=true
-fi
+TARGET_REF="main"
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --minimal)
+            MINIMAL=true
+            shift
+            ;;
+        --version|--ref)
+            if [[ -z "${2:-}" ]]; then
+                echo -e "${RED}✗ Error: $1 requires a version/tag value.${NC}"
+                exit 1
+            fi
+            TARGET_REF="$2"
+            shift 2
+            ;;
+        *)
+            echo -e "${RED}✗ Error: unknown installer option '$1'.${NC}"
+            exit 1
+            ;;
+    esac
+done
 
 # 1. Check prerequisites
 if [ "$MINIMAL" = false ]; then
@@ -44,7 +62,11 @@ if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓ python packaging installe
 # 2. Define paths
 INSTALL_DIR="$HOME/.topo"
 REPO_URL="https://github.com/Jesencloud/Topo.git"
-TARBALL_URL="https://github.com/Jesencloud/Topo/archive/refs/heads/main.tar.gz"
+if [ "$TARGET_REF" = "main" ]; then
+    TARBALL_URL="https://github.com/Jesencloud/Topo/archive/refs/heads/main.tar.gz"
+else
+    TARBALL_URL="https://github.com/Jesencloud/Topo/archive/refs/tags/${TARGET_REF}.tar.gz"
+fi
 WAS_INSTALLED=false
 
 # 3. Clone or download source
@@ -55,25 +77,25 @@ fi
 if [ "$HAS_GIT" = true ]; then
     if [ -d "$INSTALL_DIR" ]; then
         WAS_INSTALLED=true
-        if [ "$MINIMAL" = false ]; then echo -e "  ${GRAY}↺ Updating Topo in ${INSTALL_DIR}...${NC}"; fi
+        if [ "$MINIMAL" = false ]; then echo -e "  ${GRAY}↺ Updating Topo in ${INSTALL_DIR} (${TARGET_REF})...${NC}"; fi
         cd "$INSTALL_DIR"
         if [ -d ".git" ]; then
             # To keep things clean, we reset and pull
-            git fetch --quiet --depth 1 origin main
-            git reset --hard origin/main --quiet
+            git fetch --quiet --depth 1 origin "$TARGET_REF"
+            git reset --hard FETCH_HEAD --quiet
         else
             if [ "$MINIMAL" = false ]; then echo -e "  ${YELLOW}⚠ Existing install is not a git checkout; reinstalling cleanly.${NC}"; fi
             cd "$HOME"
             rm -rf "$INSTALL_DIR"
-            git clone --quiet --depth 1 "$REPO_URL" "$INSTALL_DIR"
+            git clone --quiet --depth 1 --branch "$TARGET_REF" "$REPO_URL" "$INSTALL_DIR"
             WAS_INSTALLED=false
         fi
     else
-        if [ "$MINIMAL" = false ]; then echo -e "  ${GRAY}↓ Downloading Topo via Git...${NC}"; fi
-        git clone --quiet --depth 1 "$REPO_URL" "$INSTALL_DIR"
+        if [ "$MINIMAL" = false ]; then echo -e "  ${GRAY}↓ Downloading Topo via Git (${TARGET_REF})...${NC}"; fi
+        git clone --quiet --depth 1 --branch "$TARGET_REF" "$REPO_URL" "$INSTALL_DIR"
     fi
 else
-    if [ "$MINIMAL" = false ]; then echo -e "  ${GRAY}↓ Downloading Topo archive...${NC}"; fi
+    if [ "$MINIMAL" = false ]; then echo -e "  ${GRAY}↓ Downloading Topo archive (${TARGET_REF})...${NC}"; fi
     mkdir -p "$INSTALL_DIR"
     # Download and extract, stripping the top-level directory (Topo-main)
     curl -fsSL "$TARBALL_URL" | tar -xzC "$INSTALL_DIR" --strip-components=1
@@ -89,15 +111,18 @@ cd "$INSTALL_DIR"
 
 ARCH=$(uname -m)
 BIN_DIR="src/core/bin"
-# Point to the latest release assets
-RELEASE_URL="https://github.com/Jesencloud/Topo/releases/latest/download"
+if [ "$TARGET_REF" = "main" ]; then
+    RELEASE_URL="https://github.com/Jesencloud/Topo/releases/latest/download"
+else
+    RELEASE_URL="https://github.com/Jesencloud/Topo/releases/download/${TARGET_REF}"
+fi
 
 # Ensure binary directory exists
 mkdir -p "$BIN_DIR"
 
 if [[ "$ARCH" == "x86_64" ]]; then
     if [ ! -f "$BIN_DIR/topo-core-x86_64" ]; then
-        if [ "$MINIMAL" = false ]; then echo -e "  ${GRAY}↓ Fetching x86_64 engine from latest release...${NC}"; fi
+        if [ "$MINIMAL" = false ]; then echo -e "  ${GRAY}↓ Fetching x86_64 engine from ${TARGET_REF}...${NC}"; fi
         curl -fsSL "$RELEASE_URL/topo-core-x86_64" -o "$BIN_DIR/topo-core-x86_64" || echo -e "  ${RED}⚠ Warning: Could not download x86_64 engine.${NC}"
     else
         if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓${NC} ${GRAY}Using bundled x86_64 engine.${NC}"; fi
@@ -105,7 +130,7 @@ if [[ "$ARCH" == "x86_64" ]]; then
     rm -f "$BIN_DIR/topo-core-aarch64"
 elif [[ "$ARCH" == "aarch64" ]] || [[ "$ARCH" == "arm64" ]]; then
     if [ ! -f "$BIN_DIR/topo-core-aarch64" ]; then
-        if [ "$MINIMAL" = false ]; then echo -e "  ${YELLOW}↓ ARM64 detected. Fetching optimized engine from latest release...${NC}"; fi
+        if [ "$MINIMAL" = false ]; then echo -e "  ${YELLOW}↓ ARM64 detected. Fetching optimized engine from ${TARGET_REF}...${NC}"; fi
         curl -fsSL "$RELEASE_URL/topo-core-aarch64" -o "$BIN_DIR/topo-core-aarch64" || echo -e "  ${RED}⚠ Warning: Could not download ARM64 engine.${NC}"
     else
         if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓${NC} ${GRAY}Using bundled ARM64 engine.${NC}"; fi

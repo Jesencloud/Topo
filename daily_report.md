@@ -77,6 +77,12 @@
 *   **Regression Tests**: Added install-link tests for override directories, root target selection, and launcher symlink creation.
 *   **Packaging Dependency Check**: Added an installer prerequisite check for Python's `packaging` module with Debian/Ubuntu, Fedora/RHEL, and Arch/Manjaro install commands.
 
+### 12. Release-Based Update Channel
+*   **GitHub Release Version Source**: Changed `topo update` to read the latest GitHub Release `tag_name` instead of the development branch `VERSION` file.
+*   **Tag-Based Install Path**: Updated `install.sh` to accept `--version/--ref`, allowing updates to clone/reset the exact release tag and download assets from that release instead of `main`.
+*   **Stable Update Semantics**: Version comparisons now normalize leading `v` prefixes, reject invalid release tags, avoid downgrades, and only update when the latest release tag is semantically newer.
+*   **Update Regression Tests**: Updated tests to mock GitHub Releases API responses and verify that the generated installer command targets the release tag.
+
 # Daily Modification Report - 2026-05-30
 
 ## Project: topo (Topo) - High-Performance Input & Flicker-Free UI

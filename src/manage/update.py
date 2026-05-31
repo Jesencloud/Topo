@@ -1,3 +1,4 @@
+import json
 import subprocess
 from pathlib import Path
 
@@ -8,7 +9,7 @@ from ..core.constants import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
 
 def _parse_version(version_text: str) -> Version | None:
     try:
-        return Version(version_text.strip())
+        return Version(version_text.strip().lstrip("vV"))
     except InvalidVersion:
         return None
 
@@ -19,8 +20,17 @@ def _should_update(local_version: str, remote_version: str) -> bool:
     return local is not None and remote is not None and remote > local
 
 
+def _fetch_latest_release_tag() -> str:
+    latest_release_url = "https://api.github.com/repos/Jesencloud/Topo/releases/latest"
+    data = subprocess.check_output(["curl", "-fsSL", latest_release_url], text=True)
+    tag = json.loads(data).get("tag_name", "")
+    if not isinstance(tag, str):
+        return ""
+    return tag.strip()
+
+
 def run_update():
-    """Updates topo by re-running the official installation script with version check."""
+    """Updates topo from the latest GitHub Release when its tag is newer."""
 
     # 1. Get current local version
     # Since we are running from src/manage/update.py,
@@ -33,21 +43,18 @@ def run_update():
 
     print(f" {CYAN}🚀 Checking for updates...{RESET} (Local: v{local_version})")
 
-    # 2. Fetch remote version
-    remote_version_url = "https://raw.githubusercontent.com/Jesencloud/Topo/main/VERSION"
+    # 2. Fetch latest stable release tag
     try:
-        remote_version = subprocess.check_output(
-            ["curl", "-fsSL", remote_version_url], text=True
-        ).strip()
+        remote_tag = _fetch_latest_release_tag()
     except Exception as e:
-        print(f" {RED}❌ Failed to check remote version: {e}{RESET}")
+        print(f" {RED}❌ Failed to check latest release: {e}{RESET}")
         return
 
     # 3. Compare and act
     local_parsed = _parse_version(local_version)
-    remote_parsed = _parse_version(remote_version)
+    remote_parsed = _parse_version(remote_tag)
     if remote_parsed is None:
-        print(f" {RED}❌ Invalid remote version: {remote_version!r}{RESET}")
+        print(f" {RED}❌ Invalid release tag: {remote_tag!r}{RESET}")
         return
     if local_parsed is None:
         print(f" {RED}❌ Invalid local version: {local_version!r}{RESET}")
@@ -58,22 +65,26 @@ def run_update():
     if remote_parsed < local_parsed:
         print(
             f" {GREEN}✓{RESET} {BOLD}Local Topo is newer than remote.{RESET} "
-            f"(local: v{local_version}, remote: v{remote_version})"
+            f"(local: v{local_version}, remote: {remote_tag})"
         )
         return
 
-    print(f" {YELLOW}⬆️  New version available: v{remote_version}{RESET}")
-    print(f" {GRAY}Updating Topo from v{local_version} to v{remote_version}...{RESET}\n")
+    print(f" {YELLOW}⬆️  New version available: {remote_tag}{RESET}")
+    print(f" {GRAY}Updating Topo from v{local_version} to {remote_tag}...{RESET}\n")
 
     # 4. Run update script in minimal mode
-    # We pass --minimal as an argument to bash -s
-    install_cmd = "curl -fsSL https://raw.githubusercontent.com/Jesencloud/Topo/main/install.sh | bash -s -- --minimal"
+    # Install from the release tag instead of the development branch.
+    install_cmd = (
+        "curl -fsSL "
+        f"https://raw.githubusercontent.com/Jesencloud/Topo/{remote_tag}/install.sh "
+        f"| bash -s -- --minimal --version {remote_tag}"
+    )
 
     try:
         process = subprocess.run(install_cmd, shell=True)
 
         if process.returncode == 0:
-            print(f"\n {GREEN}✨ Topo has been successfully updated to v{remote_version}!{RESET}")
+            print(f"\n {GREEN}✨ Topo has been successfully updated to {remote_tag}!{RESET}")
         else:
             print(f"\n {RED}❌ Update failed with exit code {process.returncode}{RESET}")
 
