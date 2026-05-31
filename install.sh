@@ -184,7 +184,17 @@ fi
 chmod +x $BIN_DIR/topo-core-* 2>/dev/null || true
 
 # Keep LICENSE for compliance, but remove everything else non-essential
-rm -rf tests/ daily_report.md pytest.ini topo.py .gitignore README.md topo-core/
+rm -rf \
+    .github/ \
+    assets/ \
+    docs/ \
+    tests/ \
+    daily_report.md \
+    pytest.ini \
+    topo.py \
+    .gitignore \
+    README.md \
+    topo-core/
 
 # 5. Run the linking script
 if [ "$MINIMAL" = false ]; then
