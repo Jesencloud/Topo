@@ -48,6 +48,8 @@ topo uninstall                 # Deep application uninstaller
 topo optimize                  # Refresh system services & maintenance
 topo analyze                   # Ultra-fast disk usage explorer
 topo status                    # Live system health dashboard
+topo history                   # Show recent cleanup/deletion history
+topo history --limit 5         # Show the latest 5 history sessions
 
 topo update                    # Upgrade Topo to the latest version
 topo link                      # Re-configure system-wide command
@@ -114,6 +116,19 @@ Select Application to Uninstall
  ☉ Selected Apps to Remove:
    • brave-browser
    • org.telegram.desktop
+```
+
+### Cleanup History
+
+Topo records cleanup and uninstall deletion events so you can review what changed after a run.
+
+```bash
+$ topo history --limit 5
+Deletion History
+------------------------------------------------------------------------
+2026-05-31T12:30:00+08:00 -> 2026-05-31T12:30:04+08:00  clean
+  removed=4  trashed=0  skipped=1  failed=0  size=512.0 MiB
+    deleted              /home/user/.cache/example
 ```
 
 ### Intelligence Analyze

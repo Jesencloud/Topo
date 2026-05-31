@@ -48,6 +48,10 @@
 *   **Regression Tests**: Added tests for valid tags, invalid/missing tags, and analysis-entry cleanable metadata.
 *   **Shared Clean Integration**: Moved CACHEDIR.TAG recognition into `core.file_ops` and reused it from `clean_generic_xdg_caches()` so valid tagged cache directories under `~/.cache` can be cleaned directly while dry-run keeps them intact.
 
+### 8. Help & Documentation
+*   **History Help Example**: Expanded `topo --help` examples to include `topo history --limit 5`.
+*   **README History Usage**: Added `topo history` commands and a cleanup history output example to the README.
+
 # Daily Modification Report - 2026-05-30
 
 ## Project: topo (Topo) - High-Performance Input & Flicker-Free UI

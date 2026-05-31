@@ -49,6 +49,7 @@ Examples:
   topo analyze         Start interactive disk usage explorer
   topo status          Check system health and metrics
   topo history         Show recent cleanup deletion history
+  topo history --limit 5  Show latest 5 history sessions
   topo update          Upgrade to the latest version
   topo whitelist list  View currently protected paths
   topo --dry-run clean Preview files to be cleaned without deleting
