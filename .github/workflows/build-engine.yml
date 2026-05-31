@@ -1,13 +1,10 @@
-name: Build & Release Topo
+name: Build Topo Core
 
 on:
   push:
     tags:
       - 'v*'
   workflow_dispatch:
-
-permissions:
-  contents: write
 
 jobs:
   build:
@@ -54,27 +51,3 @@ jobs:
           path: |
             topo-core-${{ matrix.arch }}
             topo-core-${{ matrix.arch }}.sha256
-
-  release:
-    name: Create Release
-    needs: build
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
-    steps:
-      - name: Download Artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            artifacts/topo-core-x86_64/topo-core-x86_64
-            artifacts/topo-core-x86_64/topo-core-x86_64.sha256
-            artifacts/topo-core-aarch64/topo-core-aarch64
-            artifacts/topo-core-aarch64/topo-core-aarch64.sha256
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
