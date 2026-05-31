@@ -31,6 +31,15 @@ fi
 
 command -v python3 >/dev/null 2>&1 || { echo -e "  ${RED}✗ Error: python3 is required but not installed.${NC}"; exit 1; }
 if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓ python3 installed${NC}"; fi
+if ! python3 -c "import packaging" >/dev/null 2>&1; then
+    echo -e "  ${RED}✗ Error: Python package 'packaging' is required but not installed.${NC}"
+    echo -e "  ${GRAY}Install it with one of:${NC}"
+    echo -e "    ${BOLD}sudo apt install python3-packaging${NC}        ${GRAY}# Debian/Ubuntu${NC}"
+    echo -e "    ${BOLD}sudo dnf install python3-packaging${NC}        ${GRAY}# Fedora/RHEL${NC}"
+    echo -e "    ${BOLD}sudo pacman -S python-packaging${NC}           ${GRAY}# Arch/Manjaro${NC}"
+    exit 1
+fi
+if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓ python packaging installed${NC}"; fi
 
 # 2. Define paths
 INSTALL_DIR="$HOME/.topo"

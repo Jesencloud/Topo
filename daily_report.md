@@ -75,6 +75,7 @@
 *   **Non-Git Install Recovery**: Existing `~/.topo` directories that are not git checkouts are now replaced with a clean clone instead of failing during `git fetch`.
 *   **Remove Alignment**: `topo remove` now recognizes both `~/.local/bin/topo` and `/usr/local/bin/topo` links when they point to the active Topo installation.
 *   **Regression Tests**: Added install-link tests for override directories, root target selection, and launcher symlink creation.
+*   **Packaging Dependency Check**: Added an installer prerequisite check for Python's `packaging` module with Debian/Ubuntu, Fedora/RHEL, and Arch/Manjaro install commands.
 
 # Daily Modification Report - 2026-05-30
 
