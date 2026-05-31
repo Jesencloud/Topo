@@ -85,10 +85,11 @@
 
 ### 13. Release Asset Automation
 *   **Multi-Arch Core Build Workflow**: Updated the GitHub Actions release workflow to build `topo-core` for `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu` on tag pushes.
-*   **Manual Release Assets**: The workflow now uploads `topo-core-x86_64` and `topo-core-aarch64` as Actions artifacts on tag pushes, leaving GitHub Release creation and asset attachment as an explicit manual step.
+*   **Automatic Release Assets**: The workflow uploads `topo-core-x86_64` and `topo-core-aarch64` as Actions artifacts and attaches them to the tag's GitHub Release automatically.
 *   **Checksum Artifacts**: Added SHA-256 checksum files for both native engine assets.
 *   **Rust Source Tracking**: Adjusted `.gitignore` so `topo-core` source and Cargo metadata can be committed while `topo-core/target/` remains ignored.
 *   **Version Prep**: Prepared the local version file for the upcoming `0.6.0` tag.
+*   **Pre-Release Detection**: Release tags containing `-rc.`, `-beta.`, or `-alpha.` are marked as GitHub pre-releases automatically.
 
 # Daily Modification Report - 2026-05-30
 
