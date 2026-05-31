@@ -88,6 +88,23 @@ PY
 fi
 if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓ target release ${TARGET_REF}${NC}"; fi
 
+checkout_target_ref() {
+    if [ "$TARGET_REF" = "main" ]; then
+        git fetch --quiet --depth 1 origin main
+        git reset --hard FETCH_HEAD --quiet
+    else
+        git fetch --quiet --depth 1 origin tag "$TARGET_REF"
+        git -c advice.detachedHead=false checkout --quiet "$TARGET_REF"
+        git reset --hard "$TARGET_REF" --quiet
+    fi
+}
+
+clone_target_ref() {
+    git clone --quiet --depth 1 "$REPO_URL" "$INSTALL_DIR"
+    cd "$INSTALL_DIR"
+    checkout_target_ref
+}
+
 # 2. Define paths
 INSTALL_DIR="$HOME/.topo"
 REPO_URL="https://github.com/Jesencloud/Topo.git"
@@ -109,19 +126,17 @@ if [ "$HAS_GIT" = true ]; then
         if [ "$MINIMAL" = false ]; then echo -e "  ${GRAY}↺ Updating Topo in ${INSTALL_DIR} (${TARGET_REF})...${NC}"; fi
         cd "$INSTALL_DIR"
         if [ -d ".git" ]; then
-            # To keep things clean, we reset and pull
-            git fetch --quiet --depth 1 origin "$TARGET_REF"
-            git reset --hard FETCH_HEAD --quiet
+            checkout_target_ref
         else
             if [ "$MINIMAL" = false ]; then echo -e "  ${YELLOW}⚠ Existing install is not a git checkout; reinstalling cleanly.${NC}"; fi
             cd "$HOME"
             rm -rf "$INSTALL_DIR"
-            git clone --quiet --depth 1 --branch "$TARGET_REF" "$REPO_URL" "$INSTALL_DIR"
+            clone_target_ref
             WAS_INSTALLED=false
         fi
     else
         if [ "$MINIMAL" = false ]; then echo -e "  ${GRAY}↓ Downloading Topo via Git (${TARGET_REF})...${NC}"; fi
-        git clone --quiet --depth 1 --branch "$TARGET_REF" "$REPO_URL" "$INSTALL_DIR"
+        clone_target_ref
     fi
 else
     if [ "$MINIMAL" = false ]; then echo -e "  ${GRAY}↓ Downloading Topo archive (${TARGET_REF})...${NC}"; fi
