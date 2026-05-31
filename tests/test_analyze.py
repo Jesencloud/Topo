@@ -2,7 +2,13 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from src.core.analyze import ScanCache, get_rust_scan_data
+from src.core.analyze import (
+    CACHEDIR_TAG_SIGNATURE,
+    ScanCache,
+    build_analysis_entry,
+    get_rust_scan_data,
+    has_valid_cachedir_tag,
+)
 
 
 def test_scan_cache():
@@ -37,3 +43,36 @@ def test_get_rust_scan_data_success(mock_run):
         assert result == mock_data
         # Verify it was cached
         assert ScanCache.get(Path("/home/user")) == mock_data
+
+
+def test_has_valid_cachedir_tag(test_env):
+    cache_dir = test_env / "cache-dir"
+    cache_dir.mkdir()
+    (cache_dir / "CACHEDIR.TAG").write_text(f"{CACHEDIR_TAG_SIGNATURE}\nextra metadata")
+
+    assert has_valid_cachedir_tag(cache_dir) is True
+
+
+def test_has_valid_cachedir_tag_rejects_invalid_or_missing_tag(test_env):
+    invalid_dir = test_env / "invalid-cache"
+    invalid_dir.mkdir()
+    (invalid_dir / "CACHEDIR.TAG").write_text("not a cache tag")
+
+    normal_dir = test_env / "normal"
+    normal_dir.mkdir()
+
+    assert has_valid_cachedir_tag(invalid_dir) is False
+    assert has_valid_cachedir_tag(normal_dir) is False
+
+
+def test_build_analysis_entry_marks_cachedir_tag_as_cleanable(test_env):
+    cache_dir = test_env / "cache-dir"
+    cache_dir.mkdir()
+    (cache_dir / "CACHEDIR.TAG").write_text(f"{CACHEDIR_TAG_SIGNATURE}\n")
+
+    entry = build_analysis_entry("cache-dir", cache_dir, size=512, total_size=1024)
+
+    assert entry["is_cleanable"] is True
+    assert entry["cleanable_reason"] == "CACHEDIR.TAG"
+    assert entry["icon"] == "🧹"
+    assert entry["percent"] == 50

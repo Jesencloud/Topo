@@ -13,6 +13,9 @@ from .constants import BLUE, CYAN, MAGENTA, YELLOW
 from .file_ops import bytes_to_human, get_size, safe_remove
 from .system import run_command
 
+CACHEDIR_TAG_FILE = "CACHEDIR.TAG"
+CACHEDIR_TAG_SIGNATURE = "Signature: 8a477f597d28d172789f06886806bc55"
+
 
 # --- Internal Cache System ---
 class ScanCache:
@@ -108,6 +111,35 @@ def get_age_hint(path: Path) -> str:
         return f">{int(days)}d"
     except OSError:
         return ""
+
+
+def has_valid_cachedir_tag(path: Path) -> bool:
+    """Return True when a directory contains a valid CACHEDIR.TAG marker."""
+    tag_path = path / CACHEDIR_TAG_FILE
+    try:
+        if not path.is_dir() or tag_path.is_symlink() or not tag_path.is_file():
+            return False
+        with tag_path.open("r", encoding="utf-8", errors="ignore") as f:
+            return f.read(len(CACHEDIR_TAG_SIGNATURE)) == CACHEDIR_TAG_SIGNATURE
+    except OSError:
+        return False
+
+
+def build_analysis_entry(name: str, path: Path, size: int, total_size: int) -> dict[str, Any]:
+    """Build a disk-analysis row with Linux cache metadata."""
+    is_cleanable = has_valid_cachedir_tag(path)
+    icon = "🧹" if is_cleanable else "📁" if path.is_dir() else "📄"
+    return {
+        "name": name,
+        "path": path,
+        "size": size,
+        "percent": (size / (total_size or 1)) * 100,
+        "color": CYAN,
+        "icon": icon,
+        "is_cleanable": is_cleanable,
+        "cleanable_reason": "CACHEDIR.TAG" if is_cleanable else "",
+        "age_hint": get_age_hint(path),
+    }
 
 
 def get_old_items_info(dir_path: Path, days_threshold: int = 90) -> list[dict[str, Any]]:
@@ -266,18 +298,7 @@ def run_deep_analysis(target_path: Path = None):
                 subdir_map = data.get("subdirs", {})
                 for name, size in subdir_map.items():
                     full_path = current_target / name
-                    icon = "📁" if full_path.is_dir() else "📄"
-                    results.append(
-                        {
-                            "name": name,
-                            "path": full_path,
-                            "size": size,
-                            "percent": (size / total_path_size) * 100,
-                            "color": CYAN,
-                            "icon": icon,
-                            "age_hint": get_age_hint(full_path),
-                        }
-                    )
+                    results.append(build_analysis_entry(name, full_path, size, total_path_size))
                 results.sort(key=lambda x: x["size"], reverse=True)
                 results = results[:50]
             needs_scan = False

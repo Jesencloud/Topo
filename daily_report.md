@@ -42,6 +42,11 @@
 *   **Snap Uninstall Support**: Added Snap app discovery and routed Snap removals through `snap remove` instead of any direct file deletion.
 *   **Uninstall Regression Tests**: Added coverage for official-only residue skipping, protected system package filtering, Snap scanning, and Snap removal command routing.
 
+### 7. CACHEDIR.TAG Analysis
+*   **Cache Directory Detection**: Added Linux `CACHEDIR.TAG` recognition using the standard `Signature: 8a477f597d28d172789f06886806bc55` marker.
+*   **Analyze Cleanable Metadata**: Disk analysis entries now mark valid cache-tagged directories as `is_cleanable` with `cleanable_reason="CACHEDIR.TAG"` and a cache-cleaning icon.
+*   **Regression Tests**: Added tests for valid tags, invalid/missing tags, and analysis-entry cleanable metadata.
+
 # Daily Modification Report - 2026-05-30
 
 ## Project: topo (Topo) - High-Performance Input & Flicker-Free UI
