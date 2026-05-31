@@ -61,14 +61,24 @@ if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓ python packaging installe
 
 if [ -z "$TARGET_REF" ]; then
     if [ "$MINIMAL" = false ]; then echo -e "  ${GRAY}↺ Resolving latest stable release...${NC}"; fi
-    TARGET_REF=$(python3 - <<'PY'
+    TARGET_REF=$(
+        curl -fsSLI -o /dev/null -w '%{url_effective}' \
+            "https://github.com/Jesencloud/Topo/releases/latest" |
+            sed 's#.*/##'
+    )
+    if [ -z "$TARGET_REF" ] || [ "$TARGET_REF" = "latest" ]; then
+        TARGET_REF=$(python3 - <<'PY'
 import json
 import sys
 import urllib.request
 
 try:
-    with urllib.request.urlopen(
+    request = urllib.request.Request(
         "https://api.github.com/repos/Jesencloud/Topo/releases/latest",
+        headers={"User-Agent": "topo-installer"},
+    )
+    with urllib.request.urlopen(
+        request,
         timeout=15,
     ) as response:
         tag = json.load(response).get("tag_name", "")
@@ -79,12 +89,14 @@ if not isinstance(tag, str) or not tag.strip():
     sys.exit(1)
 print(tag.strip())
 PY
-    ) || {
+        ) || true
+    fi
+    if [ -z "$TARGET_REF" ] || [ "$TARGET_REF" = "latest" ]; then
         echo -e "  ${RED}✗ Error: failed to resolve the latest Topo release.${NC}"
         echo -e "  ${GRAY}Install a specific version with:${NC} ${BOLD}bash install.sh --version v0.6.0${NC}"
         echo -e "  ${GRAY}Install the development branch with:${NC} ${BOLD}bash install.sh --ref main${NC}"
         exit 1
-    }
+    fi
 fi
 if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓ target release ${TARGET_REF}${NC}"; fi
 

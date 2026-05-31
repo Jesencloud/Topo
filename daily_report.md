@@ -100,6 +100,7 @@
 *   **Stable Default Install**: Changed `install.sh` so the default README install command resolves and installs the latest GitHub Release, while `--ref main` remains available for development installs.
 *   **Quiet Tag Checkout**: Adjusted release-tag installs to fetch and checkout annotated tags explicitly, avoiding Git's shallow-clone detached-HEAD warning during normal installs.
 *   **Lean Install Footprint**: Removed runtime-unnecessary `.github/`, `assets/`, and `docs/` directories from installed copies so `~/.topo` only keeps files needed to run Topo.
+*   **Release Resolver Fallback**: Made latest-release detection prefer GitHub's `/releases/latest` redirect and fall back to the API with an explicit User-Agent, reducing install failures caused by API/network quirks.
 
 # Daily Modification Report - 2026-05-30
 
