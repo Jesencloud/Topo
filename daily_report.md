@@ -95,6 +95,7 @@
 *   **Release Draft**: Added `docs/releases/v0.6.0.md` as the first public release note draft, using `assets/circle.png` as the title image.
 *   **Launch Summary**: Summarized the safety guardrails, deletion history, Linux-native uninstall filtering, CACHEDIR.TAG support, release update channel, and multi-arch engine assets from the recent development reports.
 *   **User Guidance**: Documented install commands, verified environments, supported distro families, architecture targets, caution notes, and the next release priorities.
+*   **Bilingual Format**: Reworked the release note to lead with English release copy and include a focused Chinese summary for key changes.
 
 # Daily Modification Report - 2026-05-30
 
