@@ -2,12 +2,16 @@ import os
 import shlex
 import shutil
 import sqlite3
+import sys
+import termios
 import threading
 import time
+import tty
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from ..core.constants import BLUE, BOLD, GRAY, GREEN, RESET
+from ..core import system
+from ..core.constants import BLUE, BOLD, GRAY, GREEN, PURPLE, RED, RESET, YELLOW
 from ..core.file_ops import bytes_to_human, get_size, safe_remove
 from ..core.system import has_sudo, run_command
 
@@ -26,6 +30,19 @@ def opt_log(message, success=True, skipped=False):
     with print_lock:
         # Use a single print statement within a lock to ensure atomicity
         print(f"  {icon} {msg}")
+
+
+def _read_sudo_choice() -> str:
+    if not sys.stdin.isatty():
+        return "\n"
+
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        return sys.stdin.read(1)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
 def vacuum_single_db(db_file):
@@ -232,6 +249,28 @@ def optimize_system(dry_run=False):
     os.system("clear")
     print(f"{BLUE}{BOLD}System Optimization{RESET}")
     print(f"{GRAY}Running maintenance tasks in parallel...{RESET}\n")
+
+    if not dry_run:
+        print(
+            f"{PURPLE}➔{RESET} Optimization tasks need sudo. "
+            f"{GREEN}Enter{RESET} continue, {GRAY}Space{RESET} skip:",
+            end=" ",
+            flush=True,
+        )
+        choice = _read_sudo_choice()
+        print()
+        if choice == " ":
+            return False
+        if not system.ensure_sudo_session(
+            f"{PURPLE}➔{RESET} System optimization requires admin access\n"
+            f"{PURPLE}➔{RESET} Password: "
+        ):
+            if system.SUDO_CANCELLED:
+                print(f" {YELLOW}⚠️  Optimization cancelled by user.{RESET}\n")
+            else:
+                print(f" {RED}✗{RESET} Authorization failed. Optimization skipped.\n")
+            return
+        print(f" {GREEN}✓{RESET} Authorization successful.\n")
 
     start_time = time.time()
 

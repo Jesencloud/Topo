@@ -324,45 +324,46 @@ class AnalyzeSelector(_PagedSelector):
         name_w = min(30, available - bar_w) if bar_w > 0 else max(15, available)
 
         total_len = len(self.items)
-        total_pages = (total_len + self.page_size - 1) // self.page_size
+        total_pages = max(1, (total_len + self.page_size - 1) // self.page_size)
         self.current_page = max(0, min(self.current_page, total_pages - 1))
         start = self.current_page * self.page_size
         end = min(start + self.page_size, total_len)
 
-        for i in range(start, end):
-            item = self.items[i]
-            is_hover = i == self.selected_index
-            is_selected = i in self.selected_items
-            cursor = "\033[1;36m▶\033[0m" if is_hover else " "
-            if self.can_select:
-                num = (i - start) + 1
-                inner = "\033[1;32m✓ \033[0m" if is_selected else f"{num:<2}"
-                checkbox_str = f"[{inner}] "
-            else:
-                checkbox_str = f" {i + 1:2}. "
+        if total_len == 0:
+            buf.append(f"   {GRAY}No items found{RESET}\033[K\n")
+        else:
+            for i in range(start, end):
+                item = self.items[i]
+                is_hover = i == self.selected_index
+                is_selected = i in self.selected_items
+                cursor = "\033[1;36m▶\033[0m" if is_hover else " "
+                if self.can_select:
+                    num = (i - start) + 1
+                    inner = "\033[1;32m✓ \033[0m" if is_selected else f"{num:<2}"
+                    checkbox_str = f"[{inner}] "
+                else:
+                    checkbox_str = f" {i + 1:2}. "
 
-            bar = draw_bar(item["percent"], width=bar_w, force_color=item.get("color"))
-            bar_str = f"{bar}  " if bar_w > 0 else ""
-            style = "\033[1;35m" if is_hover else ""
-            name_padded = pad_and_truncate(item["name"], name_w)
-            icon = item.get("icon", "📁")
-            age_str = f" {GRAY}{item.get('age_hint', '')}{RESET}" if item.get("age_hint") else ""
-            buf.append(
-                f"{cursor} {checkbox_str}{bar_str}{item['percent']:>5.1f}%  |  {icon} {style}{name_padded}{RESET}  {WHITE}{bytes_to_human(item['size']):>12}{RESET}{age_str}\033[K\n"
-            )
+                bar = draw_bar(item["percent"], width=bar_w, force_color=item.get("color"))
+                bar_str = f"{bar}  " if bar_w > 0 else ""
+                style = "\033[1;35m" if is_hover else ""
+                name_padded = pad_and_truncate(item["name"], name_w)
+                icon = item.get("icon", "📁")
+                age_str = f" {GRAY}{item.get('age_hint', '')}{RESET}" if item.get("age_hint") else ""
+                buf.append(
+                    f"{cursor} {checkbox_str}{bar_str}{item['percent']:>5.1f}%  |  {icon} {style}{name_padded}{RESET}  {WHITE}{bytes_to_human(item['size']):>12}{RESET}{age_str}\033[K\n"
+                )
 
         order_icon = "↓" if self.sort_reverse else "↑"
         page_info = f" Page {self.current_page + 1}/{total_pages} |" if total_pages > 1 else ""
 
         if self.can_select:
             prompts = [
-                f" {page_info} ↑↓:Move | ←:Back | Enter/→:Enter | Spc/0-9:Toggle | A:All",
-                f" {' ' * len(page_info)} Del:Delete | F:Open Folder | R:Reload | S:Sort {order_icon} | ESC:Exit"
+                f" {page_info} A:All | F:Open Folder | R:Reload | S:Sort {order_icon} | Space:Select"
             ]
         else:
             prompts = [
-                f" {page_info} ↑↓:Move | ←:Back | Enter/→:Enter",
-                f" {' ' * len(page_info)} F:Open Folder | R:Reload | S:Sort {order_icon} | ESC:Exit"
+                f" {page_info} F:Open Folder | R:Reload | S:Sort {order_icon}"
             ]
 
         # Match separator width to prompt length (excluding ANSI codes)
@@ -372,7 +373,10 @@ class AnalyzeSelector(_PagedSelector):
             buf.append(f"\033[1;90m{p}\033[0m\033[K\n")
 
         if self.selected_items:
-            buf.append("\n \033[1;35m☉ Selected Items to Remove:\033[0m\033[K\n")
+            buf.append(
+                f"\n \033[1;35m☉ Selected Items to Remove:\033[0m "
+                f"{GRAY}Enter:Delete selected{RESET}\033[K\n"
+            )
             for i in sorted(list(self.selected_items)):
                 item = self.items[i]
                 buf.append(f"   \033[1;35m•\033[0m {item.get('icon', '📁')} {item['name']}\033[K\n")
@@ -382,8 +386,6 @@ class AnalyzeSelector(_PagedSelector):
         sys.stdout.flush()
 
     def run(self):
-        if not self.items:
-            return None, None
         with _selector_session() as fd:
             while True:
                 self.render()
@@ -405,6 +407,8 @@ class AnalyzeSelector(_PagedSelector):
                     else:
                         return "BACK", None
                 elif key in (Navigator.RIGHT, "\x1bOC"):
+                    if total_len == 0:
+                        continue
                     if self.items[self.selected_index]["path"].is_dir():
                         return "DRILL_DOWN", self.selected_index
                     elif self._total_pages() > 1:
@@ -422,6 +426,10 @@ class AnalyzeSelector(_PagedSelector):
                     except Exception:
                         pass
                 elif key in Navigator.ENTER:
+                    if total_len == 0:
+                        continue
+                    if self.can_select and self.selected_items:
+                        return "DELETE_BATCH", list(self.selected_items)
                     return "DRILL_DOWN", self.selected_index
                 elif len(key) == 1 and key.lower() == "s":
                     self.sort_reverse = not self.sort_reverse
@@ -429,6 +437,8 @@ class AnalyzeSelector(_PagedSelector):
                 elif len(key) == 1 and key.lower() == "r":
                     return "REFRESH", None
                 elif len(key) == 1 and key.lower() == "f":
+                    if total_len == 0:
+                        continue
                     if self.can_select:
                         if self.selected_items:
                             return "OPEN_BATCH", list(self.selected_items)
@@ -437,9 +447,6 @@ class AnalyzeSelector(_PagedSelector):
                         return "DRILL_DOWN", self.selected_index
                 elif len(key) == 1 and key.lower() == "a" and self.can_select:
                     self._toggle_current_page_selection()
-                elif key in (Navigator.DEL, "\x1b[3~") and self.can_select:
-                    if self.selected_items:
-                        return "DELETE_BATCH", list(self.selected_items)
                 elif key == Navigator.ESC and len(key) == 1:
                     return "QUIT", None
                 elif key == "MOUSE_EVENT":

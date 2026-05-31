@@ -1,3 +1,33 @@
+# Daily Modification Report - 2026-06-01
+
+## Project: topo (Topo) - Unified Destructive Action UX
+
+### 1. Password Prompt & Cancellation Consistency
+*   **Custom Sudo Prompts**: Extended sudo authorization to accept custom multi-line prompts, replacing raw `[sudo] password` output with Topo-styled messages such as `System cleanup requires admin access`, `System optimization requires admin access`, and `App removal requires admin access`.
+*   **Clean Flow**: Added a pre-clean sudo decision prompt with `Enter` to continue and `Space` to skip. Space now returns directly to the main UI without printing an extra skipped message or showing a return prompt.
+*   **Optimize Flow**: Applied the same password interaction model to Optimize. Space skips the task silently and returns to the main UI; password cancellation stops the task instead of continuing into maintenance steps.
+*   **Uninstall Preview Flow**: Simplified uninstall preview confirmation into a single line: `Remove N application(s), size  Enter confirm, Space cancel`. Enter proceeds to the custom password prompt; Space/ESC returns to the application list without uninstalling.
+*   **Password Cancellation Safety**: Ctrl+C during password input now cancels Clean, Optimize, Uninstall, or privileged Analyze deletion without continuing into cleanup/removal logic.
+
+### 2. Analyze Delete Flow
+*   **Unified Selection Model**: Standardized Analyze deletion around `Space` to select and `Enter` to delete selected items. Removed the `Del` deletion shortcut and its hint so users do not need to choose between different destructive-action keys.
+*   **Contextual Delete Hint**: Added an inline hint beside `Selected Items to Remove` so selected files clearly show `Enter:Delete selected` at the moment the action becomes available.
+*   **Sudo Only When Needed**: Analyze now deletes user-owned writable home paths without asking for sudo, while system paths, non-home paths, or unwritable paths still require admin authorization.
+*   **Privileged Delete Safety**: Admin Analyze deletes go through `validate_path_for_deletion()` before running `sudo rm -rf -- path`, and every result is recorded in the deletion audit log.
+*   **Empty Directory Fix**: Fixed a busy-loop bug after deleting the last item in an Analyze directory. Empty results now render `No items found` and wait for user input instead of repeatedly refreshing and consuming CPU.
+*   **Refresh Messaging**: Deletion-triggered rescans now display `Refreshing analysis...` instead of the initial Rust scan message, making post-delete state changes clearer.
+
+### 3. TUI Page & Hint Cleanup
+*   **Clean Page Isolation**: Selecting Clean from the main menu now clears the screen before running, so cleanup output appears on its own page instead of under the main menu.
+*   **Status Page Isolation**: Selecting Status also clears the screen before rendering system health output.
+*   **Analyze Banner Removal**: Removed the main-menu banner from the Analyze Disk root view so the analyzer starts as a focused tool page.
+*   **Analyze Hint Simplification**: Reduced Analyze footer hints to the actions that need discovery, now showing a single concise line such as `A:All | F:Open Folder | R:Reload | S:Sort ↓ | Space:Select`.
+
+### 4. Regression Coverage
+*   **Navigator Tests**: Added coverage for Enter-based Analyze deletion, disabled Del deletion, and empty Analyze result handling.
+*   **Analyze Permission Tests**: Added coverage proving user-writable paths avoid sudo while system paths use the privileged delete branch.
+*   **Verification**: Confirmed the final state with Ruff and the full pytest suite (`132 passed`).
+
 # Daily Modification Report - 2026-05-31
 
 ## Project: topo (Topo) - Deletion Audit Trail

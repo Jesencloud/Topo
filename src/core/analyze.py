@@ -7,10 +7,17 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from ..ui.navigator import AnalyzeSelector, ConfirmSelector, TopFilesSelector
-from ..ui.tui import show_banner
-from .constants import BLUE, CYAN, MAGENTA, YELLOW
-from .file_ops import bytes_to_human, get_size, has_valid_cachedir_tag, safe_remove
+from ..ui.navigator import AnalyzeSelector, Navigator, TopFilesSelector
+from . import system
+from .constants import BLUE, CYAN, GRAY, GREEN, MAGENTA, RED, RESET, YELLOW
+from .file_ops import (
+    bytes_to_human,
+    get_size,
+    has_valid_cachedir_tag,
+    record_deletion_audit,
+    safe_remove,
+    validate_path_for_deletion,
+)
 from .system import run_command
 
 
@@ -151,6 +158,105 @@ def get_old_items_info(dir_path: Path, days_threshold: int = 90) -> list[dict[st
     return sorted(old_items, key=lambda x: x["size"], reverse=True)
 
 
+def _needs_admin_for_deletion(path: Path) -> bool:
+    """Return True when a deletion target should go through sudo."""
+    raw_path = Path(path).expanduser()
+    try:
+        resolved_path = raw_path.resolve(strict=False)
+    except OSError:
+        resolved_path = raw_path.absolute()
+
+    home = Path.home().resolve()
+    try:
+        is_in_home = resolved_path == home or home in resolved_path.parents
+    except RuntimeError:
+        is_in_home = False
+    if not is_in_home:
+        return True
+
+    try:
+        stat = raw_path.lstat()
+    except OSError:
+        return True
+
+    parent = raw_path.parent
+    return stat.st_uid != os.getuid() or not os.access(parent, os.W_OK | os.X_OK)
+
+
+def _sudo_remove(path: Path) -> bool:
+    """Remove a validated Analyze target with sudo and record an audit event."""
+    raw_path = Path(path).expanduser()
+    valid, reason = validate_path_for_deletion(raw_path)
+    if not valid:
+        record_deletion_audit(raw_path, "sudo-permanent", "rejected-validation")
+        print(f" {RED}✗{RESET} {raw_path}: {reason}")
+        return False
+
+    if not raw_path.exists() and not raw_path.is_symlink():
+        record_deletion_audit(raw_path, "sudo-permanent", "missing", 0)
+        return False
+
+    size_bytes = get_size(raw_path)
+    res = run_command(["rm", "-rf", "--", str(raw_path)], use_sudo=True, capture=True, timeout=300)
+    if res.ok:
+        record_deletion_audit(raw_path, "sudo-permanent", "deleted", size_bytes)
+        return True
+
+    record_deletion_audit(raw_path, "sudo-permanent", "failed", size_bytes)
+    return False
+
+
+def _confirm_delete(count: int, total_size: int, needs_admin: bool) -> bool:
+    """Confirm an Analyze deletion and prompt for sudo only when needed."""
+    item_text = "item" if count == 1 else "items"
+    print(
+        f" Delete {count} {item_text}, {bytes_to_human(total_size)}  "
+        f"{GREEN}Enter{RESET} confirm, {GRAY}Space{RESET} cancel:",
+        end=" ",
+        flush=True,
+    )
+
+    with Navigator.raw_mode() as fd:
+        choice = Navigator.get_key(fd)
+    print()
+
+    if choice not in Navigator.ENTER:
+        print(f" {YELLOW}⚠️  Delete skipped by user.{RESET}\n")
+        return False
+
+    if not needs_admin:
+        return True
+
+    print()
+    if not system.ensure_sudo_session(
+        f"{MAGENTA}➔{RESET} File deletion requires admin access\n"
+        f"{MAGENTA}➔{RESET} Password: "
+    ):
+        if system.SUDO_CANCELLED:
+            print(f" {YELLOW}⚠️  Delete cancelled by user.{RESET}\n")
+        else:
+            print(f" {RED}✗{RESET} Authorization failed. Delete cancelled.\n")
+        return False
+
+    print(f" {GREEN}✓{RESET} Authorization successful.\n")
+    return True
+
+
+def _delete_analyze_paths(paths: list[Path]) -> bool:
+    """Delete Analyze targets, using sudo only for paths outside user control."""
+    admin_paths = [p for p in paths if _needs_admin_for_deletion(p)]
+    total_size = sum(get_size(p) for p in paths)
+    if not _confirm_delete(len(paths), total_size, bool(admin_paths)):
+        return False
+
+    changed = False
+    for p in paths:
+        removed = _sudo_remove(p) if p in admin_paths else safe_remove(p, use_trash=True)[0]
+        if removed:
+            changed = True
+    return changed
+
+
 def run_deep_analysis(target_path: Path = None):
     # State Stack stores: {"target": Path, "results": [], "data": {}, "total_size": int}
     state_stack = []
@@ -161,13 +267,18 @@ def run_deep_analysis(target_path: Path = None):
     data = None
     total_scan_size = 0
     needs_scan = True
+    scan_reason = "scan"
 
     while True:
         target_to_scan = current_target or Path.home()
         view_title = "Analyze Disk" if current_target is None else f"Exploring: {current_target}"
 
         if needs_scan:
-            msg = f"   🚀 Rust Engine: Intelligence Scan on {target_to_scan.name if current_target else 'Home'}..."
+            target_label = target_to_scan.name if current_target else "Home"
+            if scan_reason == "refresh":
+                msg = f"   ↻ Refreshing analysis on {target_label}..."
+            else:
+                msg = f"   🚀 Rust Engine: Intelligence Scan on {target_label}..."
             print(msg, end="\r")
             data = get_rust_scan_data(target_to_scan)
             if not data:
@@ -287,11 +398,11 @@ def run_deep_analysis(target_path: Path = None):
                 results.sort(key=lambda x: x["size"], reverse=True)
                 results = results[:50]
             needs_scan = False
+            scan_reason = "scan"
 
         selector = AnalyzeSelector(
             view_title,
             results,
-            show_banner=show_banner if current_target is None else None,
             can_select=(current_target is not None),
         )
         action, idx = selector.run()
@@ -315,6 +426,7 @@ def run_deep_analysis(target_path: Path = None):
         elif action == "REFRESH":
             ScanCache._data.pop(str(target_to_scan), None)
             needs_scan = True
+            scan_reason = "refresh"
         elif action == "OPEN":
             path = results[idx]["path"]
             parent = path.parent if path.exists() else path
@@ -326,14 +438,11 @@ def run_deep_analysis(target_path: Path = None):
                 top_selector = TopFilesSelector(f"Smart View: {item['name']}", item["smart_items"])
                 selected_idxs = top_selector.run()
                 if selected_idxs:
-                    confirm_msg = f"Are you sure you want to delete {len(selected_idxs)} items?"
-                    confirm = ConfirmSelector(confirm_msg)
-                    if confirm.run():
-                        for s_idx in selected_idxs:
-                            p = item["smart_items"][s_idx]["path"]
-                            if safe_remove(p, use_trash=True)[0]:
-                                ScanCache.clear()
+                    paths = [item["smart_items"][s_idx]["path"] for s_idx in selected_idxs]
+                    if _delete_analyze_paths(paths):
+                        ScanCache.clear()
                         needs_scan = True
+                        scan_reason = "refresh"
             elif item["path"].is_dir():
                 # Safety: Avoid entering / as it's too heavy and requires sudo for full scan
                 if str(item["path"]) == "/":
@@ -349,6 +458,7 @@ def run_deep_analysis(target_path: Path = None):
                 )
                 current_target = item["path"]
                 needs_scan = True
+                scan_reason = "scan"
             elif item["path"].is_file():
                 p = item["path"]
                 archive_exts = {
@@ -373,17 +483,11 @@ def run_deep_analysis(target_path: Path = None):
                     run_command(["xdg-open", str(p)], capture=True, timeout=10)
         elif action == "DELETE_BATCH":
             selected_idxs = idx  # action was DELETE_BATCH, idx contains the list
-            total_selected_size = sum(results[i]["size"] for i in selected_idxs)
-            confirm_msg = (
-                f"Delete {len(selected_idxs)} items ({bytes_to_human(total_selected_size)})?"
-            )
-            confirm = ConfirmSelector(confirm_msg)
-            if confirm.run():
-                for s_idx in selected_idxs:
-                    p = results[s_idx]["path"]
-                    if safe_remove(p, use_trash=True)[0]:
-                        ScanCache.clear()
+            paths = [results[s_idx]["path"] for s_idx in selected_idxs]
+            if _delete_analyze_paths(paths):
+                ScanCache.clear()
                 needs_scan = True
+                scan_reason = "refresh"
         elif action == "OPEN_BATCH":
             selected_idxs = idx
             for s_idx in selected_idxs:

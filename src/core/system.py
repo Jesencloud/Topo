@@ -88,7 +88,7 @@ def has_sudo():
     return res.ok
 
 
-def ensure_sudo_session():
+def ensure_sudo_session(prompt: str | None = None):
     """Force a fresh sudo password prompt by invalidating cached credentials."""
     global SUDO_CANCELLED
     SUDO_CANCELLED = False  # Reset for each attempt
@@ -102,7 +102,10 @@ def ensure_sudo_session():
             return True
 
         # 3. sudo -v (validate) asks for the password and updates the timestamp
-        res = run_command(["-v"], use_sudo=True, capture=False, timeout=None)
+        validate_args = ["-v"]
+        if prompt:
+            validate_args.extend(["-p", prompt])
+        res = run_command(validate_args, use_sudo=True, capture=False, timeout=None)
         return res.ok
     except KeyboardInterrupt:
         print()  # Add a newline after ^C

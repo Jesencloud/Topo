@@ -132,27 +132,22 @@ Examples:
             while True:
                 choice = main_menu()
                 if choice == "1":
-                    run_clean(args.dry_run)
-                    if not Navigator.wait_for_return():
+                    sys.stdout.write("\033[2J\033[H")
+                    sys.stdout.flush()
+                    result = run_clean(args.dry_run)
+                    if result is not False and not Navigator.wait_for_return():
                         break
                 elif choice == "2":
                     run_uninstall()
                 elif choice == "3":
-                    print(
-                        "\033[1;90m🔒 Authorizing optimization tasks (Ctrl+C to cancel)...\033[0m"
-                    )
-                    if system.ensure_sudo_session():
-                        optimize_system(args.dry_run)
-                    else:
-                        if system.SUDO_CANCELLED:
-                            print("\033[1;33m⚠️  Optimization cancelled by user.\033[0m")
-                        else:
-                            print("\033[1;31m✗ Authorization failed. Optimization aborted.\033[0m")
-                    if not Navigator.wait_for_return():
+                    result = optimize_system(args.dry_run)
+                    if result is not False and not Navigator.wait_for_return():
                         break
                 elif choice == "4":
                     run_deep_analysis()
                 elif choice == "5":
+                    sys.stdout.write("\033[2J\033[H")
+                    sys.stdout.flush()
                     show_status()
                     if not Navigator.wait_for_return():
                         break
@@ -191,14 +186,7 @@ Examples:
         show_history(limit=max(args.limit, 1))
 
     if args.command == "optimize":
-        print("\033[1;90m🔒 Authorizing optimization tasks (Ctrl+C to cancel)...\033[0m")
-        if system.ensure_sudo_session():
-            optimize_system(args.dry_run)
-        else:
-            if system.SUDO_CANCELLED:
-                print("\033[1;33m⚠️  Optimization cancelled by user.\033[0m")
-            else:
-                print("\033[1;31m✗ Authorization failed. Optimization aborted.\033[0m")
+        optimize_system(args.dry_run)
 
     if args.command == "link":
         run_install_link(silent=args.silent)

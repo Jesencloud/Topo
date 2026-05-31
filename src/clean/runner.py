@@ -1,5 +1,8 @@
 import os
 import shutil
+import sys
+import termios
+import tty
 from functools import partial
 
 from ..core import system
@@ -21,6 +24,19 @@ from .system import clean_journal, clean_package_manager
 from .user import clean_user_data
 
 
+def _read_sudo_choice() -> str:
+    if not sys.stdin.isatty():
+        return "\n"
+
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        return sys.stdin.read(1)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+
 def run_clean(dry_run=False):
     # 0. Proactive Detection (Auto-Discovery) - Run once and reuse downstream
     detected_apps = proactive_app_detection()
@@ -29,14 +45,27 @@ def run_clean(dry_run=False):
     mode_label = f"{CYAN}[PREVIEW]{RESET}" if dry_run else f"{PURPLE}[EXECUTING]{RESET}"
     print(f"{mode_label} Starting system cleanup...\n")
 
+    run_system_tasks = True
     # Pre-authorize sudo to avoid interrupting the progress list
     if not dry_run:
-        print(f" {GRAY}🔒 Authorizing system-level tasks (Ctrl+C to cancel)...{RESET}")
-        if not system.ensure_sudo_session():
+        print(
+            f"{PURPLE}➔{RESET} System caches need sudo. "
+            f"{GREEN}Enter{RESET} continue, {GRAY}Space{RESET} skip:",
+            end=" ",
+            flush=True,
+        )
+        choice = _read_sudo_choice()
+        print()
+        if choice == " ":
+            return False
+        elif not system.ensure_sudo_session(
+            f"{PURPLE}➔{RESET} System cleanup requires admin access\n"
+            f"{PURPLE}➔{RESET} Password: "
+        ):
             if system.SUDO_CANCELLED:
                 print(f" {YELLOW}⚠️  Cleanup cancelled by user.{RESET}\n")
             else:
-                print(f" {RED}✗{RESET} Authorization failed. Cleanup aborted.\n")
+                print(f" {RED}✗{RESET} Authorization failed. Cleanup skipped.\n")
             return
         else:
             print(f" {GREEN}✓{RESET} Authorization successful.\n")
@@ -53,24 +82,30 @@ def run_clean(dry_run=False):
     import io
 
     # Define the grouped categories
-    execution_groups = [
-        (
-            "\033[1;95m➤ System & Package Manager\033[0m",
-            [
-                ("Package Manager Cache", clean_package_manager),
-                ("System Journal Logs", clean_journal),
-            ],
-        ),
-        ("\033[1;95m➤ User Data Cleanup\033[0m", [("User Data & Trash", clean_user_data)]),
-        (
-            "\033[1;95m➤ Deep App Cleanup\033[0m",
-            [("Deep App Caches", partial(clean_apps_deep, detected_apps=detected_apps))],
-        ),
-        (
-            "\033[1;95m➤ Developer Tools & AI Models\033[0m",
-            [("Developer Artifacts", clean_developer_tools)],
-        ),
-    ]
+    execution_groups = []
+    if run_system_tasks:
+        execution_groups.append(
+            (
+                "\033[1;95m➤ System & Package Manager\033[0m",
+                [
+                    ("Package Manager Cache", clean_package_manager),
+                    ("System Journal Logs", clean_journal),
+                ],
+            )
+        )
+    execution_groups.extend(
+        [
+            ("\033[1;95m➤ User Data Cleanup\033[0m", [("User Data & Trash", clean_user_data)]),
+            (
+                "\033[1;95m➤ Deep App Cleanup\033[0m",
+                [("Deep App Caches", partial(clean_apps_deep, detected_apps=detected_apps))],
+            ),
+            (
+                "\033[1;95m➤ Developer Tools & AI Models\033[0m",
+                [("Developer Artifacts", clean_developer_tools)],
+            ),
+        ]
+    )
 
     for header, tasks in execution_groups:
         f = io.StringIO()

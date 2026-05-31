@@ -2,9 +2,7 @@ import os
 import shutil
 import subprocess
 import sys
-import termios
 import time
-import tty
 from pathlib import Path
 from typing import Any
 
@@ -618,6 +616,7 @@ def run_uninstall():
             all_targets.append((app, app_paths, is_running))
             total_estimated_size += app["size_bytes"]
 
+        confirmed = False
         with Navigator.raw_mode() as fd:
             preview_done = False
             while not preview_done:
@@ -643,8 +642,8 @@ def run_uninstall():
                 app_text = "application" if len(selected_apps) == 1 else "applications"
                 size_display = bytes_to_human(total_estimated_size)
                 prompt = (
-                    f" {MAGENTA}→{RESET} Remove {len(selected_apps)} {app_text}, {size_display} "
-                    f" {GREEN}Enter{RESET} confirm, {GRAY}ESC{RESET} cancel: "
+                    f" Remove {len(selected_apps)} {app_text}, {size_display} "
+                    f" {GREEN}Enter{RESET} confirm, {GRAY}Space{RESET} cancel: "
                 )
                 buf.append(prompt + "\033[K")
                 buf.append("\033[J")  # Clear remaining old lines below
@@ -656,56 +655,53 @@ def run_uninstall():
                 ch = Navigator.get_key(fd)
 
                 if ch in Navigator.ENTER:
-                    # Temporary exit raw mode for sudo prompt
-                    termios.tcsetattr(fd, termios.TCSADRAIN, termios.tcgetattr(sys.stdin))
-                    try:
-                        # Ensure sudo session (require password)
-                        print(f"\n {GRAY}🔒 Authorizing removal (Ctrl+C to cancel)...{RESET}")
-
-                        if not system.ensure_sudo_session():
-                            if system.SUDO_CANCELLED:
-                                print(f"\n {YELLOW}⚠️  Uninstall cancelled by user.{RESET}")
-                            else:
-                                print(
-                                    f"\n {RED}✗{RESET} Authorization failed. Uninstall cancelled."
-                                )
-                            if not Navigator.wait_for_return():
-                                preview_done = True
-                                break
-                            continue
-
-                        # --- EXECUTION ---
-                        print(f"\n\n {GRAY}🚀 Processing...{RESET}")
-                        removed_names = []
-                        total_freed_all = 0
-
-                        for app, paths, _ in all_targets:
-                            manager.execute_uninstall(app, paths)
-                            removed_names.append(app["name"])
-                            total_freed_all += app["size_bytes"]
-
-                        # Final Summary
-                        if total_freed_all > 0:
-                            ScanCache.clear()
-                        print("=" * 70)
-                        print("\033[1;34mUninstall complete\033[0m")
-                        names_str = ", ".join(removed_names)
-                        msg = f"Removed {len(removed_names)} app(s), freed \033[1;32m"
-                        msg += f"{bytes_to_human(total_freed_all)}\033[0m: {names_str}"
-                        print(msg)
-                        print("=" * 70)
-
-                        # Standardized return/exit prompt
-                        if not Navigator.wait_for_return():
-                            return  # Exit uninstall completely
-                        preview_done = True
-                    finally:
-                        # Re-enter cbreak mode if we are continuing the loop
-                        if not preview_done:
-                            tty.setcbreak(fd)
+                    confirmed = True
+                    preview_done = True
+                elif ch == Navigator.SPACE:
+                    preview_done = True
                 elif ch == Navigator.ESC and len(ch) == 1:
                     # Explicit ESC: Cancel and go back to list
                     preview_done = True
                 else:
                     # MOUSE_EVENT, Arrows, or other keys: Stay on preview screen
                     continue
+
+        if confirmed:
+            print()
+            # Ensure sudo session (require password) outside raw mode so sudo can own input.
+            if not system.ensure_sudo_session(
+                f"{MAGENTA}➔{RESET} App removal requires admin access\n"
+                f"{MAGENTA}➔{RESET} Password: "
+            ):
+                if system.SUDO_CANCELLED:
+                    print(f" {YELLOW}⚠️  Uninstall cancelled by user.{RESET}\n")
+                else:
+                    print(f" {RED}✗{RESET} Authorization failed. Uninstall cancelled.\n")
+                return
+
+            print(f" {GREEN}✓{RESET} Authorization successful.\n")
+
+            # --- EXECUTION ---
+            print(f"\n {GRAY}🚀 Processing...{RESET}")
+            removed_names = []
+            total_freed_all = 0
+
+            for app, paths, _ in all_targets:
+                manager.execute_uninstall(app, paths)
+                removed_names.append(app["name"])
+                total_freed_all += app["size_bytes"]
+
+            # Final Summary
+            if total_freed_all > 0:
+                ScanCache.clear()
+            print("=" * 70)
+            print("\033[1;34mUninstall complete\033[0m")
+            names_str = ", ".join(removed_names)
+            msg = f"Removed {len(removed_names)} app(s), freed \033[1;32m"
+            msg += f"{bytes_to_human(total_freed_all)}\033[0m: {names_str}"
+            print(msg)
+            print("=" * 70)
+
+            # Standardized return/exit prompt
+            if not Navigator.wait_for_return():
+                return  # Exit uninstall completely

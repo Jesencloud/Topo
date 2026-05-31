@@ -82,11 +82,25 @@ def test_confirm_esc_is_false():
 
 
 # --- AnalyzeSelector ---
-def test_analyze_space_then_delete_batch():
+def test_analyze_space_then_enter_deletes_selected_batch():
     sel = AnalyzeSelector("t", _analyze_items(), can_select=True)
-    action, payload = drive(sel, [Navigator.SPACE, Navigator.DEL])
+    action, payload = drive(sel, [Navigator.SPACE, "\r"])
     assert action == "DELETE_BATCH"
     assert payload == [0]
+
+
+def test_analyze_del_no_longer_deletes_selected_batch():
+    sel = AnalyzeSelector("t", _analyze_items(), can_select=True)
+    action, _ = drive(sel, [Navigator.SPACE, Navigator.DEL, Navigator.ESC])
+    assert action == "QUIT"
+    assert sel.selected_items == {0}
+
+
+def test_analyze_delete_sequence_does_not_delete_selected_batch():
+    sel = AnalyzeSelector("t", _analyze_items(), can_select=True)
+    action, _ = drive(sel, [Navigator.SPACE, "\x1b[3~", Navigator.ESC])
+    assert action == "QUIT"
+    assert sel.selected_items == {0}
 
 
 def test_analyze_quit_keeps_selection():
@@ -115,6 +129,13 @@ def test_analyze_enter_drills_down():
     action, idx = drive(sel, ["\r"])
     assert action == "DRILL_DOWN"
     assert idx == 0
+
+
+def test_analyze_empty_view_waits_for_back():
+    sel = AnalyzeSelector("t", [], can_select=True)
+    action, idx = drive(sel, [Navigator.LEFT])
+    assert action == "BACK"
+    assert idx is None
 
 
 # --- UninstallSelector ---
