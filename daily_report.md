@@ -69,6 +69,13 @@
 *   **Linux Kernel Package Filtering**: Hid Debian-family kernel packages such as `linux-image-*` and `linux-headers-*` from uninstall results as system components.
 *   **Cross-Distro Desktop Ownership Detection**: Extended uninstall pre-scan beyond RPM by using `dpkg-query -S` for APT systems and `pacman -Qo` for Pacman systems to identify packages that own `.desktop` launchers.
 
+### 11. Installer Link Reliability
+*   **Root-Friendly Command Link**: Updated `topo link` so root installs create the launcher in `/usr/local/bin`, while regular users continue to use `~/.local/bin`.
+*   **Install-Time Link Verification**: `install.sh` now distinguishes fresh installs from updates, runs a visible link setup on fresh installs, and warns with a direct launcher path if `topo` is still not available in `PATH`.
+*   **Non-Git Install Recovery**: Existing `~/.topo` directories that are not git checkouts are now replaced with a clean clone instead of failing during `git fetch`.
+*   **Remove Alignment**: `topo remove` now recognizes both `~/.local/bin/topo` and `/usr/local/bin/topo` links when they point to the active Topo installation.
+*   **Regression Tests**: Added install-link tests for override directories, root target selection, and launcher symlink creation.
+
 # Daily Modification Report - 2026-05-30
 
 ## Project: topo (Topo) - High-Performance Input & Flicker-Free UI

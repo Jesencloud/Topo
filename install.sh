@@ -36,6 +36,7 @@ if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓ python3 installed${NC}"; 
 INSTALL_DIR="$HOME/.topo"
 REPO_URL="https://github.com/Jesencloud/Topo.git"
 TARBALL_URL="https://github.com/Jesencloud/Topo/archive/refs/heads/main.tar.gz"
+WAS_INSTALLED=false
 
 # 3. Clone or download source
 if [ "$MINIMAL" = false ]; then
@@ -44,11 +45,20 @@ fi
 
 if [ "$HAS_GIT" = true ]; then
     if [ -d "$INSTALL_DIR" ]; then
+        WAS_INSTALLED=true
         if [ "$MINIMAL" = false ]; then echo -e "  ${GRAY}↺ Updating Topo in ${INSTALL_DIR}...${NC}"; fi
         cd "$INSTALL_DIR"
-        # To keep things clean, we reset and pull
-        git fetch --quiet --depth 1 origin main
-        git reset --hard origin/main --quiet
+        if [ -d ".git" ]; then
+            # To keep things clean, we reset and pull
+            git fetch --quiet --depth 1 origin main
+            git reset --hard origin/main --quiet
+        else
+            if [ "$MINIMAL" = false ]; then echo -e "  ${YELLOW}⚠ Existing install is not a git checkout; reinstalling cleanly.${NC}"; fi
+            cd "$HOME"
+            rm -rf "$INSTALL_DIR"
+            git clone --quiet --depth 1 "$REPO_URL" "$INSTALL_DIR"
+            WAS_INSTALLED=false
+        fi
     else
         if [ "$MINIMAL" = false ]; then echo -e "  ${GRAY}↓ Downloading Topo via Git...${NC}"; fi
         git clone --quiet --depth 1 "$REPO_URL" "$INSTALL_DIR"
@@ -105,10 +115,16 @@ fi
 chmod +x topo
 
 # Pass --silent if this was an update to avoid redundant success banners
-if [ -d "$INSTALL_DIR" ]; then
+if [ "$WAS_INSTALLED" = true ]; then
     ./topo link --silent
 else
     ./topo link
+fi
+
+if ! command -v topo >/dev/null 2>&1; then
+    echo -e "  ${YELLOW}⚠ Warning: 'topo' is not available in PATH yet.${NC}"
+    echo -e "  ${GRAY}You can run it directly with:${NC} ${BOLD}${INSTALL_DIR}/topo${NC}"
+    echo -e "  ${GRAY}Or create a link manually, for example:${NC} ${BOLD}sudo ln -sf ${INSTALL_DIR}/topo /usr/local/bin/topo${NC}"
 fi
 
 # 6. Display final banner and version

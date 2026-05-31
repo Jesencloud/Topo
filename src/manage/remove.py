@@ -15,9 +15,15 @@ def run_remove(dry_run=False):
     to_remove = []
 
     # The launcher link
-    launcher_path = Path.home() / ".local/bin/topo"
-    if launcher_path.exists():
-        to_remove.append({"path": launcher_path, "desc": "Launcher script link", "type": "link"})
+    internal_dir = Path.home() / ".topo"
+    for launcher_path in (Path.home() / ".local/bin/topo", Path("/usr/local/bin/topo")):
+        if launcher_path.exists() or launcher_path.is_symlink():
+            try:
+                if launcher_path.resolve() != (internal_dir / "topo").resolve():
+                    continue
+            except OSError:
+                continue
+            to_remove.append({"path": launcher_path, "desc": "Launcher script link", "type": "link"})
 
     # Configuration directory
     config_dir = Path.home() / ".config" / "topo"
@@ -30,7 +36,6 @@ def run_remove(dry_run=False):
         to_remove.append({"path": cache_dir, "desc": "Temporary scan cache", "type": "dir"})
 
     # Internal installation directory (from install.sh)
-    internal_dir = Path.home() / ".topo"
     if internal_dir.exists():
         to_remove.append({"path": internal_dir, "desc": "Main program files", "type": "dir"})
 

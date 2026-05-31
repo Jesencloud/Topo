@@ -72,7 +72,7 @@ Examples:
 
     # --- Management ---
     link_parser = subparsers.add_parser(
-        "link", help="Create a symbolic link in ~/.local/bin for 'topo' command"
+        "link", help="Create a symbolic link for the 'topo' command"
     )
     link_parser.add_argument("--silent", action="store_true", help="Suppress success banner")
 
