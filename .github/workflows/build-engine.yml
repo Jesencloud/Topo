@@ -6,6 +6,9 @@ on:
       - 'v*'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build for ${{ matrix.target }}
@@ -41,11 +44,16 @@ jobs:
           cargo build --release --target ${{ matrix.target }}
           mv target/${{ matrix.target }}/release/topo-core ../topo-core-${{ matrix.arch }}
 
+      - name: Generate Checksum
+        run: sha256sum topo-core-${{ matrix.arch }} > topo-core-${{ matrix.arch }}.sha256
+
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: topo-core-${{ matrix.arch }}
-          path: topo-core-${{ matrix.arch }}
+          path: |
+            topo-core-${{ matrix.arch }}
+            topo-core-${{ matrix.arch }}.sha256
 
   release:
     name: Create Release
@@ -63,7 +71,9 @@ jobs:
         with:
           files: |
             artifacts/topo-core-x86_64/topo-core-x86_64
+            artifacts/topo-core-x86_64/topo-core-x86_64.sha256
             artifacts/topo-core-aarch64/topo-core-aarch64
+            artifacts/topo-core-aarch64/topo-core-aarch64.sha256
           draft: false
           prerelease: false
         env:

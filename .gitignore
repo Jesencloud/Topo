@@ -38,9 +38,6 @@ topo-core/target/
 *.tmp
 *.log
 
-# --- Specific Topo Files ---
-topo-core/
-
 # --- Sensitive Info ---
 .env
 .python-version
