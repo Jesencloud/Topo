@@ -217,6 +217,8 @@ def test_run_full_scan_skips_system_components(mock_run, mock_which):
             "ibus-hangul\t200000000\t1700000000\n"
             "ibus-chewing\t200000000\t1700000000\n"
             "ibus-anthy\t200000000\t1700000000\n"
+            "libreoffice-core\t200000000\t1700000000\n"
+            "libreoffice-xsltfilter\t200000000\t1700000000\n"
             "xdg-desktop-portal\t200000000\t1700000000\n"
             "xdg-desktop-portal-gnome\t200000000\t1700000000\n"
         ),
@@ -260,6 +262,30 @@ def test_run_full_scan_keeps_user_gnome_apps(mock_run, mock_which):
         "gnome-contacts",
         "gnome-font-viewer",
         "gnome-maps",
+    ]
+
+
+@patch("shutil.which")
+@patch("subprocess.run")
+def test_run_full_scan_keeps_user_libreoffice_apps(mock_run, mock_which):
+    mock_which.side_effect = lambda x: "/usr/bin/rpm" if x == "rpm" else None
+    mock_run.return_value = MagicMock(
+        returncode=0,
+        stdout=(
+            "libreoffice-writer\t200000000\t1700000000\n"
+            "libreoffice-calc\t200000000\t1700000000\n"
+            "libreoffice-impress\t200000000\t1700000000\n"
+        ),
+    )
+
+    mgr = UninstallManager()
+    with patch("src.core.system.get_os_id", return_value="fedora"):
+        apps = mgr.run_full_scan()
+
+    assert [app["id"] for app in apps] == [
+        "libreoffice-writer",
+        "libreoffice-calc",
+        "libreoffice-impress",
     ]
 
 

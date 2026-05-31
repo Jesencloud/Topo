@@ -104,6 +104,8 @@ class UninstallManager:
             "gnome-system-monitor",
             "gnome-terminal",
             "gvfs",
+            "libreoffice-core",
+            "libreoffice-xsltfilter",
             "nautilus",
             "xdg-desktop-portal",
             "xdg-desktop-portal-gnome",
