@@ -10,6 +10,8 @@ from .whitelist import is_protected
 
 # Global registry to track handled paths across modules
 CLEANED_PATHS: set[str] = set()
+CACHEDIR_TAG_FILE = "CACHEDIR.TAG"
+CACHEDIR_TAG_SIGNATURE = "Signature: 8a477f597d28d172789f06886806bc55"
 
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
 _CRITICAL_EXACT_PATHS = {
@@ -114,6 +116,19 @@ def bytes_to_human(n_bytes: int) -> str:
             return f"{n_bytes:.1f} {unit}" if unit != "B" else f"{int(n_bytes)} {unit}"
         n_bytes /= 1024
     return f"{n_bytes:.1f} PiB"
+
+
+def has_valid_cachedir_tag(path: str | Path) -> bool:
+    """Return True when a directory contains a valid CACHEDIR.TAG marker."""
+    path = Path(path).expanduser()
+    tag_path = path / CACHEDIR_TAG_FILE
+    try:
+        if not path.is_dir() or tag_path.is_symlink() or not tag_path.is_file():
+            return False
+        with tag_path.open("r", encoding="utf-8", errors="ignore") as f:
+            return f.read(len(CACHEDIR_TAG_SIGNATURE)) == CACHEDIR_TAG_SIGNATURE
+    except OSError:
+        return False
 
 
 def get_size(path: str | Path) -> int:

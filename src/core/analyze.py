@@ -10,11 +10,8 @@ from typing import Any
 from ..ui.navigator import AnalyzeSelector, ConfirmSelector, TopFilesSelector
 from ..ui.tui import show_banner
 from .constants import BLUE, CYAN, MAGENTA, YELLOW
-from .file_ops import bytes_to_human, get_size, safe_remove
+from .file_ops import bytes_to_human, get_size, has_valid_cachedir_tag, safe_remove
 from .system import run_command
-
-CACHEDIR_TAG_FILE = "CACHEDIR.TAG"
-CACHEDIR_TAG_SIGNATURE = "Signature: 8a477f597d28d172789f06886806bc55"
 
 
 # --- Internal Cache System ---
@@ -111,18 +108,6 @@ def get_age_hint(path: Path) -> str:
         return f">{int(days)}d"
     except OSError:
         return ""
-
-
-def has_valid_cachedir_tag(path: Path) -> bool:
-    """Return True when a directory contains a valid CACHEDIR.TAG marker."""
-    tag_path = path / CACHEDIR_TAG_FILE
-    try:
-        if not path.is_dir() or tag_path.is_symlink() or not tag_path.is_file():
-            return False
-        with tag_path.open("r", encoding="utf-8", errors="ignore") as f:
-            return f.read(len(CACHEDIR_TAG_SIGNATURE)) == CACHEDIR_TAG_SIGNATURE
-    except OSError:
-        return False
 
 
 def build_analysis_entry(name: str, path: Path, size: int, total_size: int) -> dict[str, Any]:

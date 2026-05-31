@@ -7,6 +7,7 @@ from src.clean.apps import (
     clean_orphaned_remnants,
     proactive_app_detection,
 )
+from src.core.file_ops import CACHEDIR_TAG_SIGNATURE
 
 
 def test_proactive_app_detection():
@@ -74,6 +75,34 @@ def test_clean_generic_xdg_caches(test_env):
         size, items = clean_generic_xdg_caches(dry_run=True)
         assert items >= 0
         mock_clean_age.assert_called_with(cache_dir, days=3, dry_run=True)
+
+
+def test_clean_generic_xdg_caches_removes_cachedir_tagged_directory(test_env):
+    cache_dir = test_env / ".cache/tagged-cache"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "CACHEDIR.TAG").write_text(f"{CACHEDIR_TAG_SIGNATURE}\n")
+    (cache_dir / "data.bin").write_bytes(b"1" * 512)
+
+    with patch("pathlib.Path.home", return_value=test_env):
+        size, items = clean_generic_xdg_caches(dry_run=False)
+
+    assert size >= 512
+    assert items == 1
+    assert not cache_dir.exists()
+
+
+def test_clean_generic_xdg_caches_dry_run_keeps_cachedir_tagged_directory(test_env):
+    cache_dir = test_env / ".cache/tagged-cache"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "CACHEDIR.TAG").write_text(f"{CACHEDIR_TAG_SIGNATURE}\n")
+    (cache_dir / "data.bin").write_bytes(b"1" * 512)
+
+    with patch("pathlib.Path.home", return_value=test_env):
+        size, items = clean_generic_xdg_caches(dry_run=True)
+
+    assert size >= 512
+    assert items == 1
+    assert cache_dir.exists()
 
 
 def test_clean_orphaned_remnants(test_env):

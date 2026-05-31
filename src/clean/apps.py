@@ -8,6 +8,7 @@ from ..core.file_ops import (
     bytes_to_human,
     clean_path_by_age,
     get_size,
+    has_valid_cachedir_tag,
     is_app_running,
     parse_size_from_text,
     register_cleaned_path,
@@ -150,13 +151,25 @@ def clean_generic_xdg_caches(days=30, dry_run=False):
             if not item.is_dir() or str(item.resolve()) in CLEANED_PATHS:
                 continue
             is_obvious_junk = any(kw in item.name.lower() for kw in ["cache", "log", "tmp", "temp"])
-            age_days = min(days, 3) if is_obvious_junk else days
-            s, i = clean_path_by_age(item, days=age_days, dry_run=dry_run)
+            is_tagged_cache = has_valid_cachedir_tag(item)
+            if is_tagged_cache:
+                s = get_size(item)
+                removed = safe_remove(item, use_trash=False, dry_run=dry_run)[0]
+                i = 1 if removed else 0
+            else:
+                age_days = min(days, 3) if is_obvious_junk else days
+                s, i = clean_path_by_age(item, days=age_days, dry_run=dry_run)
             if i > 0:
                 total_size += s
                 total_items += i
                 if not dry_run:
-                    tag = "Generic Cache" if is_obvious_junk else "Stale App Data"
+                    tag = (
+                        "Tagged Cache"
+                        if is_tagged_cache
+                        else "Generic Cache"
+                        if is_obvious_junk
+                        else "Stale App Data"
+                    )
                     print(f"  \033[0;32m✓\033[0m {tag}: {item.name} ({bytes_to_human(s)})")
     except OSError:
         pass

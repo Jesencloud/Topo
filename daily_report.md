@@ -46,6 +46,7 @@
 *   **Cache Directory Detection**: Added Linux `CACHEDIR.TAG` recognition using the standard `Signature: 8a477f597d28d172789f06886806bc55` marker.
 *   **Analyze Cleanable Metadata**: Disk analysis entries now mark valid cache-tagged directories as `is_cleanable` with `cleanable_reason="CACHEDIR.TAG"` and a cache-cleaning icon.
 *   **Regression Tests**: Added tests for valid tags, invalid/missing tags, and analysis-entry cleanable metadata.
+*   **Shared Clean Integration**: Moved CACHEDIR.TAG recognition into `core.file_ops` and reused it from `clean_generic_xdg_caches()` so valid tagged cache directories under `~/.cache` can be cleaned directly while dry-run keeps them intact.
 
 # Daily Modification Report - 2026-05-30
 

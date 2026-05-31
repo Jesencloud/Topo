@@ -3,12 +3,11 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from src.core.analyze import (
-    CACHEDIR_TAG_SIGNATURE,
     ScanCache,
     build_analysis_entry,
     get_rust_scan_data,
-    has_valid_cachedir_tag,
 )
+from src.core.file_ops import CACHEDIR_TAG_SIGNATURE, has_valid_cachedir_tag
 
 
 def test_scan_cache():
