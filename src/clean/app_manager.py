@@ -77,6 +77,8 @@ class UninstallManager:
             "kernel",
             "kmod",
             "kwin",
+            "linux-headers",
+            "linux-image",
             "mesa",
             "mutter",
             "networkmanager",
@@ -157,6 +159,10 @@ class UninstallManager:
         return parse_size_to_bytes(size_str)
 
     @staticmethod
+    def _strip_package_arch(package_name: str) -> str:
+        return package_name.split(":", 1)[0]
+
+    @staticmethod
     def _app_record(
         app_id: str,
         name: str,
@@ -206,31 +212,28 @@ class UninstallManager:
         return list(keywords)
 
     def run_full_scan(self) -> list[dict[str, Any]]:
-        """Scans for user-facing applications (DNF and Flatpak)."""
+        """Scans for user-facing applications across Linux package managers."""
         apps = []
         os_id = system.get_os_id()
 
-        # 1. Pre-scan: Identify RPMs that provide desktop files (User Apps)
+        # 1. Pre-scan: identify native packages that provide desktop files.
         user_app_packages = set()
-        if os_id in ("fedora", "rhel", "centos") and shutil.which("rpm"):
-            try:
-                # Find all .desktop files in standard system paths
-                desktop_dirs = [
-                    "/usr/share/applications",
-                    str(Path.home() / ".local/share/applications"),
-                ]
-                desktop_files = []
-                for d in desktop_dirs:
-                    p = Path(d)
-                    if p.exists():
-                        desktop_files.extend([str(f) for f in p.glob("*.desktop")])
+        try:
+            desktop_dirs = [
+                "/usr/share/applications",
+                str(Path.home() / ".local/share/applications"),
+            ]
+            desktop_files = []
+            for d in desktop_dirs:
+                p = Path(d)
+                if p.exists():
+                    desktop_files.extend([str(f) for f in p.glob("*.desktop")])
 
-                if desktop_files:
-                    # Query RPM to see which package owns these desktop files
-                    # We process in batches to avoid 'argument list too long'
-                    batch_size = 500
-                    for i in range(0, len(desktop_files), batch_size):
-                        batch = desktop_files[i : i + batch_size]
+            if desktop_files:
+                batch_size = 500
+                for i in range(0, len(desktop_files), batch_size):
+                    batch = desktop_files[i : i + batch_size]
+                    if os_id in ("fedora", "rhel", "centos") and shutil.which("rpm"):
                         res = system.run_command(
                             ["rpm", "-qf", "--queryformat", "%{NAME}\n"] + batch,
                             capture=True,
@@ -242,8 +245,28 @@ class UninstallManager:
                                     "file "
                                 ):  # Filter out 'file X is not owned by any package'
                                     user_app_packages.add(line.strip())
-            except (OSError, subprocess.SubprocessError, ValueError):
-                pass
+                    elif os_id in (
+                        "ubuntu",
+                        "debian",
+                        "linuxmint",
+                        "pop",
+                        "elementary",
+                    ) and shutil.which("dpkg-query"):
+                        res = system.run_command(["dpkg-query", "-S", *batch], capture=True)
+                        for line in res.stdout.splitlines():
+                            if ":" in line:
+                                user_app_packages.add(
+                                    self._strip_package_arch(line.split(":", 1)[0].strip())
+                                )
+                    elif os_id in ("arch", "manjaro", "endeavouros") and shutil.which("pacman"):
+                        res = system.run_command(["pacman", "-Qo", *batch], capture=True)
+                        for line in res.stdout.splitlines():
+                            if " is owned by " in line:
+                                owned = line.split(" is owned by ", 1)[1].split()
+                                if owned:
+                                    user_app_packages.add(owned[0])
+        except (OSError, subprocess.SubprocessError, ValueError):
+            pass
 
         # 2. DNF (RPM) Scan - Filtered by user_app_packages
         if os_id in ("fedora", "rhel", "centos") and shutil.which("rpm"):
@@ -281,7 +304,76 @@ class UninstallManager:
             except (OSError, subprocess.SubprocessError, ValueError):
                 pass
 
-        # 3. Flatpak Scan
+        # 3. APT (DEB) Scan - Filtered by desktop packages or large packages
+        if os_id in ("ubuntu", "debian", "linuxmint", "pop", "elementary") and shutil.which(
+            "dpkg-query"
+        ):
+            try:
+                res = system.run_command(
+                    ["dpkg-query", "-W", "-f=${binary:Package}\t${Installed-Size}\n"],
+                    capture=True,
+                    timeout=60,
+                )
+                if res.ok:
+                    for line in res.stdout.splitlines():
+                        parts = line.split("\t")
+                        if len(parts) < 2:
+                            continue
+                        app_id = self._strip_package_arch(parts[0].strip())
+                        try:
+                            size_bytes = int(parts[1]) * 1024
+                        except ValueError:
+                            continue
+                        if self._is_system_component(app_id, app_id):
+                            continue
+                        if app_id in user_app_packages or size_bytes > 100 * 1024 * 1024:
+                            apps.append(
+                                self._app_record(
+                                    app_id,
+                                    app_id,
+                                    size_bytes,
+                                    bytes_to_human(size_bytes),
+                                    "APT",
+                                )
+                            )
+            except (OSError, subprocess.SubprocessError, ValueError):
+                pass
+
+        # 4. Pacman Scan - Filtered by desktop packages or large packages
+        if os_id in ("arch", "manjaro", "endeavouros") and shutil.which("pacman"):
+            try:
+                res = system.run_command(["pacman", "-Qi"], capture=True, timeout=60)
+                if res.ok:
+                    package: dict[str, str] = {}
+                    for line in [*res.stdout.splitlines(), ""]:
+                        if not line.strip():
+                            app_id = package.get("Name", "").strip()
+                            size_bytes = self._parse_size_to_bytes(
+                                package.get("Installed Size", "")
+                            )
+                            if (
+                                app_id
+                                and not self._is_system_component(app_id, app_id)
+                                and (app_id in user_app_packages or size_bytes > 100 * 1024 * 1024)
+                            ):
+                                apps.append(
+                                    self._app_record(
+                                        app_id,
+                                        app_id,
+                                        size_bytes,
+                                        bytes_to_human(size_bytes),
+                                        "Pacman",
+                                    )
+                                )
+                            package = {}
+                            continue
+                        if ":" in line:
+                            key, value = line.split(":", 1)
+                            package[key.strip()] = value.strip()
+            except (OSError, subprocess.SubprocessError, ValueError):
+                pass
+
+        # 5. Flatpak Scan
         if shutil.which("flatpak"):
             try:
                 res = system.run_command(
@@ -325,7 +417,7 @@ class UninstallManager:
             except (OSError, subprocess.SubprocessError):
                 pass
 
-        # 4. Snap Scan
+        # 6. Snap Scan
         if shutil.which("snap"):
             try:
                 res = system.run_command(["snap", "list"], capture=True, timeout=60)
@@ -455,6 +547,16 @@ class UninstallManager:
             elif app["type"] == "Snap":
                 res = system.run_command(
                     ["snap", "remove", app["id"]], use_sudo=True, capture=True
+                )
+            elif app["type"] == "APT":
+                res = system.run_command(
+                    ["apt", "remove", "-y", app["id"]], use_sudo=True, capture=True
+                )
+            elif app["type"] == "Pacman":
+                res = system.run_command(
+                    ["pacman", "-Rns", "--noconfirm", app["id"]],
+                    use_sudo=True,
+                    capture=True,
                 )
             else:
                 res = system.run_command(

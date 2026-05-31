@@ -65,6 +65,9 @@
 *   **System Utility Refinement**: Hid additional GNOME integration utilities from uninstall results, including Browser Connector, Color Manager, Disk Utility, Initial Setup, Logs, Online Accounts, and System Monitor, while keeping user apps such as Calendar, Characters, Clocks, Connections, Contacts, Font Viewer, and Maps visible.
 *   **Input Method Protection**: Hid IBus language engine packages such as `ibus-libpinyin`, `ibus-hangul`, `ibus-chewing`, and `ibus-anthy` from the uninstall list because they are input-method framework components rather than standalone applications.
 *   **LibreOffice Package Filtering**: Hid internal LibreOffice packages such as `libreoffice-core` and `libreoffice-xsltfilter`, while keeping user-facing modules such as Writer, Calc, and Impress visible in the uninstall list.
+*   **APT/Pacman Mock Verification**: Added Ubuntu/Debian APT and Arch/Manjaro Pacman uninstall scan paths with mocked regression tests, including package-manager-specific removal commands so non-Fedora systems no longer fall through to DNF.
+*   **Linux Kernel Package Filtering**: Hid Debian-family kernel packages such as `linux-image-*` and `linux-headers-*` from uninstall results as system components.
+*   **Cross-Distro Desktop Ownership Detection**: Extended uninstall pre-scan beyond RPM by using `dpkg-query -S` for APT systems and `pacman -Qo` for Pacman systems to identify packages that own `.desktop` launchers.
 
 # Daily Modification Report - 2026-05-30
 

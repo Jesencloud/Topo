@@ -289,6 +289,57 @@ def test_run_full_scan_keeps_user_libreoffice_apps(mock_run, mock_which):
     ]
 
 
+@patch("src.clean.app_manager.system.run_command")
+@patch("shutil.which")
+def test_run_full_scan_apt(mock_which, mock_run_cmd):
+    mock_which.side_effect = lambda x: "/usr/bin/dpkg-query" if x == "dpkg-query" else None
+    mock_run_cmd.return_value = MagicMock(
+        ok=True,
+        stdout=(
+            "firefox\t204800\n"
+            "linux-image-generic\t204800\n"
+            "libreoffice-writer:amd64\t204800\n"
+        ),
+    )
+
+    mgr = UninstallManager()
+    with patch("src.core.system.get_os_id", return_value="ubuntu"):
+        apps = mgr.run_full_scan()
+
+    assert [(app["id"], app["type"]) for app in apps] == [
+        ("firefox", "APT"),
+        ("libreoffice-writer", "APT"),
+    ]
+
+
+@patch("src.clean.app_manager.system.run_command")
+@patch("shutil.which")
+def test_run_full_scan_pacman(mock_which, mock_run_cmd):
+    mock_which.side_effect = lambda x: "/usr/bin/pacman" if x == "pacman" else None
+    mock_run_cmd.return_value = MagicMock(
+        ok=True,
+        stdout=(
+            "Name            : firefox\n"
+            "Installed Size  : 220.00 MiB\n"
+            "\n"
+            "Name            : systemd\n"
+            "Installed Size  : 120.00 MiB\n"
+            "\n"
+            "Name            : vlc\n"
+            "Installed Size  : 150.00 MiB\n"
+        ),
+    )
+
+    mgr = UninstallManager()
+    with patch("src.core.system.get_os_id", return_value="arch"):
+        apps = mgr.run_full_scan()
+
+    assert [(app["id"], app["type"]) for app in apps] == [
+        ("firefox", "Pacman"),
+        ("vlc", "Pacman"),
+    ]
+
+
 @patch("shutil.which")
 @patch("subprocess.run")
 def test_run_full_scan_flatpaks(mock_run, mock_which):
@@ -400,6 +451,44 @@ def test_execute_uninstall_dnf(mock_run, mock_run_cmd, test_env):
     )
     # Check that pkill was called since we mocked pgrep to succeed
     assert any("pkill" in str(call) for call in mock_run_cmd.call_args_list)
+
+
+@patch("src.core.system.run_command")
+def test_execute_uninstall_apt(mock_run_cmd, test_env):
+    mgr = UninstallManager()
+    app = {
+        "name": "Firefox",
+        "id": "firefox",
+        "type": "APT",
+        "size_bytes": 150000000,
+    }
+    mock_run_cmd.return_value = MagicMock(ok=True)
+
+    with patch("pathlib.Path.home", return_value=test_env):
+        details = mgr.execute_uninstall(app, [])
+
+    assert details == []
+    mock_run_cmd.assert_any_call(["apt", "remove", "-y", "firefox"], use_sudo=True, capture=True)
+
+
+@patch("src.core.system.run_command")
+def test_execute_uninstall_pacman(mock_run_cmd, test_env):
+    mgr = UninstallManager()
+    app = {
+        "name": "Firefox",
+        "id": "firefox",
+        "type": "Pacman",
+        "size_bytes": 150000000,
+    }
+    mock_run_cmd.return_value = MagicMock(ok=True)
+
+    with patch("pathlib.Path.home", return_value=test_env):
+        details = mgr.execute_uninstall(app, [])
+
+    assert details == []
+    mock_run_cmd.assert_any_call(
+        ["pacman", "-Rns", "--noconfirm", "firefox"], use_sudo=True, capture=True
+    )
 
 
 @patch("src.core.system.run_command")
