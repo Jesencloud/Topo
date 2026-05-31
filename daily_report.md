@@ -91,6 +91,11 @@
 *   **Version Prep**: Prepared the local version file for the upcoming `0.6.0` tag.
 *   **Pre-Release Detection**: Release tags containing `-rc.`, `-beta.`, or `-alpha.` are marked as GitHub pre-releases automatically.
 
+### 14. v0.6.0 Release Notes
+*   **Release Draft**: Added `docs/releases/v0.6.0.md` as the first public release note draft, using `assets/circle.png` as the title image.
+*   **Launch Summary**: Summarized the safety guardrails, deletion history, Linux-native uninstall filtering, CACHEDIR.TAG support, release update channel, and multi-arch engine assets from the recent development reports.
+*   **User Guidance**: Documented install commands, verified environments, supported distro families, architecture targets, caution notes, and the next release priorities.
+
 # Daily Modification Report - 2026-05-30
 
 ## Project: topo (Topo) - High-Performance Input & Flicker-Free UI
