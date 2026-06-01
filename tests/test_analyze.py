@@ -6,6 +6,7 @@ from src.core.analyze import (
     ScanCache,
     _delete_analyze_paths,
     _needs_admin_for_deletion,
+    _scan_status_message,
     build_analysis_entry,
     get_rust_scan_data,
 )
@@ -52,6 +53,15 @@ def test_has_valid_cachedir_tag(test_env):
     (cache_dir / "CACHEDIR.TAG").write_text(f"{CACHEDIR_TAG_SIGNATURE}\nextra metadata")
 
     assert has_valid_cachedir_tag(cache_dir) is True
+
+
+def test_scan_status_message_uses_spinner_frame():
+    scan_msg = _scan_status_message("scan", "Home", "⠋")
+    refresh_msg = _scan_status_message("refresh", "Downloads", "⠙")
+
+    assert scan_msg == "   ⠋ Rust Engine: Intelligence Scan on Home..."
+    assert refresh_msg == "   ⠙ Refreshing analysis on Downloads..."
+    assert "🚀" not in scan_msg
 
 
 def test_has_valid_cachedir_tag_rejects_invalid_or_missing_tag(test_env):

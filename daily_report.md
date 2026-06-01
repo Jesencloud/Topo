@@ -58,6 +58,12 @@
 *   **Regression Coverage**: Added optimize tests for browser-running database skips, low-memory-pressure PageCache skips, systemd daemon reload, and desktop/MIME dry-run previews.
 *   **Verification**: Confirmed the final state with Ruff and full pytest (`149 passed`).
 
+### 8. Analyze Scan Feedback
+*   **Animated Scan Indicator**: Replaced the static rocket icon in Analyze's Rust engine scan message with a spinner animation while scans are running.
+*   **Refresh Feedback Alignment**: Reused the same animated status renderer for post-delete refresh scans so scan and refresh states feel consistent.
+*   **Regression Coverage**: Added coverage for the scan status message to ensure the spinner frame is shown and the old rocket icon does not return.
+*   **Verification**: Confirmed the final state with Ruff and full pytest (`150 passed`).
+
 # Daily Modification Report - 2026-05-31
 
 ## Project: topo (Topo) - Deletion Audit Trail

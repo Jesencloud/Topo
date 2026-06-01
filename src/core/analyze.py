@@ -20,6 +20,8 @@ from .file_ops import (
 )
 from .system import run_command
 
+SCAN_SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+
 
 # --- Internal Cache System ---
 class ScanCache:
@@ -99,6 +101,34 @@ def _parallel_scan_sizes(paths: list[Path]) -> dict[Path, int]:
         for p, size in executor.map(scan_one, paths):
             sizes[p] = size
     return sizes
+
+
+def _scan_status_message(scan_reason: str, target_label: str, frame: str) -> str:
+    if scan_reason == "refresh":
+        return f"   {frame} Refreshing analysis on {target_label}..."
+    return f"   {frame} Rust Engine: Intelligence Scan on {target_label}..."
+
+
+def _get_rust_scan_data_with_spinner(path: Path, scan_reason: str, target_label: str) -> dict[str, Any] | None:
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(get_rust_scan_data, path)
+        frame_index = 0
+        last_len = 0
+        try:
+            while True:
+                msg = _scan_status_message(
+                    scan_reason,
+                    target_label,
+                    SCAN_SPINNER_FRAMES[frame_index % len(SCAN_SPINNER_FRAMES)],
+                )
+                last_len = max(last_len, len(msg))
+                print(msg, end="\r", flush=True)
+                if future.done():
+                    return future.result()
+                frame_index += 1
+                time.sleep(0.1)
+        finally:
+            print(" " * last_len, end="\r", flush=True)
 
 
 def get_age_hint(path: Path) -> str:
@@ -275,12 +305,7 @@ def run_deep_analysis(target_path: Path = None):
 
         if needs_scan:
             target_label = target_to_scan.name if current_target else "Home"
-            if scan_reason == "refresh":
-                msg = f"   ↻ Refreshing analysis on {target_label}..."
-            else:
-                msg = f"   🚀 Rust Engine: Intelligence Scan on {target_label}..."
-            print(msg, end="\r")
-            data = get_rust_scan_data(target_to_scan)
+            data = _get_rust_scan_data_with_spinner(target_to_scan, scan_reason, target_label)
             if not data:
                 print("\n   ❌ Engine scan failed.")
                 time.sleep(1.5)
