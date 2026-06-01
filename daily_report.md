@@ -8,12 +8,12 @@
 *   **Optimize Flow**: Applied the same password interaction model to Optimize. Space skips the task silently and returns to the main UI; password cancellation stops the task instead of continuing into maintenance steps.
 *   **Uninstall Preview Flow**: Simplified uninstall preview confirmation into a single line: `Remove N application(s), size  Enter confirm, Space cancel`. Enter proceeds to the custom password prompt; Space/ESC returns to the application list without uninstalling.
 *   **Uninstall List Shortcut Alignment**: Simplified the uninstall list footer by removing Back, ESC, and generic Enter confirmation hints, expanding `Space: Select`, and spelling out sort shortcuts as `N: Name`, `S: Size`, and `T: Time`.
-*   **Explicit Uninstall Action Hint**: Added `Enter:Uninstall selected` beside `Selected Apps to Remove`, and changed Enter so it only proceeds when applications are explicitly selected instead of confirming the hovered app by default.
+*   **Explicit Uninstall Action Hint**: Added `Enter:Uninstall` beside `Selected Apps to Remove`, and changed Enter so it only proceeds when applications are explicitly selected instead of confirming the hovered app by default.
 *   **Password Cancellation Safety**: Ctrl+C during password input now cancels Clean, Optimize, Uninstall, or privileged Analyze deletion without continuing into cleanup/removal logic.
 
 ### 2. Analyze Delete Flow
 *   **Unified Selection Model**: Standardized Analyze deletion around `Space` to select and `Enter` to delete selected items. Removed the `Del` deletion shortcut and its hint so users do not need to choose between different destructive-action keys.
-*   **Contextual Delete Hint**: Added an inline hint beside `Selected Items to Remove` so selected files clearly show `Enter:Delete selected` at the moment the action becomes available.
+*   **Contextual Delete Hint**: Added an inline hint beside `Selected Items to Remove` so selected files clearly show `Enter:Delete` at the moment the action becomes available.
 *   **Sudo Only When Needed**: Analyze now deletes user-owned writable home paths without asking for sudo, while system paths, non-home paths, or unwritable paths still require admin authorization.
 *   **Privileged Delete Safety**: Admin Analyze deletes go through `validate_path_for_deletion()` before running `sudo rm -rf -- path`, and every result is recorded in the deletion audit log.
 *   **Empty Directory Fix**: Fixed a busy-loop bug after deleting the last item in an Analyze directory. Empty results now render `No items found` and wait for user input instead of repeatedly refreshing and consuming CPU.

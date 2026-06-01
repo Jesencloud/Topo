@@ -375,7 +375,7 @@ class AnalyzeSelector(_PagedSelector):
         if self.selected_items:
             buf.append(
                 f"\n \033[1;35m☉ Selected Items to Remove:\033[0m "
-                f"{GRAY}Enter:Delete selected{RESET}\033[K\n"
+                f"{GRAY}Enter:Delete{RESET}\033[K\n"
             )
             for i in sorted(list(self.selected_items)):
                 item = self.items[i]
@@ -597,7 +597,7 @@ class UninstallSelector(_PagedSelector):
         if self.selected_ids:
             buf.append(
                 f"\n \033[1;35m☉ Selected Apps to Remove:\033[0m "
-                f"{GRAY}Enter:Uninstall selected{RESET}\033[K\n"
+                f"{GRAY}Enter:Uninstall{RESET}\033[K\n"
             )
             selected_names = [i["name"] for i in self.items if i["id"] in self.selected_ids]
             for i in range(0, len(selected_names), 2):
