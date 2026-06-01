@@ -6,6 +6,7 @@ from src.core.analyze import (
     ScanCache,
     _delete_analyze_paths,
     _needs_admin_for_deletion,
+    _render_scan_header,
     _scan_status_message,
     build_analysis_entry,
     get_rust_scan_data,
@@ -62,6 +63,14 @@ def test_scan_status_message_uses_spinner_frame():
     assert scan_msg == "   ⠋ Rust Engine: Intelligence Scan on Home..."
     assert refresh_msg == "   ⠙ Refreshing analysis on Downloads..."
     assert "🚀" not in scan_msg
+
+
+def test_render_scan_header_clears_screen_and_prints_title(capsys):
+    _render_scan_header("Analyze Disk")
+
+    output = capsys.readouterr().out
+    assert output.startswith("\033[2J\033[H")
+    assert "Analyze Disk" in output
 
 
 def test_has_valid_cachedir_tag_rejects_invalid_or_missing_tag(test_env):

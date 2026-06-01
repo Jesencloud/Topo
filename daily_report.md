@@ -62,8 +62,9 @@
 *   **Animated Scan Indicator**: Replaced the static rocket icon in Analyze's Rust engine scan message with a spinner animation while scans are running.
 *   **Refresh Feedback Alignment**: Reused the same animated status renderer for post-delete refresh scans so scan and refresh states feel consistent.
 *   **Standalone Analyze Page**: Cleared the main menu before launching Analyze from the TUI, so the Rust engine scan animation starts on its own focused page like Clean and Status.
+*   **Scan Header Placement**: Added an Analyze scan header so `Rust Engine: Intelligence Scan on Home` appears directly under `Analyze Disk` during the loading state.
 *   **Regression Coverage**: Added coverage for the scan status message to ensure the spinner frame is shown and the old rocket icon does not return.
-*   **Verification**: Confirmed the final state with Ruff and full pytest (`150 passed`).
+*   **Verification**: Confirmed the final state with Ruff and full pytest (`151 passed`).
 
 # Daily Modification Report - 2026-05-31
 

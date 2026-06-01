@@ -9,7 +9,7 @@ from typing import Any
 
 from ..ui.navigator import AnalyzeSelector, Navigator, TopFilesSelector
 from . import system
-from .constants import BLUE, CYAN, GRAY, GREEN, MAGENTA, RED, RESET, YELLOW
+from .constants import BLUE, BOLD, CYAN, GRAY, GREEN, MAGENTA, RED, RESET, YELLOW
 from .file_ops import (
     bytes_to_human,
     get_size,
@@ -107,6 +107,11 @@ def _scan_status_message(scan_reason: str, target_label: str, frame: str) -> str
     if scan_reason == "refresh":
         return f"   {frame} Refreshing analysis on {target_label}..."
     return f"   {frame} Rust Engine: Intelligence Scan on {target_label}..."
+
+
+def _render_scan_header(view_title: str) -> None:
+    print("\033[2J\033[H", end="")
+    print(f"{BLUE}{BOLD}{view_title}{RESET}")
 
 
 def _get_rust_scan_data_with_spinner(path: Path, scan_reason: str, target_label: str) -> dict[str, Any] | None:
@@ -305,6 +310,7 @@ def run_deep_analysis(target_path: Path = None):
 
         if needs_scan:
             target_label = target_to_scan.name if current_target else "Home"
+            _render_scan_header(view_title)
             data = _get_rust_scan_data_with_spinner(target_to_scan, scan_reason, target_label)
             if not data:
                 print("\n   ❌ Engine scan failed.")
