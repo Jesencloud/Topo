@@ -259,7 +259,7 @@ def optimize_system(dry_run=False):
         )
         choice = _read_sudo_choice()
         print()
-        if choice == " ":
+        if choice in (" ", "\x1b"):
             return False
         if not system.ensure_sudo_session(
             f"{PURPLE}➔{RESET} System optimization requires admin access\n"

@@ -56,7 +56,7 @@ def run_clean(dry_run=False):
         )
         choice = _read_sudo_choice()
         print()
-        if choice == " ":
+        if choice in (" ", "\x1b"):
             return False
         elif not system.ensure_sudo_session(
             f"{PURPLE}➔{RESET} System cleanup requires admin access\n"
