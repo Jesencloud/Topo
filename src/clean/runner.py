@@ -8,7 +8,6 @@ from functools import partial
 from ..core import system
 from ..core.analyze import ScanCache
 from ..core.constants import (
-    CYAN,
     GRAY,
     GREEN,
     PURPLE,
@@ -42,8 +41,8 @@ def run_clean(dry_run=False):
     detected_apps = proactive_app_detection()
 
     # 1. Prepare categories
-    mode_label = f"{CYAN}[PREVIEW]{RESET}" if dry_run else f"{PURPLE}[EXECUTING]{RESET}"
-    print(f"{mode_label} Starting system cleanup...\n")
+    print(f"\n{PURPLE}Clean Your Linux{RESET}\n")
+    print(f"{GRAY}● Use --dry-run to preview, --whitelist to manage protected paths{RESET}")
 
     run_system_tasks = True
     # Pre-authorize sudo to avoid interrupting the progress list

@@ -9,6 +9,7 @@ from pathlib import Path
 
 from ..ui.navigator import draw_bar
 from .config import load_config
+from .constants import PURPLE, RESET
 from .file_ops import bytes_to_human
 from .system import run_command
 
@@ -317,8 +318,8 @@ def get_top_processes():
 def show_status():
     """Main status display logic."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"\n\033[1;36m🛡️  System Health Status ({now})\033[0m")
-    print("-" * 65)
+    print(f"\n{PURPLE}System Health Status ({now}){RESET}")
+    print()
 
     uptime = get_uptime()
     cpu_load = get_cpu_load_summary()
@@ -363,4 +364,4 @@ def show_status():
     if top_procs:
         print(f"🚀 Top Processes: {', '.join(top_procs)}")
 
-    print("-" * 65)
+    print()

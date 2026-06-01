@@ -9,7 +9,7 @@ from typing import Any
 
 from ..ui.navigator import AnalyzeSelector, Navigator, TopFilesSelector
 from . import system
-from .constants import BLUE, BOLD, CYAN, GRAY, GREEN, MAGENTA, RED, RESET, YELLOW
+from .constants import BLUE, CYAN, GRAY, GREEN, MAGENTA, PURPLE, RED, RESET, YELLOW
 from .file_ops import (
     bytes_to_human,
     get_size,
@@ -111,7 +111,7 @@ def _scan_status_message(scan_reason: str, target_label: str, frame: str) -> str
 
 def _render_scan_header(view_title: str) -> None:
     print("\033[2J\033[H", end="")
-    print(f"{BLUE}{BOLD}{view_title}{RESET}")
+    print(f"{PURPLE}{view_title}{RESET}")
 
 
 def _get_rust_scan_data_with_spinner(path: Path, scan_reason: str, target_label: str) -> dict[str, Any] | None:

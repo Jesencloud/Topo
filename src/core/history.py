@@ -109,7 +109,7 @@ def render_history(sessions: list[HistorySession], limit: int = 10) -> str:
     if not sessions:
         return "No deletion history found."
 
-    lines = ["Deletion History", "-" * 72]
+    lines = ["Deletion History", ""]
     for session in sessions[-limit:][::-1]:
         ended = session.ended_at or "incomplete"
         lines.append(f"{session.started_at} -> {ended}  {session.command}")

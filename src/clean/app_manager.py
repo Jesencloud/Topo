@@ -629,7 +629,7 @@ def run_uninstall():
                 buf = ["\033[H"]  # Go home
                 # Use \033[K on every line, including the very first line and spacers
                 buf.append(f"\033[1;35m➔\033[0m {BOLD}Uninstallation Preview{RESET}\033[K\n")
-                buf.append("-" * 70 + "\033[K\n")
+                buf.append("\033[K\n")
 
                 for app, app_paths, is_running in all_targets:
                     running_tag = " \033[1;33m[Running]\033[0m" if is_running else ""
@@ -643,7 +643,7 @@ def run_uninstall():
                         except ValueError:
                             buf.append(f"    \033[1;34m✓\033[0m {GRAY}{p}{RESET}\033[K\n")
 
-                buf.append("-" * 70 + "\033[K\n")
+                buf.append("\033[K\n")
                 buf.append("\033[K\n")  # Explicit cleared spacer line
                 app_text = "application" if len(selected_apps) == 1 else "applications"
                 size_display = bytes_to_human(total_estimated_size)
@@ -709,5 +709,5 @@ def run_uninstall():
             print("=" * 70)
 
             # Standardized return/exit prompt
-            if not Navigator.wait_for_return():
+            if not Navigator.wait_for_return("Press Enter to return application list , ESC to exit..."):
                 return  # Exit uninstall completely

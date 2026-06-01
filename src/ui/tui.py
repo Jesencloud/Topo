@@ -24,7 +24,7 @@ def show_banner():
 
 def main_menu():
     options = [
-        ("1. Clean", "One-key safe disk cleanup"),
+        ("1. Clean", "Free up disk space"),
         ("2. Uninstall", "Remove apps completely"),
         ("3. Optimize", "Check and maintain system"),
         ("4. Analyze", "Explore disk usage"),

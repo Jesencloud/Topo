@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from ..core import system
-from ..core.constants import BLUE, BOLD, GRAY, GREEN, PURPLE, RED, RESET, YELLOW
+from ..core.constants import BOLD, GRAY, GREEN, PURPLE, RED, RESET, YELLOW
 from ..core.file_ops import bytes_to_human, get_size, safe_remove
 from ..core.system import has_sudo, run_command
 
@@ -352,8 +352,8 @@ def run_thumbnail_cleanup(dry_run=False):
 
 def optimize_system(dry_run=False):
     os.system("clear")
-    print(f"{BLUE}{BOLD}System Optimization{RESET}")
-    print(f"{GRAY}Running maintenance tasks in parallel...{RESET}\n")
+    print(f"{PURPLE}System Optimization{RESET}\n")
+    print(f"{GRAY}Running maintenance tasks in parallel...{RESET}")
 
     if not dry_run:
         print(

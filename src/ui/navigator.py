@@ -7,7 +7,7 @@ import tty
 from contextlib import contextmanager
 from pathlib import Path
 
-from ..core.constants import BOLD, GRAY, GREEN, RED, RESET, WHITE, YELLOW
+from ..core.constants import BOLD, GRAY, GREEN, PURPLE, RED, RESET, WHITE, YELLOW
 from ..core.file_ops import bytes_to_human
 
 
@@ -141,9 +141,9 @@ class Navigator:
         return ch
 
     @staticmethod
-    def wait_for_return():
+    def wait_for_return(message="Press Enter to return to Main Menu, ESC to exit..."):
         """Standardized non-blocking return/exit prompt."""
-        print("\n\033[1;90mPress Enter to return, ESC to exit... \033[0m", end="", flush=True)
+        print(f"\n\033[1;90m{message} \033[0m", end="", flush=True)
         while True:
             key = Navigator.get_key()
             if key in Navigator.ENTER:
@@ -250,12 +250,14 @@ class InteractiveMenu:
             sys.stdout = old_stdout
 
         buf.append(f"\n \033[1;35m{self.title}\033[0m\033[K\n")
-        buf.append("-" * 50 + "\033[K\n")
+        buf.append("\033[K\n")
         for i, (label, desc) in enumerate(self.options):
             prefix = " \033[1;36m>\033[0m " if i == self.selected_index else "   "
-            style = "\033[1;36m" if i == self.selected_index else ""
-            buf.append(f"{prefix}{style}{label:<15}{RESET} {desc}\033[K\n")
-        buf.append("-" * 50 + "\033[K\n")
+            if i == self.selected_index:
+                buf.append(f"{prefix}\033[1;36m{label:<15} {desc}{RESET}\033[K\n")
+            else:
+                buf.append(f"{prefix}{label:<15} {desc}\033[K\n")
+        buf.append("\033[K\n")
         buf.append(f"{GRAY} ↑/↓: Navigate | Enter: Select | ESC: Quit{RESET}\033[K\n")
         buf.append("\033[J")
         sys.stdout.write("".join(buf))
@@ -308,7 +310,8 @@ class AnalyzeSelector(_PagedSelector):
             buf.append(sys.stdout.getvalue())
             sys.stdout = old_stdout
 
-        buf.append(f"\n \033[1;35m{self.title}\033[0m\033[K\n")
+        buf.append(f"\n{PURPLE}{self.title}{RESET}\033[K\n\n")
+
         hint = (
             f"{GRAY}Select a location to explore (Type numbers or Space to select):{RESET}"
             if self.can_select
@@ -339,8 +342,13 @@ class AnalyzeSelector(_PagedSelector):
                 cursor = "\033[1;36m▶\033[0m" if is_hover else " "
                 if self.can_select:
                     num = (i - start) + 1
-                    inner = "\033[1;32m✓ \033[0m" if is_selected else f"{num:<2}"
-                    checkbox_str = f"[{inner}] "
+                    num_str = f" {num}" if num < 10 else str(num)
+                    checkbox_str = (
+                        f"\033[1;32m✓ {num_str}.\033[0m "
+                        if is_selected
+                        else f"{GRAY}○{RESET} {num_str}."
+                    )
+                    checkbox_str = f"{checkbox_str} "
                 else:
                     checkbox_str = f" {i + 1:2}. "
 
@@ -359,16 +367,14 @@ class AnalyzeSelector(_PagedSelector):
 
         if self.can_select:
             prompts = [
-                f" {page_info} A:All | F:Open Folder | R:Reload | S:Sort {order_icon} | Space:Select"
+                f" {page_info} ↑↓←→ | A:All | F:Open Folder | R:Reload | S:Sort {order_icon} | Space:Select"
             ]
         else:
             prompts = [
-                f" {page_info} F:Open Folder | R:Reload | S:Sort {order_icon}"
+                f" {page_info} ↑↓→ | F:Open Folder | R:Reload | S:Sort {order_icon}"
             ]
 
-        # Match separator width to prompt length (excluding ANSI codes)
-        max_len = max(len(p) for p in prompts)
-        buf.append("\n" + "-" * max_len + "\033[K\n")
+        buf.append("\n\033[K\n")
         for p in prompts:
             buf.append(f"\033[1;90m{p}\033[0m\033[K\n")
 
@@ -465,7 +471,7 @@ class PaginatedSelector(_PagedSelector):
     def render(self):
         buf = ["\033[H"]
         buf.append(f"\n \033[1;35m{self.title}\033[0m\033[K\n")
-        buf.append("-" * 60 + "\033[K\n")
+        buf.append("\033[K\n")
         start = self.current_page * self.page_size
         end = min(start + self.page_size, len(self.items))
         for i in range(start, end):
@@ -478,7 +484,7 @@ class PaginatedSelector(_PagedSelector):
             name_padded = pad_and_truncate(item["project"], 20)
             size_str = bytes_to_human(item["size"])
             buf.append(f"{cursor} {checkbox} {style}{name_padded}{RESET} | {size_str:>10}\033[K\n")
-        buf.append("-" * 60 + "\033[K\n")
+        buf.append("\033[K\n")
         total_pages = (len(self.items) + self.page_size - 1) // self.page_size
         buf.append(
             f" Page {self.current_page + 1}/{total_pages} | {GRAY}Space: Select | A: All | Enter: Confirm | S: Manage Paths | ESC: Exit{RESET}\033[K\n"
@@ -556,9 +562,12 @@ class UninstallSelector(_PagedSelector):
 
     def render(self):
         buf = ["\033[H"]
-        buf.append(f"\n \033[1;36m{self.title}\033[0m\033[K\n")
-        buf.append("-" * 80 + "\033[K\n")
         total_len = len(self.items)
+        buf.append(
+            f"\n \033[1;36mSelect Application to Remove\033[0m "
+            f"{GRAY}{len(self.selected_ids)}/{total_len} selected{RESET}\033[K\n\n"
+        )
+
         if total_len == 0:
             buf.append(f"\n   {GRAY}No applications found{RESET}\033[K\n")
         else:
@@ -570,16 +579,19 @@ class UninstallSelector(_PagedSelector):
                 item = self.items[i]
                 is_hover = i == self.selected_index
                 is_selected = item["id"] in self.selected_ids
-                num_key = str((i - start) + 1)
+                num = (i - start) + 1
+                num_key = f" {num}" if num < 10 else str(num)
                 cursor = "\033[1;36m▶\033[0m" if is_hover else " "
-                check_inner = "\033[1;32m✓ \033[0m" if is_selected else f"{num_key:<2}"
-                checkbox = f"[{check_inner}]"
+                checkbox = (
+                    f"\033[1;32m✓ {num_key}.\033[0m"
+                    if is_selected
+                    else f"{GRAY}○{RESET} {num_key}."
+                )
                 name_style = "\033[1;35m" if is_selected else "\033[1;36m" if is_hover else ""
                 name_padded = pad_and_truncate(item["name"], 35)
                 buf.append(
                     f"{cursor} {checkbox} {name_style}{name_padded}{RESET}     {item['size_str']:>12} | {self._format_time_ago(item['install_time'])}\033[K\n"
                 )
-            buf.append("-" * 80 + "\033[K\n")
             sort_dir = "↓" if self.sort_reverse else "↑"
             sort_labels = {
                 "name": f"N: Name {sort_dir}",
@@ -591,13 +603,14 @@ class UninstallSelector(_PagedSelector):
                 for key in ("name", "size_bytes", "install_time")
             )
             buf.append(
-                f" Page {self.current_page + 1}/{total_pages} | {GRAY}A: All | {sort_hint} | Space: Select{RESET}\033[K\n"
+                f"\n Page {self.current_page + 1}/{total_pages} | "
+                f"{GRAY}↑↓←→ | A: All | {sort_hint} | Space: Select{RESET}\033[K\n"
             )
 
         if self.selected_ids:
             buf.append(
                 f"\n \033[1;35m☉ Selected Apps to Remove:\033[0m "
-                f"{GRAY}Enter:Uninstall{RESET}\033[K\n"
+                f"{GRAY}Press Enter to Uninstall, ESC to Exit{RESET}\033[K\n"
             )
             selected_names = [i["name"] for i in self.items if i["id"] in self.selected_ids]
             for i in range(0, len(selected_names), 2):
@@ -698,11 +711,8 @@ class TopFilesSelector:
 
     def render(self):
         buf = ["\033[H"]
-        import shutil
-
-        columns = shutil.get_terminal_size().columns
         buf.append(f"\n \033[1;33m{self.title}\033[0m\033[K\n")
-        buf.append("-" * (columns - 2) + "\033[K\n")
+        buf.append("\033[K\n")
         viewport = 20
         start = max(0, self.selected_index - viewport // 2)
         end = min(len(self.items), start + viewport)
@@ -713,7 +723,7 @@ class TopFilesSelector:
             buf.append(
                 f"{cursor} {checkbox} {WHITE}{bytes_to_human(item.get('size', item.get('size_bytes', 0))):>12}{RESET} | {str(item['path'])}\033[K\n"
             )
-        buf.append("-" * (columns - 2) + "\033[K\n")
+        buf.append("\033[K\n")
         buf.append(f"{GRAY} ↑/↓: Move | Space: Toggle | Enter: Delete | ESC: Back{RESET}\033[K\n")
         if self.selected_items:
             buf.append("\n \033[1;35m☉ Selected Large Files to Remove:\033[0m\033[K\n")
@@ -807,7 +817,7 @@ class CleanSelector:
     def render(self):
         buf = ["\033[H"]
         buf.append(f"\n \033[1;36m{self.title}\033[0m\033[K\n")
-        buf.append("-" * 65 + "\033[K\n")
+        buf.append("\033[K\n")
         total_freed = 0
         for i, item in enumerate(self.items):
             is_hover = i == self.selected_index
@@ -821,7 +831,7 @@ class CleanSelector:
             buf.append(
                 f"{cursor} {checkbox} \033[1;36m{name_padded}{RESET} |     {size_str:>12} | {GRAY}{item['desc']}{RESET}\033[K\n"
             )
-        buf.append("-" * 65 + "\033[K\n")
+        buf.append("\033[K\n")
         buf.append(f" Total Selected: \033[1;32m{bytes_to_human(total_freed)}\033[0m\033[K\n")
         buf.append(
             f"\n{GRAY} ↑/↓: Move | Space: Toggle | Enter: Clean Selected | ESC: Cancel{RESET}\033[K\n"

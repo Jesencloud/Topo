@@ -141,7 +141,7 @@ def run_purge(dry_run=False):
             while True:
                 os.system("clear")
                 print("\n\033[1;36m⚙️  topo Purge Settings\033[0m")
-                print("-" * 50)
+                print()
                 paths = get_purge_paths()
                 print("Current Purge Search Paths:")
                 for i, p in enumerate(paths):
