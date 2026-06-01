@@ -44,8 +44,10 @@
 *   **Graceful Process Termination**: Changed uninstall process cleanup from immediate SIGKILL to a staged SIGTERM, short wait, and SIGKILL fallback sequence.
 *   **Uninstall Bypass Mode**: Added a `bypass_whitelist` path-removal mode so explicit app uninstall can remove protected app-owned residue such as browser or messaging app profiles.
 *   **Hard Protection Boundary**: Split protection into hard rules and normal app-data rules. Uninstall bypass can skip ordinary app-data protection, but still refuses system paths, user whitelist entries, Topo configuration, and credential directories such as SSH/GPG/AWS/Kube/Docker/GitHub CLI.
+*   **Clear Removal Context Naming**: Replaced the uninstall cleanup call site with `allow_app_data_removal=True`, making the intent explicit while keeping the older `bypass_whitelist` keyword compatible for internal callers.
+*   **Hard Protection Reasons**: Added specific hard-protection reasons such as `critical system path`, `credential or identity data`, `Topo configuration`, and `user whitelist` so future UI/history output can explain skipped residue paths clearly.
 *   **Regression Coverage**: Added tests proving uninstall bypass removes ordinary app data while preserving hard-protected credentials, user whitelist paths, and Topo config.
-*   **Verification**: Confirmed the final state with Ruff and full pytest (`144 passed`).
+*   **Verification**: Confirmed the final state with Ruff and full pytest (`145 passed`).
 
 # Daily Modification Report - 2026-05-31
 

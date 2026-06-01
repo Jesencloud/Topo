@@ -14,7 +14,12 @@ from src.core.file_ops import (
     register_cleaned_path,
     safe_remove,
 )
-from src.core.whitelist import add_to_whitelist, get_config_dir, is_protected
+from src.core.whitelist import (
+    add_to_whitelist,
+    get_config_dir,
+    get_hard_protection_reason,
+    is_protected,
+)
 
 
 def test_register_cleaned_path():
@@ -78,7 +83,7 @@ def test_safe_remove_bypass_allows_app_data_cleanup(test_env):
     state_file = app_dir / "Local State"
     state_file.write_text("{}")
 
-    success, message = safe_remove(app_dir, use_trash=False, bypass_whitelist=True)
+    success, message = safe_remove(app_dir, use_trash=False, allow_app_data_removal=True)
 
     assert success is True
     assert "Permanently deleted" in message
@@ -91,10 +96,10 @@ def test_safe_remove_bypass_keeps_hard_protected_credentials(test_env):
     key_file = ssh_dir / "id_ed25519"
     key_file.write_text("secret")
 
-    success, message = safe_remove(ssh_dir, use_trash=False, bypass_whitelist=True)
+    success, message = safe_remove(ssh_dir, use_trash=False, allow_app_data_removal=True)
 
     assert success is False
-    assert "hard-protected" in message
+    assert message == "Path is hard-protected: credential or identity data"
     assert key_file.exists()
 
 
@@ -105,10 +110,10 @@ def test_safe_remove_bypass_respects_user_whitelist(test_env):
     marker.write_text("keep")
     add_to_whitelist(str(protected_dir))
 
-    success, message = safe_remove(protected_dir, use_trash=False, bypass_whitelist=True)
+    success, message = safe_remove(protected_dir, use_trash=False, allow_app_data_removal=True)
 
     assert success is False
-    assert "hard-protected" in message
+    assert message == "Path is hard-protected: user whitelist"
     assert marker.exists()
 
 
@@ -118,11 +123,19 @@ def test_safe_remove_bypass_keeps_topo_config(test_env):
     marker = topo_config / "settings.json"
     marker.write_text("{}")
 
-    success, message = safe_remove(topo_config, use_trash=False, bypass_whitelist=True)
+    success, message = safe_remove(topo_config, use_trash=False, allow_app_data_removal=True)
 
     assert success is False
-    assert "hard-protected" in message
+    assert message == "Path is hard-protected: Topo configuration"
     assert marker.exists()
+
+
+def test_hard_protection_reason_is_specific(test_env):
+    assert get_hard_protection_reason(Path("/etc/passwd")) == "critical system path"
+    assert get_hard_protection_reason(Path.home()) == "home directory"
+    assert get_hard_protection_reason(test_env / ".gnupg/private.key") == (
+        "credential or identity data"
+    )
 
 
 def test_safe_remove_deletion(test_env):

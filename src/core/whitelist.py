@@ -256,17 +256,17 @@ def _is_critical_system_path(path: Path) -> bool:
     return False
 
 
-def is_hard_protected(path) -> bool:
-    """Return True for paths that no deletion mode may bypass."""
+def get_hard_protection_reason(path) -> str | None:
+    """Return why a path is protected across every deletion context."""
     path = _resolve_path(path)
 
     if _is_critical_system_path(path):
-        return True
+        return "critical system path"
 
     try:
         home = Path.home().resolve()
         if path == home:
-            return True
+            return "home directory"
     except Exception:
         home = Path.home()
 
@@ -277,12 +277,12 @@ def is_hard_protected(path) -> bool:
         except OSError:
             prot_path = protected.expanduser().absolute()
         if path == prot_path or prot_path in path.parents:
-            return True
+            return "credential or identity data"
 
     try:
         topo_config = get_config_dir().resolve()
         if path == topo_config or topo_config in path.parents:
-            return True
+            return "Topo configuration"
     except Exception:
         pass
 
@@ -290,11 +290,16 @@ def is_hard_protected(path) -> bool:
         try:
             prot_path = Path(prot_str).expanduser().resolve()
             if path == prot_path or prot_path in path.parents:
-                return True
+                return "user whitelist"
         except Exception:
             continue
 
-    return False
+    return None
+
+
+def is_hard_protected(path) -> bool:
+    """Return True for paths that no deletion mode may bypass."""
+    return get_hard_protection_reason(path) is not None
 
 
 def is_protected(path) -> bool:

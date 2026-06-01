@@ -569,10 +569,11 @@ class UninstallManager:
             record_deletion_audit(app["id"], package_mode, package_status, package_size)
             package_event_recorded = True
 
-            # 3. Path removal (with bypass_whitelist=True for thorough cleanup)
+            # 3. Path removal: explicit uninstall may remove app-owned data,
+            # but hard-protected credentials/system paths remain blocked.
             removed_details = []
             for p in paths:
-                success, _ = safe_remove(p, use_trash=False, bypass_whitelist=True)
+                success, _ = safe_remove(p, use_trash=False, allow_app_data_removal=True)
                 try:
                     removed_details.append((success, str(p.relative_to(Path.home()))))
                 except ValueError:

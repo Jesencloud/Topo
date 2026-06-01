@@ -9,7 +9,7 @@ from .system import run_command
 from .whitelist import (
     CRITICAL_PREFIX_PATHS,
     DELETION_CRITICAL_EXACT_PATHS,
-    is_hard_protected,
+    get_hard_protection_reason,
     is_protected,
 )
 
@@ -56,8 +56,15 @@ def record_deletion_audit(
         pass
 
 
-def validate_path_for_deletion(path: str | Path, bypass_whitelist: bool = False) -> tuple[bool, str]:
+def validate_path_for_deletion(
+    path: str | Path,
+    allow_app_data_removal: bool = False,
+    bypass_whitelist: bool | None = None,
+) -> tuple[bool, str]:
     """Validate a raw deletion target before size checks or unlink attempts."""
+    if bypass_whitelist is not None:
+        allow_app_data_removal = bypass_whitelist
+
     raw_text = os.fspath(path)
     if not raw_text:
         return False, "Path is empty"
@@ -74,9 +81,9 @@ def validate_path_for_deletion(path: str | Path, bypass_whitelist: bool = False)
     except OSError:
         resolved_path = raw_path.absolute()
 
-    if bypass_whitelist:
-        if is_hard_protected(resolved_path):
-            return False, "Path is hard-protected"
+    if allow_app_data_removal:
+        if reason := get_hard_protection_reason(resolved_path):
+            return False, f"Path is hard-protected: {reason}"
     elif is_protected(resolved_path):
         return False, "Path is whitelisted"
     if resolved_path == Path("/") or resolved_path in DELETION_CRITICAL_EXACT_PATHS:
@@ -170,13 +177,18 @@ def safe_remove(
     path: str | Path,
     use_trash: bool = True,
     dry_run: bool = False,
+    allow_app_data_removal: bool = False,
     bypass_whitelist: bool = False,
 ) -> tuple[bool, str]:
     """Safe removal with trash support and protection checks."""
+    allow_app_data_removal = allow_app_data_removal or bypass_whitelist
     raw_path = Path(path).expanduser()
     mode = "trash" if use_trash else "permanent"
 
-    valid, reason = validate_path_for_deletion(path, bypass_whitelist=bypass_whitelist)
+    valid, reason = validate_path_for_deletion(
+        path,
+        allow_app_data_removal=allow_app_data_removal,
+    )
     if not valid:
         record_deletion_audit(raw_path, mode, "rejected-validation")
         return False, reason
