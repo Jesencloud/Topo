@@ -146,6 +146,19 @@ def test_uninstall_space_then_enter_returns_indices():
     assert result == [0]
 
 
+def test_uninstall_enter_without_selection_does_not_confirm_hovered_app():
+    sel = UninstallSelector("t", _uninstall_items())
+    result = drive(sel, ["\r", Navigator.ESC])
+    assert result == []
+
+
+def test_uninstall_delete_key_does_not_confirm_selected_app():
+    sel = UninstallSelector("t", _uninstall_items())
+    result = drive(sel, [Navigator.SPACE, "\x1b[3~", Navigator.ESC])
+    assert result == []
+    assert sel.selected_ids == {"app0"}
+
+
 def test_uninstall_esc_returns_empty():
     assert drive(UninstallSelector("t", _uninstall_items()), [Navigator.ESC]) == []
 

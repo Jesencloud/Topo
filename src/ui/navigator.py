@@ -580,13 +580,25 @@ class UninstallSelector(_PagedSelector):
                     f"{cursor} {checkbox} {name_style}{name_padded}{RESET}     {item['size_str']:>12} | {self._format_time_ago(item['install_time'])}\033[K\n"
                 )
             buf.append("-" * 80 + "\033[K\n")
-            order_icon = "↓" if self.sort_reverse else "↑"
+            sort_dir = "↓" if self.sort_reverse else "↑"
+            sort_labels = {
+                "name": f"N: Name {sort_dir}",
+                "size_bytes": f"S: Size {sort_dir}",
+                "install_time": f"T: Time {sort_dir}",
+            }
+            sort_hint = " | ".join(
+                sort_labels[key] if key == self.sort_key else sort_labels[key].rsplit(" ", 1)[0]
+                for key in ("name", "size_bytes", "install_time")
+            )
             buf.append(
-                f" Page {self.current_page + 1}/{total_pages} | {GRAY}Spc: Select | A: All | ←: Back | Enter: Confirm | S/N/T: Sort {order_icon} | ESC{RESET}\033[K\n"
+                f" Page {self.current_page + 1}/{total_pages} | {GRAY}A: All | {sort_hint} | Space: Select{RESET}\033[K\n"
             )
 
         if self.selected_ids:
-            buf.append("\n \033[1;35m☉ Selected Apps to Remove:\033[0m\033[K\n")
+            buf.append(
+                f"\n \033[1;35m☉ Selected Apps to Remove:\033[0m "
+                f"{GRAY}Enter:Uninstall selected{RESET}\033[K\n"
+            )
             selected_names = [i["name"] for i in self.items if i["id"] in self.selected_ids]
             for i in range(0, len(selected_names), 2):
                 pair = selected_names[i : i + 2]
@@ -654,9 +666,9 @@ class UninstallSelector(_PagedSelector):
                         self.selected_ids -= page_ids
                     else:
                         self.selected_ids |= page_ids
-                elif key in Navigator.ENTER or key == "\x1b[3~":  # Enter or Del
+                elif key in Navigator.ENTER:
                     if not self.selected_ids:
-                        return [self.selected_index] if total_len > 0 else []
+                        continue
                     return [
                         i
                         for i, item in enumerate(self.items)

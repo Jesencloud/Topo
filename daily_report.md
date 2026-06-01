@@ -7,6 +7,8 @@
 *   **Clean Flow**: Added a pre-clean sudo decision prompt with `Enter` to continue and `Space` to skip. Space now returns directly to the main UI without printing an extra skipped message or showing a return prompt.
 *   **Optimize Flow**: Applied the same password interaction model to Optimize. Space skips the task silently and returns to the main UI; password cancellation stops the task instead of continuing into maintenance steps.
 *   **Uninstall Preview Flow**: Simplified uninstall preview confirmation into a single line: `Remove N application(s), size  Enter confirm, Space cancel`. Enter proceeds to the custom password prompt; Space/ESC returns to the application list without uninstalling.
+*   **Uninstall List Shortcut Alignment**: Simplified the uninstall list footer by removing Back, ESC, and generic Enter confirmation hints, expanding `Space: Select`, and spelling out sort shortcuts as `N: Name`, `S: Size`, and `T: Time`.
+*   **Explicit Uninstall Action Hint**: Added `Enter:Uninstall selected` beside `Selected Apps to Remove`, and changed Enter so it only proceeds when applications are explicitly selected instead of confirming the hovered app by default.
 *   **Password Cancellation Safety**: Ctrl+C during password input now cancels Clean, Optimize, Uninstall, or privileged Analyze deletion without continuing into cleanup/removal logic.
 
 ### 2. Analyze Delete Flow
