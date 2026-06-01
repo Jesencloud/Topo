@@ -1,6 +1,12 @@
 from unittest.mock import mock_open, patch
 
-from src.core.status import get_cpu_temp, get_ip_info, get_mem_info, get_uptime
+from src.core.status import (
+    get_cpu_load_summary,
+    get_cpu_temp,
+    get_ip_info,
+    get_mem_info,
+    get_uptime,
+)
 
 
 def test_get_mem_info():
@@ -21,6 +27,26 @@ def test_get_uptime():
     with patch("builtins.open", mock_open(read_data=mock_data)):
         uptime = get_uptime()
         assert uptime == "1h 1m"
+
+
+def test_get_cpu_load_summary_is_user_readable():
+    with (
+        patch("os.getloadavg", return_value=(1.0, 0.8, 0.5)),
+        patch("os.cpu_count", return_value=4),
+    ):
+        summary = get_cpu_load_summary()
+
+    assert summary == "Low (25% of 4 cores; 1m 1.00, 5m 0.80, 15m 0.50)"
+
+
+def test_get_cpu_load_summary_marks_overloaded():
+    with (
+        patch("os.getloadavg", return_value=(8.0, 6.0, 4.0)),
+        patch("os.cpu_count", return_value=4),
+    ):
+        summary = get_cpu_load_summary()
+
+    assert summary.startswith("Overloaded (200% of 4 cores")
 
 
 def test_get_cpu_temp():

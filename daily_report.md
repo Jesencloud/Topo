@@ -23,6 +23,7 @@
 ### 3. TUI Page & Hint Cleanup
 *   **Clean Page Isolation**: Selecting Clean from the main menu now clears the screen before running, so cleanup output appears on its own page instead of under the main menu.
 *   **Status Page Isolation**: Selecting Status also clears the screen before rendering system health output.
+*   **Readable CPU Load**: Replaced raw Linux load-average output in System Health Status with a user-readable load label and core-relative percentage while preserving 1m/5m/15m details.
 *   **Analyze Banner Removal**: Removed the main-menu banner from the Analyze Disk root view so the analyzer starts as a focused tool page.
 *   **Analyze Hint Simplification**: Reduced Analyze footer hints to the actions that need discovery, now showing a single concise line such as `A:All | F:Open Folder | R:Reload | S:Sort ↓ | Space:Select`.
 

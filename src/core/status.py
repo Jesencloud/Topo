@@ -43,6 +43,27 @@ def get_uptime():
         return "Unknown"
 
 
+def get_cpu_load_summary():
+    """Return CPU load average with a user-readable saturation label."""
+    load_1m, load_5m, load_15m = os.getloadavg()
+    cores = os.cpu_count() or 1
+    load_percent = (load_1m / cores) * 100
+
+    if load_percent < 50:
+        label = "Low"
+    elif load_percent < 80:
+        label = "Moderate"
+    elif load_percent < 100:
+        label = "High"
+    else:
+        label = "Overloaded"
+
+    return (
+        f"{label} ({load_percent:.0f}% of {cores} cores; "
+        f"1m {load_1m:.2f}, 5m {load_5m:.2f}, 15m {load_15m:.2f})"
+    )
+
+
 def get_battery_info():
     """Get battery capacity, health, and cycle count."""
     try:
@@ -300,7 +321,7 @@ def show_status():
     print("-" * 65)
 
     uptime = get_uptime()
-    cpu_load = os.getloadavg()
+    cpu_load = get_cpu_load_summary()
     cpu_temp = get_cpu_temp()
     fans = get_fan_speed()
     used_mem_str, total_mem_str, mem_percent = get_mem_info()
@@ -314,7 +335,7 @@ def show_status():
     disk_percent = (home_stats.used / home_stats.total) * 100
 
     print(f"⏱️  Uptime:       {uptime}")
-    print(f"📊 CPU Load:     {cpu_load[0]:.2f}, {cpu_load[1]:.2f}, {cpu_load[2]:.2f} (1m, 5m, 15m)")
+    print(f"📊 CPU Load:     {cpu_load}")
     print(f"🌡️  CPU Temp:     {cpu_temp}")
     if fans:
         print(f"⚙️  Fan Speed:    {fans}")
