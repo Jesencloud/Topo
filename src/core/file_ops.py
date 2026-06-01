@@ -14,6 +14,12 @@ CACHEDIR_TAG_FILE = "CACHEDIR.TAG"
 CACHEDIR_TAG_SIGNATURE = "Signature: 8a477f597d28d172789f06886806bc55"
 
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
+_SYSTEM_CLEANABLE_CONTENT_DIRS = (Path("/var/tmp"), Path("/var/cache"))
+
+
+def _is_system_cleanable_content(path: Path) -> bool:
+    """Allow contents of known system cache/temp roots without allowing the roots."""
+    return any(root in path.parents for root in _SYSTEM_CLEANABLE_CONTENT_DIRS)
 
 
 def get_deletion_log_path() -> Path:
@@ -65,13 +71,14 @@ def validate_path_for_deletion(path: str | Path) -> tuple[bool, str]:
 
     if is_protected(resolved_path):
         return False, "Path is whitelisted"
-    if resolved_path in DELETION_CRITICAL_EXACT_PATHS:
+    if resolved_path == Path("/") or resolved_path in DELETION_CRITICAL_EXACT_PATHS:
         return False, "Refusing to delete critical system path"
     for critical in CRITICAL_PREFIX_PATHS:
-        if resolved_path == critical or critical in resolved_path.parents:
+        if (
+            (resolved_path == critical or critical in resolved_path.parents)
+            and not _is_system_cleanable_content(resolved_path)
+        ):
             return False, "Refusing to delete critical system path"
-    if resolved_path == Path.home():
-        return False, "Refusing to delete critical system path"
     return True, ""
 
 

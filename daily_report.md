@@ -32,6 +32,14 @@
 *   **Analyze Permission Tests**: Added coverage proving user-writable paths avoid sudo while system paths use the privileged delete branch.
 *   **Verification**: Confirmed the final state with Ruff and the full pytest suite (`132 passed`).
 
+### 5. Protection Policy Hardening
+*   **Expanded Sensitive Data Protection**: Added default protection for messaging apps, shell profiles, developer credentials, CLI tools, editor state, sync clients, and additional Flatpak app data.
+*   **System Temp/Cache Carve-Out**: Allowed deletion validation for contents under `/var/tmp` and `/var/cache` while continuing to protect those root directories and unrelated `/var` system paths.
+*   **Legacy Whitelist Migration**: Ignored old auto-seeded system entries such as `/`, `/usr`, and `/var` when reading `whitelist.json`, keeping hardcoded protections authoritative while preserving user-added paths.
+*   **Topo Self-Protection**: Protected Topo's own configuration directory from accidental removal through the shared `is_protected()` policy.
+*   **Redundant Delete Guardrail**: Restored a minimal prefix-based critical-path fallback inside `validate_path_for_deletion()` so system children remain blocked even if higher-level protection logic changes.
+*   **Verification**: Added protection and carve-out regression tests and confirmed the suite with Ruff plus full pytest (`140 passed`).
+
 # Daily Modification Report - 2026-05-31
 
 ## Project: topo (Topo) - Deletion Audit Trail

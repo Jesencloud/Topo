@@ -43,6 +43,12 @@ def test_whitelist_protection(test_env):
     assert is_protected("/etc/shadow") is True
     assert is_protected("/boot") is True
     assert is_protected("/run/systemd") is True
+    assert is_protected("/var") is True
+    assert is_protected("/var/log/journal") is True
+    assert is_protected("/var/tmp") is True
+    assert is_protected("/var/cache") is True
+    assert is_protected("/var/tmp/topo-stale.tmp") is False
+    assert is_protected("/var/cache/dnf/topo-cache") is False
     assert is_protected(test_env / "my_docs") is False
 
 

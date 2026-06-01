@@ -8,8 +8,8 @@ def get_whitelist_file() -> Path:
     return get_config_dir() / "whitelist.json"
 
 
+# Paths that are always protected recursively
 DEFAULT_CRITICAL_PATHS = [
-    "/",
     "/bin",
     "/boot",
     "/dev",
@@ -24,10 +24,13 @@ DEFAULT_CRITICAL_PATHS = [
     "/usr",
     "/var",
 ]
-CRITICAL_PREFIX_PATHS = tuple(
-    Path(path) for path in DEFAULT_CRITICAL_PATHS if path != "/"
+CRITICAL_PREFIX_PATHS = tuple(Path(path) for path in DEFAULT_CRITICAL_PATHS)
+LEGACY_SEEDED_WHITELIST_PATHS = frozenset({"/", *DEFAULT_CRITICAL_PATHS})
+
+# Paths that are only protected from exact deletion
+DELETION_CRITICAL_EXACT_PATHS = tuple(
+    Path(path) for path in ("/", "/home", "/mnt", "/media", "/srv", "/usr", "/var", "/tmp", "/boot")
 )
-DELETION_CRITICAL_EXACT_PATHS = tuple(Path(path) for path in ("/", "/home", "/mnt", "/media", "/srv"))
 
 LINUX_PROTECTED_HOME_PATHS = [
     # Credentials and encryption material
@@ -36,14 +39,25 @@ LINUX_PROTECTED_HOME_PATHS = [
     ".pki",
     ".password-store",
     ".local/share/keyrings",
+    ".config/sops",
+    ".config/age",
     # Browser profiles
     ".mozilla",
+    ".thunderbird",
     ".config/google-chrome",
     ".config/chromium",
     ".config/BraveSoftware",
     ".config/microsoft-edge",
     ".config/vivaldi",
     ".config/opera",
+    # Messaging and social
+    ".local/share/TelegramDesktop",
+    ".config/Signal",
+    ".config/discord",
+    ".config/Slack",
+    ".config/Element",
+    ".config/whatsapp-for-linux",
+    ".config/transmission",
     # Password managers and authenticators
     ".config/Bitwarden",
     ".config/1Password",
@@ -51,6 +65,7 @@ LINUX_PROTECTED_HOME_PATHS = [
     ".config/KeePassXC",
     ".local/share/keepassxc",
     ".local/share/KeePassXC",
+    ".config/authy-desktop",
     # Input methods and personal dictionaries
     ".config/fcitx",
     ".config/fcitx5",
@@ -64,7 +79,7 @@ LINUX_PROTECTED_HOME_PATHS = [
     ".local/share/ibus",
     ".local/share/rime",
     ".local/share/uim",
-    # Desktop environment settings
+    # Desktop environment and system settings
     ".config/dconf",
     ".config/gnome-session",
     ".config/gnome-shell",
@@ -75,9 +90,28 @@ LINUX_PROTECTED_HOME_PATHS = [
     ".config/nautilus",
     ".config/user-dirs.dirs",
     ".config/mimeapps.list",
+    ".config/pulse",
+    ".config/fontconfig",
     ".local/share/gnome-shell",
     ".local/share/gvfs-metadata",
     ".local/share/nautilus",
+    ".local/share/flatpak",
+    ".local/share/fonts",
+    # Shell and CLI configs
+    ".bashrc",
+    ".bash_profile",
+    ".bash_history",
+    ".zshrc",
+    ".zprofile",
+    ".zsh_history",
+    ".profile",
+    ".config/fish",
+    ".config/gh",
+    ".config/gcloud",
+    ".aws",
+    ".kube",
+    ".docker",
+    ".azure",
     # Wallets and crypto tools
     ".electrum",
     ".config/Electrum",
@@ -97,6 +131,16 @@ LINUX_PROTECTED_HOME_PATHS = [
     ".config/VSCodium",
     ".config/Cursor",
     ".config/zed",
+    ".config/nvim",
+    ".local/share/nvim",
+    ".emacs.d",
+    ".config/sublime-text",
+    ".config/sublime-text-3",
+    # Sync and cloud storage
+    ".dropbox",
+    ".config/Nextcloud",
+    ".config/syncthing",
+    ".config/rclone",
 ]
 
 LINUX_PROTECTED_FLATPAK_APP_IDS = [
@@ -114,6 +158,10 @@ LINUX_PROTECTED_FLATPAK_APP_IDS = [
     "org.mozilla.firefox",
     "org.mozilla.Thunderbird",
     "org.pgadmin.pgadmin4",
+    "org.telegram.desktop",
+    "com.discordapp.Discord",
+    "com.slack.Slack",
+    "im.riot.Riot",
 ]
 
 
@@ -124,17 +172,20 @@ def _ensure_config():
         config_dir.mkdir(parents=True, exist_ok=True)
     if not whitelist_file.exists():
         with open(whitelist_file, "w") as f:
-            # Seed with default critical system paths
-            json.dump(DEFAULT_CRITICAL_PATHS, f, indent=4)
+            # Seed with empty list; critical paths are hardcoded for safety
+            json.dump([], f, indent=4)
 
 
 def get_whitelist():
     _ensure_config()
     try:
         with open(get_whitelist_file()) as f:
-            return json.load(f)
+            data = json.load(f)
     except Exception:
         return []
+    if not isinstance(data, list):
+        return []
+    return [path for path in data if path not in LEGACY_SEEDED_WHITELIST_PATHS]
 
 
 def add_to_whitelist(path_str: str):
@@ -171,37 +222,71 @@ def is_protected(path) -> bool:
     except Exception:
         path = path.absolute()
 
-    # 1. Always protect root exactly
-    if str(path) == "/":
+    # 1. Exact matches for critical system paths
+    path_str = str(path)
+    if path_str == "/" or any(str(cp) == path_str for cp in DELETION_CRITICAL_EXACT_PATHS):
         return True
 
-    # 2. Check hardcoded critical prefixes (protects them and their children)
-    # We exclude "/" here because it's handled above and shouldn't be recursive
-    for cp_path in CRITICAL_PREFIX_PATHS:
-        if path == cp_path or cp_path in path.parents:
+    # 2. Home directory exactly
+    try:
+        if path == Path.home().resolve():
             return True
+    except Exception:
+        pass
 
+    # 3. Critical prefixes (recursive protection)
+    for prefix in CRITICAL_PREFIX_PATHS:
+        try:
+            prefix_res = prefix.resolve()
+        except Exception:
+            prefix_res = prefix.absolute()
+
+        if path == prefix_res or prefix_res in path.parents:
+            # Carve-out: allow cleaning /var/tmp and /var/cache contents
+            is_carve_out = False
+            for allow in ["/var/tmp/", "/var/cache/"]:
+                if path_str.startswith(allow):
+                    is_carve_out = True
+                    break
+            if not is_carve_out:
+                return True
+
+    # 4. Sensitive app data (in home)
     if is_sensitive_linux_app_data(path):
         return True
 
-    # 3. Check User Whitelist
+    # 5. Topo self-protection
+    try:
+        topo_config = get_config_dir().resolve()
+        if path == topo_config or topo_config in path.parents:
+            return True
+    except Exception:
+        pass
+
+    # 6. User whitelist (absolute recursive protection)
     whitelist = get_whitelist()
-    for protected in whitelist:
+    for prot_str in whitelist:
         try:
-            prot_path = Path(protected).expanduser().resolve()
-            if path == prot_path:
-                return True
-            # Protect children, but skip root to avoid protecting everything
-            if str(prot_path) != "/" and prot_path in path.parents:
+            prot_path = Path(prot_str).expanduser().resolve()
+            if path == prot_path or prot_path in path.parents:
                 return True
         except Exception:
             continue
+
     return False
 
 
 def is_sensitive_linux_app_data(path: Path) -> bool:
     """Protect Linux user data that should not be removed as app cache/residue."""
-    home = Path.home()
+    try:
+        home = Path.home().resolve()
+    except Exception:
+        home = Path.home()
+
+    # Only protect paths within the home directory
+    if home not in path.parents and path != home:
+        return False
+
     protected_paths = [home / rel for rel in LINUX_PROTECTED_HOME_PATHS]
     protected_paths.extend(home / ".var/app" / app_id for app_id in LINUX_PROTECTED_FLATPAK_APP_IDS)
 

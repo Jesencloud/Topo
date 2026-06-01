@@ -1,4 +1,12 @@
-from src.core.whitelist import add_to_whitelist, get_whitelist, is_protected, remove_from_whitelist
+import json
+
+from src.core.whitelist import (
+    add_to_whitelist,
+    get_whitelist,
+    get_whitelist_file,
+    is_protected,
+    remove_from_whitelist,
+)
 
 
 def test_whitelist_persistence(test_env):
@@ -33,6 +41,15 @@ def test_whitelist_normalization(test_env):
     assert is_protected(folder) is True
 
 
+def test_legacy_seeded_system_paths_are_ignored(test_env):
+    whitelist_file = get_whitelist_file()
+    whitelist_file.parent.mkdir(parents=True, exist_ok=True)
+    whitelist_file.write_text(json.dumps(["/", "/var", "/usr", str(test_env / "keep")]))
+
+    assert get_whitelist() == [str(test_env / "keep")]
+    assert is_protected("/var/tmp/topo-stale.tmp") is False
+
+
 def test_linux_sensitive_app_data_is_protected(test_env):
     sensitive_paths = [
         test_env / ".ssh/id_ed25519",
@@ -49,8 +66,24 @@ def test_linux_sensitive_app_data_is_protected(test_env):
         test_env / ".local/share/gvfs-metadata/home",
         test_env / ".local/share/DBeaverData/workspace6/General/.dbeaver/credentials-config.json",
         test_env / ".config/Code/User/settings.json",
+        test_env / ".config/Signal/config.json",
+        test_env / ".config/discord/Local State",
+        test_env / ".config/Slack/storage.json",
+        test_env / ".local/share/TelegramDesktop/tdata/settings",
+        test_env / ".aws/credentials",
+        test_env / ".kube/config",
+        test_env / ".docker/config.json",
+        test_env / ".config/gh/hosts.yml",
+        test_env / ".bashrc",
+        test_env / ".zsh_history",
+        test_env / ".config/fish/config.fish",
+        test_env / ".config/nvim/init.lua",
+        test_env / ".emacs.d/init.el",
+        test_env / ".config/sublime-text/Packages/User/Preferences.sublime-settings",
         test_env / ".var/app/org.mozilla.firefox/.mozilla/firefox/profile.default/logins.json",
         test_env / ".var/app/org.keepassxc.KeePassXC/config/keepassxc.ini",
+        test_env / ".var/app/org.telegram.desktop/data/TelegramDesktop/tdata/settings",
+        test_env / ".var/app/com.discordapp.Discord/config/discord/Local State",
     ]
 
     for path in sensitive_paths:
