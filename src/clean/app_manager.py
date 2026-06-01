@@ -522,11 +522,10 @@ class UninstallManager:
         package_size = int(app.get("size_bytes") or 0)
 
         try:
-            # 1. Kill processes
+            # 1. Graceful Kill (SIGTERM -> Wait -> SIGKILL)
             all_process_names = [app["id"], app["name"].lower()]
             if app["type"] == "Flatpak":
                 import contextlib
-
                 with contextlib.suppress(OSError, subprocess.SubprocessError):
                     system.run_command(["flatpak", "kill", app["id"]], capture=True, timeout=20)
 
@@ -534,8 +533,14 @@ class UninstallManager:
                 try:
                     res = system.run_command(["pgrep", "-x", proc], capture=True, timeout=5)
                     if res.ok:
-                        system.run_command(["pkill", "-9", "-x", proc], capture=True, timeout=5)
-                        time.sleep(0.5)
+                        # Step 1: SIGTERM
+                        system.run_command(["pkill", "-15", "-x", proc], capture=True, timeout=5)
+                        # Step 2: Brief wait
+                        time.sleep(1.0)
+                        # Step 3: Check and SIGKILL if still running
+                        if system.run_command(["pgrep", "-x", proc], capture=True, timeout=5).ok:
+                            system.run_command(["pkill", "-9", "-x", proc], capture=True, timeout=5)
+                            time.sleep(0.5)
                 except (OSError, subprocess.SubprocessError):
                     pass
 
@@ -564,10 +569,10 @@ class UninstallManager:
             record_deletion_audit(app["id"], package_mode, package_status, package_size)
             package_event_recorded = True
 
-            # 3. Path removal
+            # 3. Path removal (with bypass_whitelist=True for thorough cleanup)
             removed_details = []
             for p in paths:
-                success, _ = safe_remove(p, use_trash=False)
+                success, _ = safe_remove(p, use_trash=False, bypass_whitelist=True)
                 try:
                     removed_details.append((success, str(p.relative_to(Path.home()))))
                 except ValueError:

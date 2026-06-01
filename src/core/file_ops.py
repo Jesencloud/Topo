@@ -6,7 +6,12 @@ from datetime import datetime
 from pathlib import Path
 
 from .system import run_command
-from .whitelist import CRITICAL_PREFIX_PATHS, DELETION_CRITICAL_EXACT_PATHS, is_protected
+from .whitelist import (
+    CRITICAL_PREFIX_PATHS,
+    DELETION_CRITICAL_EXACT_PATHS,
+    is_hard_protected,
+    is_protected,
+)
 
 # Global registry to track handled paths across modules
 CLEANED_PATHS: set[str] = set()
@@ -51,7 +56,7 @@ def record_deletion_audit(
         pass
 
 
-def validate_path_for_deletion(path: str | Path) -> tuple[bool, str]:
+def validate_path_for_deletion(path: str | Path, bypass_whitelist: bool = False) -> tuple[bool, str]:
     """Validate a raw deletion target before size checks or unlink attempts."""
     raw_text = os.fspath(path)
     if not raw_text:
@@ -69,7 +74,10 @@ def validate_path_for_deletion(path: str | Path) -> tuple[bool, str]:
     except OSError:
         resolved_path = raw_path.absolute()
 
-    if is_protected(resolved_path):
+    if bypass_whitelist:
+        if is_hard_protected(resolved_path):
+            return False, "Path is hard-protected"
+    elif is_protected(resolved_path):
         return False, "Path is whitelisted"
     if resolved_path == Path("/") or resolved_path in DELETION_CRITICAL_EXACT_PATHS:
         return False, "Refusing to delete critical system path"
@@ -162,12 +170,13 @@ def safe_remove(
     path: str | Path,
     use_trash: bool = True,
     dry_run: bool = False,
+    bypass_whitelist: bool = False,
 ) -> tuple[bool, str]:
     """Safe removal with trash support and protection checks."""
     raw_path = Path(path).expanduser()
     mode = "trash" if use_trash else "permanent"
 
-    valid, reason = validate_path_for_deletion(path)
+    valid, reason = validate_path_for_deletion(path, bypass_whitelist=bypass_whitelist)
     if not valid:
         record_deletion_audit(raw_path, mode, "rejected-validation")
         return False, reason

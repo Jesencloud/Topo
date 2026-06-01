@@ -143,6 +143,20 @@ LINUX_PROTECTED_HOME_PATHS = [
     ".config/rclone",
 ]
 
+LINUX_HARD_PROTECTED_HOME_PATHS = [
+    ".ssh",
+    ".gnupg",
+    ".pki",
+    ".password-store",
+    ".local/share/keyrings",
+    ".config/sops",
+    ".config/age",
+    ".aws",
+    ".kube",
+    ".docker",
+    ".config/gh",
+]
+
 LINUX_PROTECTED_FLATPAK_APP_IDS = [
     "app.zen_browser.zen",
     "com.bitwarden.desktop",
@@ -212,50 +226,59 @@ def remove_from_whitelist(path_str: str):
     return False
 
 
-def is_protected(path) -> bool:
-    """Check if a path or its parent is in the whitelist."""
+def _resolve_path(path) -> Path:
     if not isinstance(path, Path):
         path = Path(path)
 
     try:
-        path = path.expanduser().resolve()
+        return path.expanduser().resolve()
     except Exception:
-        path = path.absolute()
+        return path.absolute()
 
-    # 1. Exact matches for critical system paths
+
+def _is_system_carve_out(path: Path) -> bool:
     path_str = str(path)
-    if path_str == "/" or any(str(cp) == path_str for cp in DELETION_CRITICAL_EXACT_PATHS):
+    return path_str.startswith(("/var/tmp/", "/var/cache/"))
+
+
+def _is_critical_system_path(path: Path) -> bool:
+    if path == Path("/") or path in DELETION_CRITICAL_EXACT_PATHS:
         return True
 
-    # 2. Home directory exactly
-    try:
-        if path == Path.home().resolve():
-            return True
-    except Exception:
-        pass
-
-    # 3. Critical prefixes (recursive protection)
     for prefix in CRITICAL_PREFIX_PATHS:
         try:
             prefix_res = prefix.resolve()
         except Exception:
             prefix_res = prefix.absolute()
 
-        if path == prefix_res or prefix_res in path.parents:
-            # Carve-out: allow cleaning /var/tmp and /var/cache contents
-            is_carve_out = False
-            for allow in ["/var/tmp/", "/var/cache/"]:
-                if path_str.startswith(allow):
-                    is_carve_out = True
-                    break
-            if not is_carve_out:
-                return True
+        if (path == prefix_res or prefix_res in path.parents) and not _is_system_carve_out(path):
+            return True
+    return False
 
-    # 4. Sensitive app data (in home)
-    if is_sensitive_linux_app_data(path):
+
+def is_hard_protected(path) -> bool:
+    """Return True for paths that no deletion mode may bypass."""
+    path = _resolve_path(path)
+
+    if _is_critical_system_path(path):
         return True
 
-    # 5. Topo self-protection
+    try:
+        home = Path.home().resolve()
+        if path == home:
+            return True
+    except Exception:
+        home = Path.home()
+
+    protected_home_paths = [home / rel for rel in LINUX_HARD_PROTECTED_HOME_PATHS]
+    for protected in protected_home_paths:
+        try:
+            prot_path = protected.expanduser().resolve()
+        except OSError:
+            prot_path = protected.expanduser().absolute()
+        if path == prot_path or prot_path in path.parents:
+            return True
+
     try:
         topo_config = get_config_dir().resolve()
         if path == topo_config or topo_config in path.parents:
@@ -263,15 +286,28 @@ def is_protected(path) -> bool:
     except Exception:
         pass
 
-    # 6. User whitelist (absolute recursive protection)
-    whitelist = get_whitelist()
-    for prot_str in whitelist:
+    for prot_str in get_whitelist():
         try:
             prot_path = Path(prot_str).expanduser().resolve()
             if path == prot_path or prot_path in path.parents:
                 return True
         except Exception:
             continue
+
+    return False
+
+
+def is_protected(path) -> bool:
+    """Check if a path is protected by hard rules, app-data rules, or user whitelist."""
+    path = _resolve_path(path)
+
+    if is_hard_protected(path):
+        return True
+
+    if is_sensitive_linux_app_data(path):
+        cache_names = {"Cache", "cache", "logs", "Code Cache", "GPUCache", "Service Worker"}
+        home_parts_len = len(Path.home().resolve().parts)
+        return not any(name in path.parts[home_parts_len:] for name in cache_names)
 
     return False
 

@@ -40,6 +40,13 @@
 *   **Redundant Delete Guardrail**: Restored a minimal prefix-based critical-path fallback inside `validate_path_for_deletion()` so system children remain blocked even if higher-level protection logic changes.
 *   **Verification**: Added protection and carve-out regression tests and confirmed the suite with Ruff plus full pytest (`140 passed`).
 
+### 6. Uninstall Thorough Cleanup Guardrails
+*   **Graceful Process Termination**: Changed uninstall process cleanup from immediate SIGKILL to a staged SIGTERM, short wait, and SIGKILL fallback sequence.
+*   **Uninstall Bypass Mode**: Added a `bypass_whitelist` path-removal mode so explicit app uninstall can remove protected app-owned residue such as browser or messaging app profiles.
+*   **Hard Protection Boundary**: Split protection into hard rules and normal app-data rules. Uninstall bypass can skip ordinary app-data protection, but still refuses system paths, user whitelist entries, Topo configuration, and credential directories such as SSH/GPG/AWS/Kube/Docker/GitHub CLI.
+*   **Regression Coverage**: Added tests proving uninstall bypass removes ordinary app data while preserving hard-protected credentials, user whitelist paths, and Topo config.
+*   **Verification**: Confirmed the final state with Ruff and full pytest (`144 passed`).
+
 # Daily Modification Report - 2026-05-31
 
 ## Project: topo (Topo) - Deletion Audit Trail

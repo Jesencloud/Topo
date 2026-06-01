@@ -14,7 +14,7 @@ from src.core.file_ops import (
     register_cleaned_path,
     safe_remove,
 )
-from src.core.whitelist import is_protected
+from src.core.whitelist import add_to_whitelist, get_config_dir, is_protected
 
 
 def test_register_cleaned_path():
@@ -70,6 +70,59 @@ def test_safe_remove_prevents_sensitive_linux_app_data(test_env):
     assert success is False
     assert "whitelisted" in message.lower()
     assert login_db.exists()
+
+
+def test_safe_remove_bypass_allows_app_data_cleanup(test_env):
+    app_dir = test_env / ".config/discord"
+    app_dir.mkdir(parents=True)
+    state_file = app_dir / "Local State"
+    state_file.write_text("{}")
+
+    success, message = safe_remove(app_dir, use_trash=False, bypass_whitelist=True)
+
+    assert success is True
+    assert "Permanently deleted" in message
+    assert not app_dir.exists()
+
+
+def test_safe_remove_bypass_keeps_hard_protected_credentials(test_env):
+    ssh_dir = test_env / ".ssh"
+    ssh_dir.mkdir()
+    key_file = ssh_dir / "id_ed25519"
+    key_file.write_text("secret")
+
+    success, message = safe_remove(ssh_dir, use_trash=False, bypass_whitelist=True)
+
+    assert success is False
+    assert "hard-protected" in message
+    assert key_file.exists()
+
+
+def test_safe_remove_bypass_respects_user_whitelist(test_env):
+    protected_dir = test_env / "keep-even-on-uninstall"
+    protected_dir.mkdir()
+    marker = protected_dir / "data.txt"
+    marker.write_text("keep")
+    add_to_whitelist(str(protected_dir))
+
+    success, message = safe_remove(protected_dir, use_trash=False, bypass_whitelist=True)
+
+    assert success is False
+    assert "hard-protected" in message
+    assert marker.exists()
+
+
+def test_safe_remove_bypass_keeps_topo_config(test_env):
+    topo_config = get_config_dir()
+    topo_config.mkdir(parents=True, exist_ok=True)
+    marker = topo_config / "settings.json"
+    marker.write_text("{}")
+
+    success, message = safe_remove(topo_config, use_trash=False, bypass_whitelist=True)
+
+    assert success is False
+    assert "hard-protected" in message
+    assert marker.exists()
 
 
 def test_safe_remove_deletion(test_env):
