@@ -17,6 +17,11 @@ from ..core.system import has_sudo, run_command
 
 # Lock to ensure parallel tasks don't corrupt the terminal output
 print_lock = threading.Lock()
+SQLITE_MAX_OPTIMIZE_SIZE = 100 * 1024 * 1024
+SQLITE_MIN_FREE_BYTES = 5 * 1024 * 1024
+SQLITE_MIN_FREE_RATIO = 0.10
+SQLITE_VACUUM_TIMEOUT = 20
+MEMORY_PRESSURE_AVAILABLE_RATIO = 0.15
 
 
 def opt_log(message, success=True, skipped=False):
@@ -45,11 +50,48 @@ def _read_sudo_choice() -> str:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
+def _is_any_process_running(process_names: list[str]) -> bool:
+    if not shutil.which("pgrep"):
+        return False
+    return any(run_command(["pgrep", "-x", name], capture=True, timeout=1).ok for name in process_names)
+
+
+def _is_sqlite_database(db_file: Path) -> bool:
+    try:
+        with db_file.open("rb") as f:
+            return f.read(16) == b"SQLite format 3\x00"
+    except OSError:
+        return False
+
+
+def _set_sqlite_timeout(conn: sqlite3.Connection, deadline: float) -> None:
+    def abort_if_expired():
+        return 1 if time.monotonic() > deadline else 0
+
+    conn.set_progress_handler(abort_if_expired, 10000)
+
+
 def vacuum_single_db(db_file):
     """Worker function to vacuum a single database only if worth it."""
+    db_path = Path(db_file)
+    if db_path.name.endswith(("-wal", "-shm")):
+        return 0
+    if not _is_sqlite_database(db_path):
+        return 0
     try:
-        conn = sqlite3.connect(db_file, timeout=1)
+        if db_path.stat().st_size > SQLITE_MAX_OPTIMIZE_SIZE:
+            return 0
+    except OSError:
+        return 0
+
+    try:
+        conn = sqlite3.connect(db_path, timeout=1)
+        _set_sqlite_timeout(conn, time.monotonic() + SQLITE_VACUUM_TIMEOUT)
         cursor = conn.cursor()
+        cursor.execute("PRAGMA integrity_check")
+        if cursor.fetchone()[0] != "ok":
+            conn.close()
+            return 0
         cursor.execute("PRAGMA page_count")
         page_count = cursor.fetchone()[0]
         cursor.execute("PRAGMA freelist_count")
@@ -64,30 +106,34 @@ def vacuum_single_db(db_file):
         free_ratio = freelist_count / page_count
         free_bytes = freelist_count * page_size
 
-        if free_ratio > 0.1 or free_bytes > 5 * 1024 * 1024:
-            old_size = get_size(db_file)
+        if free_ratio > SQLITE_MIN_FREE_RATIO or free_bytes > SQLITE_MIN_FREE_BYTES:
+            old_size = get_size(db_path)
             conn.execute("VACUUM")
             conn.close()
-            return old_size - get_size(db_file)
+            return old_size - get_size(db_path)
 
         conn.close()
         return 0
-    except Exception:
+    except (OSError, sqlite3.Error):
         return 0
 
 
 def run_vacuum_all(dry_run=False):
     """Task to optimize all browser databases."""
     targets = [
-        "~/.mozilla/firefox/*/places.sqlite",
-        "~/.mozilla/firefox/*/cookies.sqlite",
-        "~/.config/google-chrome/Default/History",
-        "~/.config/BraveSoftware/Brave-Browser/Default/History",
-        "~/.config/microsoft-edge/Default/History",
+        ("Firefox", ["firefox"], "~/.mozilla/firefox/*/places.sqlite"),
+        ("Firefox", ["firefox"], "~/.mozilla/firefox/*/cookies.sqlite"),
+        ("Chrome", ["google-chrome", "chrome", "chromium"], "~/.config/google-chrome/Default/History"),
+        ("Brave", ["brave", "brave-browser"], "~/.config/BraveSoftware/Brave-Browser/Default/History"),
+        ("Edge", ["microsoft-edge"], "~/.config/microsoft-edge/Default/History"),
     ]
 
     db_files = []
-    for pattern in targets:
+    busy_apps = set()
+    for app_name, process_names, pattern in targets:
+        if _is_any_process_running(process_names):
+            busy_apps.add(app_name)
+            continue
         path_obj = Path(pattern).expanduser()
         parent = path_obj.parent
         if not parent.exists():
@@ -96,10 +142,13 @@ def run_vacuum_all(dry_run=False):
             if f.is_file():
                 db_files.append(f)
 
+    if busy_apps and not db_files:
+        return f"{', '.join(sorted(busy_apps))} running; database optimization skipped"
     if not db_files:
         return None
     if dry_run:
-        return f"Found {len(db_files)} database(s) to optimize"
+        suffix = f"; skipped running app(s): {', '.join(sorted(busy_apps))}" if busy_apps else ""
+        return f"Found {len(db_files)} database(s) to optimize{suffix}"
 
     total_saved = 0
     # Nested pool or just direct execution since we are already in a pool
@@ -107,26 +156,31 @@ def run_vacuum_all(dry_run=False):
         total_saved += vacuum_single_db(db)
 
     saved_str = f" (compressed {bytes_to_human(total_saved)})" if total_saved > 0 else ""
-    return f"Optimized {len(db_files)} browser database(s){saved_str}"
+    suffix = f"; skipped running app(s): {', '.join(sorted(busy_apps))}" if busy_apps else ""
+    return f"Optimized {len(db_files)} browser database(s){saved_str}{suffix}"
 
 
-def run_fstrim():
+def run_fstrim(dry_run=False):
     if not shutil.which("fstrim"):
         return None
+    if dry_run:
+        return "SSD partitions would be trimmed (fstrim)"
     if run_command(["fstrim", "-av"], use_sudo=True, capture=True).ok:
         return "SSD partitions trimmed (fstrim)"
     return None
 
 
-def run_fccache():
+def run_fccache(dry_run=False):
     if not shutil.which("fc-cache"):
         return None
+    if dry_run:
+        return "System font cache would be refreshed"
     if run_command(["fc-cache"], capture=True).ok:
         return "System font cache refreshed"
     return None
 
 
-def run_dns_flush():
+def run_dns_flush(dry_run=False):
     dns_cmd = None
     if shutil.which("resolvectl"):
         dns_cmd = ["resolvectl", "flush-caches"]
@@ -134,6 +188,8 @@ def run_dns_flush():
         dns_cmd = ["nscd", "-i", "hosts"]
     if not dns_cmd:
         return None
+    if dry_run:
+        return "DNS resolver cache would be flushed"
     if run_command(dns_cmd, use_sudo=True, capture=True).ok:
         return "DNS resolver cache flushed"
     return None
@@ -198,6 +254,8 @@ def run_systemd_user_service_cleanup(dry_run=False):
                 removed += 1
         if removed == 0:
             return None
+        if shutil.which("systemctl"):
+            run_command(["systemctl", "--user", "daemon-reload"], capture=True, timeout=10)
         return f"Removed {removed} broken user systemd service(s)"
 
     return f"Found {len(broken_units)} broken user systemd service(s)"
@@ -228,7 +286,30 @@ def _service_exec_target_exists(command: str) -> bool:
     return shutil.which(command) is not None
 
 
-def run_memory_opt():
+def _read_memory_pressure() -> tuple[bool, str]:
+    try:
+        values = {}
+        with open("/proc/meminfo") as f:
+            for line in f:
+                key, raw_value = line.split(":", 1)
+                if key in {"MemTotal", "MemAvailable"}:
+                    values[key] = int(raw_value.strip().split()[0]) * 1024
+        total = values.get("MemTotal", 0)
+        available = values.get("MemAvailable", 0)
+        if total <= 0 or available <= 0:
+            return False, ""
+        ratio = available / total
+        return ratio < MEMORY_PRESSURE_AVAILABLE_RATIO, f"{ratio * 100:.0f}% memory available"
+    except (OSError, ValueError, IndexError):
+        return False, ""
+
+
+def run_memory_opt(dry_run=False):
+    pressure_high, detail = _read_memory_pressure()
+    if not pressure_high:
+        return f"Memory pressure already optimal ({detail})" if detail else "Memory pressure already optimal"
+    if dry_run:
+        return "PageCache would be released (Memory pressure high)"
     if not has_sudo():
         return None
     run_command(["sync"], capture=True)
@@ -237,9 +318,33 @@ def run_memory_opt():
     return None
 
 
-def run_thumbnail_cleanup():
+def run_desktop_database_refresh(dry_run=False):
+    app_dir = Path.home() / ".local/share/applications"
+    if not app_dir.exists() or not shutil.which("update-desktop-database"):
+        return None
+    if dry_run:
+        return "Desktop application database would be refreshed"
+    if run_command(["update-desktop-database", str(app_dir)], capture=True, timeout=30).ok:
+        return "Desktop application database refreshed"
+    return None
+
+
+def run_mime_database_refresh(dry_run=False):
+    mime_dir = Path.home() / ".local/share/mime"
+    if not mime_dir.exists() or not shutil.which("update-mime-database"):
+        return None
+    if dry_run:
+        return "MIME database would be refreshed"
+    if run_command(["update-mime-database", str(mime_dir)], capture=True, timeout=30).ok:
+        return "MIME database refreshed"
+    return None
+
+
+def run_thumbnail_cleanup(dry_run=False):
     thumb_cache = os.path.expanduser("~/.cache/thumbnails")
     if os.path.exists(thumb_cache):
+        if dry_run:
+            return "Desktop thumbnail cache would be cleared"
         shutil.rmtree(thumb_cache, ignore_errors=True)
         return "Desktop thumbnail cache cleared"
     return None
@@ -277,18 +382,27 @@ def optimize_system(dry_run=False):
     tasks = []
     if not dry_run:
         tasks = [
-            run_fstrim,
-            run_fccache,
-            run_dns_flush,
-            run_memory_opt,
-            run_thumbnail_cleanup,
+            lambda: run_fstrim(dry_run),
+            lambda: run_fccache(dry_run),
+            lambda: run_dns_flush(dry_run),
+            lambda: run_memory_opt(dry_run),
+            lambda: run_thumbnail_cleanup(dry_run),
+            lambda: run_desktop_database_refresh(dry_run),
+            lambda: run_mime_database_refresh(dry_run),
             lambda: run_vacuum_all(dry_run),
             lambda: run_zombie_cleanup(dry_run),
             lambda: run_systemd_user_service_cleanup(dry_run),
         ]
     else:
         tasks = [
+            lambda: run_fstrim(True),
+            lambda: run_fccache(True),
+            lambda: run_dns_flush(True),
+            lambda: run_memory_opt(True),
+            lambda: run_thumbnail_cleanup(True),
             lambda: run_vacuum_all(True),
+            lambda: run_desktop_database_refresh(True),
+            lambda: run_mime_database_refresh(True),
             lambda: run_zombie_cleanup(True),
             lambda: run_systemd_user_service_cleanup(True),
         ]

@@ -49,6 +49,15 @@
 *   **Regression Coverage**: Added tests proving uninstall bypass removes ordinary app data while preserving hard-protected credentials, user whitelist paths, and Topo config.
 *   **Verification**: Confirmed the final state with Ruff and full pytest (`145 passed`).
 
+### 7. Linux-Native Optimize Hardening
+*   **Safer Browser Database Optimization**: Added Mole-inspired SQLite safeguards for browser database vacuuming: skip running browsers, reject WAL/SHM sidecar files, verify SQLite headers, cap database size at 100 MiB, run `PRAGMA integrity_check`, and enforce a VACUUM timeout guard.
+*   **Conditional Memory Relief**: Changed PageCache release from unconditional sudo work to a memory-pressure check based on `/proc/meminfo`. Optimize now skips cache dropping when available memory is already healthy.
+*   **Desktop/MIME Cache Refresh**: Added optional Linux desktop database and MIME database refresh tasks using `update-desktop-database` and `update-mime-database` when available.
+*   **User Systemd Reload**: After removing broken user systemd service units, Topo now runs `systemctl --user daemon-reload` when available so user service state matches the filesystem.
+*   **Dry-Run Parity**: Expanded optimize dry-run previews for fstrim, font cache, DNS cache, PageCache, thumbnail cache, desktop database, and MIME database tasks.
+*   **Regression Coverage**: Added optimize tests for browser-running database skips, low-memory-pressure PageCache skips, systemd daemon reload, and desktop/MIME dry-run previews.
+*   **Verification**: Confirmed the final state with Ruff and full pytest (`149 passed`).
+
 # Daily Modification Report - 2026-05-31
 
 ## Project: topo (Topo) - Deletion Audit Trail
