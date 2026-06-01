@@ -144,6 +144,8 @@ Examples:
                     if result is not False and not Navigator.wait_for_return():
                         break
                 elif choice == "4":
+                    sys.stdout.write("\033[2J\033[H")
+                    sys.stdout.flush()
                     run_deep_analysis()
                 elif choice == "5":
                     sys.stdout.write("\033[2J\033[H")
