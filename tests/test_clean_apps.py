@@ -164,3 +164,16 @@ def test_clean_app_generic_execution(test_env):
     assert items == 1
     assert app_cache_dir.exists()
     assert not (app_cache_dir / "data.bin").exists()
+
+
+def test_clean_app_generic_keeps_protected_desktop_config(test_env):
+    dconf_dir = test_env / ".config/dconf"
+    dconf_dir.mkdir(parents=True)
+    settings_file = dconf_dir / "user"
+    settings_file.write_bytes(b"gnome settings")
+
+    freed, items = clean_app_generic("dconf", [str(dconf_dir)], dry_run=False)
+
+    assert freed == 0
+    assert items == 0
+    assert settings_file.exists()
