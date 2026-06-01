@@ -63,6 +63,7 @@
 *   **Refresh Feedback Alignment**: Reused the same animated status renderer for post-delete refresh scans so scan and refresh states feel consistent.
 *   **Standalone Analyze Page**: Cleared the main menu before launching Analyze from the TUI, so the Rust engine scan animation starts on its own focused page like Clean and Status.
 *   **Scan Header Placement**: Added an Analyze scan header so `Rust Engine: Intelligence Scan on Home` appears directly under `Analyze Disk` during the loading state.
+*   **Scan Copy Simplification**: Updated the Analyze scan message to `Rust Engine: Analyzing disk usage, please wait . . .` for clearer loading feedback.
 *   **Regression Coverage**: Added coverage for the scan status message to ensure the spinner frame is shown and the old rocket icon does not return.
 *   **Verification**: Confirmed the final state with Ruff and full pytest (`151 passed`).
 

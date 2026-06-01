@@ -106,7 +106,7 @@ def _parallel_scan_sizes(paths: list[Path]) -> dict[Path, int]:
 def _scan_status_message(scan_reason: str, target_label: str, frame: str) -> str:
     if scan_reason == "refresh":
         return f"   {frame} Refreshing analysis on {target_label}..."
-    return f"   {frame} Rust Engine: Intelligence Scan on {target_label}..."
+    return f"   {frame} Rust Engine: Analyzing disk usage, please wait . . ."
 
 
 def _render_scan_header(view_title: str) -> None:
