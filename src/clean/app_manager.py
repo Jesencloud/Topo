@@ -8,7 +8,7 @@ from typing import Any
 
 from ..core import system
 from ..core.analyze import ScanCache
-from ..core.constants import BOLD, GRAY, GREEN, MAGENTA, RED, RESET, YELLOW
+from ..core.constants import BOLD, GRAY, GREEN, MAGENTA, PURPLE, RED, RESET, YELLOW
 from ..core.file_ops import (
     bytes_to_human,
     parse_size_to_bytes,
@@ -573,7 +573,7 @@ class UninstallManager:
                 res = system.run_command(["snap", "remove", app["id"]], use_sudo=True, capture=True)
             elif app["type"] == "APT":
                 res = system.run_command(
-                    ["apt", "remove", "-y", app["id"]], use_sudo=True, capture=True
+                    ["apt", "purge", "-y", "--autoremove", app["id"]], use_sudo=True, capture=True
                 )
             elif app["type"] == "Pacman":
                 res = system.run_command(
@@ -617,7 +617,7 @@ def run_uninstall():
             Navigator.wait_for_return()
             return
 
-        selector = UninstallSelector("Select Application to Uninstall", apps)
+        selector = UninstallSelector("Select Application to Remove", apps)
         selected_indices = selector.run()
 
         if not selected_indices:
@@ -648,7 +648,7 @@ def run_uninstall():
             while not preview_done:
                 buf = ["\033[H"]  # Go home
                 # Use \033[K on every line, including the very first line and spacers
-                buf.append(f"\033[1;35m➔\033[0m {BOLD}Uninstallation Preview{RESET}\033[K\n")
+                buf.append(f"\033[1;35m➔\033[0m {PURPLE}Uninstallation Preview{RESET}\033[K\n")
                 buf.append("\033[K\n")
 
                 for app, app_paths, is_running in all_targets:

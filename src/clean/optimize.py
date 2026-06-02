@@ -368,7 +368,7 @@ def run_thumbnail_cleanup(dry_run=False):
 
 def optimize_system(dry_run=False):
     os.system("clear")
-    print(f"{PURPLE}System Optimization{RESET}\n")
+    print(f"\n{PURPLE}System Optimization{RESET}\n")
     print(f"{GRAY}Running maintenance tasks in parallel...{RESET}")
 
     if not dry_run:

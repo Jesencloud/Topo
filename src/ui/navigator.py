@@ -563,7 +563,7 @@ class UninstallSelector(_PagedSelector):
         buf = ["\033[H"]
         total_len = len(self.items)
         buf.append(
-            f"\n \033[1;36mSelect Application to Remove\033[0m "
+            f"\n \033[1;35mSelect Application to Remove\033[0m "
             f"{GRAY}{len(self.selected_ids)}/{total_len} selected{RESET}\033[K\n\n"
         )
 

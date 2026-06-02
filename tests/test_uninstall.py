@@ -464,7 +464,9 @@ def test_execute_uninstall_apt(mock_run_cmd, test_env):
         details = mgr.execute_uninstall(app, [])
 
     assert details == []
-    mock_run_cmd.assert_any_call(["apt", "remove", "-y", "firefox"], use_sudo=True, capture=True)
+    mock_run_cmd.assert_any_call(
+        ["apt", "purge", "-y", "--autoremove", "firefox"], use_sudo=True, capture=True
+    )
 
 
 @patch("src.core.system.run_command")
