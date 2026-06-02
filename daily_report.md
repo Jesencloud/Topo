@@ -28,6 +28,10 @@ Today's session eliminated the vertical jitter that appeared when paging and dri
     *   **Progress Bar Logic**: Refined `draw_bar` so that 0% is strictly gray and any value > 0% (even 0.1%) forces at least one colored block (Green/Yellow/Red).
     *   **Cleaner TUI**: Removed `age_hint` (e.g., `>1m`) from the Analyze Disk view for a more minimalist look. Changed the uninstaller title to "Select Application to Remove" in purple with tighter spacing.
 *   **Sudo Cancellation Experience**: Added a graceful "Uninstall cancelled by user" prompt with a standardized "Enter: Return / ESC: Exit" handler when a password prompt is interrupted with `Ctrl+C`.
+*   **System Health Enhancements**: 
+    *   Applied dynamic color coding (Green/Yellow/Red) to **Memory** and **Disk** percentage text to match their progress bars.
+    *   Added intelligent color coding for **CPU Temperature**: Green (<60°C), Yellow (60-80°C), and Red (>80°C).
+    *   Added color coding for **Battery**: Green (>50%), Yellow (20-50%), and Red (<20%). Health and cycle details remain in the default color for clear hierarchy.
 *   **Bug Fix**: Fixed a hardcoded `CYAN` color in `src/core/analyze.py` that was preventing Analyze Disk progress bars from showing their correct status colors (Green/Yellow/Red).
 *   **v0.7.0 Release Prep**: Updated `VERSION` to `0.7.0` and drafted comprehensive release notes in `docs/releases/v0.7.0.md` summarizing all changes since v0.6.0.
 

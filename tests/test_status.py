@@ -1,6 +1,7 @@
 from unittest.mock import mock_open, patch
 
 from src.core.status import (
+    get_battery_info,
     get_cpu_load_summary,
     get_cpu_temp,
     get_ip_info,
@@ -55,14 +56,16 @@ def test_get_cpu_temp():
         patch("pathlib.Path.exists", return_value=True),
         patch("builtins.open", mock_open(read_data=mock_data)),
     ):
-        temp = get_cpu_temp()
-        assert temp == "45.0°C"
+        val, text = get_cpu_temp()
+        assert val == 45.0
+        assert text == "45.0°C"
 
 
 def test_get_cpu_temp_missing():
     with patch("pathlib.Path.exists", return_value=False):
-        temp = get_cpu_temp()
-        assert temp == "N/A"
+        val, text = get_cpu_temp()
+        assert val == 0
+        assert text == "N/A"
 
 
 def test_get_ip_info_does_not_fetch_public_ip_by_default():
@@ -95,3 +98,27 @@ def test_get_ip_info_fetches_public_ip_when_enabled():
 
     assert local_ip == "192.168.1.10"
     assert public_ip == "[CN] 203.0.113.1"
+
+
+def test_get_battery_info():
+    # Mock battery data: capacity=80%, design=5000, full=4500 (90% health), cycles=100
+    def battery_mock_open(path):
+        if "capacity" in str(path):
+            return mock_open(read_data="80\n")()
+        if "energy_full_design" in str(path):
+            return mock_open(read_data="5000\n")()
+        if "energy_full" in str(path):
+            return mock_open(read_data="4500\n")()
+        if "cycle_count" in str(path):
+            return mock_open(read_data="100\n")()
+        return mock_open()()
+
+    with (
+        patch("pathlib.Path.exists", return_value=True),
+        patch("builtins.open", side_effect=battery_mock_open),
+    ):
+        val, pct, details = get_battery_info()
+        assert val == 80
+        assert pct == "80%"
+        assert "Health: 90.0%" in details
+        assert "Cycles: 100" in details

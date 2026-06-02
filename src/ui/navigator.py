@@ -44,6 +44,15 @@ def pad_and_truncate(text, width):
         return text + " " * (width - actual_w)
 
 
+def get_color_for_percent(percent):
+    """Returns the ANSI color code for a given percentage."""
+    if percent > 80:
+        return RED
+    if percent > 50:
+        return YELLOW
+    return GREEN
+
+
 def draw_bar(percent, width=20, force_color=None):
     """Draws a sleek progress bar using the '▬' character."""
     if width <= 0:
@@ -54,14 +63,7 @@ def draw_bar(percent, width=20, force_color=None):
         filled = 1
     empty = width - filled
 
-    if force_color:
-        color = force_color
-    elif percent > 80:
-        color = RED
-    elif percent > 50:
-        color = YELLOW
-    else:
-        color = GREEN
+    color = force_color or get_color_for_percent(percent)
 
     if percent <= 0:
         # For 0%, show a consistent gray empty bar

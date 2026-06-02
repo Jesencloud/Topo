@@ -7,9 +7,9 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
-from ..ui.navigator import draw_bar
+from ..ui.navigator import draw_bar, get_color_for_percent
 from .config import load_config
-from .constants import PURPLE, RESET
+from .constants import GRAY, GREEN, PURPLE, RED, RESET, YELLOW
 from .file_ops import bytes_to_human
 from .system import run_command
 
@@ -73,7 +73,8 @@ def get_battery_info():
             return None
 
         with open(bat_path / "capacity") as f:
-            capacity = f.read().strip()
+            capacity_str = f.read().strip()
+            capacity = int(capacity_str)
 
         # Health calculation
         try:
@@ -96,9 +97,9 @@ def get_battery_info():
         except OSError:
             pass
 
-        return f"{capacity}%{health_str}{cycles_str}"
-    except OSError:
-        return "N/A"
+        return capacity, f"{capacity}%", f"{health_str}{cycles_str}"
+    except (OSError, ValueError):
+        return 0, "N/A", ""
 
 
 def get_network_traffic():
@@ -181,10 +182,11 @@ def get_cpu_temp():
         if temp_path.exists():
             with open(temp_path) as f:
                 temp_mc = int(f.read().strip())
-                return f"{temp_mc / 1000:.1f}°C"
+                temp_c = temp_mc / 1000
+                return temp_c, f"{temp_c:.1f}°C"
     except (OSError, ValueError):
         pass
-    return "N/A"
+    return 0, "N/A"
 
 
 def get_fan_speed():
@@ -323,10 +325,10 @@ def show_status():
 
     uptime = get_uptime()
     cpu_load = get_cpu_load_summary()
-    cpu_temp = get_cpu_temp()
+    temp_val, cpu_temp_str = get_cpu_temp()
     fans = get_fan_speed()
     used_mem_str, total_mem_str, mem_percent = get_mem_info()
-    battery = get_battery_info()
+    battery_data = get_battery_info()
     rx, tx = get_network_traffic()
     local_ip, public_ip = get_ip_info()
     gpu = get_gpu_info()
@@ -337,24 +339,40 @@ def show_status():
 
     print(f"⏱️  Uptime:       {uptime}")
     print(f"📊 CPU Load:     {cpu_load}")
-    print(f"🌡️  CPU Temp:     {cpu_temp}")
+
+    # CPU Temp Color
+    temp_color = GREEN
+    if temp_val > 80:
+        temp_color = RED
+    elif temp_val > 60:
+        temp_color = YELLOW
+    print(f"🌡️  CPU Temp:     {temp_color}{cpu_temp_str}{RESET}")
+
     if fans:
         print(f"⚙️  Fan Speed:    {fans}")
 
     # Visual Progress Bars
     mem_bar = draw_bar(mem_percent, width=20)
-    print(f"🧠 Memory:       {mem_bar}  {mem_percent:>5.1f}%  ({used_mem_str} / {total_mem_str})")
+    mem_color = get_color_for_percent(mem_percent) if mem_percent > 0 else GRAY
+    print(f"🧠 Memory:       {mem_bar}  {mem_color}{mem_percent:>5.1f}%{RESET}  ({used_mem_str} / {total_mem_str})")
 
     disk_bar = draw_bar(disk_percent, width=20)
+    disk_color = get_color_for_percent(disk_percent) if disk_percent > 0 else GRAY
     print(
-        f"💾 Disk:         {disk_bar}  {disk_percent:>5.1f}%  ({bytes_to_human(home_stats.used)} / {bytes_to_human(home_stats.total)})"
+        f"💾 Disk:         {disk_bar}  {disk_color}{disk_percent:>5.1f}%{RESET}  ({bytes_to_human(home_stats.used)} / {bytes_to_human(home_stats.total)})"
     )
 
     if gpu:
         print(f"🎮 GPU Status:   {gpu}")
 
-    if battery:
-        print(f"🔋 Battery:      {battery}")
+    if battery_data:
+        bat_val, bat_pct_str, bat_details = battery_data
+        bat_color = GREEN
+        if bat_val < 20:
+            bat_color = RED
+        elif bat_val < 50:
+            bat_color = YELLOW
+        print(f"🔋 Battery:      {bat_color}{bat_pct_str}{RESET}{bat_details}")
 
     ip_str = f" | {local_ip}"
     if public_ip:
