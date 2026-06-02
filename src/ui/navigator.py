@@ -357,7 +357,9 @@ class AnalyzeSelector(_PagedSelector):
                 style = "\033[1;35m" if is_hover else ""
                 name_padded = pad_and_truncate(item["name"], name_w)
                 icon = item.get("icon", "📁")
-                age_str = f" {GRAY}{item.get('age_hint', '')}{RESET}" if item.get("age_hint") else ""
+                age_str = (
+                    f" {GRAY}{item.get('age_hint', '')}{RESET}" if item.get("age_hint") else ""
+                )
                 buf.append(
                     f"{cursor} {checkbox_str}{bar_str}{item['percent']:>5.1f}%  |  {icon} {style}{name_padded}{RESET}  {WHITE}{bytes_to_human(item['size']):>12}{RESET}{age_str}\033[K\n"
                 )
@@ -370,9 +372,7 @@ class AnalyzeSelector(_PagedSelector):
                 f" {page_info} ↑↓←→ | A:All | F:Open Folder | R:Reload | S:Sort {order_icon} | Space:Select"
             ]
         else:
-            prompts = [
-                f" {page_info} ↑↓→ | F:Open Folder | R:Reload | S:Sort {order_icon}"
-            ]
+            prompts = [f" {page_info} ↑↓→ | F:Open Folder | R:Reload | S:Sort {order_icon}"]
 
         buf.append("\n\033[K\n")
         for p in prompts:
@@ -380,8 +380,7 @@ class AnalyzeSelector(_PagedSelector):
 
         if self.selected_items:
             buf.append(
-                f"\n \033[1;35m☉ Selected Items to Remove:\033[0m "
-                f"{GRAY}Enter:Delete{RESET}\033[K\n"
+                f"\n \033[1;35m☉ Selected Items to Remove:\033[0m {GRAY}Enter:Delete{RESET}\033[K\n"
             )
             for i in sorted(list(self.selected_items)):
                 item = self.items[i]
@@ -683,9 +682,7 @@ class UninstallSelector(_PagedSelector):
                     if not self.selected_ids:
                         continue
                     return [
-                        i
-                        for i, item in enumerate(self.items)
-                        if item["id"] in self.selected_ids
+                        i for i, item in enumerate(self.items) if item["id"] in self.selected_ids
                     ]
                 elif key == Navigator.ESC and len(key) == 1:
                     return []
@@ -751,9 +748,7 @@ class TopFilesSelector:
                         self.selected_items.add(self.selected_index)
                 elif key in Navigator.ENTER:
                     return (
-                        list(self.selected_items)
-                        if self.selected_items
-                        else [self.selected_index]
+                        list(self.selected_items) if self.selected_items else [self.selected_index]
                     )
                 elif key == Navigator.ESC and len(key) == 1:
                     return []

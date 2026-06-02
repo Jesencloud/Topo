@@ -61,7 +61,8 @@ def test_linux_sensitive_app_data_is_protected(test_env):
         test_env / ".config/rime/default.custom.yaml",
         test_env / ".local/share/fcitx/table/user.mb",
         test_env / ".config/dconf/user",
-        test_env / ".config/gnome-shell/extensions/user-theme@gnome-shell-extensions.gcampax.github.com",
+        test_env
+        / ".config/gnome-shell/extensions/user-theme@gnome-shell-extensions.gcampax.github.com",
         test_env / ".config/gtk-3.0/settings.ini",
         test_env / ".local/share/gvfs-metadata/home",
         test_env / ".local/share/DBeaverData/workspace6/General/.dbeaver/credentials-config.json",

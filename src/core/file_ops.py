@@ -90,9 +90,8 @@ def validate_path_for_deletion(
         return False, "Refusing to delete critical system path"
     for critical in CRITICAL_PREFIX_PATHS:
         if (
-            (resolved_path == critical or critical in resolved_path.parents)
-            and not _is_system_cleanable_content(resolved_path)
-        ):
+            resolved_path == critical or critical in resolved_path.parents
+        ) and not _is_system_cleanable_content(resolved_path):
             return False, "Refusing to delete critical system path"
     return True, ""
 

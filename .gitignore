@@ -37,6 +37,10 @@ topo-core/target/
 *.swp
 *.tmp
 *.log
+.claude/
+.claude/settings.local.json
+scheduled_tasks.lock
+settings.local.json
 
 # --- Sensitive Info ---
 .env

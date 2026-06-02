@@ -25,9 +25,30 @@ class UninstallManager:
     # (e.g. "desktop" from "org.telegram.desktop", or "data"/"app").
     _GENERIC_TOKENS = frozenset(
         {
-            "app", "apps", "data", "core", "bin", "cache", "config", "share",
-            "gui", "lib", "tmp", "temp", "default", "common", "main", "client",
-            "desktop", "system", "settings", "local", "user", "code", "go", "id",
+            "app",
+            "apps",
+            "data",
+            "core",
+            "bin",
+            "cache",
+            "config",
+            "share",
+            "gui",
+            "lib",
+            "tmp",
+            "temp",
+            "default",
+            "common",
+            "main",
+            "client",
+            "desktop",
+            "system",
+            "settings",
+            "local",
+            "user",
+            "code",
+            "go",
+            "id",
         }
     )
     _OFFICIAL_ONLY_TOKENS = frozenset(
@@ -526,6 +547,7 @@ class UninstallManager:
             all_process_names = [app["id"], app["name"].lower()]
             if app["type"] == "Flatpak":
                 import contextlib
+
                 with contextlib.suppress(OSError, subprocess.SubprocessError):
                     system.run_command(["flatpak", "kill", app["id"]], capture=True, timeout=20)
 
@@ -548,9 +570,7 @@ class UninstallManager:
             if app["type"] == "Flatpak":
                 res = system.run_command(["flatpak", "uninstall", "-y", app["id"]], capture=True)
             elif app["type"] == "Snap":
-                res = system.run_command(
-                    ["snap", "remove", app["id"]], use_sudo=True, capture=True
-                )
+                res = system.run_command(["snap", "remove", app["id"]], use_sudo=True, capture=True)
             elif app["type"] == "APT":
                 res = system.run_command(
                     ["apt", "remove", "-y", app["id"]], use_sudo=True, capture=True
@@ -564,7 +584,7 @@ class UninstallManager:
             else:
                 res = system.run_command(
                     ["dnf", "remove", "-y", app["id"]], use_sudo=True, capture=True
-            )
+                )
             package_status = "removed" if res.ok else "failed"
             record_deletion_audit(app["id"], package_mode, package_status, package_size)
             package_event_recorded = True
@@ -676,8 +696,7 @@ def run_uninstall():
             print()
             # Ensure sudo session (require password) outside raw mode so sudo can own input.
             if not system.ensure_sudo_session(
-                f"{MAGENTA}➔{RESET} App removal requires admin access\n"
-                f"{MAGENTA}➔{RESET} Password: "
+                f"{MAGENTA}➔{RESET} App removal requires admin access\n{MAGENTA}➔{RESET} Password: "
             ):
                 if system.SUDO_CANCELLED:
                     print(f" {YELLOW}⚠️  Uninstall cancelled by user.{RESET}\n")
@@ -709,5 +728,7 @@ def run_uninstall():
             print("=" * 70)
 
             # Standardized return/exit prompt
-            if not Navigator.wait_for_return("Press Enter to return application list , ESC to exit..."):
+            if not Navigator.wait_for_return(
+                "Press Enter to return application list , ESC to exit..."
+            ):
                 return  # Exit uninstall completely

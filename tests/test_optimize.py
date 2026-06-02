@@ -25,7 +25,9 @@ def test_run_systemd_user_service_cleanup_removes_broken_unit(test_env):
 
     assert result == "Removed 1 broken user systemd service(s)"
     assert not service_file.exists()
-    mock_run.assert_called_once_with(["systemctl", "--user", "daemon-reload"], capture=True, timeout=10)
+    mock_run.assert_called_once_with(
+        ["systemctl", "--user", "daemon-reload"], capture=True, timeout=10
+    )
 
 
 def test_run_systemd_user_service_cleanup_keeps_valid_unit(test_env):
@@ -66,7 +68,9 @@ def test_run_vacuum_all_skips_when_browser_is_running(test_env):
 
 def test_run_memory_opt_skips_when_memory_pressure_is_low():
     with (
-        patch("src.clean.optimize._read_memory_pressure", return_value=(False, "72% memory available")),
+        patch(
+            "src.clean.optimize._read_memory_pressure", return_value=(False, "72% memory available")
+        ),
         patch("src.clean.optimize.has_sudo") as mock_has_sudo,
         patch("src.clean.optimize.run_command") as mock_run,
     ):

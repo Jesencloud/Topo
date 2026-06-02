@@ -23,7 +23,9 @@ def run_remove(dry_run=False):
                     continue
             except OSError:
                 continue
-            to_remove.append({"path": launcher_path, "desc": "Launcher script link", "type": "link"})
+            to_remove.append(
+                {"path": launcher_path, "desc": "Launcher script link", "type": "link"}
+            )
 
     # Configuration directory
     config_dir = Path.home() / ".config" / "topo"

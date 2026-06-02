@@ -22,6 +22,11 @@ from .system import run_command
 
 SCAN_SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 
+# Grace period before a scan paints the (screen-clearing) scan header + spinner.
+# Scans that finish within this window redraw in place like a cache hit, so fast
+# small-directory scans don't flash/jitter; only slower scans show the spinner.
+SCAN_SPINNER_DELAY = 0.15
+
 
 # --- Internal Cache System ---
 class ScanCache:
@@ -83,6 +88,39 @@ def get_rust_scan_data(path: Path) -> dict[str, Any] | None:
     return None
 
 
+def get_rust_tree_data(path: Path) -> dict[str, Any] | None:
+    """Scan the whole subtree under ``path`` in one pass.
+
+    Returns a map ``{relative-dir-path: {total_size_bytes, file_count, subdirs}}``
+    where ``"."`` is the root, used to prime the cache for every directory level
+    so that drilling into any descendant needs no rescan. Returns None if the
+    engine is missing, fails, or predates ``--tree`` support.
+    """
+    binary = _get_core_binary()
+    if binary is None:
+        return None
+
+    res = run_command([str(binary), "--tree", str(path)], capture=True, timeout=600)
+    if not res.ok:
+        return None
+    try:
+        return json.loads(res.stdout)
+    except json.JSONDecodeError:
+        return None
+
+
+def _prime_cache_from_tree(root: Path, tree: dict[str, Any]) -> None:
+    """Populate ScanCache for every directory level returned by a tree scan.
+
+    Keys are rejoined onto the original ``root`` (not the engine's canonicalized
+    path) so they match how the UI builds child paths via ``parent / name`` —
+    this is what keeps the cache hits working when ``root`` is a symlink.
+    """
+    for rel, node in tree.items():
+        key = root if rel == "." else root.joinpath(*rel.split("/"))
+        ScanCache.set(key, node)
+
+
 def _parallel_scan_sizes(paths: list[Path]) -> dict[Path, int]:
     """Scan multiple paths concurrently via the Rust engine.
 
@@ -110,30 +148,64 @@ def _scan_status_message(scan_reason: str, target_label: str, frame: str) -> str
 
 
 def _render_scan_header(view_title: str) -> None:
-    print("\033[2J\033[H", end="")
-    print(f"{PURPLE}{view_title}{RESET}")
+    # Place the title exactly where AnalyzeSelector.render() puts it (home,
+    # one blank line, then the title on row 2) so the screen does not shift
+    # vertically when the scan screen hands off to the result list.
+    print(f"\033[H\033[J\n{PURPLE}{view_title}{RESET}\033[K", flush=True)
 
 
-def _get_rust_scan_data_with_spinner(path: Path, scan_reason: str, target_label: str) -> dict[str, Any] | None:
+def _scan_with_spinner(
+    worker, scan_reason: str, target_label: str, view_title: str
+) -> dict[str, Any] | None:
+    """Run ``worker()`` in a background thread.
+
+    If it finishes within ``SCAN_SPINNER_DELAY`` the scan screen is never
+    painted, so fast scans (small dirs / mostly-cached subtrees) hand off to the
+    result list with an in-place redraw — exactly like a cache hit, no flash or
+    jitter. Only scans slower than the grace period clear the screen and animate
+    the spinner."""
     with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(get_rust_scan_data, path)
+        future = executor.submit(worker)
+        elapsed = 0.0
+        header_shown = False
         frame_index = 0
         last_len = 0
         try:
-            while True:
-                msg = _scan_status_message(
-                    scan_reason,
-                    target_label,
-                    SCAN_SPINNER_FRAMES[frame_index % len(SCAN_SPINNER_FRAMES)],
-                )
-                last_len = max(last_len, len(msg))
-                print(msg, end="\r", flush=True)
-                if future.done():
-                    return future.result()
-                frame_index += 1
-                time.sleep(0.1)
+            while not future.done():
+                if not header_shown and elapsed >= SCAN_SPINNER_DELAY:
+                    _render_scan_header(view_title)
+                    header_shown = True
+                if header_shown:
+                    msg = _scan_status_message(
+                        scan_reason,
+                        target_label,
+                        SCAN_SPINNER_FRAMES[frame_index % len(SCAN_SPINNER_FRAMES)],
+                    )
+                    last_len = max(last_len, len(msg))
+                    print(msg, end="\r", flush=True)
+                    frame_index += 1
+                time.sleep(0.05)
+                elapsed += 0.05
+            return future.result()
         finally:
-            print(" " * last_len, end="\r", flush=True)
+            if header_shown:
+                print(" " * last_len, end="\r", flush=True)
+
+
+def _get_rust_scan_data_with_spinner(
+    path: Path, scan_reason: str, target_label: str, view_title: str
+) -> dict[str, Any] | None:
+    return _scan_with_spinner(
+        lambda: get_rust_scan_data(path), scan_reason, target_label, view_title
+    )
+
+
+def _tree_scan_with_spinner(
+    path: Path, scan_reason: str, target_label: str, view_title: str
+) -> dict[str, Any] | None:
+    return _scan_with_spinner(
+        lambda: get_rust_tree_data(path), scan_reason, target_label, view_title
+    )
 
 
 def get_age_hint(path: Path) -> str:
@@ -264,8 +336,7 @@ def _confirm_delete(count: int, total_size: int, needs_admin: bool) -> bool:
 
     print()
     if not system.ensure_sudo_session(
-        f"{MAGENTA}➔{RESET} File deletion requires admin access\n"
-        f"{MAGENTA}➔{RESET} Password: "
+        f"{MAGENTA}➔{RESET} File deletion requires admin access\n{MAGENTA}➔{RESET} Password: "
     ):
         if system.SUDO_CANCELLED:
             print(f" {YELLOW}⚠️  Delete cancelled by user.{RESET}\n")
@@ -310,8 +381,33 @@ def run_deep_analysis(target_path: Path = None):
 
         if needs_scan:
             target_label = target_to_scan.name if current_target else "Home"
-            _render_scan_header(view_title)
-            data = _get_rust_scan_data_with_spinner(target_to_scan, scan_reason, target_label)
+            cached = ScanCache.get(target_to_scan)
+            if cached is not None:
+                # Cache hit (possibly primed by an earlier whole-subtree scan):
+                # load instantly without painting the scan screen, so the view
+                # doesn't blank/flash and shift vertically on every page turn.
+                data = cached
+            elif current_target is not None:
+                # Exploring inside a directory: scan the WHOLE subtree once and
+                # prime the cache for every level, so subsequent drilling never
+                # rescans. The scan screen only appears if the scan is slow (see
+                # _scan_with_spinner); fast small-dir scans redraw in place.
+                # Falls back to a single-level scan for engines predating --tree.
+                tree = _tree_scan_with_spinner(
+                    target_to_scan, scan_reason, target_label, view_title
+                )
+                if tree:
+                    _prime_cache_from_tree(target_to_scan, tree)
+                    data = ScanCache.get(target_to_scan)
+                else:
+                    data = _get_rust_scan_data_with_spinner(
+                        target_to_scan, scan_reason, target_label, view_title
+                    )
+            else:
+                # Root view (categories): a single-level scan is all it needs.
+                data = _get_rust_scan_data_with_spinner(
+                    target_to_scan, scan_reason, target_label, view_title
+                )
             if not data:
                 print("\n   ❌ Engine scan failed.")
                 time.sleep(1.5)

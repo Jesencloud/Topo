@@ -1,3 +1,29 @@
+# Daily Modification Report - 2026-06-02
+
+## Project: topo (Topo) - Flicker-Free Analyze Navigation & Whole-Subtree Scan Cache
+
+Today's session eliminated the vertical jitter that appeared when paging and drilling in the Analyze disk explorer, and made directory navigation scan-free by caching an entire subtree from a single Rust engine pass.
+
+### 1. Analyze Paging/Drill Jitter Fixes
+*   **Cache-Hit Skips Scan Screen**: `run_deep_analysis()` now loads directly from `ScanCache` on a hit instead of repainting the scan header, so drilling back into a previously visited directory no longer blanks and vertically shifts the view.
+*   **Scan Header Alignment**: Aligned the scan header so its title sits on the same row as `AnalyzeSelector.render()` (home, one blank line, then the title), removing the one-row vertical jump when the scan screen handed off to the result list.
+*   **Padded-Page Investigation**: Diagnosed and ruled out a separate within-page footer shift; the committed fix focuses on the scan-driven jitter that users actually hit while navigating directories.
+
+### 2. Whole-Subtree Scan + Per-Directory Cache Priming
+*   **Rust `--tree` Mode**: Added a `--tree` mode to the `topo-core` engine that, in the same single walk it already performs to compute totals, aggregates size, file count, and immediate-children for EVERY directory level and emits them keyed by a path relative to the scan root (`"."` is the root). The default single-level output is byte-for-byte unchanged for existing callers (`_parallel_scan_sizes`, `get_size_fast`).
+*   **Shared Walker**: Factored the directory walk into a single `walk_files()` helper reused by both the single-level and tree scans, so skip-list, symlink, hidden-file, and zero-byte rules stay identical across modes.
+*   **Size-Threshold Pruning**: Tree mode only emits directories ≥ 1 MiB (the root is always emitted, and every node still lists all immediate children), bounding output and memory on very large home directories while keeping every meaningful directory instantly drillable.
+*   **Cache Priming**: `get_rust_tree_data()` and `_prime_cache_from_tree()` populate `ScanCache` for every directory level from one engine pass, rejoining relative keys onto the original (possibly symlinked) root so they match how the UI builds child paths via `parent / name`.
+*   **Scan-Free Drilling**: Entering a directory now tree-scans once and primes all levels, so subsequent drilling into any cached subdirectory is an instant cache hit with no rescan. Sub-1 MiB directories fall back to a quick scoped scan, and engines predating `--tree` fall back to the original single-level scan.
+
+### 3. Grace-Period Scan Screen (No Flash on Fast Scans)
+*   **Deferred Scan UI**: `_scan_with_spinner()` runs the scan in a background thread and only paints the screen-clearing header + spinner if the scan exceeds a short grace period (`SCAN_SPINNER_DELAY = 0.15s`). Fast scans (small dirs) finish within the window and hand off to the result list with an in-place redraw — identical to a cache hit, with no flash or jitter — while genuinely slow scans (first Home scan, large directories) still show the loading spinner.
+
+### 4. Regression Coverage
+*   **Rust Tests**: Added `cargo` tests covering tree-mode totals/file-counts/subdirs across levels, directories with only subdirectories, zero-byte exclusion, relative-key shape, skip-list directories, and symlink non-following, plus a `tempfile` dev-dependency.
+*   **Python Tests**: Added coverage for tree-data parsing (without touching the cache), cache-key rejoining, drill-after-tree-scan cache hits, old-engine single-scan fallback, the root view staying on single-scan, and the spinner grace period (fast scan skips the header, slow scan shows it).
+*   **Verification**: Confirmed the final state with `cargo test`, `ruff check src tests`, and the full pytest suite.
+
 # Daily Modification Report - 2026-06-01
 
 ## Project: topo (Topo) - Unified Destructive Action UX

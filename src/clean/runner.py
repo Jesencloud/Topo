@@ -58,8 +58,7 @@ def run_clean(dry_run=False):
         if choice in (" ", "\x1b"):
             return False
         elif not system.ensure_sudo_session(
-            f"{PURPLE}➔{RESET} System cleanup requires admin access\n"
-            f"{PURPLE}➔{RESET} Password: "
+            f"{PURPLE}➔{RESET} System cleanup requires admin access\n{PURPLE}➔{RESET} Password: "
         ):
             if system.SUDO_CANCELLED:
                 print(f" {YELLOW}⚠️  Cleanup cancelled by user.{RESET}\n")

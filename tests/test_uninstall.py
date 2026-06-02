@@ -295,11 +295,7 @@ def test_run_full_scan_apt(mock_which, mock_run_cmd):
     mock_which.side_effect = lambda x: "/usr/bin/dpkg-query" if x == "dpkg-query" else None
     mock_run_cmd.return_value = MagicMock(
         ok=True,
-        stdout=(
-            "firefox\t204800\n"
-            "linux-image-generic\t204800\n"
-            "libreoffice-writer:amd64\t204800\n"
-        ),
+        stdout=("firefox\t204800\nlinux-image-generic\t204800\nlibreoffice-writer:amd64\t204800\n"),
     )
 
     mgr = UninstallManager()

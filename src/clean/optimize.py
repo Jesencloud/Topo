@@ -53,7 +53,9 @@ def _read_sudo_choice() -> str:
 def _is_any_process_running(process_names: list[str]) -> bool:
     if not shutil.which("pgrep"):
         return False
-    return any(run_command(["pgrep", "-x", name], capture=True, timeout=1).ok for name in process_names)
+    return any(
+        run_command(["pgrep", "-x", name], capture=True, timeout=1).ok for name in process_names
+    )
 
 
 def _is_sqlite_database(db_file: Path) -> bool:
@@ -123,8 +125,16 @@ def run_vacuum_all(dry_run=False):
     targets = [
         ("Firefox", ["firefox"], "~/.mozilla/firefox/*/places.sqlite"),
         ("Firefox", ["firefox"], "~/.mozilla/firefox/*/cookies.sqlite"),
-        ("Chrome", ["google-chrome", "chrome", "chromium"], "~/.config/google-chrome/Default/History"),
-        ("Brave", ["brave", "brave-browser"], "~/.config/BraveSoftware/Brave-Browser/Default/History"),
+        (
+            "Chrome",
+            ["google-chrome", "chrome", "chromium"],
+            "~/.config/google-chrome/Default/History",
+        ),
+        (
+            "Brave",
+            ["brave", "brave-browser"],
+            "~/.config/BraveSoftware/Brave-Browser/Default/History",
+        ),
         ("Edge", ["microsoft-edge"], "~/.config/microsoft-edge/Default/History"),
     ]
 
@@ -307,13 +317,19 @@ def _read_memory_pressure() -> tuple[bool, str]:
 def run_memory_opt(dry_run=False):
     pressure_high, detail = _read_memory_pressure()
     if not pressure_high:
-        return f"Memory pressure already optimal ({detail})" if detail else "Memory pressure already optimal"
+        return (
+            f"Memory pressure already optimal ({detail})"
+            if detail
+            else "Memory pressure already optimal"
+        )
     if dry_run:
         return "PageCache would be released (Memory pressure high)"
     if not has_sudo():
         return None
     run_command(["sync"], capture=True)
-    if run_command(["bash", "-c", "echo 1 > /proc/sys/vm/drop_caches"], use_sudo=True, capture=True).ok:
+    if run_command(
+        ["bash", "-c", "echo 1 > /proc/sys/vm/drop_caches"], use_sudo=True, capture=True
+    ).ok:
         return "PageCache released (Memory relief)"
     return None
 
