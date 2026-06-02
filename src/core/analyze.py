@@ -233,7 +233,6 @@ def build_analysis_entry(name: str, path: Path, size: int, total_size: int) -> d
         "path": path,
         "size": size,
         "percent": (size / (total_size or 1)) * 100,
-        "color": CYAN,
         "icon": icon,
         "is_cleanable": is_cleanable,
         "cleanable_reason": "CACHEDIR.TAG" if is_cleanable else "",

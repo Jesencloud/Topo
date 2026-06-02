@@ -699,10 +699,16 @@ def run_uninstall():
                 f"{MAGENTA}➔{RESET} App removal requires admin access\n{MAGENTA}➔{RESET} Password: "
             ):
                 if system.SUDO_CANCELLED:
-                    print(f" {YELLOW}⚠️  Uninstall cancelled by user.{RESET}\n")
+                    # Navigator.wait_for_return already adds a leading newline
+                    print(f" {YELLOW}⚠️  Uninstall cancelled by user.{RESET}", end="")
+                    if not Navigator.wait_for_return(
+                        "Press Enter to return to application list, ESC to exit..."
+                    ):
+                        return
+                    continue
                 else:
                     print(f" {RED}✗{RESET} Authorization failed. Uninstall cancelled.\n")
-                return
+                    return
 
             print(f" {GREEN}✓{RESET} Authorization successful.\n")
 
@@ -729,6 +735,6 @@ def run_uninstall():
 
             # Standardized return/exit prompt
             if not Navigator.wait_for_return(
-                "Press Enter to return application list , ESC to exit..."
+                "Press Enter to return to application list, ESC to exit..."
             ):
                 return  # Exit uninstall completely

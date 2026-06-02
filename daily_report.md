@@ -19,9 +19,21 @@ Today's session eliminated the vertical jitter that appeared when paging and dri
 ### 3. Grace-Period Scan Screen (No Flash on Fast Scans)
 *   **Deferred Scan UI**: `_scan_with_spinner()` runs the scan in a background thread and only paints the screen-clearing header + spinner if the scan exceeds a short grace period (`SCAN_SPINNER_DELAY = 0.15s`). Fast scans (small dirs) finish within the window and hand off to the result list with an in-place redraw — identical to a cache hit, with no flash or jitter — while genuinely slow scans (first Home scan, large directories) still show the loading spinner.
 
-### 4. Regression Coverage
-*   **Rust Tests**: Added `cargo` tests covering tree-mode totals/file-counts/subdirs across levels, directories with only subdirectories, zero-byte exclusion, relative-key shape, skip-list directories, and symlink non-following, plus a `tempfile` dev-dependency.
-*   **Python Tests**: Added coverage for tree-data parsing (without touching the cache), cache-key rejoining, drill-after-tree-scan cache hits, old-engine single-scan fallback, the root view staying on single-scan, and the spinner grace period (fast scan skips the header, slow scan shows it).
+### 4. Thorough Uninstallation & UI Polish (v0.7.0 Prep)
+*   **APT Purge & Autoremove**: Upgraded Ubuntu/Debian uninstallation from `apt remove` to `apt purge -y --autoremove`. This ensures system-level configurations and orphaned dependencies are fully cleared, aligning with the "Remove apps completely" promise.
+*   **Light-Theme Compatibility**: Redefined the `WHITE` color constant to a dark gray (`\033[38;5;244m`), ensuring that file sizes and metadata are clearly visible on both dark and pure-white terminal backgrounds.
+*   **UI Layout & Color Sync**:
+    *   **Analyze Disk**: Moved the folder/file name to the center and pushed the file size to the far right with a separator. Matched the file size color with the name color (dynamic highlighting).
+    *   **Uninstall List**: Reordered the layout to `[Checkbox] [App Name] [Size] | [Time]`.
+    *   **Progress Bar Logic**: Refined `draw_bar` so that 0% is strictly gray and any value > 0% (even 0.1%) forces at least one colored block (Green/Yellow/Red).
+    *   **Cleaner TUI**: Removed `age_hint` (e.g., `>1m`) from the Analyze Disk view for a more minimalist look. Changed the uninstaller title to "Select Application to Remove" in purple with tighter spacing.
+*   **Sudo Cancellation Experience**: Added a graceful "Uninstall cancelled by user" prompt with a standardized "Enter: Return / ESC: Exit" handler when a password prompt is interrupted with `Ctrl+C`.
+*   **Bug Fix**: Fixed a hardcoded `CYAN` color in `src/core/analyze.py` that was preventing Analyze Disk progress bars from showing their correct status colors (Green/Yellow/Red).
+*   **v0.7.0 Release Prep**: Updated `VERSION` to `0.7.0` and drafted comprehensive release notes in `docs/releases/v0.7.0.md` summarizing all changes since v0.6.0.
+
+### 5. Regression Coverage
+*   **Uninstall Tests**: Updated `tests/test_uninstall.py` to verify the new `apt purge --autoremove` command.
+*   **Rust & UI Tests**: Added `cargo` tests covering tree-mode totals and hierarchical data, and verified the final TUI state manually across different terminal themes.
 *   **Verification**: Confirmed the final state with `cargo test`, `ruff check src tests`, and the full pytest suite.
 
 # Daily Modification Report - 2026-06-01

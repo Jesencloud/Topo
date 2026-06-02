@@ -48,7 +48,10 @@ def draw_bar(percent, width=20, force_color=None):
     """Draws a sleek progress bar using the '▬' character."""
     if width <= 0:
         return ""
+    # Ensure even small percentages show at least one block to distinguish from 0%
     filled = int((percent / 100) * width)
+    if percent > 0 and filled == 0:
+        filled = 1
     empty = width - filled
 
     if force_color:
@@ -60,8 +63,12 @@ def draw_bar(percent, width=20, force_color=None):
     else:
         color = GREEN
 
-    bar = f"{color}{'▬' * filled}{RESET}{GRAY}{'▬' * empty}{RESET}"
-    return bar
+    if percent <= 0:
+        # For 0%, show a consistent gray empty bar
+        return f"{GRAY}{'▬' * width}{RESET}"
+
+    # For >0%, show colored filled part and gray empty part
+    return f"{color}{'▬' * filled}{RESET}{GRAY}{'▬' * empty}{RESET}"
 
 
 class Navigator:
@@ -352,16 +359,13 @@ class AnalyzeSelector(_PagedSelector):
                 else:
                     checkbox_str = f" {i + 1:2}. "
 
-                bar = draw_bar(item["percent"], width=bar_w, force_color=item.get("color"))
+                bar = draw_bar(item["percent"], width=bar_w)
                 bar_str = f"{bar}  " if bar_w > 0 else ""
                 style = "\033[1;35m" if is_hover else ""
                 name_padded = pad_and_truncate(item["name"], name_w)
                 icon = item.get("icon", "📁")
-                age_str = (
-                    f" {GRAY}{item.get('age_hint', '')}{RESET}" if item.get("age_hint") else ""
-                )
                 buf.append(
-                    f"{cursor} {checkbox_str}{bar_str}{item['percent']:>5.1f}%  |  {icon} {style}{name_padded}{RESET}  {WHITE}{bytes_to_human(item['size']):>12}{RESET}{age_str}\033[K\n"
+                    f"{cursor} {checkbox_str}{RESET}{bar_str}{item['percent']:>5.1f}%  {icon} {style}{name_padded}{RESET} | {style}{bytes_to_human(item['size']):>10}{RESET}\033[K\n"
                 )
 
         order_icon = "↓" if self.sort_reverse else "↑"
@@ -589,7 +593,7 @@ class UninstallSelector(_PagedSelector):
                 name_style = "\033[1;35m" if is_selected else "\033[1;36m" if is_hover else ""
                 name_padded = pad_and_truncate(item["name"], 35)
                 buf.append(
-                    f"{cursor} {checkbox} {name_style}{name_padded}{RESET}     {item['size_str']:>12} | {self._format_time_ago(item['install_time'])}\033[K\n"
+                    f"{cursor} {checkbox} {name_style}{name_padded}{RESET}  {name_style}{item['size_str']:>12}{RESET} | {self._format_time_ago(item['install_time'])}\033[K\n"
                 )
             sort_dir = "↓" if self.sort_reverse else "↑"
             sort_labels = {
