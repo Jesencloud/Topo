@@ -20,7 +20,13 @@ Today's session focused on improving the TUI's responsiveness to terminal window
 *   **Selective Mouse Tracking**: Modified `_selector_session` to allow optional mouse tracking. Disabled mouse tracking for the **Main Menu** and **Confirm Dialog**, ensuring that users can select and copy text (like the banner or paths) using their terminal's standard mouse behavior without needing to hold `Shift`.
 *   **Preserved Interaction**: Kept mouse wheel and dragging support enabled for high-density, scrollable views (Analyze, Uninstall, Clean) where scrolling is a priority.
 
-### 5. Stability & Regression Coverage
+### 5. Professional-Grade System Optimization
+*   **Smart Swap Management**: Re-implemented the intelligent swap reset logic. It now monitors `/proc/meminfo` and safely executes `swapoff -a && swapon -a` only when available RAM is at least twice the used swap size, eliminating micro-stutters.
+*   **Aggressive Journal Maintenance**: Added a maintenance task to vacuum systemd journals to 3 days (`--vacuum-time=3d`), ensuring the logs remain compact without losing recent history.
+*   **System Coredump Cleanup**: Integrated a task to clear system coredumps via `journalctl --vacuum-coredump=0`, reclaiming space from historical crash dumps.
+*   **Broken Symlink Removal**: Added a user-level cleanup for broken symbolic links in common directories (`~/.local/bin`, `~/Desktop`, `~/Documents`).
+
+### 6. Stability & Regression Coverage
 *   **Scroll Wheel Null Safety**: Fixed a `TypeError` in `_handle_scrollbar_mouse` where arithmetic operations failed if the scroll position was uninitialized.
 *   **Test Suite Updates**: Updated `tests/test_navigator.py` to verify the presence of the `\033[J` clearing sequence and ensure the new resize-polling logic doesn't introduce regressions in key capture.
 *   **Verification**: Confirmed the final state with `pytest tests/test_navigator.py` and manual verification across different terminal emulators.

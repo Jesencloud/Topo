@@ -12,7 +12,7 @@ from pathlib import Path
 
 from ..core import system
 from ..core.constants import BOLD, GRAY, GREEN, PURPLE, RED, RESET, YELLOW
-from ..core.file_ops import bytes_to_human, get_size, safe_remove
+from ..core.file_ops import bytes_to_human, get_size, parse_size_from_text, safe_remove
 from ..core.system import has_sudo, run_command
 
 # Lock to ensure parallel tasks don't corrupt the terminal output
@@ -271,6 +271,111 @@ def run_systemd_user_service_cleanup(dry_run=False):
     return f"Found {len(broken_units)} broken user systemd service(s)"
 
 
+def run_swap_management(dry_run=False):
+    """Reset swap if RAM is plentiful to reduce micro-stutter."""
+    if not shutil.which("swapoff") or not shutil.which("swapon"):
+        return None
+
+    try:
+        mem = {}
+        with open("/proc/meminfo") as f:
+            for line in f:
+                parts = line.split(":")
+                if len(parts) == 2:
+                    key = parts[0].strip()
+                    raw_val = parts[1].strip().split()[0]
+                    mem[key] = int(raw_val) * 1024
+
+        available = mem.get("MemAvailable", 0)
+        total_swap = mem.get("SwapTotal", 0)
+        free_swap = mem.get("SwapFree", 0)
+        used_swap = total_swap - free_swap
+
+        if used_swap <= 0:
+            return None
+
+        # Only reset if we have 2x the used swap available in RAM for safety
+        if available > used_swap * 2:
+            if dry_run:
+                return f"Swap would be reset (Currently using {bytes_to_human(used_swap)})"
+
+            # swapoff -a can take time as data is moved back to RAM
+            if run_command(["swapoff", "-a"], use_sudo=True, timeout=120).ok:
+                run_command(["swapon", "-a"], use_sudo=True, timeout=30)
+                return f"Swap reset successful (Reclaimed {bytes_to_human(used_swap)})"
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def run_journal_optimization(dry_run=False):
+    """Aggressive journal vacuuming (keep 3 days)."""
+    if not shutil.which("journalctl"):
+        return None
+    if dry_run:
+        return "System journal would be vacuumed to 3 days"
+
+    res = run_command(["journalctl", "--vacuum-time=3d"], use_sudo=True, capture=True)
+    if res.ok and res.stdout:
+        freed = parse_size_from_text(res.stdout)
+        if freed > 0:
+            return f"Journal vacuumed to 3 days (Reclaimed {bytes_to_human(freed)})"
+    return "Journal already optimized (under 3 days)"
+
+
+def run_coredump_cleanup(dry_run=False):
+    """Clean system coredump files."""
+    coredump_dir = Path("/var/lib/systemd/coredump")
+    if not coredump_dir.exists() and not shutil.which("journalctl"):
+        return None
+
+    if dry_run:
+        return "System coredumps would be cleared"
+
+    res = run_command(["journalctl", "--vacuum-coredump=0"], use_sudo=True, capture=True)
+    if res.ok:
+        return "System coredumps cleared"
+    return None
+
+
+def run_broken_symlink_cleanup(dry_run=False):
+    """Remove broken symlinks in common user directories."""
+    search_dirs = [
+        Path.home() / ".local/bin",
+        Path.home() / "Desktop",
+        Path.home() / "Documents",
+    ]
+
+    broken = []
+    for d in search_dirs:
+        if not d.exists():
+            continue
+        try:
+            for item in d.iterdir():
+                if item.is_symlink() and not item.exists():
+                    broken.append(item)
+        except OSError:
+            continue
+
+    if not broken:
+        return None
+
+    if dry_run:
+        return f"Found {len(broken)} broken user symlinks"
+
+    removed = 0
+    for link in broken:
+        try:
+            link.unlink()
+            removed += 1
+        except OSError:
+            continue
+
+    if removed > 0:
+        return f"Removed {removed} broken user symlink(s)"
+    return None
+
+
 def _extract_service_exec_target(service_file: Path) -> str:
     for line in service_file.read_text(errors="ignore").splitlines():
         line = line.strip()
@@ -402,6 +507,10 @@ def optimize_system(dry_run=False):
             lambda: run_fccache(dry_run),
             lambda: run_dns_flush(dry_run),
             lambda: run_memory_opt(dry_run),
+            lambda: run_swap_management(dry_run),
+            lambda: run_journal_optimization(dry_run),
+            lambda: run_coredump_cleanup(dry_run),
+            lambda: run_broken_symlink_cleanup(dry_run),
             lambda: run_thumbnail_cleanup(dry_run),
             lambda: run_desktop_database_refresh(dry_run),
             lambda: run_mime_database_refresh(dry_run),
@@ -415,6 +524,10 @@ def optimize_system(dry_run=False):
             lambda: run_fccache(True),
             lambda: run_dns_flush(True),
             lambda: run_memory_opt(True),
+            lambda: run_swap_management(True),
+            lambda: run_journal_optimization(True),
+            lambda: run_coredump_cleanup(True),
+            lambda: run_broken_symlink_cleanup(True),
             lambda: run_thumbnail_cleanup(True),
             lambda: run_vacuum_all(True),
             lambda: run_desktop_database_refresh(True),
