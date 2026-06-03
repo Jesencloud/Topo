@@ -461,12 +461,12 @@ class Navigator:
 
 
 @contextmanager
-def _selector_session():
+def _selector_session(enable_mouse=True):
     """Shared full-screen scaffolding: hide cursor, clear, raw mode, then restore."""
     Navigator.hide_cursor()
     sys.stdout.write("\033[2J")
     try:
-        with Navigator.raw_mode(enable_mouse=True) as fd:
+        with Navigator.raw_mode(enable_mouse=enable_mouse) as fd:
             yield fd
     finally:
         Navigator.show_cursor()
@@ -549,7 +549,7 @@ class InteractiveMenu:
         _render_scrollable_frame(self, buf, focus_line)
 
     def run(self):
-        with _selector_session() as fd:
+        with _selector_session(enable_mouse=False) as fd:
             while True:
                 self.render()
                 key = Navigator.get_key(fd)
@@ -1080,7 +1080,7 @@ class ConfirmSelector:
         _render_scrollable_frame(self, buf, focus_line)
 
     def run(self):
-        with _selector_session() as fd:
+        with _selector_session(enable_mouse=False) as fd:
             while True:
                 self.render()
                 key = Navigator.get_key(fd)

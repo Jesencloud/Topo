@@ -16,7 +16,11 @@ Today's session focused on improving the TUI's responsiveness to terminal window
 *   **Minimalist Characters**: Standardized the scrollbar to use the single-column linear characters `┃` (thumb) and `│` (track). The full block character `█` is no longer used for the scrollbar.
 *   **Theme Inheritance**: Forced the use of the `RESET` ANSI sequence for scrollbar rendering, ensuring it inherits the user's terminal theme colors instead of using hardcoded bright white or gray.
 
-### 4. Stability & Regression Coverage
+### 4. Copy-Paste Compatibility (Main UI)
+*   **Selective Mouse Tracking**: Modified `_selector_session` to allow optional mouse tracking. Disabled mouse tracking for the **Main Menu** and **Confirm Dialog**, ensuring that users can select and copy text (like the banner or paths) using their terminal's standard mouse behavior without needing to hold `Shift`.
+*   **Preserved Interaction**: Kept mouse wheel and dragging support enabled for high-density, scrollable views (Analyze, Uninstall, Clean) where scrolling is a priority.
+
+### 5. Stability & Regression Coverage
 *   **Scroll Wheel Null Safety**: Fixed a `TypeError` in `_handle_scrollbar_mouse` where arithmetic operations failed if the scroll position was uninitialized.
 *   **Test Suite Updates**: Updated `tests/test_navigator.py` to verify the presence of the `\033[J` clearing sequence and ensure the new resize-polling logic doesn't introduce regressions in key capture.
 *   **Verification**: Confirmed the final state with `pytest tests/test_navigator.py` and manual verification across different terminal emulators.
