@@ -2,6 +2,7 @@ import os
 import re
 import select
 import shutil
+import subprocess
 import sys
 import termios
 import time
@@ -450,6 +451,73 @@ class Navigator:
         return num_str
 
     @staticmethod
+    def _get_sound_player(sound_name):
+        """Resolves the player and path for a named sound (e.g. 'click', 'delete')."""
+        if not hasattr(Navigator, "_sound_configs"):
+            Navigator._sound_configs = {}
+
+        if sound_name not in Navigator._sound_configs:
+            from ..core.paths import get_config_dir
+
+            # 1. Check for user override
+            config_sound = get_config_dir() / "sounds" / f"{sound_name}.wav"
+            # 2. Check for bundled asset (default)
+            project_root = Path(__file__).parent.parent.parent
+            asset_map = {"click": "cli_click.wav", "delete": "delete_remove.wav"}
+            bundled_sound = project_root / "assets" / asset_map.get(sound_name, "")
+
+            target_sound = None
+            if config_sound.exists():
+                target_sound = config_sound
+            elif bundled_sound.exists():
+                target_sound = bundled_sound
+
+            player = None
+            if target_sound:
+                if shutil.which("pw-play"):
+                    player = ["pw-play", str(target_sound)]
+                elif shutil.which("paplay"):
+                    player = ["paplay", str(target_sound)]
+                elif shutil.which("aplay"):
+                    player = ["aplay", str(target_sound)]
+
+            if not player:
+                player = "bell"
+
+            Navigator._sound_configs[sound_name] = player
+
+        return Navigator._sound_configs[sound_name]
+
+    @staticmethod
+    def play_click():
+        """Plays a subtle navigation sound."""
+        player = Navigator._get_sound_player("click")
+        if player == "bell":
+            sys.stdout.write("\a")
+            sys.stdout.flush()
+        else:
+            try:
+                subprocess.Popen(player, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                sys.stdout.write("\a")
+                sys.stdout.flush()
+
+    @staticmethod
+    def play_delete():
+        """Plays a distinct sound for deletion or uninstallation."""
+        player = Navigator._get_sound_player("delete")
+        if player == "bell":
+            # For delete, we can play bell twice for a different feel if no wav
+            sys.stdout.write("\a\a")
+            sys.stdout.flush()
+        else:
+            try:
+                subprocess.Popen(player, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                sys.stdout.write("\a\a")
+                sys.stdout.flush()
+
+    @staticmethod
     def hide_cursor():
         sys.stdout.write("\x1b[?25l")
         sys.stdout.flush()
@@ -494,6 +562,7 @@ class _PagedSelector:
         if n:
             self.selected_index = (self.selected_index + delta) % n
             self.current_page = self.selected_index // self.page_size
+            Navigator.play_click()
 
     def _flip_page(self, delta):
         if self.items:
@@ -558,8 +627,10 @@ class InteractiveMenu:
                 _clear_manual_scroll(self)
                 if key in (Navigator.UP, "\x1bOA"):
                     self.selected_index = (self.selected_index - 1) % len(self.options)
+                    Navigator.play_click()
                 elif key in (Navigator.DOWN, "\x1bOB"):
                     self.selected_index = (self.selected_index + 1) % len(self.options)
+                    Navigator.play_click()
                 elif key in (Navigator.LEFT, Navigator.RIGHT, "\x1bOC", "\x1bOD"):
                     continue
                 elif key in Navigator.ENTER:
@@ -730,6 +801,7 @@ class AnalyzeSelector(_PagedSelector):
                     if total_len == 0:
                         continue
                     if self.can_select and self.selected_items:
+                        Navigator.play_delete()
                         return "DELETE_BATCH", list(self.selected_items)
                     return "DRILL_DOWN", self.selected_index
                 elif len(key) == 1 and key.lower() == "s":
@@ -988,6 +1060,7 @@ class UninstallSelector(_PagedSelector):
                 elif key in Navigator.ENTER:
                     if not self.selected_ids:
                         continue
+                    Navigator.play_delete()
                     return [
                         i for i, item in enumerate(self.items) if item["id"] in self.selected_ids
                     ]
@@ -1051,14 +1124,17 @@ class TopFilesSelector:
                 _clear_manual_scroll(self)
                 if key in (Navigator.UP, "\x1bOA"):
                     self.selected_index = (self.selected_index - 1) % len(self.items)
+                    Navigator.play_click()
                 elif key in (Navigator.DOWN, "\x1bOB"):
                     self.selected_index = (self.selected_index + 1) % len(self.items)
+                    Navigator.play_click()
                 elif key == Navigator.SPACE:
                     if self.selected_index in self.selected_items:
                         self.selected_items.remove(self.selected_index)
                     else:
                         self.selected_items.add(self.selected_index)
                 elif key in Navigator.ENTER:
+                    Navigator.play_delete()
                     return (
                         list(self.selected_items) if self.selected_items else [self.selected_index]
                     )
@@ -1105,11 +1181,14 @@ class ConfirmSelector:
                     "\x1bOD",
                 ):
                     self.selected_index = 1 - self.selected_index
+                    Navigator.play_click()
                 elif len(key) == 1 and key.lower() == "y":
                     return True
                 elif len(key) == 1 and key.lower() == "n":
                     return False
                 elif key in Navigator.ENTER:
+                    if self.selected_index == 0:
+                        Navigator.play_delete()
                     return self.selected_index == 0
                 elif key == Navigator.ESC and len(key) == 1:
                     return False
@@ -1162,8 +1241,10 @@ class CleanSelector:
                 _clear_manual_scroll(self)
                 if key in (Navigator.UP, "\x1bOA"):
                     self.selected_index = (self.selected_index - 1) % len(self.items)
+                    Navigator.play_click()
                 elif key in (Navigator.DOWN, "\x1bOB"):
                     self.selected_index = (self.selected_index + 1) % len(self.items)
+                    Navigator.play_click()
                 elif key == Navigator.SPACE:
                     if self.selected_index in self.selected_items:
                         self.selected_items.remove(self.selected_index)
@@ -1172,6 +1253,7 @@ class CleanSelector:
                 elif key in Navigator.ENTER or key == Navigator.DEL:
                     if not self.selected_items:
                         continue
+                    Navigator.play_delete()
                     return list(self.selected_items)
                 elif key == Navigator.ESC and len(key) == 1:
                     return []

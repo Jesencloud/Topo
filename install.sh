@@ -196,9 +196,9 @@ fi
 chmod +x $BIN_DIR/topo-core-* 2>/dev/null || true
 
 # Keep LICENSE for compliance, but remove everything else non-essential
+rm -f assets/*.png 2>/dev/null || true
 rm -rf \
     .github/ \
-    assets/ \
     docs/ \
     tests/ \
     daily_report.md \

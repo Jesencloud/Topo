@@ -11,7 +11,8 @@ def show_banner():
     if cmd_name in ("python3", "main.py", "topo"):
         cmd_name = "Topo"
 
-    banner = f"""{EARTH}  ████████  ██████  ██████   ██████
+    banner = f"""
+{EARTH}  ████████  ██████  ██████   ██████
      ██    ██    ██ ██   ██ ██    ██
      ██    ██    ██ ██████  ██    ██
      ██    ██    ██ ██      ██    ██

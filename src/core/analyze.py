@@ -330,6 +330,7 @@ def _confirm_delete(count: int, total_size: int, needs_admin: bool) -> bool:
         print(f" {YELLOW}⚠️  Delete skipped by user.{RESET}\n")
         return False
 
+    Navigator.play_delete()
     if not needs_admin:
         return True
 

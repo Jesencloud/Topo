@@ -19,7 +19,17 @@ Today's session focused on improving the TUI's responsiveness to terminal window
 ### 4. Analyze Selection Layout Optimization
 *   **Two-Column Summary**: Updated the "Selected Items to Remove" list in the Analyze Disk view to use a space-efficient two-column layout. Each row now displays up to two items with their respective icons, providing a more compact and readable summary of the removal queue.
 
-### 5. Copy-Paste Compatibility (Main UI)
+### 5. High-Quality Auditory Feedback
+*   **Dual-Sound Support**: Implemented a comprehensive audio feedback system with distinct sounds for different actions.
+    *   **Navigation Click**: Uses `assets/cli_click.wav` for cursor movement.
+    *   **Action Confirmation**: Uses `assets/delete_remove.wav` for destructive actions like file deletion or app uninstallation.
+*   **Custom Sound Priority**: Upgraded `Navigator.play_click()` and `Navigator.play_delete()` to prioritize user-provided WAV files at `~/.config/topo/sounds/` (`click.wav` and `delete.wav`), followed by the bundled assets.
+*   **Removed GTK Dependency**: Removed the fallback to Linux standard system sounds (`canberra-gtk-play`) to ensure the application maintains its own signature sound profile.
+*   **Asynchronous Playback**: Implemented playback using non-blocking `subprocess.Popen` with `pw-play`, `paplay`, or `aplay` to ensure zero impact on TUI responsiveness.
+*   **Installation Preservation**: Updated `install.sh` to preserve the `assets/` directory during installation while still pruning non-essential images, ensuring the bundled WAV files remain available in the deployed `~/.topo` directory.
+*   **Graceful Fallback**: Maintains a reliable fallback to the standard terminal bell (`\a`) if no audio players or files are available.
+
+### 6. Copy-Paste Compatibility (Main UI)
 *   **Selective Mouse Tracking**: Modified `_selector_session` to allow optional mouse tracking. Disabled mouse tracking for the **Main Menu** and **Confirm Dialog**, ensuring that users can select and copy text (like the banner or paths) using their terminal's standard mouse behavior without needing to hold `Shift`.
 *   **Preserved Interaction**: Kept mouse wheel and dragging support enabled for high-density, scrollable views (Analyze, Uninstall, Clean) where scrolling is a priority.
 
