@@ -1,14 +1,40 @@
 import os
+import re
 import select
+import shutil
 import sys
 import termios
 import time
 import tty
+import unicodedata
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 
 from ..core.constants import BOLD, GRAY, GREEN, PURPLE, RED, RESET, WHITE, YELLOW
 from ..core.file_ops import bytes_to_human
+
+ANSI_CSI_RE = re.compile("\x1b\\[[0-?]*[ -/]*[@-~]")
+SGR_MOUSE_RE = re.compile("\x1b\\[<(?P<button>\\d+);(?P<x>\\d+);(?P<y>\\d+)(?P<final>[mM])")
+
+
+@dataclass(frozen=True)
+class MouseEvent:
+    action: str
+    button: int
+    x: int
+    y: int
+
+
+@dataclass(frozen=True)
+class FrameState:
+    width: int
+    height: int
+    total_lines: int
+    top: int
+    scrollbar_visible: bool
+    thumb_top: int = 0
+    thumb_height: int = 0
 
 
 def get_terminal_width():
@@ -18,22 +44,197 @@ def get_terminal_width():
         return 80
 
 
+def _char_width(char):
+    if unicodedata.combining(char):
+        return 0
+    if unicodedata.east_asian_width(char) in ("W", "F"):
+        return 2
+    return 1
+
+
+def _strip_frame_controls(text):
+    return (
+        text.replace("\033[2J", "")
+        .replace("\033[H", "")
+        .replace("\033[J", "")
+        .replace("\033[K", "")
+    )
+
+
+def _frame_line_count(parts):
+    text = _strip_frame_controls("".join(parts))
+    if not text:
+        return 0
+    lines = text.count("\n")
+    return lines if text.endswith("\n") else lines + 1
+
+
+def _frame_lines(parts):
+    text = _strip_frame_controls("".join(parts))
+    lines = text.split("\n")
+    while lines and lines[-1] == "":
+        lines.pop()
+    return lines or [""]
+
+
+def _fit_ansi_line(line, width):
+    if width <= 0:
+        return ""
+
+    out = []
+    used = 0
+    i = 0
+    truncated = False
+    while i < len(line):
+        match = ANSI_CSI_RE.match(line, i)
+        if match:
+            out.append(match.group(0))
+            i = match.end()
+            continue
+
+        char = line[i]
+        char_w = _char_width(char)
+        if used + char_w > width:
+            truncated = True
+            break
+
+        out.append(char)
+        used += char_w
+        i += 1
+
+    if truncated:
+        out.append(RESET)
+    return "".join(out)
+
+
+def _viewport_top_for_focus(focus_line, total_lines, height):
+    if total_lines <= height:
+        return 0
+
+    max_top = total_lines - height
+    focus_line = max(0, min(focus_line, total_lines - 1))
+    return max(0, min(focus_line - height // 2, max_top))
+
+
+def _write_scrollable_frame(parts, focus_line=None, scroll_top=None):
+    """Render a virtual full-screen frame with a right-edge scrollbar."""
+    size = shutil.get_terminal_size(fallback=(80, 24))
+    width = max(1, size.columns)
+    height = max(1, size.lines)
+    content_width = max(0, width - 1)
+
+    lines = _frame_lines(parts)
+    total_lines = len(lines)
+    focus = 0 if focus_line is None else focus_line
+    max_top = max(0, total_lines - height)
+    if scroll_top is None:
+        top = _viewport_top_for_focus(focus, total_lines, height)
+    else:
+        top = max(0, min(scroll_top, max_top))
+
+    out = ["\033[H"]
+    for row in range(height):
+        idx = top + row
+        line = _fit_ansi_line(lines[idx], content_width) if idx < total_lines else ""
+        out.append(f"\033[{row + 1};1H{line}\033[K")
+
+    scrollbar_visible = total_lines > height and width > 1
+    thumb_top = 0
+    thumb_height = 0
+    if scrollbar_visible:
+        thumb_height = max(1, min(height, round(height * height / total_lines)))
+        thumb_top = round(top * (height - thumb_height) / max_top) if max_top else 0
+        for row in range(height):
+            is_thumb = thumb_top <= row < thumb_top + thumb_height
+            char = "┃" if is_thumb else "│"
+            out.append(f"\033[{row + 1};{width}H{RESET}{char}")
+
+    out.append(RESET)
+    sys.stdout.write("".join(out))
+    sys.stdout.flush()
+    return FrameState(width, height, total_lines, top, scrollbar_visible, thumb_top, thumb_height)
+
+
+def _render_scrollable_frame(owner, parts, focus_line=None):
+    scroll_top = getattr(owner, "_scroll_top", None)
+    state = _write_scrollable_frame(parts, focus_line, scroll_top)
+    owner._frame_state = state
+    if not state.scrollbar_visible:
+        owner._scroll_top = None
+        owner._scrollbar_dragging = False
+    elif scroll_top is not None:
+        owner._scroll_top = state.top
+    return state
+
+
+def _clear_manual_scroll(owner):
+    owner._scroll_top = None
+    owner._scrollbar_dragging = False
+    owner._scrollbar_drag_offset = 0
+
+
+def _scroll_top_from_mouse_y(state, y, offset=0):
+    max_top = state.total_lines - state.height
+    track_range = state.height - state.thumb_height
+    if max_top <= 0 or track_range <= 0:
+        return 0
+
+    thumb_row = max(0, min((y - 1) - offset, track_range))
+    return round(thumb_row * max_top / track_range)
+
+
+def _handle_scrollbar_mouse(owner, event):
+    state = getattr(owner, "_frame_state", None)
+    if state is None or not state.scrollbar_visible:
+        return False
+
+    dragging = getattr(owner, "_scrollbar_dragging", False)
+    if event.action == "release":
+        owner._scrollbar_dragging = False
+        return dragging
+
+    if event.action == "press":
+        if event.button != 0 or event.x != state.width:
+            return False
+        thumb_start = state.thumb_top + 1
+        thumb_end = thumb_start + state.thumb_height - 1
+        if thumb_start <= event.y <= thumb_end:
+            owner._scrollbar_drag_offset = event.y - thumb_start
+        else:
+            owner._scrollbar_drag_offset = state.thumb_height // 2
+        owner._scrollbar_dragging = True
+        owner._scroll_top = _scroll_top_from_mouse_y(
+            state, event.y, owner._scrollbar_drag_offset
+        )
+        return True
+
+    if event.action == "drag" and dragging:
+        owner._scroll_top = _scroll_top_from_mouse_y(
+            state, event.y, getattr(owner, "_scrollbar_drag_offset", 0)
+        )
+        return True
+
+    return False
+
+
+def _consume_mouse(owner, key):
+    if isinstance(key, MouseEvent):
+        _handle_scrollbar_mouse(owner, key)
+        return True
+    return key == "MOUSE_EVENT"
+
+
 def pad_and_truncate(text, width):
     """Pads or truncates text to fit a specific width, accounting for CJK characters."""
-    import unicodedata
-
     actual_w = 0
     for char in text:
-        if unicodedata.east_asian_width(char) in ("W", "F"):
-            actual_w += 2
-        else:
-            actual_w += 1
+        actual_w += _char_width(char)
 
     if actual_w > width:
         curr_w = 0
         res = ""
         for char in text:
-            char_w = 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
+            char_w = _char_width(char)
             if curr_w + char_w + 3 > width:
                 res += "..."
                 break
@@ -84,20 +285,26 @@ class Navigator:
     ESC = "\x1b"
     SPACE = " "
     DEL = "\x7f"
+    MOUSE_DISABLE = "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l"
+    MOUSE_ENABLE = "\x1b[?1000h\x1b[?1002h\x1b[?1006h"
 
     @staticmethod
     @contextmanager
-    def raw_mode():
+    def raw_mode(enable_mouse=False):
         """Context manager to put the terminal into cbreak mode and restore it later."""
         fd = sys.stdin.fileno()
         old_settings = termios.tcgetattr(fd)
         try:
             tty.setcbreak(fd)
-            # Disable mouse reporting
-            sys.stdout.write("\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l")
+            sys.stdout.write(Navigator.MOUSE_DISABLE)
+            if enable_mouse:
+                sys.stdout.write(Navigator.MOUSE_ENABLE)
             sys.stdout.flush()
             yield fd
         finally:
+            if enable_mouse:
+                sys.stdout.write(Navigator.MOUSE_DISABLE)
+                sys.stdout.flush()
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
     @staticmethod
@@ -124,7 +331,7 @@ class Navigator:
                         # Standard X11 Mouse tracking
                         for _ in range(3):
                             ch += os.read(fd, 1).decode("utf-8", "ignore")
-                        return "MOUSE_EVENT"
+                        return Navigator._parse_x10_mouse(ch) or "MOUSE_EVENT"
 
                     if next_ch == "<":
                         # SGR Mouse tracking
@@ -133,7 +340,7 @@ class Navigator:
                             ch += last
                             if last in ("m", "M") or len(ch) > 25:
                                 break
-                        return "MOUSE_EVENT"
+                        return Navigator._parse_sgr_mouse(ch) or "MOUSE_EVENT"
 
                     # Other CSI sequences (Arrows, PageUp, etc.)
                     while select.select([fd], [], [], 0.02)[0]:
@@ -148,6 +355,39 @@ class Navigator:
         except Exception:
             return ""
         return ch
+
+    @staticmethod
+    def _parse_mouse_code(code, x, y, final):
+        button = code & 0b11
+        if final == "m":
+            return MouseEvent("release", button, x, y)
+        if code & 64:
+            action = "wheel_down" if button == 1 else "wheel_up"
+            return MouseEvent(action, button, x, y)
+        if code & 32:
+            return MouseEvent("drag", button, x, y)
+        return MouseEvent("press", button, x, y)
+
+    @staticmethod
+    def _parse_sgr_mouse(sequence):
+        match = SGR_MOUSE_RE.fullmatch(sequence)
+        if not match:
+            return None
+        return Navigator._parse_mouse_code(
+            int(match.group("button")),
+            int(match.group("x")),
+            int(match.group("y")),
+            match.group("final"),
+        )
+
+    @staticmethod
+    def _parse_x10_mouse(sequence):
+        if len(sequence) < 6:
+            return None
+        code = max(0, ord(sequence[3]) - 32)
+        x = max(1, ord(sequence[4]) - 32)
+        y = max(1, ord(sequence[5]) - 32)
+        return Navigator._parse_mouse_code(code, x, y, "M")
 
     @staticmethod
     def wait_for_return(message="Press Enter to return to Main Menu, ESC to exit..."):
@@ -191,7 +431,7 @@ def _selector_session():
     Navigator.hide_cursor()
     sys.stdout.write("\033[2J")
     try:
-        with Navigator.raw_mode() as fd:
+        with Navigator.raw_mode(enable_mouse=True) as fd:
             yield fd
     finally:
         Navigator.show_cursor()
@@ -260,23 +500,27 @@ class InteractiveMenu:
 
         buf.append(f"\n \033[1;35m{self.title}\033[0m\033[K\n")
         buf.append("\033[K\n")
+        focus_line = 0
         for i, (label, desc) in enumerate(self.options):
             prefix = " \033[1;36m>\033[0m " if i == self.selected_index else "   "
             if i == self.selected_index:
+                focus_line = _frame_line_count(buf)
                 buf.append(f"{prefix}\033[1;36m{label:<15} {desc}{RESET}\033[K\n")
             else:
                 buf.append(f"{prefix}{label:<15} {desc}\033[K\n")
         buf.append("\033[K\n")
         buf.append(f"{GRAY} ↑/↓: Navigate | Enter: Select | ESC: Quit{RESET}\033[K\n")
         buf.append("\033[J")
-        sys.stdout.write("".join(buf))
-        sys.stdout.flush()
+        _render_scrollable_frame(self, buf, focus_line)
 
     def run(self):
         with _selector_session() as fd:
             while True:
                 self.render()
                 key = Navigator.get_key(fd)
+                if _consume_mouse(self, key):
+                    continue
+                _clear_manual_scroll(self)
                 if key in (Navigator.UP, "\x1bOA"):
                     self.selected_index = (self.selected_index - 1) % len(self.options)
                 elif key in (Navigator.DOWN, "\x1bOB"):
@@ -328,8 +572,6 @@ class AnalyzeSelector(_PagedSelector):
         )
         buf.append(f"{hint}\033[K\n\n")
 
-        import shutil
-
         columns = shutil.get_terminal_size().columns
         available = columns - (2 + 5 + 8 + 3 + 2 + 5 + 12 + 5)
         bar_w = 20 if available > 40 else 10 if available > 20 else 0
@@ -340,8 +582,10 @@ class AnalyzeSelector(_PagedSelector):
         self.current_page = max(0, min(self.current_page, total_pages - 1))
         start = self.current_page * self.page_size
         end = min(start + self.page_size, total_len)
+        focus_line = 0
 
         if total_len == 0:
+            focus_line = _frame_line_count(buf)
             buf.append(f"   {GRAY}No items found{RESET}\033[K\n")
         else:
             for i in range(start, end):
@@ -366,6 +610,8 @@ class AnalyzeSelector(_PagedSelector):
                 style = "\033[1;35m" if is_hover else ""
                 name_padded = pad_and_truncate(item["name"], name_w)
                 icon = item.get("icon", "📁")
+                if is_hover:
+                    focus_line = _frame_line_count(buf)
                 buf.append(
                     f"{cursor} {checkbox_str}{RESET}{bar_str}{item['percent']:>5.1f}%  {icon} {style}{name_padded}{RESET} | {style}{bytes_to_human(item['size']):>10}{RESET}\033[K\n"
                 )
@@ -393,14 +639,16 @@ class AnalyzeSelector(_PagedSelector):
                 buf.append(f"   \033[1;35m•\033[0m {item.get('icon', '📁')} {item['name']}\033[K\n")
 
         buf.append("\033[J")  # Clear remaining
-        sys.stdout.write("".join(buf))
-        sys.stdout.flush()
+        _render_scrollable_frame(self, buf, focus_line)
 
     def run(self):
         with _selector_session() as fd:
             while True:
                 self.render()
                 key = Navigator.get_key(fd)
+                if _consume_mouse(self, key):
+                    continue
+                _clear_manual_scroll(self)
                 total_len = len(self.items)
                 if key in (Navigator.UP, "\x1bOA"):
                     self._move_cursor(-1)
@@ -479,6 +727,7 @@ class PaginatedSelector(_PagedSelector):
         buf.append("\033[K\n")
         start = self.current_page * self.page_size
         end = min(start + self.page_size, len(self.items))
+        focus_line = 0
         for i in range(start, end):
             item = self.items[i]
             is_hover = i == self.selected_index
@@ -488,6 +737,8 @@ class PaginatedSelector(_PagedSelector):
             style = "\033[1;37m" if is_hover else ""
             name_padded = pad_and_truncate(item["project"], 20)
             size_str = bytes_to_human(item["size"])
+            if is_hover:
+                focus_line = _frame_line_count(buf)
             buf.append(f"{cursor} {checkbox} {style}{name_padded}{RESET} | {size_str:>10}\033[K\n")
         buf.append("\033[K\n")
         total_pages = (len(self.items) + self.page_size - 1) // self.page_size
@@ -495,8 +746,7 @@ class PaginatedSelector(_PagedSelector):
             f" Page {self.current_page + 1}/{total_pages} | {GRAY}Space: Select | A: All | Enter: Confirm | S: Manage Paths | ESC: Exit{RESET}\033[K\n"
         )
         buf.append("\033[J")
-        sys.stdout.write("".join(buf))
-        sys.stdout.flush()
+        _render_scrollable_frame(self, buf, focus_line)
 
     def run(self):
         if not self.items:
@@ -505,6 +755,9 @@ class PaginatedSelector(_PagedSelector):
             while True:
                 self.render()
                 key = Navigator.get_key(fd)
+                if _consume_mouse(self, key):
+                    continue
+                _clear_manual_scroll(self)
                 if key in (Navigator.UP, "\x1bOA"):
                     self._move_cursor(-1)
                 elif key in (Navigator.DOWN, "\x1bOB"):
@@ -574,12 +827,14 @@ class UninstallSelector(_PagedSelector):
         )
 
         if total_len == 0:
+            focus_line = _frame_line_count(buf)
             buf.append(f"\n   {GRAY}No applications found{RESET}\033[K\n")
         else:
             total_pages = (total_len + self.page_size - 1) // self.page_size
             self.current_page = max(0, min(self.current_page, total_pages - 1))
             start = self.current_page * self.page_size
             end = min(start + self.page_size, total_len)
+            focus_line = 0
             for i in range(start, end):
                 item = self.items[i]
                 is_hover = i == self.selected_index
@@ -594,6 +849,8 @@ class UninstallSelector(_PagedSelector):
                 )
                 name_style = "\033[1;35m" if is_selected else "\033[1;36m" if is_hover else ""
                 name_padded = pad_and_truncate(item["name"], 35)
+                if is_hover:
+                    focus_line = _frame_line_count(buf)
                 buf.append(
                     f"{cursor} {checkbox} {name_style}{name_padded}{RESET}  {name_style}{item['size_str']:>12}{RESET} | {self._format_time_ago(item['install_time'])}\033[K\n"
                 )
@@ -626,8 +883,7 @@ class UninstallSelector(_PagedSelector):
                 buf.append(line + "\033[K\n")
 
         buf.append("\033[J")
-        sys.stdout.write("".join(buf))
-        sys.stdout.flush()
+        _render_scrollable_frame(self, buf, focus_line)
 
     def run(self):
         if not self.items:
@@ -636,6 +892,9 @@ class UninstallSelector(_PagedSelector):
             while True:
                 self.render()
                 key = Navigator.get_key(fd)
+                if _consume_mouse(self, key):
+                    continue
+                _clear_manual_scroll(self)
                 total_len = len(self.items)
                 if key in (Navigator.UP, "\x1bOA"):
                     self._move_cursor(-1)
@@ -719,10 +978,13 @@ class TopFilesSelector:
         viewport = 20
         start = max(0, self.selected_index - viewport // 2)
         end = min(len(self.items), start + viewport)
+        focus_line = 0
         for i in range(start, end):
             item = self.items[i]
             cursor = "\033[1;36m▶\033[0m" if i == self.selected_index else " "
             checkbox = "[\033[1;32m✓\033[0m]" if i in self.selected_items else "[ ]"
+            if i == self.selected_index:
+                focus_line = _frame_line_count(buf)
             buf.append(
                 f"{cursor} {checkbox} {WHITE}{bytes_to_human(item.get('size', item.get('size_bytes', 0))):>12}{RESET} | {str(item['path'])}\033[K\n"
             )
@@ -733,8 +995,7 @@ class TopFilesSelector:
             for i in sorted(list(self.selected_items)):
                 buf.append(f"   \033[1;35m•\033[0m 📄 {Path(self.items[i]['path']).name}\033[K\n")
         buf.append("\033[J")
-        sys.stdout.write("".join(buf))
-        sys.stdout.flush()
+        _render_scrollable_frame(self, buf, focus_line)
 
     def run(self):
         if not self.items:
@@ -743,6 +1004,9 @@ class TopFilesSelector:
             while True:
                 self.render()
                 key = Navigator.get_key(fd)
+                if _consume_mouse(self, key):
+                    continue
+                _clear_manual_scroll(self)
                 if key in (Navigator.UP, "\x1bOA"):
                     self.selected_index = (self.selected_index - 1) % len(self.items)
                 elif key in (Navigator.DOWN, "\x1bOB"):
@@ -775,16 +1039,19 @@ class ConfirmSelector:
             else f"  {GRAY}Yes{RESET}  "
         )
         n = "\033[1;37m\033[45m No \033[0m" if self.selected_index == 1 else f"  {GRAY}No{RESET}  "
+        focus_line = _frame_line_count(buf)
         buf.append(f"  {y}   {n}\033[K\n\n")
         buf.append("\033[J")
-        sys.stdout.write("".join(buf))
-        sys.stdout.flush()
+        _render_scrollable_frame(self, buf, focus_line)
 
     def run(self):
         with _selector_session() as fd:
             while True:
                 self.render()
                 key = Navigator.get_key(fd)
+                if _consume_mouse(self, key):
+                    continue
+                _clear_manual_scroll(self)
                 if key in (
                     Navigator.LEFT,
                     Navigator.RIGHT,
@@ -820,6 +1087,7 @@ class CleanSelector:
         buf.append(f"\n \033[1;36m{self.title}\033[0m\033[K\n")
         buf.append("\033[K\n")
         total_freed = 0
+        focus_line = 0
         for i, item in enumerate(self.items):
             is_hover = i == self.selected_index
             is_checked = i in self.selected_items
@@ -829,6 +1097,8 @@ class CleanSelector:
             checkbox = "[\033[1;32m✓\033[0m]" if is_checked else "[ ]"
             name_padded = pad_and_truncate(item["name"], 25)
             size_str = bytes_to_human(item["size"]) if item["size"] > 0 else "Scan Result"
+            if is_hover:
+                focus_line = _frame_line_count(buf)
             buf.append(
                 f"{cursor} {checkbox} \033[1;36m{name_padded}{RESET} |     {size_str:>12} | {GRAY}{item['desc']}{RESET}\033[K\n"
             )
@@ -838,14 +1108,16 @@ class CleanSelector:
             f"\n{GRAY} ↑/↓: Move | Space: Toggle | Enter: Clean Selected | ESC: Cancel{RESET}\033[K\n"
         )
         buf.append("\033[J")
-        sys.stdout.write("".join(buf))
-        sys.stdout.flush()
+        _render_scrollable_frame(self, buf, focus_line)
 
     def run(self):
         with _selector_session() as fd:
             while True:
                 self.render()
                 key = Navigator.get_key(fd)
+                if _consume_mouse(self, key):
+                    continue
+                _clear_manual_scroll(self)
                 if key in (Navigator.UP, "\x1bOA"):
                     self.selected_index = (self.selected_index - 1) % len(self.items)
                 elif key in (Navigator.DOWN, "\x1bOB"):

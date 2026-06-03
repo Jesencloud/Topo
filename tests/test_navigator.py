@@ -5,13 +5,16 @@ I/O is mocked) so we can refactor the shared scaffolding without changing the
 observable behavior.
 """
 
+import os
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
 from src.ui.navigator import (
     AnalyzeSelector,
+    CleanSelector,
     ConfirmSelector,
+    MouseEvent,
     Navigator,
     PaginatedSelector,
     UninstallSelector,
@@ -19,11 +22,17 @@ from src.ui.navigator import (
 
 
 @contextmanager
-def _fake_raw_mode():
+def _fake_raw_mode(*args, **kwargs):
     yield 0  # a dummy file descriptor
 
 
 def drive(selector, keys):
+    """Run selector.run() feeding it the given key sequence."""
+    result, _ = drive_with_writes(selector, keys)
+    return result
+
+
+def drive_with_writes(selector, keys):
     """Run selector.run() feeding it the given key sequence."""
     it = iter(keys)
 
@@ -35,12 +44,12 @@ def drive(selector, keys):
         patch.object(Navigator, "show_cursor"),
         patch.object(Navigator, "raw_mode", _fake_raw_mode),
         patch.object(Navigator, "get_key", side_effect=next_key),
-        patch("sys.stdout.write"),
+        patch("sys.stdout.write") as write,
         patch("sys.stdout.flush"),
         patch("select.select", return_value=([], [], [])),
         patch("os.read", return_value=b""),
     ):
-        return selector.run()
+        return selector.run(), write.call_args_list
 
 
 def _analyze_items(n=20):
@@ -172,3 +181,57 @@ def test_paginated_manage_paths():
 def test_paginated_enter_defaults_to_hover():
     items = [{"project": f"p{i}", "path": Path("/tmp"), "size": 100} for i in range(5)]
     assert drive(PaginatedSelector("t", items), ["\r"]) == [0]
+
+
+def test_short_terminal_render_draws_right_edge_scrollbar():
+    items = [
+        {"name": f"task{i}", "size": 100 + i, "desc": "cleanup target"}
+        for i in range(8)
+    ]
+    selector = CleanSelector("t", items)
+    selector.selected_index = 7
+
+    with (
+        patch("src.ui.navigator.shutil.get_terminal_size", return_value=os.terminal_size((40, 5))),
+        patch("sys.stdout.write") as write,
+        patch("sys.stdout.flush"),
+    ):
+        selector.render()
+
+    output = write.call_args.args[0]
+    assert "\033[1;40H" in output
+    assert "\033[5;40H" in output
+    assert "┃" in output
+    assert "\033[1;37m" not in output
+    assert "task7" in output
+    assert "task0" not in output
+
+
+def test_sgr_mouse_drag_sequence_is_parsed():
+    assert Navigator._parse_sgr_mouse("\x1b[<0;40;2M") == MouseEvent("press", 0, 40, 2)
+    assert Navigator._parse_sgr_mouse("\x1b[<32;40;5M") == MouseEvent("drag", 0, 40, 5)
+    assert Navigator._parse_sgr_mouse("\x1b[<0;40;5m") == MouseEvent("release", 0, 40, 5)
+
+
+def test_scrollbar_drag_scrolls_short_terminal_view():
+    items = [
+        {"name": f"task{i}", "size": 100 + i, "desc": "cleanup target"}
+        for i in range(10)
+    ]
+    selector = CleanSelector("t", items)
+    keys = [
+        MouseEvent("press", 0, 40, 1),
+        MouseEvent("drag", 0, 40, 5),
+        MouseEvent("release", 0, 40, 5),
+        Navigator.ESC,
+    ]
+
+    with patch(
+        "src.ui.navigator.shutil.get_terminal_size",
+        return_value=os.terminal_size((40, 5)),
+    ):
+        result, writes = drive_with_writes(selector, keys)
+
+    output = "".join(call.args[0] for call in writes)
+    assert result == []
+    assert "task9" in output
