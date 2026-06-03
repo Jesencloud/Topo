@@ -669,9 +669,16 @@ class AnalyzeSelector(_PagedSelector):
             buf.append(
                 f"\n \033[1;35m☉ Selected Items to Remove:\033[0m {GRAY}Enter:Delete{RESET}\033[K\n"
             )
-            for i in sorted(list(self.selected_items)):
-                item = self.items[i]
-                buf.append(f"   \033[1;35m•\033[0m {item.get('icon', '📁')} {item['name']}\033[K\n")
+            selected_indices = sorted(list(self.selected_items))
+            for i in range(0, len(selected_indices), 2):
+                pair = selected_indices[i : i + 2]
+                line = ""
+                for idx in pair:
+                    item = self.items[idx]
+                    icon = item.get("icon", "📁")
+                    name_padded = pad_and_truncate(item["name"], 35)
+                    line += f"   \033[1;35m•\033[0m {icon} {name_padded}"
+                buf.append(line + "\033[K\n")
 
         buf.append("\033[J")  # Clear remaining
         _render_scrollable_frame(self, buf, focus_line)

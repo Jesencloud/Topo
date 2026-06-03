@@ -16,7 +16,10 @@ Today's session focused on improving the TUI's responsiveness to terminal window
 *   **Minimalist Characters**: Standardized the scrollbar to use the single-column linear characters `┃` (thumb) and `│` (track). The full block character `█` is no longer used for the scrollbar.
 *   **Theme Inheritance**: Forced the use of the `RESET` ANSI sequence for scrollbar rendering, ensuring it inherits the user's terminal theme colors instead of using hardcoded bright white or gray.
 
-### 4. Copy-Paste Compatibility (Main UI)
+### 4. Analyze Selection Layout Optimization
+*   **Two-Column Summary**: Updated the "Selected Items to Remove" list in the Analyze Disk view to use a space-efficient two-column layout. Each row now displays up to two items with their respective icons, providing a more compact and readable summary of the removal queue.
+
+### 5. Copy-Paste Compatibility (Main UI)
 *   **Selective Mouse Tracking**: Modified `_selector_session` to allow optional mouse tracking. Disabled mouse tracking for the **Main Menu** and **Confirm Dialog**, ensuring that users can select and copy text (like the banner or paths) using their terminal's standard mouse behavior without needing to hold `Shift`.
 *   **Preserved Interaction**: Kept mouse wheel and dragging support enabled for high-density, scrollable views (Analyze, Uninstall, Clean) where scrolling is a priority.
 
