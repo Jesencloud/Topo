@@ -184,10 +184,7 @@ def test_paginated_enter_defaults_to_hover():
 
 
 def test_short_terminal_render_draws_right_edge_scrollbar():
-    items = [
-        {"name": f"task{i}", "size": 100 + i, "desc": "cleanup target"}
-        for i in range(8)
-    ]
+    items = [{"name": f"task{i}", "size": 100 + i, "desc": "cleanup target"} for i in range(8)]
     selector = CleanSelector("t", items)
     selector.selected_index = 7
 
@@ -201,6 +198,7 @@ def test_short_terminal_render_draws_right_edge_scrollbar():
     output = write.call_args.args[0]
     assert "\033[1;40H" in output
     assert "\033[5;40H" in output
+    assert "\033[5;40H\033[J" in output
     assert "┃" in output
     assert "\033[1;37m" not in output
     assert "task7" in output
@@ -214,10 +212,7 @@ def test_sgr_mouse_drag_sequence_is_parsed():
 
 
 def test_scrollbar_drag_scrolls_short_terminal_view():
-    items = [
-        {"name": f"task{i}", "size": 100 + i, "desc": "cleanup target"}
-        for i in range(10)
-    ]
+    items = [{"name": f"task{i}", "size": 100 + i, "desc": "cleanup target"} for i in range(10)]
     selector = CleanSelector("t", items)
     keys = [
         MouseEvent("press", 0, 40, 1),

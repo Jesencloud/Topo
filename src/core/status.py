@@ -354,7 +354,9 @@ def show_status():
     # Visual Progress Bars
     mem_bar = draw_bar(mem_percent, width=20)
     mem_color = get_color_for_percent(mem_percent) if mem_percent > 0 else GRAY
-    print(f"🧠 Memory:       {mem_bar}  {mem_color}{mem_percent:>5.1f}%{RESET}  ({used_mem_str} / {total_mem_str})")
+    print(
+        f"🧠 Memory:       {mem_bar}  {mem_color}{mem_percent:>5.1f}%{RESET}  ({used_mem_str} / {total_mem_str})"
+    )
 
     disk_bar = draw_bar(disk_percent, width=20)
     disk_color = get_color_for_percent(disk_percent) if disk_percent > 0 else GRAY

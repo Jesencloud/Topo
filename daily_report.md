@@ -1,3 +1,26 @@
+# Daily Modification Report - 2026-06-03
+
+## Project: topo (Topo) - Responsive UI & Mouse Wheel Support
+
+Today's session focused on improving the TUI's responsiveness to terminal window resizing and enhancing interactivity with mouse wheel support, while strictly adhering to minimalist visual standards for the scrollbar.
+
+### 1. Responsive Terminal Resize
+*   **Dynamic Size Polling**: Updated `Navigator._read_key` to poll for terminal size changes using `select.select` with a 50ms timeout. The loop now returns a `RESIZE` signal immediately when a change is detected, allowing the UI to re-render and keep the scrollbar attached to the right edge during window dragging.
+*   **Viewport Artifact Clearing**: Integrated the `\033[J` (Clear from cursor to end of screen) command at the end of `_write_scrollable_frame`. This ensures that any visual artifacts remaining below the viewport after a terminal height reduction are completely wiped.
+
+### 2. Mouse Wheel Interaction
+*   **Vertical Wheel Scrolling**: Implemented native mouse wheel support in `_handle_scrollbar_mouse`. Users can now scroll through any scrollable list by 3 lines per wheel notch.
+*   **Viewport-Wide Trigger**: Wheel scrolling works anywhere within the active viewport when a scrollbar is visible, providing a fluid navigation experience across all analysis and uninstallation views.
+
+### 3. Scrollbar Visual Refinement
+*   **Minimalist Characters**: Standardized the scrollbar to use the single-column linear characters `┃` (thumb) and `│` (track). The full block character `█` is no longer used for the scrollbar.
+*   **Theme Inheritance**: Forced the use of the `RESET` ANSI sequence for scrollbar rendering, ensuring it inherits the user's terminal theme colors instead of using hardcoded bright white or gray.
+
+### 4. Stability & Regression Coverage
+*   **Scroll Wheel Null Safety**: Fixed a `TypeError` in `_handle_scrollbar_mouse` where arithmetic operations failed if the scroll position was uninitialized.
+*   **Test Suite Updates**: Updated `tests/test_navigator.py` to verify the presence of the `\033[J` clearing sequence and ensure the new resize-polling logic doesn't introduce regressions in key capture.
+*   **Verification**: Confirmed the final state with `pytest tests/test_navigator.py` and manual verification across different terminal emulators.
+
 # Daily Modification Report - 2026-06-02
 
 ## Project: topo (Topo) - Flicker-Free Analyze Navigation & Whole-Subtree Scan Cache

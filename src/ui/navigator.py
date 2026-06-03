@@ -149,6 +149,8 @@ def _write_scrollable_frame(parts, focus_line=None, scroll_top=None):
             char = "┃" if is_thumb else "│"
             out.append(f"\033[{row + 1};{width}H{RESET}{char}")
 
+    # Clear any potential artifacts below the current frame (important on resize)
+    out.append(f"\033[{height};{width}H\033[J")
     out.append(RESET)
     sys.stdout.write("".join(out))
     sys.stdout.flush()
@@ -188,6 +190,21 @@ def _handle_scrollbar_mouse(owner, event):
     if state is None or not state.scrollbar_visible:
         return False
 
+    if event.action == "wheel_up":
+        max_top = state.total_lines - state.height
+        current_top = getattr(owner, "_scroll_top", None)
+        if current_top is None:
+            current_top = state.top
+        owner._scroll_top = max(0, min(current_top - 3, max_top))
+        return True
+    if event.action == "wheel_down":
+        max_top = state.total_lines - state.height
+        current_top = getattr(owner, "_scroll_top", None)
+        if current_top is None:
+            current_top = state.top
+        owner._scroll_top = max(0, min(current_top + 3, max_top))
+        return True
+
     dragging = getattr(owner, "_scrollbar_dragging", False)
     if event.action == "release":
         owner._scrollbar_dragging = False
@@ -203,9 +220,7 @@ def _handle_scrollbar_mouse(owner, event):
         else:
             owner._scrollbar_drag_offset = state.thumb_height // 2
         owner._scrollbar_dragging = True
-        owner._scroll_top = _scroll_top_from_mouse_y(
-            state, event.y, owner._scrollbar_drag_offset
-        )
+        owner._scroll_top = _scroll_top_from_mouse_y(state, event.y, owner._scrollbar_drag_offset)
         return True
 
     if event.action == "drag" and dragging:
@@ -287,6 +302,7 @@ class Navigator:
     DEL = "\x7f"
     MOUSE_DISABLE = "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l"
     MOUSE_ENABLE = "\x1b[?1000h\x1b[?1002h\x1b[?1006h"
+    _last_size = None
 
     @staticmethod
     @contextmanager
@@ -317,9 +333,28 @@ class Navigator:
 
     @staticmethod
     def _read_key(fd):
+        if Navigator._last_size is None:
+            Navigator._last_size = shutil.get_terminal_size()
+
         try:
-            # Read first character using raw FD
-            ch = os.read(fd, 1).decode("utf-8", "ignore")
+            while True:
+                # Poll with small timeout. SIGWINCH will likely interrupt this.
+                try:
+                    r, _, _ = select.select([fd], [], [], 0.05)
+                except (InterruptedError, OSError):
+                    r = False
+
+                # Detect terminal resize
+                new_size = shutil.get_terminal_size()
+                if new_size != Navigator._last_size:
+                    Navigator._last_size = new_size
+                    return "RESIZE"
+
+                if r:
+                    # Read first character using raw FD
+                    ch = os.read(fd, 1).decode("utf-8", "ignore")
+                    break
+
             if ch == "\x1b" and select.select([fd], [], [], 0.05)[0]:
                 ch += os.read(fd, 1).decode("utf-8", "ignore")
 
