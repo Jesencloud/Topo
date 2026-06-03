@@ -652,10 +652,13 @@ class AnalyzeSelector(_PagedSelector):
         self.can_select = can_select
         self.page_size = 15
         self.current_page = 0
+        self.confirming_delete = False
+        self.confirm_text = ""
         self._sort_items()
 
     def _sort_items(self):
         self.selected_items.clear()
+        self.confirming_delete = False
         self.items.sort(key=lambda x: x["size"], reverse=self.sort_reverse)
 
     def render(self):
@@ -751,6 +754,9 @@ class AnalyzeSelector(_PagedSelector):
                     line += f"   \033[1;35m•\033[0m {icon} {name_padded}"
                 buf.append(line + "\033[K\n")
 
+        if self.confirming_delete:
+            buf.append(f"\n {self.confirm_text}\033[K\n")
+
         buf.append("\033[J")  # Clear remaining
         _render_scrollable_frame(self, buf, focus_line)
 
@@ -762,6 +768,16 @@ class AnalyzeSelector(_PagedSelector):
                 if _consume_mouse(self, key):
                     continue
                 _clear_manual_scroll(self)
+
+                if self.confirming_delete:
+                    if key in Navigator.ENTER:
+                        self.confirming_delete = False
+                        return "DELETE_BATCH", list(self.selected_items)
+                    if key == Navigator.SPACE or key == Navigator.ESC or len(key) > 1:
+                        self.confirming_delete = False
+                        continue
+                    continue
+
                 total_len = len(self.items)
                 if key in (Navigator.UP, "\x1bOA"):
                     self._move_cursor(-1)
@@ -801,8 +817,16 @@ class AnalyzeSelector(_PagedSelector):
                     if total_len == 0:
                         continue
                     if self.can_select and self.selected_items:
-                        Navigator.play_delete()
-                        return "DELETE_BATCH", list(self.selected_items)
+                        self.confirming_delete = True
+                        count = len(self.selected_items)
+                        total_size = sum(self.items[i]["size"] for i in self.selected_items)
+                        item_text = "item" if count == 1 else "items"
+                        self.confirm_text = (
+                            f"{PURPLE}➔{RESET} Delete {count} {item_text}, "
+                            f"{bytes_to_human(total_size)}  "
+                            f"{GREEN}Enter{RESET} confirm, {GRAY}Space{RESET} cancel:"
+                        )
+                        continue
                     return "DRILL_DOWN", self.selected_index
                 elif len(key) == 1 and key.lower() == "s":
                     self.sort_reverse = not self.sort_reverse
@@ -1060,7 +1084,6 @@ class UninstallSelector(_PagedSelector):
                 elif key in Navigator.ENTER:
                     if not self.selected_ids:
                         continue
-                    Navigator.play_delete()
                     return [
                         i for i, item in enumerate(self.items) if item["id"] in self.selected_ids
                     ]
@@ -1085,6 +1108,8 @@ class TopFilesSelector:
             0,
             set(),
         )
+        self.confirming_delete = False
+        self.confirm_text = ""
 
     def render(self):
         buf = ["\033[H"]
@@ -1107,8 +1132,17 @@ class TopFilesSelector:
         buf.append(f"{GRAY} ↑/↓: Move | Space: Toggle | Enter: Delete | ESC: Back{RESET}\033[K\n")
         if self.selected_items:
             buf.append("\n \033[1;35m☉ Selected Large Files to Remove:\033[0m\033[K\n")
-            for i in sorted(list(self.selected_items)):
-                buf.append(f"   \033[1;35m•\033[0m 📄 {Path(self.items[i]['path']).name}\033[K\n")
+            selected_indices = sorted(list(self.selected_items))
+            for i in range(0, len(selected_indices), 2):
+                pair = selected_indices[i : i + 2]
+                line = ""
+                for idx in pair:
+                    line += f"   \033[1;35m•\033[0m 📄 {Path(self.items[idx]['path']).name}"
+                buf.append(line + "\033[K\n")
+
+        if self.confirming_delete:
+            buf.append(f"\n {self.confirm_text}\033[K\n")
+
         buf.append("\033[J")
         _render_scrollable_frame(self, buf, focus_line)
 
@@ -1122,6 +1156,20 @@ class TopFilesSelector:
                 if _consume_mouse(self, key):
                     continue
                 _clear_manual_scroll(self)
+
+                if self.confirming_delete:
+                    if key in Navigator.ENTER:
+                        self.confirming_delete = False
+                        return (
+                            list(self.selected_items)
+                            if self.selected_items
+                            else [self.selected_index]
+                        )
+                    if key == Navigator.SPACE or key == Navigator.ESC or len(key) > 1:
+                        self.confirming_delete = False
+                        continue
+                    continue
+
                 if key in (Navigator.UP, "\x1bOA"):
                     self.selected_index = (self.selected_index - 1) % len(self.items)
                     Navigator.play_click()
@@ -1134,9 +1182,20 @@ class TopFilesSelector:
                     else:
                         self.selected_items.add(self.selected_index)
                 elif key in Navigator.ENTER:
-                    Navigator.play_delete()
-                    return (
+                    self.confirming_delete = True
+                    selected_idxs = (
                         list(self.selected_items) if self.selected_items else [self.selected_index]
+                    )
+                    count = len(selected_idxs)
+                    total_size = sum(
+                        self.items[i].get("size", self.items[i].get("size_bytes", 0))
+                        for i in selected_idxs
+                    )
+                    item_text = "item" if count == 1 else "items"
+                    self.confirm_text = (
+                        f"{PURPLE}➔{RESET} Delete {count} {item_text}, "
+                        f"{bytes_to_human(total_size)}  "
+                        f"{GREEN}Enter{RESET} confirm, {GRAY}Space{RESET} cancel:"
                     )
                 elif key == Navigator.ESC and len(key) == 1:
                     return []
@@ -1187,8 +1246,6 @@ class ConfirmSelector:
                 elif len(key) == 1 and key.lower() == "n":
                     return False
                 elif key in Navigator.ENTER:
-                    if self.selected_index == 0:
-                        Navigator.play_delete()
                     return self.selected_index == 0
                 elif key == Navigator.ESC and len(key) == 1:
                     return False
@@ -1253,7 +1310,6 @@ class CleanSelector:
                 elif key in Navigator.ENTER or key == Navigator.DEL:
                     if not self.selected_items:
                         continue
-                    Navigator.play_delete()
                     return list(self.selected_items)
                 elif key == Navigator.ESC and len(key) == 1:
                     return []

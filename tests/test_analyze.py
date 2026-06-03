@@ -259,13 +259,13 @@ def test_analyze_delete_user_writable_path_without_admin(test_env):
 
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.core.analyze._confirm_delete", return_value=True) as mock_confirm,
+        patch("src.core.analyze._ensure_admin_for_delete", return_value=True) as mock_admin_check,
         patch("src.core.analyze.safe_remove", return_value=(True, "Moved to trash")) as mock_safe,
         patch("src.core.analyze._sudo_remove") as mock_sudo,
     ):
         assert _delete_analyze_paths([target]) is True
 
-    mock_confirm.assert_called_once_with(1, target.stat().st_size, False)
+    mock_admin_check.assert_called_once_with([target])
     mock_safe.assert_called_once_with(target, use_trash=True)
     mock_sudo.assert_not_called()
 
@@ -275,13 +275,13 @@ def test_analyze_delete_system_path_requires_admin():
 
     with (
         patch("src.core.analyze.get_size", return_value=4096),
-        patch("src.core.analyze._confirm_delete", return_value=True) as mock_confirm,
+        patch("src.core.analyze._ensure_admin_for_delete", return_value=True) as mock_admin_check,
         patch("src.core.analyze.safe_remove") as mock_safe,
         patch("src.core.analyze._sudo_remove", return_value=True) as mock_sudo,
     ):
         assert _delete_analyze_paths([target]) is True
 
-    mock_confirm.assert_called_once_with(1, 4096, True)
+    mock_admin_check.assert_called_once_with([target])
     mock_sudo.assert_called_once_with(target)
     mock_safe.assert_not_called()
 

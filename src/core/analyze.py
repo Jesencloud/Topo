@@ -9,9 +9,8 @@ from typing import Any
 
 from ..ui.navigator import AnalyzeSelector, Navigator, TopFilesSelector
 from . import system
-from .constants import BLUE, CYAN, GRAY, GREEN, MAGENTA, PURPLE, RED, RESET, YELLOW
+from .constants import BLUE, CYAN, GREEN, MAGENTA, PURPLE, RED, RESET, YELLOW
 from .file_ops import (
-    bytes_to_human,
     get_size,
     has_valid_cachedir_tag,
     record_deletion_audit,
@@ -312,26 +311,10 @@ def _sudo_remove(path: Path) -> bool:
     return False
 
 
-def _confirm_delete(count: int, total_size: int, needs_admin: bool) -> bool:
-    """Confirm an Analyze deletion and prompt for sudo only when needed."""
-    item_text = "item" if count == 1 else "items"
-    print(
-        f" Delete {count} {item_text}, {bytes_to_human(total_size)}  "
-        f"{GREEN}Enter{RESET} confirm, {GRAY}Space{RESET} cancel:",
-        end=" ",
-        flush=True,
-    )
-
-    with Navigator.raw_mode() as fd:
-        choice = Navigator.get_key(fd)
-    print()
-
-    if choice not in Navigator.ENTER:
-        print(f" {YELLOW}⚠️  Delete skipped by user.{RESET}\n")
-        return False
-
-    Navigator.play_delete()
-    if not needs_admin:
+def _ensure_admin_for_delete(paths: list[Path]) -> bool:
+    """Prompts for sudo only if any path in the list requires admin privileges."""
+    admin_paths = [p for p in paths if _needs_admin_for_deletion(p)]
+    if not admin_paths:
         return True
 
     print()
@@ -350,16 +333,17 @@ def _confirm_delete(count: int, total_size: int, needs_admin: bool) -> bool:
 
 def _delete_analyze_paths(paths: list[Path]) -> bool:
     """Delete Analyze targets, using sudo only for paths outside user control."""
-    admin_paths = [p for p in paths if _needs_admin_for_deletion(p)]
-    total_size = sum(get_size(p) for p in paths)
-    if not _confirm_delete(len(paths), total_size, bool(admin_paths)):
+    if not _ensure_admin_for_delete(paths):
         return False
 
+    admin_paths = [p for p in paths if _needs_admin_for_deletion(p)]
     changed = False
     for p in paths:
         removed = _sudo_remove(p) if p in admin_paths else safe_remove(p, use_trash=True)[0]
         if removed:
             changed = True
+    if changed:
+        Navigator.play_delete()
     return changed
 
 

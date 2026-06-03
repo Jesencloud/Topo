@@ -732,6 +732,7 @@ def run_uninstall():
             msg += f"{bytes_to_human(total_freed_all)}\033[0m: {names_str}"
             print(msg)
             print("=" * 70)
+            Navigator.play_delete()
 
             # Standardized return/exit prompt
             if not Navigator.wait_for_return(

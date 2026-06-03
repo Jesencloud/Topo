@@ -93,7 +93,8 @@ def test_confirm_esc_is_false():
 # --- AnalyzeSelector ---
 def test_analyze_space_then_enter_deletes_selected_batch():
     sel = AnalyzeSelector("t", _analyze_items(), can_select=True)
-    action, payload = drive(sel, [Navigator.SPACE, "\r"])
+    # New logic: Enter triggers confirmation, second Enter confirms deletion
+    action, payload = drive(sel, [Navigator.SPACE, "\r", "\r"])
     assert action == "DELETE_BATCH"
     assert payload == [0]
 

@@ -18,11 +18,13 @@ Today's session focused on improving the TUI's responsiveness to terminal window
 
 ### 4. Analyze Selection Layout Optimization
 *   **Two-Column Summary**: Updated the "Selected Items to Remove" list in the Analyze Disk view to use a space-efficient two-column layout. Each row now displays up to two items with their respective icons, providing a more compact and readable summary of the removal queue.
+*   **In-TUI Confirmation (Restored)**: Successfully integrated the deletion confirmation prompt directly into the Analyze TUI. After selecting items, the first `Enter` press now triggers a professional status line (item count and total size) immediately below the selected items list. A **second `Enter`** is required to confirm deletion, while `Space` or `Esc` cancels the action. This ensures a safe, visually anchored, and structural confirmation workflow within the TUI.
 
 ### 5. High-Quality Auditory Feedback
 *   **Dual-Sound Support**: Implemented a comprehensive audio feedback system with distinct sounds for different actions.
     *   **Navigation Click**: Uses `assets/cli_click.wav` for cursor movement.
-    *   **Action Confirmation**: Uses `assets/delete_remove.wav` for destructive actions like file deletion or app uninstallation.
+    *   **Action Completion**: Uses `assets/delete_remove.wav` for the successful completion of destructive actions like file deletion or app uninstallation.
+*   **Context-Aware Timing**: Refined sound triggers to play only upon **task completion** rather than confirmation. To avoid excessive noise during frequent use, **One-Key Clean is now silent** upon completion, while manual file deletions (Analyze) and app uninstallations continue to provide the distinct `delete_remove.wav` auditory feedback to signal full execution.
 *   **Custom Sound Priority**: Upgraded `Navigator.play_click()` and `Navigator.play_delete()` to prioritize user-provided WAV files at `~/.config/topo/sounds/` (`click.wav` and `delete.wav`), followed by the bundled assets.
 *   **Removed GTK Dependency**: Removed the fallback to Linux standard system sounds (`canberra-gtk-play`) to ensure the application maintains its own signature sound profile.
 *   **Asynchronous Playback**: Implemented playback using non-blocking `subprocess.Popen` with `pw-play`, `paplay`, or `aplay` to ensure zero impact on TUI responsiveness.
