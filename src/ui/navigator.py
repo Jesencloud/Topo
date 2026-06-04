@@ -304,6 +304,7 @@ class Navigator:
     MOUSE_DISABLE = "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l"
     MOUSE_ENABLE = "\x1b[?1000h\x1b[?1002h\x1b[?1006h"
     _last_size = None
+    is_muted = False
 
     @staticmethod
     @contextmanager
@@ -491,6 +492,8 @@ class Navigator:
     @staticmethod
     def play_click():
         """Plays a subtle navigation sound."""
+        if Navigator.is_muted:
+            return
         player = Navigator._get_sound_player("click")
         if player == "bell":
             sys.stdout.write("\a")
@@ -505,6 +508,8 @@ class Navigator:
     @staticmethod
     def play_delete():
         """Plays a distinct sound for deletion or uninstallation."""
+        if Navigator.is_muted:
+            return
         player = Navigator._get_sound_player("delete")
         if player == "bell":
             # For delete, we can play bell twice for a different feel if no wav
@@ -613,7 +618,8 @@ class InteractiveMenu:
             else:
                 buf.append(f"{prefix}{label:<15} {desc}\033[K\n")
         buf.append("\033[K\n")
-        buf.append(f"{GRAY} ↑/↓: Navigate | Enter: Select | ESC: Quit{RESET}\033[K\n")
+        mute_label = "Unmute" if Navigator.is_muted else "Mute"
+        buf.append(f"{GRAY} ↑/↓ | M: {mute_label} | Enter: Select | ESC: Quit{RESET}\033[K\n")
         buf.append("\033[J")
         _render_scrollable_frame(self, buf, focus_line)
 
@@ -633,6 +639,8 @@ class InteractiveMenu:
                 elif key in (Navigator.DOWN, "\x1bOB"):
                     self.selected_index = (self.selected_index + 1) % len(self.options)
                     Navigator.play_click()
+                elif len(key) == 1 and key.lower() == "m":
+                    Navigator.is_muted = not Navigator.is_muted
                 elif key in (Navigator.LEFT, Navigator.RIGHT, "\x1bOC", "\x1bOD"):
                     continue
                 elif key in Navigator.ENTER:

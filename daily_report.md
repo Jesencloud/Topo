@@ -57,7 +57,12 @@ Today's session was a comprehensive bug-fix pass driven by a full code audit of 
 *   The top-files cutoff was a literal `1_000_000` while the comment and the tree threshold use 1 MiB; introduced `TOP_FILE_MIN_BYTES = 1_048_576` so single- and tree-mode thresholds agree.
 *   `cargo test`: 7/7 engine tests still pass.
 
-### 11. Verification
+### 11. [Low] Navigation Auditory Feedback Mute Toggle
+*   **Mute Functionality**: Implemented a global mute toggle for navigation sound effects. Users can now press **`M`** in the Main Menu to turn sound effects on or off.
+*   **Dynamic UI Prompt**: The Interactive Menu now dynamically displays `M: Mute` or `M: Unmute` based on the current state.
+*   **Persistent State**: The mute setting is maintained as a class attribute in `Navigator`, ensuring consistent behavior across all selectors (Analyze, Uninstall, etc.) within the session.
+
+### 12. Verification
 *   `ruff check src tests` — **All checks passed**.
 *   `pytest` — **183 passed** (full suite, including the new regression tests added throughout this report).
 *   `cargo test` (topo-core) — **7 passed**.
