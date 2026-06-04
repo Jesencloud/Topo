@@ -36,25 +36,28 @@ curl -fsSL https://raw.githubusercontent.com/Jesencloud/Topo/main/install.sh | b
 
 > Note: The script automatically detects your architecture (**x86_64** or **ARM64**) and provisions the optimized engine.
 
-**Run**
 <p align="center">
   <img src="assets/topo_home.png" alt="Topo - Clean Your Linux" width="800" />
 </p>
 
-```bash
-topo                           # Start interactive TUI (Recommended)
-topo clean                     # One-key safe cleanup
-topo uninstall                 # Deep application uninstaller
-topo optimize                  # Refresh system services & maintenance
-topo analyze                   # Ultra-fast disk usage explorer
-topo status                    # Live system health dashboard
-topo history                   # Show recent cleanup/deletion history
-topo history --limit 5         # Show the latest 5 history sessions
+## Run 
 
-topo update                    # Upgrade Topo to the latest version
-topo link                      # Re-configure system-wide command
-topo remove                    # Safely remove Topo from system
-topo --help                    # Show help
+```bash
+  topo                 Start interactive TUI (Recommended)
+  topo clean           Run one-key safe cleanup
+  topo analyze         Start interactive disk usage explorer
+  topo status          Check system health and metrics
+  topo history         Show recent cleanup deletion history
+  topo history --limit 5  Show latest 5 history sessions
+  topo update          Upgrade to the latest version
+  topo whitelist list  View currently protected paths
+  topo --dry-run clean Preview files to be cleaned without deleting
+
+options:
+  -h, --help   show this help message and exit
+  --dry-run    Preview changes without deleting
+  --version    show program's version number and exit
+
 ```
 
 ## Security & Safety Design
@@ -68,11 +71,14 @@ It adopts a **Zero-Interruption** policy: administrative tasks are pre-authorize
 ### Deep System Cleanup
 
 ```bash
-$ topo clean
-[EXECUTING] Starting system cleanup...
+Clean Your Linux
 
- 🔒 Authorizing system-level tasks (Ctrl+C to cancel)...
+● Use --dry-run to preview, --whitelist to manage protected paths
+➔ System caches need sudo. Enter continue, Space skip: 
+➔ System cleanup requires admin access
+➔ Password: 
  ✓ Authorization successful.
+
 
 ➤ System & Package Manager
   ✓ Cleaned DNF cache (1.2 GB)
@@ -98,24 +104,28 @@ Free space now: 482.2 GB
 Select apps to remove and Topo will find all associated residues.
 
 ```bash
-Select Application to Uninstall
---------------------------------------------------------------------------------
-  [1] google-chrome-stable                          4.0 GB | 5d ago
-  [2] cursor                                        1.0 GB | Yesterday
-  [3] net.thunderbird.Thunderbird                 871.2 MB | 4d ago
-  [4] wechat                                      750.6 MB | 0y ago
-  [✓] brave-browser                               449.1 MB | 5d ago
-▶ [✓] org.telegram.desktop                        351.5 MB | 4d ago
-  [7] libreoffice-core                            302.3 MB | 2d ago
-  [8] ibus                                        221.8 MB | 0y ago
-  [9] clash-verge                                 182.0 MB | 0y ago
-  [0] gnome-software                              128.0 MB | 0y ago
---------------------------------------------------------------------------------
- Page 1/8 | Space: Select | Enter: Confirm | S/N/T/O: Sort ↓ | ESC: Exit
+ Select Application to Remove 2/54 selected
 
- ☉ Selected Apps to Remove:
-   • brave-browser
-   • org.telegram.desktop
+  ○  1. cursor                                  837.1 MiB | 2d ago
+  ○  2. wechat                                  715.8 MiB | Just now
+▶ ✓  3. brave-browser                           428.7 MiB | 4d ago
+  ○  4. google-chrome-stable                    404.0 MiB | 4d ago
+  ✓  5. Thunderbird                              368.7 MB | 13d ago
+  ○  6. java-25-openjdk-headless                236.8 MiB | 20d ago
+  ○  7. clash-verge                             235.8 MiB | 6d ago
+  ○  8. glibc-all-langpacks                     227.2 MiB | 20d ago
+  ○  9. rust-std-static                         162.7 MiB | 6d ago
+  ○ 10. llvm-libs                               140.5 MiB | 4d ago
+  ○ 11. cldr-emoji-annotation                   122.4 MiB | 1mo ago
+  ○ 12. gcc                                     120.8 MiB | 14d ago
+  ○ 13. libreoffice-calc                         27.4 MiB | 11d ago
+  ○ 14. orca                                     22.2 MiB | 20d ago
+  ○ 15. papers                                   14.6 MiB | 20d ago
+
+ Page 1/4 | ↑↓←→ | A: All | N: Name | S: Size ↓ | T: Time | Space: Select
+
+ ☉ Selected Apps to Remove: Press Enter to Uninstall, ESC to Exit
+   • brave-browser                         • Thunderbird           
 ```
 
 ### Cleanup History
@@ -124,11 +134,15 @@ Topo records cleanup and uninstall deletion events so you can review what change
 
 ```bash
 $ topo history --limit 5
+topo 0.8.0 (Python Edition)
+System: fedora
 Deletion History
-------------------------------------------------------------------------
-2026-05-31T12:30:00+08:00 -> 2026-05-31T12:30:04+08:00  clean
-  removed=4  trashed=0  skipped=1  failed=0  size=512.0 MiB
-    deleted              /home/user/.cache/example
+
+2026-06-04T18:17:03+08:00 -> 2026-06-04T18:17:05+08:00  uninstall wechat
+  removed=2  trashed=0  skipped=0  failed=0  size=820.4 MiB
+    removed              wechat
+    deleted              /home/users/.xwechat
+
 ```
 
 ### Intelligence Analyze
@@ -136,18 +150,31 @@ Deletion History
 Powered by a dedicated Rust engine, Topo scans hundreds of thousands of files in milliseconds.
 
 ```bash
-Analyze Disk
-Select a category to explore:
+Exploring: /home/users/.config/Cursor
 
-▶   1. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬  100.0%  |  📁 Root (/)                                          23.5 GB
-    2. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬   35.7%  |  📁 System                                             8.4 GB
-    3. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    7.3%  |  📁 Home                                               1.7 GB
-    4. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    0.8%  |  👀 System Logs                                      189.8 MB
-    5. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    0.1%  |  👀 Cargo Cache                                       30.8 MB
-    6. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    0.0%  |  📁 Applications                                       1.3 MB
+Select a location to explore (Type numbers or Space to select):
 
-------------------------------------------------------------------------------------------------------------
- ↑↓←→ | Num Select | Space Select | A All | ← Back | Enter Open | F Folder | L Largest | Del Delete | R Refresh | S Sort ↓ | ESC Exit
+  ○  1. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬   59.9%  📁 WebStorage                     |  109.4 MiB
+  ○  2. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬   11.5%  📁 CachedExtensionVSIXs           |   21.0 MiB
+  ✓  3.  ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    6.8%  📁 Cache                          |   12.4 MiB
+  ○  4. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    5.6%  📁 User                           |   10.3 MiB
+  ○  5. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    5.3%  📁 CachedData                     |    9.7 MiB
+  ○  6. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    4.3%  📁 GPUCache                       |    7.9 MiB
+▶ ✓  7.  ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    1.6%  📁 logs                           |    2.8 MiB
+  ○  8. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    1.1%  📁 clp                            |    2.0 MiB
+  ○  9. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    0.9%  📁 Partitions                     |    1.7 MiB
+  ○ 10. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    0.9%  📁 process-monitor                |    1.6 MiB
+  ○ 11. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    0.6%  📁 CachedProfilesData             |    1.1 MiB
+  ○ 12. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    0.4%  📁 Local Storage                  |  789.5 KiB
+  ○ 13. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    0.3%  📁 DawnWebGPUCache                |  544.4 KiB
+  ○ 14. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    0.3%  📁 DawnGraphiteCache              |  544.4 KiB
+  ○ 15. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    0.2%  📁 Dictionaries                   |  441.4 KiB
+
+
+  Page 1/3 | ↑↓←→ | A:All | F:Open Folder | R:Reload | S:Sort ↓ | Space:Select
+
+ ☉ Selected Items to Remove: Enter:Delete
+   • 📁 Cache                                 • 📁 logs
 ```
 
 ## Technical Advantages
