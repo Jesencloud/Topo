@@ -38,6 +38,26 @@ def test_clean_trash_execution_gio(mock_run, mock_which, test_env):
     mock_run.assert_called_with(["gio", "trash", "--empty"], capture=True, timeout=30)
 
 
+def test_clean_trash_fallback_uses_safe_remove_and_real_uid(test_env):
+    """Without gio, the fallback empties the home Trash via safe_remove (not a
+    bare rmtree of a literal /tmp/trash-$USER path) and counts only what went."""
+    trash = test_env / ".local/share/Trash"
+    (trash / "files").mkdir(parents=True)
+    (trash / "files" / "junk.bin").write_text("0123456789")  # 10 bytes
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("shutil.which", return_value=None),  # no gio -> fallback
+        patch("os.getuid", return_value=999999),  # /tmp/.Trash-999999 won't exist
+    ):
+        size, items, cats = clean_trash(dry_run=False)
+
+    assert items == 1
+    assert size == 10
+    assert trash.exists()  # recreated empty
+    assert not (trash / "files").exists()
+
+
 def test_clean_system_temp_only_removes_stale_user_owned_items(test_env):
     fake_tmp = test_env / "tmp"
     fake_var_tmp = test_env / "var_tmp"

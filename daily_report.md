@@ -21,6 +21,10 @@ Today's session was a comprehensive bug-fix pass driven by a full code audit of 
 *   **Bare-Byte Size Parsing**: `parse_size_to_bytes()` returned 0 for a unit-less numeric string; it now treats a wholly-numeric value as raw bytes (without misreading stray digits in command output).
 *   **Regression Coverage**: Updated `test_clean_path_by_age` to mock `lstat` (atime + mtime); added bare-byte parsing assertions.
 
+### 4. [Med] Trash fallback empties the real trash, safely
+*   `clean_trash()`'s manual fallback used a literal `Path("/tmp/trash-$USER")` — `$USER` was never expanded, so it never matched a real trash dir; it deleted via `shutil.rmtree(ignore_errors=True)` (bypassing protection/audit) yet still added the size to the freed total even on failure.
+*   It now targets `~/.local/share/Trash` and `/tmp/.Trash-<uid>` (real UID), removes them through `safe_remove(use_trash=False)`, recreates the empty dir, and counts space only when removal actually succeeds. Added a fallback regression test.
+
 <!-- WIP-2026-06-04 -->
 
 # Daily Modification Report - 2026-06-03

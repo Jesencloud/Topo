@@ -31,22 +31,28 @@ def clean_trash(dry_run=False):
             print("  \033[0;32m✓\033[0m User Trash emptied")
             return 0, 1, 1
 
-    # 2. Fallback to manual deletion
-    trash_dirs = [Path.home() / ".local/share/Trash", Path("/tmp/trash-$USER")]
+    # 2. Fallback: empty the standard home Trash and this user's /tmp trash.
+    #    Paths use the real UID (not a literal "$USER"), and removal goes through
+    #    safe_remove so protection/audit apply and stats reflect what truly went.
+    trash_dirs = [
+        Path.home() / ".local/share/Trash",
+        Path(f"/tmp/.Trash-{os.getuid()}"),
+    ]
     for td in trash_dirs:
-        if td.exists():
-            size = get_size(td)
-            if dry_run:
-                if size > 0:
-                    print(f"  \033[0;32m✓\033[0m {td} ({bytes_to_human(size)}) would be cleaned")
-                    total_size += size
-                    total_items += 1
-            else:
-                shutil.rmtree(td, ignore_errors=True)
-                td.mkdir(exist_ok=True)
+        if not td.exists():
+            continue
+        size = get_size(td)
+        if dry_run:
+            if size > 0:
+                print(f"  \033[0;32m✓\033[0m {td} ({bytes_to_human(size)}) would be cleaned")
                 total_size += size
                 total_items += 1
-                print(f"  \033[0;32m✓\033[0m {td} ({bytes_to_human(size)}) cleaned")
+            continue
+        if safe_remove(td, use_trash=False)[0]:
+            td.mkdir(parents=True, exist_ok=True)
+            total_size += size
+            total_items += 1
+            print(f"  \033[0;32m✓\033[0m {td} ({bytes_to_human(size)}) cleaned")
 
     return total_size, total_items, (1 if total_items > 0 else 0)
 
