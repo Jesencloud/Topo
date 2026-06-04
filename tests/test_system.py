@@ -1,7 +1,7 @@
 import subprocess
 from unittest.mock import MagicMock, patch
 
-from src.core.system import run_command
+from src.core.system import run_command, setup_passwordless_sudo
 
 
 @patch("subprocess.run")
@@ -43,3 +43,25 @@ def test_run_command_timeout_result(mock_run):
     assert result.returncode == 124
     assert result.timed_out is True
     assert result.stdout == "partial"
+
+
+def test_setup_passwordless_sudo_uses_invoking_user(monkeypatch, capsys):
+    monkeypatch.setenv("SUDO_USER", "realuser")
+    monkeypatch.setenv("USER", "root")
+    monkeypatch.setattr("sys.argv", ["/home/realuser/.topo/topo"])
+
+    setup_passwordless_sudo()
+
+    out = capsys.readouterr().out
+    assert "realuser ALL=(ALL) NOPASSWD: /home/realuser/.topo/topo" in out
+
+
+def test_setup_passwordless_sudo_refuses_path_with_spaces(monkeypatch, capsys):
+    monkeypatch.setenv("SUDO_USER", "realuser")
+    monkeypatch.setattr("sys.argv", ["/home/real user/.topo/topo"])
+
+    setup_passwordless_sudo()
+
+    out = capsys.readouterr().out
+    assert "NOPASSWD" not in out
+    assert "Could not generate a safe sudoers rule" in out

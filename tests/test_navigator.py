@@ -231,3 +231,8 @@ def test_scrollbar_drag_scrolls_short_terminal_view():
     output = "".join(call.args[0] for call in writes)
     assert result == []
     assert "task9" in output
+
+
+def test_clean_selector_empty_items_returns_without_error():
+    # Empty items must not raise ZeroDivisionError on cursor movement; run() exits.
+    assert CleanSelector("t", []).run() == []

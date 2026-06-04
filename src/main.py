@@ -113,6 +113,10 @@ Examples:
                 print(f"✅ Removed from whitelist: {args.path}")
             else:
                 print(f"❌ Path not found in whitelist: {args.path}")
+                sys.exit(1)
+        elif args.action in ("add", "remove"):
+            print(f"Usage: topo whitelist {args.action} <path>")
+            sys.exit(1)
         elif args.action == "list" or not args.action:
             from .core.whitelist import get_whitelist
 
@@ -124,6 +128,7 @@ Examples:
                 print(f"   - {p}")
         else:
             print("Usage: topo whitelist <add|remove|list> [path]")
+            sys.exit(1)
         return
 
     # If no command is provided, enter TUI

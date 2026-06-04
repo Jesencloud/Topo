@@ -44,6 +44,14 @@ Today's session was a comprehensive bug-fix pass driven by a full code audit of 
 *   **Thorough removal**: `topo remove` now also deletes the deletion-audit/state dir (`$XDG_STATE_HOME/topo`), strips the `# Added by topo` PATH block from `~/.bashrc`/`~/.zshrc`, and recognizes a *dangling* launcher symlink (the previous `resolve()`-based check skipped links whose target was already gone).
 *   **Regression Coverage**: New `test_remove.py` covers rc-line stripping (and no-op without the marker) and dangling-link detection.
 
+### 9. [Low] Assorted robustness
+*   **TUI empty-list guard**: `CleanSelector.run()` (and `InteractiveMenu.run()`) lacked the empty-items guard the other selectors have, so an empty list + an arrow key hit `% len([])` → `ZeroDivisionError`. Both now return immediately when empty.
+*   **Whitelist CLI exit codes**: `topo whitelist add/remove` without a path, or `remove` of an absent path, now exit non-zero instead of always 0 (so scripts can detect failure).
+*   **Battery health**: clamped to 100% (new batteries report `energy_full > energy_full_design`, which previously displayed e.g. "Health: 103.4%").
+*   **Multi-GPU status**: `get_gpu_info()` split the entire `nvidia-smi` output on `", "`; with more than one GPU this raised and silently returned no GPU info. It now parses the first line.
+*   **Passwordless-sudo rule**: `setup_passwordless_sudo()` used `$USER` (wrong under sudo) and would emit a broken sudoers rule for paths containing spaces. It now uses the real invoking user (`SUDO_USER`) and refuses to emit an unsafe rule.
+*   **Regression Coverage**: Added tests across `test_navigator.py`, `test_status.py`, and `test_system.py`.
+
 <!-- WIP-2026-06-04 -->
 
 # Daily Modification Report - 2026-06-03

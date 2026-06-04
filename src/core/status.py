@@ -82,7 +82,7 @@ def get_battery_info():
                 design = int(f.read().strip())
             with open(bat_path / "energy_full") as f:
                 full = int(f.read().strip())
-            health = (full / design) * 100
+            health = min(100.0, (full / design) * 100)
             health_str = f" (Health: {health:.1f}%)"
         except (OSError, ValueError, ZeroDivisionError):
             health_str = ""
@@ -235,8 +235,10 @@ def get_gpu_info():
                 capture=True,
                 timeout=10,
             )
-            if res.ok:
-                util, used, total, temp = res.stdout.strip().split(", ")
+            if res.ok and res.stdout.strip():
+                # Multiple GPUs produce multiple lines; report the first.
+                first = res.stdout.strip().splitlines()[0]
+                util, used, total, temp = first.split(", ")
                 return f"NVIDIA: {util}% util | Mem: {int(used) / 1024:.1f}GB / {int(total) / 1024:.1f}GB | {temp}°C"
         except (ValueError, IndexError):
             pass

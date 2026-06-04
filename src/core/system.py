@@ -117,11 +117,21 @@ def ensure_sudo_session(prompt: str | None = None):
 
 def setup_passwordless_sudo():
     """Generate a command to enable permanent passwordless sudo for the current user."""
-    user = os.getenv("USER")
+    user = get_invoking_user()
     script_path = os.path.realpath(sys.argv[0])
-    rule = f"{user} ALL=(ALL) NOPASSWD: {script_path}"
 
     print(f"\n{BOLD}🛡️  Setup Passwordless Mode{RESET}")
+    # A sudoers NOPASSWD command path must be a single, unquoted token. Refuse to
+    # emit a rule for paths with spaces/quotes (or a bogus invoking user) rather
+    # than print one that is syntactically wrong or broader than intended.
+    if not user or user == "unknown" or " " in script_path or "'" in script_path:
+        print(
+            "Could not generate a safe sudoers rule for this install "
+            f"(user={user!r}, path={script_path!r})."
+        )
+        return
+
+    rule = f"{user} ALL=(ALL) NOPASSWD: {script_path}"
     print("To allow topo to run without ever asking for a password, run this command once:")
     print(f"\n\033[1;33mecho '{rule}' | sudo tee /etc/sudoers.d/topo\033[0m\n")
     print("This will create a safe rule specifically for the topo script.")

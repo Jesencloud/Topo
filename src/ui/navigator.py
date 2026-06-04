@@ -618,6 +618,8 @@ class InteractiveMenu:
         _render_scrollable_frame(self, buf, focus_line)
 
     def run(self):
+        if not self.options:
+            return None
         with _selector_session(enable_mouse=False) as fd:
             while True:
                 self.render()
@@ -1289,6 +1291,8 @@ class CleanSelector:
         _render_scrollable_frame(self, buf, focus_line)
 
     def run(self):
+        if not self.items:
+            return []
         with _selector_session() as fd:
             while True:
                 self.render()

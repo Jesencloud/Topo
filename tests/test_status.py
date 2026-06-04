@@ -1,9 +1,10 @@
-from unittest.mock import mock_open, patch
+from unittest.mock import MagicMock, mock_open, patch
 
 from src.core.status import (
     get_battery_info,
     get_cpu_load_summary,
     get_cpu_temp,
+    get_gpu_info,
     get_ip_info,
     get_mem_info,
     get_uptime,
@@ -122,3 +123,35 @@ def test_get_battery_info():
         assert pct == "80%"
         assert "Health: 90.0%" in details
         assert "Cycles: 100" in details
+
+
+def test_get_battery_health_capped_at_100():
+    def battery_mock_open(path):
+        if "capacity" in str(path):
+            return mock_open(read_data="95\n")()
+        if "energy_full_design" in str(path):
+            return mock_open(read_data="5000\n")()
+        if "energy_full" in str(path):
+            return mock_open(read_data="5200\n")()  # full > design -> would be >100%
+        return mock_open()()
+
+    with (
+        patch("pathlib.Path.exists", return_value=True),
+        patch("builtins.open", side_effect=battery_mock_open),
+    ):
+        _, _, details = get_battery_info()
+
+    assert "Health: 100.0%" in details
+
+
+def test_get_gpu_info_multi_gpu_uses_first_line():
+    out = "10, 1024, 8192, 55\n20, 2048, 8192, 60\n"
+    with (
+        patch("src.core.status.shutil.which", return_value="/usr/bin/nvidia-smi"),
+        patch("src.core.status.run_command", return_value=MagicMock(ok=True, stdout=out)),
+    ):
+        result = get_gpu_info()
+
+    assert result is not None
+    assert "NVIDIA: 10% util" in result
+    assert "1.0GB" in result
