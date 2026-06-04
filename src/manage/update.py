@@ -1,4 +1,5 @@
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -22,7 +23,7 @@ def _should_update(local_version: str, remote_version: str) -> bool:
 
 def _fetch_latest_release_tag() -> str:
     latest_release_url = "https://api.github.com/repos/Jesencloud/Topo/releases/latest"
-    data = subprocess.check_output(["curl", "-fsSL", latest_release_url], text=True)
+    data = subprocess.check_output(["curl", "-fsSL", latest_release_url], text=True, timeout=15)
     tag = json.loads(data).get("tag_name", "")
     if not isinstance(tag, str):
         return ""
@@ -69,24 +70,35 @@ def run_update():
         )
         return
 
+    # Refuse any tag that isn't a plain version-ish token. _parse_version already
+    # proved it parses, but the raw tag goes into a URL and is handed to the
+    # installer, so reject anything with shell metacharacters or whitespace.
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", remote_tag):
+        print(f" {RED}❌ Refusing unsafe release tag: {remote_tag!r}{RESET}")
+        return
+
     print(f" {YELLOW}⬆️  New version available: {remote_tag}{RESET}")
     print(f" {GRAY}Updating Topo from v{local_version} to {remote_tag}...{RESET}\n")
 
-    # 4. Run update script in minimal mode
-    # Install from the release tag instead of the development branch.
-    install_cmd = (
-        "curl -fsSL "
-        f"https://raw.githubusercontent.com/Jesencloud/Topo/{remote_tag}/install.sh "
-        f"| bash -s -- --minimal --version {remote_tag}"
-    )
+    # 4. Download the release installer, then run it via `bash -s` stdin.
+    # No shell=True and no string interpolation into a command line: the tag is
+    # passed as a separate argv element, so a crafted tag cannot inject commands.
+    script_url = f"https://raw.githubusercontent.com/Jesencloud/Topo/{remote_tag}/install.sh"
+    try:
+        script = subprocess.check_output(["curl", "-fsSL", script_url], text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"\n {RED}❌ Failed to download installer: {e}{RESET}")
+        return
 
     try:
-        process = subprocess.run(install_cmd, shell=True)
-
+        process = subprocess.run(
+            ["bash", "-s", "--", "--minimal", "--version", remote_tag],
+            input=script,
+            text=True,
+        )
         if process.returncode == 0:
             print(f"\n {GREEN}✨ Topo has been successfully updated to {remote_tag}!{RESET}")
         else:
             print(f"\n {RED}❌ Update failed with exit code {process.returncode}{RESET}")
-
-    except Exception as e:
+    except (OSError, subprocess.SubprocessError) as e:
         print(f"\n {RED}❌ Error during update: {e}{RESET}")

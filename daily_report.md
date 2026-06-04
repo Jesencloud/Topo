@@ -28,6 +28,11 @@ Today's session was a comprehensive bug-fix pass driven by a full code audit of 
 ### 5. [Med] SQLite vacuum no longer leaks connections on error
 *   `vacuum_single_db()` called `conn.close()` only on its success paths; if any `PRAGMA`/`VACUUM` raised `sqlite3.Error`, the outer `except` returned 0 with the connection (and its file handle) still open — leaking one per corrupt/locked DB across a full browser-database sweep. The connection is now wrapped in `contextlib.closing()`, so every path (success, early-return, exception) closes it. Added a regression test asserting `close()` is called on error.
 
+### 6. [Med] Safer self-update (`topo update`)
+*   `_fetch_latest_release_tag()`'s `curl` had no timeout, so a hung network blocked `topo update` indefinitely — added `timeout=15`.
+*   The update ran `curl … | bash -s -- … --version {remote_tag}` via `subprocess.run(shell=True)`, interpolating the GitHub release tag into a shell command line. Now the tag is validated against a strict pattern (rejecting anything with shell metacharacters/whitespace even if PEP 440 accepts it, e.g. epoch tags `1!2.3`), the installer is fetched with a plain `curl` argv list (`timeout=30`), and executed via `bash -s` stdin with the tag passed as a separate argv element — no `shell=True`, no command-line interpolation.
+*   **Regression Coverage**: Updated the install test for the shell-free flow and added a test that an unsafe tag is refused before any download/execution.
+
 <!-- WIP-2026-06-04 -->
 
 # Daily Modification Report - 2026-06-03
