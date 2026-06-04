@@ -541,3 +541,46 @@ def test_get_app_keywords(test_env):
 
     assert "my-app" in keywords
     assert "my-app-icon" in keywords
+
+
+def test_find_residue_paths_never_targets_xdg_user_dirs(test_env):
+    """An app whose display name is a common word (e.g. GNOME 'Music') must not
+    flag standard XDG user-data directories such as ~/Music or ~/Videos."""
+    mgr = UninstallManager()
+    music_dir = test_env / "Music"
+    videos_dir = test_env / "Videos"
+    documents_dir = test_env / "Documents"
+    for d in (music_dir, videos_dir, documents_dir):
+        d.mkdir()
+    (music_dir / "song.mp3").write_text("precious")
+
+    with patch("pathlib.Path.home", return_value=test_env):
+        music_paths = mgr.find_residue_paths("org.gnome.Music", "Music", "Flatpak")
+        videos_paths = mgr.find_residue_paths("org.gnome.Totem", "Videos", "Flatpak")
+        docs_paths = mgr.find_residue_paths("com.example.Documents", "Documents", "Flatpak")
+
+    assert music_dir not in music_paths
+    assert videos_dir not in videos_paths
+    assert documents_dir not in docs_paths
+
+
+def test_uninstall_cannot_delete_xdg_user_data_dir(test_env):
+    """Defense in depth: even if a user-data dir reaches safe_remove with
+    allow_app_data_removal=True, it must be refused while files inside stay
+    deletable."""
+    from src.core.file_ops import safe_remove
+
+    music = test_env / "Music"
+    music.mkdir()
+    song = music / "song.mp3"
+    song.write_text("precious")
+
+    with patch("pathlib.Path.home", return_value=test_env):
+        ok_dir, reason = safe_remove(music, use_trash=False, allow_app_data_removal=True)
+        ok_file, _ = safe_remove(song, use_trash=False, allow_app_data_removal=True)
+
+    assert ok_dir is False
+    assert "user data" in reason.lower()
+    assert music.exists()
+    assert ok_file is True
+    assert not song.exists()

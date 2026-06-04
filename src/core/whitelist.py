@@ -157,6 +157,20 @@ LINUX_HARD_PROTECTED_HOME_PATHS = [
     ".config/gh",
 ]
 
+# Standard XDG user-data directories. Protected as DIRECTORIES (exact match
+# only) so uninstall residue cleanup can never delete ~/Music, ~/Videos,
+# ~/Documents, etc. Files *inside* them stay deletable via Analyze.
+LINUX_USER_DATA_DIRS = [
+    "Desktop",
+    "Documents",
+    "Downloads",
+    "Music",
+    "Pictures",
+    "Public",
+    "Templates",
+    "Videos",
+]
+
 LINUX_PROTECTED_FLATPAK_APP_IDS = [
     "app.zen_browser.zen",
     "com.bitwarden.desktop",
@@ -269,6 +283,17 @@ def get_hard_protection_reason(path) -> str | None:
             return "home directory"
     except Exception:
         home = Path.home()
+
+    # Protect standard XDG user-data directories themselves (exact match) from
+    # every deletion context, including uninstall residue removal. Files *inside*
+    # them remain deletable via Analyze, so this only blocks wiping the whole dir.
+    for rel in LINUX_USER_DATA_DIRS:
+        try:
+            user_dir = (home / rel).resolve()
+        except OSError:
+            user_dir = (home / rel).absolute()
+        if path == user_dir:
+            return "user data directory"
 
     protected_home_paths = [home / rel for rel in LINUX_HARD_PROTECTED_HOME_PATHS]
     for protected in protected_home_paths:

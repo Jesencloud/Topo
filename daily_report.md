@@ -1,3 +1,17 @@
+# Daily Modification Report - 2026-06-04
+
+## Project: topo (Topo) - Security & Correctness Bug-Fix Sweep
+
+Today's session was a comprehensive bug-fix pass driven by a full code audit of the Python (`src/`) and Rust (`topo-core/`) sources. Every finding was re-verified against the source before fixing, and audit false-positives were discarded. Fixes are grouped by severity, each with regression coverage where practical.
+
+### 1. [Critical] Uninstall no longer deletes XDG user-data directories
+*   **Root Cause**: `UninstallManager.find_residue_paths()` ran a top-level "deep search" of the home directory and matched folders by the app's *display name*. An app whose name is a common word (e.g. GNOME **Music** → `org.gnome.Music`, or **Videos**/Totem) matched `~/Music`, `~/Videos`, etc. `execute_uninstall()` then passed these to `safe_remove(..., use_trash=False, allow_app_data_removal=True)`, which **permanently deleted** them — and `get_hard_protection_reason()` only shielded credential dirs (`.ssh`/`.gnupg`/`.aws`/...), not standard user data.
+*   **Fix (source)**: The deep search now skips standard XDG user-data directory names (`Desktop`, `Documents`, `Downloads`, `Music`, `Pictures`, `Public`, `Templates`, `Videos`), so they are never treated as app residue.
+*   **Fix (defense in depth)**: Added `LINUX_USER_DATA_DIRS` to `whitelist.py` and taught `get_hard_protection_reason()` to protect each of these directories **as an exact path** ("user data directory"). This blocks wiping the whole directory in any deletion context — including uninstall — while files *inside* them remain deletable via Analyze, so disk cleanup still works.
+*   **Regression Coverage**: Added tests proving `find_residue_paths("org.gnome.Music", "Music", ...)` never returns `~/Music`, that `safe_remove(~/Music, allow_app_data_removal=True)` is refused while `~/Music/song.mp3` is still removable, and that these directories report `is_protected() is True` while their children do not.
+
+<!-- WIP-2026-06-04 -->
+
 # Daily Modification Report - 2026-06-03
 
 ## Project: topo (Topo) - Responsive UI & Mouse Wheel Support

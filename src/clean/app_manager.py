@@ -16,6 +16,7 @@ from ..core.file_ops import (
     safe_remove,
 )
 from ..core.history import record_history_session
+from ..core.whitelist import LINUX_USER_DATA_DIRS
 from ..ui.navigator import Navigator, UninstallSelector
 
 
@@ -514,12 +515,18 @@ class UninstallManager:
 
         # 6. Deep Subdirectory Search (if name is specific enough)
         if len(app_name) > 3:
+            # Never treat standard XDG user-data directories (~/Music, ~/Videos,
+            # ~/Documents, ...) as app residue. An app whose display name happens
+            # to be a common word (e.g. GNOME "Music") must not wipe user data.
+            protected_dir_names = {d.lower() for d in LINUX_USER_DATA_DIRS}
             try:
                 # Only scan top-level dirs in home for speed/safety
                 with os.scandir(home_path) as it:
                     for entry in it:
                         if entry.is_dir():
                             entry_lower = entry.name.lower()
+                            if entry_lower in protected_dir_names:
+                                continue
                             if (
                                 self._name_matches(entry_lower, app_name.lower())
                                 and str(entry.path) not in seen

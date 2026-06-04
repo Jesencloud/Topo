@@ -94,3 +94,17 @@ def test_linux_sensitive_app_data_is_protected(test_env):
 def test_linux_sensitive_app_data_does_not_protect_unrelated_paths(test_env):
     assert is_protected(test_env / ".cache/some-app/cache.db") is False
     assert is_protected(test_env / ".config/my-normal-app/config.json") is False
+
+
+def test_xdg_user_data_dirs_protected_as_directories(test_env):
+    """Standard XDG user-data dirs are protected as whole directories (so
+    uninstall can't wipe ~/Music), but files inside them stay deletable."""
+    from src.core.whitelist import get_hard_protection_reason
+
+    for name in ("Music", "Videos", "Documents", "Pictures", "Downloads"):
+        assert get_hard_protection_reason(test_env / name) == "user data directory"
+        assert is_protected(test_env / name) is True
+
+    # Files inside are NOT hard-protected — Analyze can still delete them.
+    assert get_hard_protection_reason(test_env / "Music" / "song.mp3") is None
+    assert is_protected(test_env / "Music" / "song.mp3") is False
