@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 const DEFAULT_TREE_MIN_BYTES: u64 = 1_048_576; // 1 MiB
+const TOP_FILE_MIN_BYTES: u64 = 1_048_576; // 1 MiB; min size to enter the top-files list
 
 #[derive(Serialize, Deserialize)]
 struct ScanResult {
@@ -91,19 +92,20 @@ fn compute_single(root_path: &Path) -> ScanResult {
     let mut subdir_sizes: HashMap<String, u64> = HashMap::new();
 
     walk_files(root_path, |path, size| {
-        total_size += size;
-        file_count += 1;
+        total_size = total_size.saturating_add(size);
+        file_count = file_count.saturating_add(1);
 
         // 1. Attribute size to top-level subdirectory
         if let Ok(rel_path) = path.strip_prefix(root_path) {
             if let Some(first_comp) = rel_path.components().next() {
                 let subdir_name = first_comp.as_os_str().to_string_lossy().into_owned();
-                *subdir_sizes.entry(subdir_name).or_insert(0) += size;
+                let e = subdir_sizes.entry(subdir_name).or_insert(0);
+                *e = e.saturating_add(size);
             }
         }
 
-        // 2. Track top 100 files (> 1MB)
-        if size > 1_000_000 {
+        // 2. Track top 100 files (> 1 MiB)
+        if size > TOP_FILE_MIN_BYTES {
             let info = FileInfo {
                 path: path.to_string_lossy().into_owned(),
                 size_bytes: size,
@@ -152,9 +154,10 @@ fn compute_tree(root_path: &Path) -> HashMap<String, DirAgg> {
 
         // Root "." gets the file's size/count, with comps[0] as its child.
         let root_agg = dirs.entry(".".to_string()).or_default();
-        root_agg.total_size_bytes += size;
-        root_agg.file_count += 1;
-        *root_agg.subdirs.entry(comps[0].clone()).or_insert(0) += size;
+        root_agg.total_size_bytes = root_agg.total_size_bytes.saturating_add(size);
+        root_agg.file_count = root_agg.file_count.saturating_add(1);
+        let root_child = root_agg.subdirs.entry(comps[0].clone()).or_insert(0);
+        *root_child = root_child.saturating_add(size);
 
         // Descend through each intermediate directory: comps[0], comps[0]/comps[1],
         // ... comps[0]/.../comps[n-2]. Each gets the size and a child entry toward
@@ -168,9 +171,10 @@ fn compute_tree(root_path: &Path) -> HashMap<String, DirAgg> {
                 prefix.push_str(&comps[i]);
             }
             let agg = dirs.entry(prefix.clone()).or_default();
-            agg.total_size_bytes += size;
-            agg.file_count += 1;
-            *agg.subdirs.entry(comps[i + 1].clone()).or_insert(0) += size;
+            agg.total_size_bytes = agg.total_size_bytes.saturating_add(size);
+            agg.file_count = agg.file_count.saturating_add(1);
+            let child = agg.subdirs.entry(comps[i + 1].clone()).or_insert(0);
+            *child = child.saturating_add(size);
         }
     });
 

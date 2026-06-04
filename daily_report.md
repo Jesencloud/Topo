@@ -52,6 +52,11 @@ Today's session was a comprehensive bug-fix pass driven by a full code audit of 
 *   **Passwordless-sudo rule**: `setup_passwordless_sudo()` used `$USER` (wrong under sudo) and would emit a broken sudoers rule for paths containing spaces. It now uses the real invoking user (`SUDO_USER`) and refuses to emit an unsafe rule.
 *   **Regression Coverage**: Added tests across `test_navigator.py`, `test_status.py`, and `test_system.py`.
 
+### 10. [Low] Rust engine: overflow-safe sizes & consistent threshold
+*   File-size and file-count aggregation used plain `+=` on `u64`, which panics in debug builds and silently wraps in release on overflow (e.g. pathological/corrupt metadata on an enormous tree). All accumulations in `compute_single`/`compute_tree` now use `saturating_add`.
+*   The top-files cutoff was a literal `1_000_000` while the comment and the tree threshold use 1 MiB; introduced `TOP_FILE_MIN_BYTES = 1_048_576` so single- and tree-mode thresholds agree.
+*   `cargo test`: 7/7 engine tests still pass.
+
 <!-- WIP-2026-06-04 -->
 
 # Daily Modification Report - 2026-06-03
