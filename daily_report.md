@@ -57,7 +57,11 @@ Today's session was a comprehensive bug-fix pass driven by a full code audit of 
 *   The top-files cutoff was a literal `1_000_000` while the comment and the tree threshold use 1 MiB; introduced `TOP_FILE_MIN_BYTES = 1_048_576` so single- and tree-mode thresholds agree.
 *   `cargo test`: 7/7 engine tests still pass.
 
-<!-- WIP-2026-06-04 -->
+### 11. Verification
+*   `ruff check src tests` — **All checks passed**.
+*   `pytest` — **183 passed** (full suite, including the new regression tests added throughout this report).
+*   `cargo test` (topo-core) — **7 passed**.
+*   Each fix above was committed individually on branch `bugfix/audit-fixes-2026-06-04` (not pushed).
 
 # Daily Modification Report - 2026-06-03
 
