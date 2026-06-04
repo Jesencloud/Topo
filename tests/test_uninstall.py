@@ -5,6 +5,7 @@ import pytest
 from src.clean.app_manager import UninstallManager, run_uninstall
 from src.core.history import parse_deletion_history
 
+
 @pytest.fixture(autouse=True)
 def mock_sleep():
     """Mock time.sleep globally for all uninstall tests to prevent slow test execution."""
@@ -424,7 +425,9 @@ def test_execute_uninstall_snap(mock_run_cmd, test_env):
         details = mgr.execute_uninstall(app, [])
 
     assert details["removed_paths"] == []
-    mock_run_cmd.assert_any_call(["snap", "remove", "--purge", "my-snap"], use_sudo=True, capture=True)
+    mock_run_cmd.assert_any_call(
+        ["snap", "remove", "--purge", "my-snap"], use_sudo=True, capture=True
+    )
 
 
 @patch("src.core.system.run_command")
@@ -473,9 +476,7 @@ def test_execute_uninstall_apt(mock_run_cmd, test_env):
         details = mgr.execute_uninstall(app, [])
 
     assert details["removed_paths"] == []
-    mock_run_cmd.assert_any_call(
-        ["apt", "purge", "-y", "firefox"], use_sudo=True, capture=True
-    )
+    mock_run_cmd.assert_any_call(["apt", "purge", "-y", "firefox"], use_sudo=True, capture=True)
 
 
 @patch("src.core.system.run_command")

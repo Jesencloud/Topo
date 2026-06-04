@@ -13,6 +13,7 @@ from ..core.constants import (
     PURPLE,
     RED,
     RESET,
+    THEME_TITLE,
     YELLOW,
 )
 from ..core.file_ops import bytes_to_human
@@ -84,7 +85,7 @@ def run_clean(dry_run=False):
     if run_system_tasks:
         execution_groups.append(
             (
-                "\033[1;95m➤ System & Package Manager\033[0m",
+                f"{THEME_TITLE}➤ System & Package Manager{RESET}",
                 [
                     ("Package Manager Cache", clean_package_manager),
                     ("System Journal Logs", clean_journal),
@@ -93,13 +94,13 @@ def run_clean(dry_run=False):
         )
     execution_groups.extend(
         [
-            ("\033[1;95m➤ User Data Cleanup\033[0m", [("User Data & Trash", clean_user_data)]),
+            (f"{THEME_TITLE}➤ User Data Cleanup{RESET}", [("User Data & Trash", clean_user_data)]),
             (
-                "\033[1;95m➤ Deep App Cleanup\033[0m",
+                f"{THEME_TITLE}➤ Deep App Cleanup{RESET}",
                 [("Deep App Caches", partial(clean_apps_deep, detected_apps=detected_apps))],
             ),
             (
-                "\033[1;95m➤ Developer Tools & AI Models\033[0m",
+                f"{THEME_TITLE}➤ Developer Tools & AI Models{RESET}",
                 [("Developer Artifacts", clean_developer_tools)],
             ),
         ]

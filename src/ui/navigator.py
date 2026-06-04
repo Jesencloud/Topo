@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..core.constants import BOLD, GRAY, GREEN, PURPLE, RED, RESET, WHITE, YELLOW
+from ..core.constants import BOLD, GRAY, GREEN, PURPLE, RED, RESET, THEME_TITLE, WHITE, YELLOW
 from ..core.file_ops import bytes_to_human
 
 ANSI_CSI_RE = re.compile("\x1b\\[[0-?]*[ -/]*[@-~]")
@@ -607,7 +607,7 @@ class InteractiveMenu:
             buf.append(sys.stdout.getvalue())
             sys.stdout = old_stdout
 
-        buf.append(f"\n \033[1;35m{self.title}\033[0m\033[K\n")
+        buf.append(f"\n {THEME_TITLE}{self.title}{RESET}\033[K\n")
         buf.append("\033[K\n")
         focus_line = 0
         for i, (label, desc) in enumerate(self.options):
@@ -682,7 +682,7 @@ class AnalyzeSelector(_PagedSelector):
             buf.append(sys.stdout.getvalue())
             sys.stdout = old_stdout
 
-        buf.append(f"\n{PURPLE}{self.title}{RESET}\033[K\n\n")
+        buf.append(f"\n {THEME_TITLE}{self.title}{RESET}\033[K\n\n")
 
         hint = (
             f"{GRAY}Select a location to explore (Type numbers or Space to select):{RESET}"
@@ -751,7 +751,7 @@ class AnalyzeSelector(_PagedSelector):
 
         if self.selected_items:
             buf.append(
-                f"\n \033[1;35m☉ Selected Items to Remove:\033[0m {GRAY}Enter:Delete{RESET}\033[K\n"
+                f"\n {THEME_TITLE}☉ Selected Items to Remove:{RESET} {GRAY}Enter:Delete{RESET}\033[K\n"
             )
             selected_indices = sorted(list(self.selected_items))
             for i in range(0, len(selected_indices), 2):
@@ -761,7 +761,7 @@ class AnalyzeSelector(_PagedSelector):
                     item = self.items[idx]
                     icon = item.get("icon", "📁")
                     name_padded = pad_and_truncate(item["name"], 35)
-                    line += f"   \033[1;35m•\033[0m {icon} {name_padded}"
+                    line += f"   {THEME_TITLE}•{RESET} {icon} {name_padded}"
                 buf.append(line + "\033[K\n")
 
         if self.confirming_delete:
@@ -871,7 +871,7 @@ class PaginatedSelector(_PagedSelector):
 
     def render(self):
         buf = ["\033[H"]
-        buf.append(f"\n \033[1;35m{self.title}\033[0m\033[K\n")
+        buf.append(f"\n {THEME_TITLE}{self.title}{RESET}\033[K\n")
         buf.append("\033[K\n")
         start = self.current_page * self.page_size
         end = min(start + self.page_size, len(self.items))
@@ -970,7 +970,7 @@ class UninstallSelector(_PagedSelector):
         buf = ["\033[H"]
         total_len = len(self.items)
         buf.append(
-            f"\n \033[1;35mSelect Application to Remove\033[0m "
+            f"\n {THEME_TITLE}Select Application to Remove{RESET} "
             f"{GRAY}{len(self.selected_ids)}/{total_len} selected{RESET}\033[K\n\n"
         )
 
@@ -1019,7 +1019,7 @@ class UninstallSelector(_PagedSelector):
 
         if self.selected_ids:
             buf.append(
-                f"\n \033[1;35m☉ Selected Apps to Remove:\033[0m "
+                f"\n {THEME_TITLE}☉ Selected Apps to Remove:{RESET} "
                 f"{GRAY}Press Enter to Uninstall, ESC to Exit{RESET}\033[K\n"
             )
             selected_names = [i["name"] for i in self.items if i["id"] in self.selected_ids]
@@ -1027,7 +1027,7 @@ class UninstallSelector(_PagedSelector):
                 pair = selected_names[i : i + 2]
                 line = ""
                 for name in pair:
-                    line += f"   \033[1;35m•\033[0m {pad_and_truncate(name, 35)}"
+                    line += f"   {THEME_TITLE}•{RESET} {pad_and_truncate(name, 35)}"
                 buf.append(line + "\033[K\n")
 
         buf.append("\033[J")
@@ -1123,7 +1123,7 @@ class TopFilesSelector:
 
     def render(self):
         buf = ["\033[H"]
-        buf.append(f"\n \033[1;33m{self.title}\033[0m\033[K\n")
+        buf.append(f"\n {THEME_TITLE}{self.title}{RESET}\033[K\n")
         buf.append("\033[K\n")
         viewport = 20
         start = max(0, self.selected_index - viewport // 2)
@@ -1141,13 +1141,13 @@ class TopFilesSelector:
         buf.append("\033[K\n")
         buf.append(f"{GRAY} ↑/↓: Move | Space: Toggle | Enter: Delete | ESC: Back{RESET}\033[K\n")
         if self.selected_items:
-            buf.append("\n \033[1;35m☉ Selected Large Files to Remove:\033[0m\033[K\n")
+            buf.append(f"\n {THEME_TITLE}☉ Selected Large Files to Remove:{RESET}\033[K\n")
             selected_indices = sorted(list(self.selected_items))
             for i in range(0, len(selected_indices), 2):
                 pair = selected_indices[i : i + 2]
                 line = ""
                 for idx in pair:
-                    line += f"   \033[1;35m•\033[0m 📄 {Path(self.items[idx]['path']).name}"
+                    line += f"   {THEME_TITLE}•{RESET} 📄 {Path(self.items[idx]['path']).name}"
                 buf.append(line + "\033[K\n")
 
         if self.confirming_delete:

@@ -9,6 +9,7 @@ from .clean.project import run_purge
 from .clean.runner import run_clean
 from .core import system
 from .core.analyze import run_deep_analysis
+from .core.constants import RESET, THEME_TITLE
 from .core.history import show_history
 from .core.status import show_status
 from .core.whitelist import add_to_whitelist, remove_from_whitelist
@@ -121,7 +122,7 @@ Examples:
             from .core.whitelist import get_whitelist
 
             w = get_whitelist()
-            print("\033[1;36m🛡️  Current Whitelist:\033[0m")
+            print(f"{THEME_TITLE}🛡️  Current Whitelist:{RESET}")
             if not w:
                 print("   (Empty)")
             for p in w:

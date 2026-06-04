@@ -1,3 +1,4 @@
+import contextlib
 import os
 import shutil
 import subprocess
@@ -8,7 +9,7 @@ from typing import Any
 
 from ..core import system
 from ..core.analyze import ScanCache
-from ..core.constants import BOLD, GRAY, GREEN, MAGENTA, PURPLE, RED, RESET, YELLOW
+from ..core.constants import BOLD, GRAY, GREEN, MAGENTA, PURPLE, RED, RESET, THEME_TITLE, YELLOW
 from ..core.file_ops import (
     bytes_to_human,
     parse_size_to_bytes,
@@ -396,10 +397,8 @@ class UninstallManager:
                             install_time = 0
                             list_file = Path(f"/var/lib/dpkg/info/{app_id}.list")
                             if list_file.exists():
-                                try:
+                                with contextlib.suppress(OSError):
                                     install_time = int(list_file.stat().st_mtime)
-                                except OSError:
-                                    pass
 
                             apps.append(
                                 self._app_record(
@@ -512,7 +511,7 @@ class UninstallManager:
                         size_bytes = 0
                         size_str = "N/A"
                         install_time = 0
-                        
+
                         # Primary method: Check the actual .snap file (most accurate)
                         if revision:
                             snap_file = Path(f"/var/lib/snapd/snaps/{app_id}_{revision}.snap")
@@ -532,7 +531,9 @@ class UninstallManager:
                                     try:
                                         if install_time == 0:
                                             install_time = int(snap_path.stat().st_mtime)
-                                        res_size = system.run_command(["du", "-sk", str(snap_path)], capture=True, timeout=5)
+                                        res_size = system.run_command(
+                                            ["du", "-sk", str(snap_path)], capture=True, timeout=5
+                                        )
                                         if res_size.ok and res_size.stdout:
                                             kb = int(res_size.stdout.split()[0])
                                             size_bytes = kb * 1024
@@ -541,7 +542,11 @@ class UninstallManager:
                                     except (OSError, ValueError, IndexError):
                                         pass
 
-                        apps.append(self._app_record(app_id, app_id, size_bytes, size_str, "Snap", install_time))
+                        apps.append(
+                            self._app_record(
+                                app_id, app_id, size_bytes, size_str, "Snap", install_time
+                            )
+                        )
             except (OSError, subprocess.SubprocessError):
                 pass
 
@@ -646,8 +651,6 @@ class UninstallManager:
                 app, self._executable_names_from_desktop(str(app.get("id") or ""))
             )
             if app["type"] == "Flatpak":
-                import contextlib
-
                 with contextlib.suppress(OSError, subprocess.SubprocessError):
                     system.run_command(["flatpak", "kill", app["id"]], capture=True, timeout=20)
 
@@ -663,9 +666,9 @@ class UninstallManager:
             if processes_to_kill:
                 for proc in processes_to_kill:
                     system.run_command(["pkill", "-15", "-x", proc], capture=True, timeout=5)
-                
+
                 time.sleep(1.0)
-                
+
                 for proc in processes_to_kill:
                     if system.run_command(["pgrep", "-x", proc], capture=True, timeout=5).ok:
                         system.run_command(["pkill", "-9", "-x", proc], capture=True, timeout=5)
@@ -675,7 +678,9 @@ class UninstallManager:
             if app["type"] == "Flatpak":
                 res = system.run_command(["flatpak", "uninstall", "-y", app["id"]], capture=True)
             elif app["type"] == "Snap":
-                res = system.run_command(["snap", "remove", "--purge", app["id"]], use_sudo=True, capture=True)
+                res = system.run_command(
+                    ["snap", "remove", "--purge", app["id"]], use_sudo=True, capture=True
+                )
             elif app["type"] == "APT":
                 res = system.run_command(
                     ["apt", "purge", "-y", app["id"]], use_sudo=True, capture=True
@@ -758,7 +763,9 @@ def run_uninstall():
             while not preview_done:
                 buf = ["\033[H"]  # Go home
                 # Use \033[K on every line, including the very first line and spacers
-                buf.append(f"\033[1;35m➔\033[0m {PURPLE}Uninstallation Preview{RESET}\033[K\n")
+                buf.append(
+                    f"{THEME_TITLE}➔{RESET} {THEME_TITLE}Uninstallation Preview{RESET}\033[K\n"
+                )
                 buf.append("\033[K\n")
 
                 for app, app_paths, is_running in all_targets:

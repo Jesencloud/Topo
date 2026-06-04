@@ -6,7 +6,13 @@ from typing import Any
 
 from ..core.analyze import ScanCache
 from ..core.config import get_purge_paths
-from ..core.constants import MONOREPO_INDICATORS, PROJECT_INDICATORS, PURGE_TARGETS
+from ..core.constants import (
+    MONOREPO_INDICATORS,
+    PROJECT_INDICATORS,
+    PURGE_TARGETS,
+    RESET,
+    THEME_TITLE,
+)
 from ..core.file_ops import bytes_to_human, get_size_fast, safe_remove
 from ..ui.navigator import Navigator, PaginatedSelector
 
@@ -123,7 +129,7 @@ class PurgeManager:
 
 def run_purge(dry_run=False):
     while True:
-        print("\033[1;95m➤ Project Purge\033[0m")
+        print(f"{THEME_TITLE}➤ Project Purge{RESET}")
         manager = PurgeManager()
         results = manager.run_scan()
 
