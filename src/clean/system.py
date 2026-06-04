@@ -37,6 +37,8 @@ def clean_snaps(dry_run=False):
 def clean_package_manager(dry_run=False):
     """Clean system package manager caches."""
     freed = 0
+    snap_items = 0
+    snap_cats = 0
     os_id = get_os_id()
     cmd = []
     desc = ""
@@ -47,30 +49,31 @@ def clean_package_manager(dry_run=False):
     elif os_id in ("ubuntu", "debian") and shutil.which("apt-get"):
         cmd = ["apt-get", "clean"]
         desc = "APT cache"
-        s, i, c = clean_snaps(dry_run=dry_run)
+        # Old Snap revisions are a separate cleanup category; keep their stats.
+        s, snap_items, snap_cats = clean_snaps(dry_run=dry_run)
         freed += s
     elif os_id == "arch" and shutil.which("pacman"):
         cmd = ["pacman", "-Sc", "--noconfirm"]
         desc = "Pacman cache"
 
     if not cmd:
-        return freed, 0, 0
+        return freed, snap_items, snap_cats
 
     if dry_run:
         print(f"  \033[0;32m✓\033[0m {desc} would be cleaned")
-        return freed, 0, 1
+        return freed, snap_items, snap_cats + 1
 
     res = run_command(cmd, use_sudo=True, capture=True)
     if res.ok and res.stdout:
         freed += parse_size_from_text(res.stdout)
         print(f"  \033[0;32m✓\033[0m Cleaned {desc} ({bytes_to_human(freed)})")
-        return freed, 1, 1
+        return freed, snap_items + 1, snap_cats + 1
 
     if res.ok and desc == "APT cache":  # apt-get clean is silent
         print(f"  \033[0;32m✓\033[0m Cleaned {desc}")
-        return freed, 1, 1
+        return freed, snap_items + 1, snap_cats + 1
 
-    return freed, 0, 0
+    return freed, snap_items, snap_cats
 
 
 def clean_journal(dry_run=False):

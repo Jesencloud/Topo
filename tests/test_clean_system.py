@@ -69,3 +69,29 @@ def test_clean_journal(mock_run, mock_which):
 
     s, i, c = clean_journal(dry_run=True)
     assert c == 1
+
+
+@patch("shutil.which")
+@patch("src.clean.system.run_command")
+@patch("src.clean.system.get_os_id")
+def test_clean_package_manager_ubuntu_includes_snap_stats(mock_get_os_id, mock_run, mock_which):
+    """Snap revision removals must be counted in package-manager stats."""
+    mock_get_os_id.return_value = "ubuntu"
+    mock_which.side_effect = lambda x: f"/usr/bin/{x}" if x in ("apt-get", "snap") else None
+
+    def run_side_effect(cmd, **kwargs):
+        if cmd[:2] == ["snap", "list"]:
+            return MagicMock(
+                returncode=0,
+                ok=True,
+                stdout="Name Version Rev Tracking Publisher Notes\n"
+                "core22 2023 1234 latest canonical* disabled\n",
+            )
+        return MagicMock(returncode=0, ok=True, stdout="")
+
+    mock_run.side_effect = run_side_effect
+
+    s, i, c = clean_package_manager(dry_run=False)
+    # apt cache (1 item / 1 cat) + one removed snap revision (1 item / 1 cat)
+    assert i == 2
+    assert c == 2

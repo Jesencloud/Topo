@@ -33,6 +33,11 @@ Today's session was a comprehensive bug-fix pass driven by a full code audit of 
 *   The update ran `curl … | bash -s -- … --version {remote_tag}` via `subprocess.run(shell=True)`, interpolating the GitHub release tag into a shell command line. Now the tag is validated against a strict pattern (rejecting anything with shell metacharacters/whitespace even if PEP 440 accepts it, e.g. epoch tags `1!2.3`), the installer is fetched with a plain `curl` argv list (`timeout=30`), and executed via `bash -s` stdin with the tag passed as a separate argv element — no `shell=True`, no command-line interpolation.
 *   **Regression Coverage**: Updated the install test for the shell-free flow and added a test that an unsafe tag is refused before any download/execution.
 
+### 7. [Low] Accurate cleanup accounting
+*   **Tool caches**: `clean_tool_cache()` reported the *pre-clean* directory size as freed whenever the command exited 0, overstating reclaimed space when `npm/pip/go cache clean` only partially clears. It now reports `before - after` (or the full size if the directory was removed entirely).
+*   **Snap revisions**: `clean_package_manager()` discarded the item/category counts returned by `clean_snaps()` (it kept only the freed bytes, which are always 0 for snaps), so removed old revisions never showed in totals. Those counts now flow through.
+*   **Regression Coverage**: Added tests for actual-freed reporting and for snap-revision stats reaching the package-manager totals.
+
 <!-- WIP-2026-06-04 -->
 
 # Daily Modification Report - 2026-06-03

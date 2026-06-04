@@ -31,11 +31,16 @@ def clean_tool_cache(description, command_args, cache_path=None, dry_run=False):
 
     if total_size > 0 or not cache_path:
         res = run_command(command_args, capture=True)
-        if (res and res.returncode == 0) or (
-            cache_path and not Path(cache_path).expanduser().exists()
-        ):
-            print(f"  \033[0;32m✓\033[0m {description} ({bytes_to_human(total_size)}) cleaned")
-            return total_size, 1
+        cache_gone = cache_path and not Path(cache_path).expanduser().exists()
+        if (res and res.returncode == 0) or cache_gone:
+            # Report space actually reclaimed (before - after), not the pre-clean
+            # size, since `npm/pip/go cache clean` may only clear part of it.
+            freed = total_size
+            if cache_path and not cache_gone:
+                after = get_size_fast(Path(cache_path).expanduser())
+                freed = max(0, total_size - after)
+            print(f"  \033[0;32m✓\033[0m {description} ({bytes_to_human(freed)}) cleaned")
+            return freed, 1
     return 0, 0
 
 

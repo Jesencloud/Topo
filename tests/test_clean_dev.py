@@ -81,3 +81,17 @@ def test_clean_developer_tools(mock_clean_tool, mock_which):
         size, items, cats = clean_developer_tools(dry_run=False)
         assert cats > 0
         assert size > 0
+
+
+def test_clean_tool_cache_reports_actual_freed(test_env):
+    """Freed space should be (before - after), not the pre-clean size."""
+    cache = test_env / ".cache/mytool"
+    cache.mkdir(parents=True)
+    with (
+        patch("src.clean.dev.run_command", return_value=MagicMock(returncode=0)),
+        patch("src.clean.dev.get_size_fast", side_effect=[1000, 200]),  # before, after
+        patch("pathlib.Path.exists", return_value=True),
+    ):
+        size, items = clean_tool_cache("mytool", ["mytool", "clean"], str(cache), dry_run=False)
+    assert items == 1
+    assert size == 800  # 1000 - 200, not the pre-clean 1000
