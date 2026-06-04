@@ -1,3 +1,4 @@
+import contextlib
 import os
 import shlex
 import shutil
@@ -87,35 +88,31 @@ def vacuum_single_db(db_file):
         return 0
 
     try:
-        conn = sqlite3.connect(db_path, timeout=1)
-        _set_sqlite_timeout(conn, time.monotonic() + SQLITE_VACUUM_TIMEOUT)
-        cursor = conn.cursor()
-        cursor.execute("PRAGMA integrity_check")
-        if cursor.fetchone()[0] != "ok":
-            conn.close()
-            return 0
-        cursor.execute("PRAGMA page_count")
-        page_count = cursor.fetchone()[0]
-        cursor.execute("PRAGMA freelist_count")
-        freelist_count = cursor.fetchone()[0]
-        cursor.execute("PRAGMA page_size")
-        page_size = cursor.fetchone()[0]
+        with contextlib.closing(sqlite3.connect(db_path, timeout=1)) as conn:
+            _set_sqlite_timeout(conn, time.monotonic() + SQLITE_VACUUM_TIMEOUT)
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA integrity_check")
+            if cursor.fetchone()[0] != "ok":
+                return 0
+            cursor.execute("PRAGMA page_count")
+            page_count = cursor.fetchone()[0]
+            cursor.execute("PRAGMA freelist_count")
+            freelist_count = cursor.fetchone()[0]
+            cursor.execute("PRAGMA page_size")
+            page_size = cursor.fetchone()[0]
 
-        if page_count == 0:
-            conn.close()
-            return 0
+            if page_count == 0:
+                return 0
 
-        free_ratio = freelist_count / page_count
-        free_bytes = freelist_count * page_size
+            free_ratio = freelist_count / page_count
+            free_bytes = freelist_count * page_size
+            if free_ratio <= SQLITE_MIN_FREE_RATIO and free_bytes <= SQLITE_MIN_FREE_BYTES:
+                return 0
 
-        if free_ratio > SQLITE_MIN_FREE_RATIO or free_bytes > SQLITE_MIN_FREE_BYTES:
             old_size = get_size(db_path)
             conn.execute("VACUUM")
-            conn.close()
-            return old_size - get_size(db_path)
-
-        conn.close()
-        return 0
+        # Connection now closed via closing(); the on-disk size has settled.
+        return old_size - get_size(db_path)
     except (OSError, sqlite3.Error):
         return 0
 

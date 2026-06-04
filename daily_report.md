@@ -25,6 +25,9 @@ Today's session was a comprehensive bug-fix pass driven by a full code audit of 
 *   `clean_trash()`'s manual fallback used a literal `Path("/tmp/trash-$USER")` — `$USER` was never expanded, so it never matched a real trash dir; it deleted via `shutil.rmtree(ignore_errors=True)` (bypassing protection/audit) yet still added the size to the freed total even on failure.
 *   It now targets `~/.local/share/Trash` and `/tmp/.Trash-<uid>` (real UID), removes them through `safe_remove(use_trash=False)`, recreates the empty dir, and counts space only when removal actually succeeds. Added a fallback regression test.
 
+### 5. [Med] SQLite vacuum no longer leaks connections on error
+*   `vacuum_single_db()` called `conn.close()` only on its success paths; if any `PRAGMA`/`VACUUM` raised `sqlite3.Error`, the outer `except` returned 0 with the connection (and its file handle) still open — leaking one per corrupt/locked DB across a full browser-database sweep. The connection is now wrapped in `contextlib.closing()`, so every path (success, early-return, exception) closes it. Added a regression test asserting `close()` is called on error.
+
 <!-- WIP-2026-06-04 -->
 
 # Daily Modification Report - 2026-06-03

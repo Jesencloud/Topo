@@ -1,5 +1,6 @@
+import sqlite3
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from src.clean.optimize import (
     run_desktop_database_refresh,
@@ -7,6 +8,7 @@ from src.clean.optimize import (
     run_mime_database_refresh,
     run_systemd_user_service_cleanup,
     run_vacuum_all,
+    vacuum_single_db,
 )
 
 
@@ -105,3 +107,18 @@ def test_run_mime_database_refresh_dry_run(test_env):
         result = run_mime_database_refresh(dry_run=True)
 
     assert result == "MIME database would be refreshed"
+
+
+def test_vacuum_single_db_closes_connection_on_error(tmp_path):
+    """A PRAGMA/VACUUM failure must not leak the sqlite connection."""
+    db = tmp_path / "broken.db"
+    db.write_bytes(b"SQLite format 3\x00" + b"\x00" * 200)  # valid header, corrupt body
+
+    fake_conn = MagicMock()
+    fake_conn.cursor.return_value.execute.side_effect = sqlite3.Error("corrupt")
+
+    with patch("src.clean.optimize.sqlite3.connect", return_value=fake_conn):
+        result = vacuum_single_db(db)
+
+    assert result == 0
+    fake_conn.close.assert_called_once()
