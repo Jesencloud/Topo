@@ -10,10 +10,11 @@ Today's session was a comprehensive bug-fix pass driven by a full code audit of 
 *   **Fix (defense in depth)**: Added `LINUX_USER_DATA_DIRS` to `whitelist.py` and taught `get_hard_protection_reason()` to protect each of these directories **as an exact path** ("user data directory"). This blocks wiping the whole directory in any deletion context — including uninstall — while files *inside* them remain deletable via Analyze, so disk cleanup still works.
 *   **Regression Coverage**: Added tests proving `find_residue_paths("org.gnome.Music", "Music", ...)` never returns `~/Music`, that `safe_remove(~/Music, allow_app_data_removal=True)` is refused while `~/Music/song.mp3` is still removable, and that these directories report `is_protected() is True` while their children do not.
 
-### 2. [High] Uninstall reports accurate results & terminates the right processes
+### 2. [High] Uninstall reports accurate results, terminates processes reliably, and is significantly faster
 *   **Truthful Summary**: `run_uninstall()` ignored `execute_uninstall()`'s return value, so it counted every app as "Removed" and added its install size to "freed" even when `dnf/apt/... remove` failed (e.g. sudo denied). `execute_uninstall()` now returns `{"package_removed": bool, "removed_paths": [...]}`, and `run_uninstall()` only counts space for packages that actually uninstalled, listing the rest under a new `✗ Failed:` line.
 *   **Reliable Process Termination**: Process killing built its target list from `app["name"].lower()` — the *localized display name*. A name like "Telegram Desktop" (with a space) can never match `pkill -x`, so GUI apps were never terminated (leaving file handles open), while a short display name risked killing an unrelated process. Added `_candidate_process_names()` / `_executable_names_from_desktop()`, which derive real `comm` names from the package/flatpak id and the `.desktop` `Exec` line. Both the preview "running" check and the kill step now use them.
-*   **Regression Coverage**: Added tests that the process-name candidates exclude the display name, that `.desktop` Exec names are parsed, and that a failed package removal reports `Removed 0 app(s)` + `Failed:` instead of phantom freed space. Updated the six `execute_uninstall` tests for the new return shape.
+*   **Faster Execution & Real-time Feedback**: Optimized the process termination loop by batching `pkill` commands, significantly reducing per-app delays. Removed the slow `--autoremove` flag from the per-app `apt purge` loop, running it only once at the end of the uninstallation batch. Added real-time visual feedback (`Removing [App Name]...`) to keep the user informed during the processing phase.
+*   **Regression Coverage**: Added tests that the process-name candidates exclude the display name, that `.desktop` Exec names are parsed, and that a failed package removal reports `Removed 0 app(s)` + `Failed:` instead of phantom freed space. Updated the six `execute_uninstall` tests for the new return shape and optimized `apt` command.
 
 ### 3. [High] Age-based cleanup is symlink-safe and no longer aborts midway
 *   **No Mid-Sweep Abort**: `clean_path_by_age()` wrapped its whole per-item loop in a single `try/except OSError`, so one broken symlink (whose `stat()` raised) aborted the *entire* directory sweep, silently skipping every remaining item. The `try` is now per-item with `continue`.
@@ -68,29 +69,25 @@ Today's session was a comprehensive bug-fix pass driven by a full code audit of 
 *   `cargo test` (topo-core) — **7 passed**.
 *   Each fix above was committed individually on branch `bugfix/audit-fixes-2026-06-04` (not pushed).
 
-# Daily Modification Report - 2026-06-03
+## Responsive UI & Mouse Wheel Support
 
-## Project: topo (Topo) - Responsive UI & Mouse Wheel Support
-
-Today's session focused on improving the TUI's responsiveness to terminal window resizing and enhancing interactivity with mouse wheel support, while strictly adhering to minimalist visual standards for the scrollbar.
-
-### 1. Responsive Terminal Resize
+### 13. Responsive Terminal Resize
 *   **Dynamic Size Polling**: Updated `Navigator._read_key` to poll for terminal size changes using `select.select` with a 50ms timeout. The loop now returns a `RESIZE` signal immediately when a change is detected, allowing the UI to re-render and keep the scrollbar attached to the right edge during window dragging.
 *   **Viewport Artifact Clearing**: Integrated the `\033[J` (Clear from cursor to end of screen) command at the end of `_write_scrollable_frame`. This ensures that any visual artifacts remaining below the viewport after a terminal height reduction are completely wiped.
 
-### 2. Mouse Wheel Interaction
+### 14. Mouse Wheel Interaction
 *   **Vertical Wheel Scrolling**: Implemented native mouse wheel support in `_handle_scrollbar_mouse`. Users can now scroll through any scrollable list by 3 lines per wheel notch.
 *   **Viewport-Wide Trigger**: Wheel scrolling works anywhere within the active viewport when a scrollbar is visible, providing a fluid navigation experience across all analysis and uninstallation views.
 
-### 3. Scrollbar Visual Refinement
+### 15. Scrollbar Visual Refinement
 *   **Minimalist Characters**: Standardized the scrollbar to use the single-column linear characters `┃` (thumb) and `│` (track). The full block character `█` is no longer used for the scrollbar.
 *   **Theme Inheritance**: Forced the use of the `RESET` ANSI sequence for scrollbar rendering, ensuring it inherits the user's terminal theme colors instead of using hardcoded bright white or gray.
 
-### 4. Analyze Selection Layout Optimization
+### 16. Analyze Selection Layout Optimization
 *   **Two-Column Summary**: Updated the "Selected Items to Remove" list in the Analyze Disk view to use a space-efficient two-column layout. Each row now displays up to two items with their respective icons, providing a more compact and readable summary of the removal queue.
 *   **In-TUI Confirmation (Restored)**: Successfully integrated the deletion confirmation prompt directly into the Analyze TUI. After selecting items, the first `Enter` press now triggers a professional status line (item count and total size) immediately below the selected items list. A **second `Enter`** is required to confirm deletion, while `Space` or `Esc` cancels the action. This ensures a safe, visually anchored, and structural confirmation workflow within the TUI.
 
-### 5. High-Quality Auditory Feedback
+### 17. High-Quality Auditory Feedback
 *   **Dual-Sound Support**: Implemented a comprehensive audio feedback system with distinct sounds for different actions.
     *   **Navigation Click**: Uses `assets/cli_click.wav` for cursor movement.
     *   **Action Completion**: Uses `assets/delete_remove.wav` for the successful completion of destructive actions like file deletion or app uninstallation.
@@ -101,26 +98,24 @@ Today's session focused on improving the TUI's responsiveness to terminal window
 *   **Installation Preservation**: Updated `install.sh` to preserve the `assets/` directory during installation while still pruning non-essential images, ensuring the bundled WAV files remain available in the deployed `~/.topo` directory.
 *   **Graceful Fallback**: Maintains a reliable fallback to the standard terminal bell (`\a`) if no audio players or files are available.
 
-### 6. Copy-Paste Compatibility (Main UI)
+### 18. Copy-Paste Compatibility (Main UI)
 *   **Selective Mouse Tracking**: Modified `_selector_session` to allow optional mouse tracking. Disabled mouse tracking for the **Main Menu** and **Confirm Dialog**, ensuring that users can select and copy text (like the banner or paths) using their terminal's standard mouse behavior without needing to hold `Shift`.
 *   **Preserved Interaction**: Kept mouse wheel and dragging support enabled for high-density, scrollable views (Analyze, Uninstall, Clean) where scrolling is a priority.
 
-### 7. Snap Data Relocation (Ubuntu Optimization)
+### 19. Snap Data Relocation (Ubuntu Optimization)
 *   **Snap Cache Cleanup**: Implemented `clean_snap_cache` in the Clean module. It proactively scans `~/snap/*/common/.cache` for application-specific caches. The logic has been refined to use a **0-day age threshold** (cleaning all cache files) and includes a **running process check** to ensure safety. To keep the execution log clean, it only reports entries where space was actually reclaimed (`> 0 B`), eliminating confusing "(0 B)" reports.
 *   **Insight Relocation**: Removed "Snap Data" from the Analyze Disk "Insights" list. By moving it to the Clean module, it transitions from a view-only indicator to a functional maintenance task, keeping the Analyze root view focused on unhandled data.
 
-### 8. Stability & Regression Coverage
+### 20. Accurate Installation Timestamps for Ubuntu/Debian
+*   **APT Package Time Detection**: Fixed an issue where all `apt`/`dpkg` packages showed "Unknown" install times in the uninstaller. Since `dpkg-query` does not expose installation dates natively, the scanner now retrieves the modification time (`mtime`) of each package's file list (`/var/lib/dpkg/info/<package_name>.list`). This provides a highly accurate and performant way to display when a package was installed or last upgraded.
+
+### 21. System Optimization Tasks
 *   **Smart Swap Management**: Re-implemented the intelligent swap reset logic. It now monitors `/proc/meminfo` and safely executes `swapoff -a && swapon -a` only when available RAM is at least twice the used swap size, eliminating micro-stutters.
 *   **Aggressive Journal Maintenance**: Added a maintenance task to vacuum systemd journals to 3 days (`--vacuum-time=3d`), ensuring the logs remain compact without losing recent history.
 *   **System Coredump Cleanup**: Integrated a task to clear system coredumps via `journalctl --vacuum-coredump=0`, reclaiming space from historical crash dumps.
 *   **Broken Symlink Removal**: Added a user-level cleanup for broken symbolic links in common directories (`~/.local/bin`, `~/Desktop`, `~/Documents`).
 
-### 6. Stability & Regression Coverage
-*   **Scroll Wheel Null Safety**: Fixed a `TypeError` in `_handle_scrollbar_mouse` where arithmetic operations failed if the scroll position was uninitialized.
-*   **Test Suite Updates**: Updated `tests/test_navigator.py` to verify the presence of the `\033[J` clearing sequence and ensure the new resize-polling logic doesn't introduce regressions in key capture.
-*   **Verification**: Confirmed the final state with `pytest tests/test_navigator.py` and manual verification across different terminal emulators.
-
-# Daily Modification Report - 2026-06-02
+# Daily Modification Report - 2026-06-03
 
 ## Project: topo (Topo) - Flicker-Free Analyze Navigation & Whole-Subtree Scan Cache
 

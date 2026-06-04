@@ -393,6 +393,14 @@ class UninstallManager:
                         if self._is_system_component(app_id, app_id):
                             continue
                         if app_id in user_app_packages or size_bytes > 100 * 1024 * 1024:
+                            install_time = 0
+                            list_file = Path(f"/var/lib/dpkg/info/{app_id}.list")
+                            if list_file.exists():
+                                try:
+                                    install_time = int(list_file.stat().st_mtime)
+                                except OSError:
+                                    pass
+
                             apps.append(
                                 self._app_record(
                                     app_id,
@@ -400,6 +408,7 @@ class UninstallManager:
                                     size_bytes,
                                     bytes_to_human(size_bytes),
                                     "APT",
+                                    install_time,
                                 )
                             )
             except (OSError, subprocess.SubprocessError, ValueError):
@@ -493,11 +502,46 @@ class UninstallManager:
                         if len(parts) < 2:
                             continue
                         app_id = parts[0]
+                        revision = parts[2] if len(parts) >= 3 else ""
                         if app_id in {"core", "core18", "core20", "core22", "core24", "snapd"}:
                             continue
                         if self._is_system_component(app_id, app_id):
                             continue
-                        apps.append(self._app_record(app_id, app_id, 0, "N/A", "Snap"))
+
+                        # Estimate size and time
+                        size_bytes = 0
+                        size_str = "N/A"
+                        install_time = 0
+                        
+                        # Primary method: Check the actual .snap file (most accurate)
+                        if revision:
+                            snap_file = Path(f"/var/lib/snapd/snaps/{app_id}_{revision}.snap")
+                            if snap_file.exists():
+                                try:
+                                    size_bytes = snap_file.stat().st_size
+                                    size_str = bytes_to_human(size_bytes)
+                                    install_time = int(snap_file.stat().st_mtime)
+                                except OSError:
+                                    pass
+
+                        # Fallback: Check mount points
+                        if size_bytes == 0:
+                            for mount_root in ["/snap", "/var/lib/snapd/snap"]:
+                                snap_path = Path(f"{mount_root}/{app_id}/current")
+                                if snap_path.exists():
+                                    try:
+                                        if install_time == 0:
+                                            install_time = int(snap_path.stat().st_mtime)
+                                        res_size = system.run_command(["du", "-sk", str(snap_path)], capture=True, timeout=5)
+                                        if res_size.ok and res_size.stdout:
+                                            kb = int(res_size.stdout.split()[0])
+                                            size_bytes = kb * 1024
+                                            size_str = bytes_to_human(size_bytes)
+                                            break
+                                    except (OSError, ValueError, IndexError):
+                                        pass
+
+                        apps.append(self._app_record(app_id, app_id, size_bytes, size_str, "Snap", install_time))
             except (OSError, subprocess.SubprocessError):
                 pass
 
@@ -607,29 +651,34 @@ class UninstallManager:
                 with contextlib.suppress(OSError, subprocess.SubprocessError):
                     system.run_command(["flatpak", "kill", app["id"]], capture=True, timeout=20)
 
+            # 1. Graceful Kill (Batched)
+            processes_to_kill = []
             for proc in all_process_names:
                 try:
-                    res = system.run_command(["pgrep", "-x", proc], capture=True, timeout=5)
-                    if res.ok:
-                        # Step 1: SIGTERM
-                        system.run_command(["pkill", "-15", "-x", proc], capture=True, timeout=5)
-                        # Step 2: Brief wait
-                        time.sleep(1.0)
-                        # Step 3: Check and SIGKILL if still running
-                        if system.run_command(["pgrep", "-x", proc], capture=True, timeout=5).ok:
-                            system.run_command(["pkill", "-9", "-x", proc], capture=True, timeout=5)
-                            time.sleep(0.5)
+                    if system.run_command(["pgrep", "-x", proc], capture=True, timeout=5).ok:
+                        processes_to_kill.append(proc)
                 except (OSError, subprocess.SubprocessError):
-                    pass
+                    continue
+
+            if processes_to_kill:
+                for proc in processes_to_kill:
+                    system.run_command(["pkill", "-15", "-x", proc], capture=True, timeout=5)
+                
+                time.sleep(1.0)
+                
+                for proc in processes_to_kill:
+                    if system.run_command(["pgrep", "-x", proc], capture=True, timeout=5).ok:
+                        system.run_command(["pkill", "-9", "-x", proc], capture=True, timeout=5)
+                time.sleep(0.5)
 
             # 2. Binary uninstall
             if app["type"] == "Flatpak":
                 res = system.run_command(["flatpak", "uninstall", "-y", app["id"]], capture=True)
             elif app["type"] == "Snap":
-                res = system.run_command(["snap", "remove", app["id"]], use_sudo=True, capture=True)
+                res = system.run_command(["snap", "remove", "--purge", app["id"]], use_sudo=True, capture=True)
             elif app["type"] == "APT":
                 res = system.run_command(
-                    ["apt", "purge", "-y", "--autoremove", app["id"]], use_sudo=True, capture=True
+                    ["apt", "purge", "-y", app["id"]], use_sudo=True, capture=True
                 )
             elif app["type"] == "Pacman":
                 res = system.run_command(
@@ -774,12 +823,16 @@ def run_uninstall():
             print(f" {GREEN}✓{RESET} Authorization successful.\n")
 
             # --- EXECUTION ---
-            print(f"\n {GRAY}🚀 Processing...{RESET}")
+            print(f"\n {GRAY}🚀 Processing...{RESET}\n")
             removed_names = []
             failed_names = []
             total_freed_all = 0
+            has_apt = False
 
             for app, paths, _ in all_targets:
+                print(f"  {PURPLE}➔{RESET} Removing {BOLD}{app['name']}{RESET}...")
+                if app["type"] == "APT":
+                    has_apt = True
                 result = manager.execute_uninstall(app, paths)
                 package_removed = bool(result.get("package_removed"))
                 paths_removed = any(ok for ok, _ in result.get("removed_paths", []))
@@ -789,6 +842,10 @@ def run_uninstall():
                         total_freed_all += app["size_bytes"]
                 else:
                     failed_names.append(app["name"])
+
+            if has_apt and removed_names:
+                print(f"  {PURPLE}➔{RESET} Cleaning up orphaned dependencies...")
+                system.run_command(["apt", "autoremove", "-y"], use_sudo=True, capture=True)
 
             # Final Summary — only report what actually succeeded.
             if removed_names:
