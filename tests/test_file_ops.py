@@ -239,6 +239,11 @@ def test_parse_size_from_text():
     assert parse_size_to_bytes("1.5 GiB") == int(1.5 * 1024**3)
     assert parse_size_from_text("no size here") == 0
     assert parse_size_from_text("") == 0
+    # Bare numeric strings (no unit) are treated as raw bytes.
+    assert parse_size_to_bytes("4096") == 4096
+    assert parse_size_to_bytes("  1024  ") == 1024
+    # ...but stray numbers inside non-numeric text are not misread as bytes.
+    assert parse_size_to_bytes("deleted 5 files") == 0
 
 
 def test_safe_remove_edge_cases(test_env):
@@ -343,10 +348,11 @@ def test_clean_path_by_age(test_env):
     current_time = time.time()
     old_time = current_time - (15 * 86400)
 
-    # We mock the entire stat object returned by iterdir()
-    with patch("pathlib.Path.stat") as mock_stat:
-        mock_stat.return_value.st_atime = old_time
-        # Since we mock Path.stat universally, both files look old
+    # We mock the lstat object used to judge entry age
+    with patch("pathlib.Path.lstat") as mock_lstat:
+        mock_lstat.return_value.st_atime = old_time
+        mock_lstat.return_value.st_mtime = old_time
+        # Both files look old by atime AND mtime
 
         # Dry run
         size, items = clean_path_by_age(cache_dir, days=10, dry_run=True)

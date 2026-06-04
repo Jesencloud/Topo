@@ -232,30 +232,39 @@ def safe_remove(
 
 
 def clean_path_by_age(path: str | Path, days: int, dry_run: bool = False) -> tuple[int, int]:
-    """Cleans items within a path that haven't been accessed in 'days' days."""
+    """Cleans items within a path that haven't been touched in 'days' days."""
     path = Path(path).expanduser()
     if not path.exists() or not path.is_dir():
         return 0, 0
 
     total_size = 0
     items_count = 0
-    now = time.time()
-    cutoff = now - (days * 86400)
+    cutoff = time.time() - (days * 86400)
 
     try:
-        for item in path.iterdir():
-            if item.stat().st_atime < cutoff:
-                size = get_size(item)
-                if dry_run:
-                    safe_remove(item, use_trash=False, dry_run=True)
-                    total_size += size
-                    items_count += 1
-                else:
-                    if safe_remove(item, use_trash=False)[0]:
-                        total_size += size
-                        items_count += 1
+        entries = list(path.iterdir())
     except OSError:
-        pass
+        return total_size, items_count
+
+    for item in entries:
+        try:
+            # lstat() judges the entry itself and never follows a symlink to its
+            # target. Consider both atime and mtime so that 'noatime'/'relatime'
+            # mounts (where atime barely updates) don't make active data look stale.
+            st = item.lstat()
+        except OSError:
+            # A single vanished/broken entry must not abort the whole sweep.
+            continue
+        if st.st_atime >= cutoff or st.st_mtime >= cutoff:
+            continue
+        size = get_size(item)
+        if dry_run:
+            safe_remove(item, use_trash=False, dry_run=True)
+            total_size += size
+            items_count += 1
+        elif safe_remove(item, use_trash=False)[0]:
+            total_size += size
+            items_count += 1
     return total_size, items_count
 
 
@@ -278,6 +287,11 @@ def parse_size_to_bytes(text: str) -> int:
         elif "K" in unit:
             val *= 1024
         return int(val)
+    # A bare numeric string (no unit) is treated as raw bytes — but only when the
+    # whole value is numeric, so stray digits in command output aren't misread.
+    stripped = text.strip()
+    if stripped and stripped.replace(".", "", 1).isdigit():
+        return int(float(stripped))
     return 0
 
 

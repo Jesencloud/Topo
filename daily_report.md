@@ -15,6 +15,12 @@ Today's session was a comprehensive bug-fix pass driven by a full code audit of 
 *   **Reliable Process Termination**: Process killing built its target list from `app["name"].lower()` — the *localized display name*. A name like "Telegram Desktop" (with a space) can never match `pkill -x`, so GUI apps were never terminated (leaving file handles open), while a short display name risked killing an unrelated process. Added `_candidate_process_names()` / `_executable_names_from_desktop()`, which derive real `comm` names from the package/flatpak id and the `.desktop` `Exec` line. Both the preview "running" check and the kill step now use them.
 *   **Regression Coverage**: Added tests that the process-name candidates exclude the display name, that `.desktop` Exec names are parsed, and that a failed package removal reports `Removed 0 app(s)` + `Failed:` instead of phantom freed space. Updated the six `execute_uninstall` tests for the new return shape.
 
+### 3. [High] Age-based cleanup is symlink-safe and no longer aborts midway
+*   **No Mid-Sweep Abort**: `clean_path_by_age()` wrapped its whole per-item loop in a single `try/except OSError`, so one broken symlink (whose `stat()` raised) aborted the *entire* directory sweep, silently skipping every remaining item. The `try` is now per-item with `continue`.
+*   **Symlink-Safe & noatime-Aware**: It judged age via `item.stat().st_atime`, which (a) *follows* symlinks (reading the target's time, not the link's) and (b) ignores `noatime`/`relatime` mounts where atime barely updates, risking deletion of still-active data. It now uses `item.lstat()` and keeps an entry if *either* atime or mtime is recent — matching `clean_system_temp`.
+*   **Bare-Byte Size Parsing**: `parse_size_to_bytes()` returned 0 for a unit-less numeric string; it now treats a wholly-numeric value as raw bytes (without misreading stray digits in command output).
+*   **Regression Coverage**: Updated `test_clean_path_by_age` to mock `lstat` (atime + mtime); added bare-byte parsing assertions.
+
 <!-- WIP-2026-06-04 -->
 
 # Daily Modification Report - 2026-06-03
