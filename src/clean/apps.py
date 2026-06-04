@@ -269,6 +269,45 @@ def clean_orphaned_remnants(dry_run=False):
     return total_size, total_items
 
 
+def clean_snap_cache(dry_run=False):
+    """Cleans user caches for Snap applications (located in ~/snap/*/common/.cache)."""
+    snap_root = Path.home() / "snap"
+    if not snap_root.exists():
+        return 0, 0
+
+    total_size = 0
+    total_items = 0
+    try:
+        for app_dir in snap_root.iterdir():
+            if not app_dir.is_dir() or app_dir.name.startswith("."):
+                continue
+
+            # Skip if the snap app is currently running
+            if is_app_running(app_dir.name):
+                continue
+
+            # Snap cache is usually in <app>/common/.cache
+            cache_path = app_dir / "common" / ".cache"
+            if cache_path.exists():
+                # For cache dirs, we clean everything (0 days) to match APP_DEFS behavior
+                s, i = clean_path_by_age(cache_path, days=0, dry_run=dry_run)
+                if i > 0:
+                    total_size += s
+                    total_items += i
+                    if not dry_run and s > 0:
+                        print(
+                            f"  \033[0;32m✓\033[0m Snap Cache: {app_dir.name} ({bytes_to_human(s)})"
+                        )
+    except OSError:
+        pass
+
+    if dry_run and total_size > 0:
+        print(
+            f"  \033[0;32m✓\033[0m Snap application caches ({bytes_to_human(total_size)}) would be checked"
+        )
+    return total_size, total_items
+
+
 def clean_apps_deep(dry_run=False, detected_apps=None):
     """Main entry point for deep application cleanup.
 
@@ -290,7 +329,12 @@ def clean_apps_deep(dry_run=False, detected_apps=None):
             total_items += i
             total_categories += 1
 
-    for func in [clean_flatpak_unused, clean_generic_xdg_caches, clean_orphaned_remnants]:
+    for func in [
+        clean_flatpak_unused,
+        clean_snap_cache,
+        clean_generic_xdg_caches,
+        clean_orphaned_remnants,
+    ]:
         s, i = func(dry_run=dry_run)[:2]
         if i > 0:
             total_size += s

@@ -5,6 +5,7 @@ from src.clean.apps import (
     clean_app_generic,
     clean_generic_xdg_caches,
     clean_orphaned_remnants,
+    clean_snap_cache,
     proactive_app_detection,
 )
 from src.core.file_ops import CACHEDIR_TAG_SIGNATURE
@@ -177,3 +178,18 @@ def test_clean_app_generic_keeps_protected_desktop_config(test_env):
     assert freed == 0
     assert items == 0
     assert settings_file.exists()
+
+
+def test_clean_snap_cache(test_env):
+    """Verify that clean_snap_cache identifies and cleans snap caches."""
+    snap_dir = test_env / "snap/spotify/common/.cache"
+    snap_dir.mkdir(parents=True)
+    (snap_dir / "data.bin").write_bytes(b"0" * 1024)
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.clean.apps.clean_path_by_age", return_value=(1024, 1)),
+    ):
+        size, items = clean_snap_cache(dry_run=True)
+        assert size == 1024
+        assert items == 1

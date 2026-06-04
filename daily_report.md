@@ -35,7 +35,11 @@ Today's session focused on improving the TUI's responsiveness to terminal window
 *   **Selective Mouse Tracking**: Modified `_selector_session` to allow optional mouse tracking. Disabled mouse tracking for the **Main Menu** and **Confirm Dialog**, ensuring that users can select and copy text (like the banner or paths) using their terminal's standard mouse behavior without needing to hold `Shift`.
 *   **Preserved Interaction**: Kept mouse wheel and dragging support enabled for high-density, scrollable views (Analyze, Uninstall, Clean) where scrolling is a priority.
 
-### 5. Professional-Grade System Optimization
+### 7. Snap Data Relocation (Ubuntu Optimization)
+*   **Snap Cache Cleanup**: Implemented `clean_snap_cache` in the Clean module. It proactively scans `~/snap/*/common/.cache` for application-specific caches. The logic has been refined to use a **0-day age threshold** (cleaning all cache files) and includes a **running process check** to ensure safety. To keep the execution log clean, it only reports entries where space was actually reclaimed (`> 0 B`), eliminating confusing "(0 B)" reports.
+*   **Insight Relocation**: Removed "Snap Data" from the Analyze Disk "Insights" list. By moving it to the Clean module, it transitions from a view-only indicator to a functional maintenance task, keeping the Analyze root view focused on unhandled data.
+
+### 8. Stability & Regression Coverage
 *   **Smart Swap Management**: Re-implemented the intelligent swap reset logic. It now monitors `/proc/meminfo` and safely executes `swapoff -a && swapon -a` only when available RAM is at least twice the used swap size, eliminating micro-stutters.
 *   **Aggressive Journal Maintenance**: Added a maintenance task to vacuum systemd journals to 3 days (`--vacuum-time=3d`), ensuring the logs remain compact without losing recent history.
 *   **System Coredump Cleanup**: Integrated a task to clear system coredumps via `journalctl --vacuum-coredump=0`, reclaiming space from historical crash dumps.

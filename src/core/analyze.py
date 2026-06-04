@@ -431,7 +431,6 @@ def run_deep_analysis(target_path: Path = None):
                     {"name": "Apt Cache", "path": Path("/var/cache/apt/archives")},
                     {"name": "Pacman Cache", "path": Path("/var/cache/pacman/pkg")},
                     {"name": "Dnf Cache", "path": Path("/var/cache/dnf")},
-                    {"name": "Snap Data", "path": home / "snap"},
                     {"name": "Flatpak Data", "path": home / ".local/share/flatpak"},
                     {"name": "Ollama Models", "path": home / ".ollama" / "models"},
                 ]
