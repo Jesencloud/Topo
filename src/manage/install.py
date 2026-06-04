@@ -40,14 +40,14 @@ def run_install_link(silent=False):
                 print(f" {YELLOW}✗{RESET} Error creating directory {target_dir}: {e}")
             return False
 
-    # 3. Create/Update link
+    # 3. Create/Update link atomically (temp symlink + os.replace), so an
+    #    interrupted update never leaves the 'topo' command missing.
     try:
-        if target_link.exists() or target_link.is_symlink():
-            target_link.unlink()
-            if not silent:
-                print(f"  {GRAY}↺{RESET} Removed existing link at {target_link}")
-
-        target_link.symlink_to(source_script.absolute())
+        tmp_link = target_link.with_name(f".{target_link.name}.topo-tmp")
+        if tmp_link.exists() or tmp_link.is_symlink():
+            tmp_link.unlink()
+        tmp_link.symlink_to(source_script.absolute())
+        os.replace(tmp_link, target_link)
         if not silent:
             print(f"  {GREEN}✓{RESET} Created symbolic link: {BOLD}{target_link}{RESET}")
     except OSError as e:
@@ -65,7 +65,7 @@ def run_install_link(silent=False):
     print(f" {BLUE}Success! 'topo' is now available.{RESET}")
 
     path_env = os.environ.get("PATH", "")
-    if str(target_dir) not in path_env:
+    if str(target_dir) not in path_env.split(os.pathsep):
         print(f"\n {YELLOW}ℹ  {target_dir} is not in your PATH. Attempting auto-fix...{RESET}")
 
         added = False

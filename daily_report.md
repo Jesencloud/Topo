@@ -38,6 +38,12 @@ Today's session was a comprehensive bug-fix pass driven by a full code audit of 
 *   **Snap revisions**: `clean_package_manager()` discarded the item/category counts returned by `clean_snaps()` (it kept only the freed bytes, which are always 0 for snaps), so removed old revisions never showed in totals. Those counts now flow through.
 *   **Regression Coverage**: Added tests for actual-freed reporting and for snap-revision stats reaching the package-manager totals.
 
+### 8. [Low] Cleaner install / uninstall self-management
+*   **PATH detection**: `run_install_link()` checked `str(target_dir) not in path_env` — a substring test, so `~/.local/bin` was wrongly considered present when PATH held something like `~/.local/bin-foo`. It now splits PATH on `os.pathsep` and compares entries.
+*   **Atomic link**: the launcher symlink was created via `unlink()` then `symlink_to()`; an interruption between them removed the command. It is now built via a temp symlink + `os.replace()` (atomic).
+*   **Thorough removal**: `topo remove` now also deletes the deletion-audit/state dir (`$XDG_STATE_HOME/topo`), strips the `# Added by topo` PATH block from `~/.bashrc`/`~/.zshrc`, and recognizes a *dangling* launcher symlink (the previous `resolve()`-based check skipped links whose target was already gone).
+*   **Regression Coverage**: New `test_remove.py` covers rc-line stripping (and no-op without the marker) and dangling-link detection.
+
 <!-- WIP-2026-06-04 -->
 
 # Daily Modification Report - 2026-06-03
