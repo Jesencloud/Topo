@@ -10,6 +10,11 @@ Today's session was a comprehensive bug-fix pass driven by a full code audit of 
 *   **Fix (defense in depth)**: Added `LINUX_USER_DATA_DIRS` to `whitelist.py` and taught `get_hard_protection_reason()` to protect each of these directories **as an exact path** ("user data directory"). This blocks wiping the whole directory in any deletion context — including uninstall — while files *inside* them remain deletable via Analyze, so disk cleanup still works.
 *   **Regression Coverage**: Added tests proving `find_residue_paths("org.gnome.Music", "Music", ...)` never returns `~/Music`, that `safe_remove(~/Music, allow_app_data_removal=True)` is refused while `~/Music/song.mp3` is still removable, and that these directories report `is_protected() is True` while their children do not.
 
+### 2. [High] Uninstall reports accurate results & terminates the right processes
+*   **Truthful Summary**: `run_uninstall()` ignored `execute_uninstall()`'s return value, so it counted every app as "Removed" and added its install size to "freed" even when `dnf/apt/... remove` failed (e.g. sudo denied). `execute_uninstall()` now returns `{"package_removed": bool, "removed_paths": [...]}`, and `run_uninstall()` only counts space for packages that actually uninstalled, listing the rest under a new `✗ Failed:` line.
+*   **Reliable Process Termination**: Process killing built its target list from `app["name"].lower()` — the *localized display name*. A name like "Telegram Desktop" (with a space) can never match `pkill -x`, so GUI apps were never terminated (leaving file handles open), while a short display name risked killing an unrelated process. Added `_candidate_process_names()` / `_executable_names_from_desktop()`, which derive real `comm` names from the package/flatpak id and the `.desktop` `Exec` line. Both the preview "running" check and the kill step now use them.
+*   **Regression Coverage**: Added tests that the process-name candidates exclude the display name, that `.desktop` Exec names are parsed, and that a failed package removal reports `Removed 0 app(s)` + `Failed:` instead of phantom freed space. Updated the six `execute_uninstall` tests for the new return shape.
+
 <!-- WIP-2026-06-04 -->
 
 # Daily Modification Report - 2026-06-03

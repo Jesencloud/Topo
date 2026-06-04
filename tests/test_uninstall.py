@@ -56,6 +56,7 @@ def test_run_uninstall_execute_and_exit(
         patch("subprocess.run") as mock_run,
     ):
         mock_run.return_value = MagicMock(returncode=1)
+        mock_exec.return_value = {"package_removed": True, "removed_paths": []}
         run_uninstall()
         mock_exec.assert_called_once()
 
@@ -394,7 +395,7 @@ def test_execute_uninstall_flatpak(mock_run, mock_run_cmd, test_env):
     with patch("pathlib.Path.home", return_value=test_env):
         details = mgr.execute_uninstall(app, [])
 
-    assert isinstance(details, list)
+    assert details["removed_paths"] == []
     mock_run_cmd.assert_called_with(
         ["flatpak", "uninstall", "-y", "com.example.MyApp"], capture=True
     )
@@ -414,7 +415,7 @@ def test_execute_uninstall_snap(mock_run_cmd, test_env):
     with patch("pathlib.Path.home", return_value=test_env):
         details = mgr.execute_uninstall(app, [])
 
-    assert details == []
+    assert details["removed_paths"] == []
     mock_run_cmd.assert_any_call(["snap", "remove", "my-snap"], use_sudo=True, capture=True)
 
 
@@ -439,8 +440,8 @@ def test_execute_uninstall_dnf(mock_run, mock_run_cmd, test_env):
         dummy_path.mkdir(parents=True)
         details = mgr.execute_uninstall(app, [dummy_path])
 
-    assert isinstance(details, list)
-    assert len(details) == 1
+    assert details["package_removed"] is True
+    assert len(details["removed_paths"]) == 1
     # Check DNF removal command
     mock_run_cmd.assert_called_with(
         ["dnf", "remove", "-y", "heavy-app"], use_sudo=True, capture=True
@@ -463,7 +464,7 @@ def test_execute_uninstall_apt(mock_run_cmd, test_env):
     with patch("pathlib.Path.home", return_value=test_env):
         details = mgr.execute_uninstall(app, [])
 
-    assert details == []
+    assert details["removed_paths"] == []
     mock_run_cmd.assert_any_call(
         ["apt", "purge", "-y", "--autoremove", "firefox"], use_sudo=True, capture=True
     )
@@ -483,7 +484,7 @@ def test_execute_uninstall_pacman(mock_run_cmd, test_env):
     with patch("pathlib.Path.home", return_value=test_env):
         details = mgr.execute_uninstall(app, [])
 
-    assert details == []
+    assert details["removed_paths"] == []
     mock_run_cmd.assert_any_call(
         ["pacman", "-Rns", "--noconfirm", "firefox"], use_sudo=True, capture=True
     )
@@ -504,7 +505,7 @@ def test_execute_uninstall_writes_history_for_package_only(mock_run_cmd, test_en
 
     details = mgr.execute_uninstall(app, [])
 
-    assert details == []
+    assert details["removed_paths"] == []
     sessions = parse_deletion_history(log_path)
     assert len(sessions) == 1
     assert sessions[0].command == "uninstall NoResidue"
@@ -584,3 +585,69 @@ def test_uninstall_cannot_delete_xdg_user_data_dir(test_env):
     assert music.exists()
     assert ok_file is True
     assert not song.exists()
+
+
+def test_candidate_process_names_uses_ids_not_display_name():
+    mgr = UninstallManager()
+    app = {"id": "org.telegram.desktop", "name": "Telegram Desktop", "type": "Flatpak"}
+    names = mgr._candidate_process_names(app, {"telegram-desktop"})
+    assert "org.telegram.desktop" in names
+    assert "desktop" in names  # flatpak last segment
+    assert "telegram-desktop" in names  # real executable name passed in
+    # A localized display name with a space can never match `pkill -x`.
+    assert "telegram desktop" not in names
+
+
+def test_executable_names_from_desktop(test_env):
+    mgr = UninstallManager()
+    app_dir = test_env / ".local/share/applications"
+    app_dir.mkdir(parents=True, exist_ok=True)
+    (app_dir / "com.example.App.desktop").write_text(
+        "[Desktop Entry]\nName=Fancy App\nExec=/usr/bin/fancy-bin %U\n"
+    )
+    with patch("pathlib.Path.home", return_value=test_env):
+        names = mgr._executable_names_from_desktop("com.example.App")
+    assert "fancy-bin" in names
+
+
+@patch("sys.stdin.fileno", return_value=0)
+@patch("sys.stdin.read", return_value="\n")
+@patch("termios.tcgetattr", return_value=[])
+@patch("termios.tcsetattr")
+@patch("tty.setcbreak")
+@patch("src.ui.navigator.Navigator.raw_mode")
+def test_run_uninstall_failed_package_not_counted(
+    mock_raw, mock_setcbreak, mock_setattr, mock_getattr, mock_read, mock_fileno, capsys
+):
+    """A failed package removal must not be reported as freed; it goes to Failed."""
+    mock_apps = [
+        {
+            "id": "test",
+            "name": "Test",
+            "size_bytes": 100,
+            "size_str": "100B",
+            "type": "DNF",
+            "install_time": 0,
+        }
+    ]
+    mock_raw.return_value.__enter__.return_value = 0
+
+    with (
+        patch("src.clean.app_manager.UninstallManager.run_full_scan", return_value=mock_apps),
+        patch("src.clean.app_manager.UninstallSelector.run", return_value=[0]),
+        patch("src.clean.app_manager.UninstallManager.find_residue_paths", return_value=[]),
+        patch(
+            "src.clean.app_manager.UninstallManager.execute_uninstall",
+            return_value={"package_removed": False, "removed_paths": []},
+        ),
+        patch("src.core.system.ensure_sudo_session", return_value=True),
+        patch("src.ui.navigator.Navigator.get_key", return_value="\n"),
+        patch("src.ui.navigator.Navigator.wait_for_return", return_value=False),
+        patch("subprocess.run") as mock_sub,
+    ):
+        mock_sub.return_value = MagicMock(returncode=1)
+        run_uninstall()
+
+    out = capsys.readouterr().out
+    assert "Removed 0 app(s)" in out
+    assert "Failed:" in out

@@ -231,6 +231,52 @@ class UninstallManager:
             pass
         return list(keywords)
 
+    def _executable_names_from_desktop(self, app_id: str) -> set[str]:
+        """Real executable (comm) names parsed from the app's .desktop Exec line.
+
+        These are what actually appear in the process table, unlike the localized
+        display name (which can never match `pkill -x`).
+        """
+        names: set[str] = set()
+        if not app_id:
+            return names
+        desktop_paths = [
+            Path(f"/usr/share/applications/{app_id}.desktop"),
+            Path.home() / f".local/share/applications/{app_id}.desktop",
+        ]
+        for dp in desktop_paths:
+            if not dp.exists():
+                continue
+            try:
+                with open(dp, errors="ignore") as f:
+                    for line in f:
+                        if line.startswith("Exec="):
+                            field = line.split("=", 1)[1].strip()
+                            if field:
+                                exe = field.split()[0].split("/")[-1].strip("'\"")
+                                if exe and not exe.startswith("%"):
+                                    names.add(exe)
+                            break
+            except OSError:
+                pass
+        return names
+
+    @staticmethod
+    def _candidate_process_names(app: dict[str, Any], extra: set[str] | None = None) -> list[str]:
+        """Plausible process (comm) names to terminate before removing an app.
+
+        Uses the package/flatpak id and any executable names from .desktop, but
+        NOT the localized display name: a name like "Telegram Desktop" can never
+        match `pkill -x`, and a short display name could kill an unrelated process.
+        """
+        names: set[str] = set(extra or set())
+        app_id = str(app.get("id") or "")
+        if app_id:
+            names.add(app_id)
+            if "." in app_id:  # flatpak: org.gnome.Music -> music
+                names.add(app_id.rsplit(".", 1)[-1].lower())
+        return [n for n in names if n]
+
     def run_full_scan(self) -> list[dict[str, Any]]:
         """Scans for user-facing applications across Linux package managers."""
         apps = []
@@ -550,8 +596,11 @@ class UninstallManager:
         package_size = int(app.get("size_bytes") or 0)
 
         try:
-            # 1. Graceful Kill (SIGTERM -> Wait -> SIGKILL)
-            all_process_names = [app["id"], app["name"].lower()]
+            # 1. Graceful Kill (SIGTERM -> Wait -> SIGKILL). Use real executable
+            # names (id + .desktop Exec), never the localized display name.
+            all_process_names = self._candidate_process_names(
+                app, self._executable_names_from_desktop(str(app.get("id") or ""))
+            )
             if app["type"] == "Flatpak":
                 import contextlib
 
@@ -606,7 +655,10 @@ class UninstallManager:
                 except ValueError:
                     removed_details.append((success, str(p)))
 
-            return removed_details
+            return {
+                "package_removed": package_status == "removed",
+                "removed_paths": removed_details,
+            }
         finally:
             if package_status == "failed" and not package_event_recorded:
                 record_deletion_audit(app.get("id", app_name), package_mode, "failed", package_size)
@@ -638,7 +690,9 @@ def run_uninstall():
         total_estimated_size = 0
         for app in selected_apps:
             is_running = False
-            for proc in (app["id"], app["name"].lower()):
+            for proc in manager._candidate_process_names(
+                app, manager._executable_names_from_desktop(str(app.get("id") or ""))
+            ):
                 try:
                     if system.run_command(["pgrep", "-x", proc], capture=True, timeout=5).ok:
                         is_running = True
@@ -722,22 +776,31 @@ def run_uninstall():
             # --- EXECUTION ---
             print(f"\n {GRAY}🚀 Processing...{RESET}")
             removed_names = []
+            failed_names = []
             total_freed_all = 0
 
             for app, paths, _ in all_targets:
-                manager.execute_uninstall(app, paths)
-                removed_names.append(app["name"])
-                total_freed_all += app["size_bytes"]
+                result = manager.execute_uninstall(app, paths)
+                package_removed = bool(result.get("package_removed"))
+                paths_removed = any(ok for ok, _ in result.get("removed_paths", []))
+                if package_removed or paths_removed:
+                    removed_names.append(app["name"])
+                    if package_removed:
+                        total_freed_all += app["size_bytes"]
+                else:
+                    failed_names.append(app["name"])
 
-            # Final Summary
-            if total_freed_all > 0:
+            # Final Summary — only report what actually succeeded.
+            if removed_names:
                 ScanCache.clear()
             print("=" * 70)
             print("\033[1;34mUninstall complete\033[0m")
-            names_str = ", ".join(removed_names)
+            names_str = ", ".join(removed_names) if removed_names else "none"
             msg = f"Removed {len(removed_names)} app(s), freed \033[1;32m"
             msg += f"{bytes_to_human(total_freed_all)}\033[0m: {names_str}"
             print(msg)
+            if failed_names:
+                print(f" {RED}✗ Failed:{RESET} {', '.join(failed_names)}")
             print("=" * 70)
             Navigator.play_delete()
 
