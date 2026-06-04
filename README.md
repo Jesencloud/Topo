@@ -154,27 +154,27 @@ Exploring: /home/users/.config/Cursor
 
 Select a location to explore (Type numbers or Space to select):
 
-  ○  1. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬   59.9%  📁 WebStorage                     |  109.4 MiB
-  ○  2. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬   11.5%  📁 CachedExtensionVSIXs           |   21.0 MiB
-  ✓  3.  ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    6.8%  📁 Cache                          |   12.4 MiB
-  ○  4. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    5.6%  📁 User                           |   10.3 MiB
-  ○  5. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    5.3%  📁 CachedData                     |    9.7 MiB
-  ○  6. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    4.3%  📁 GPUCache                       |    7.9 MiB
-▶ ✓  7.  ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    1.6%  📁 logs                           |    2.8 MiB
-  ○  8. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    1.1%  📁 clp                            |    2.0 MiB
-  ○  9. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    0.9%  📁 Partitions                     |    1.7 MiB
-  ○ 10. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    0.9%  📁 process-monitor                |    1.6 MiB
-  ○ 11. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    0.6%  📁 CachedProfilesData             |    1.1 MiB
-  ○ 12. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    0.4%  📁 Local Storage                  |  789.5 KiB
-  ○ 13. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    0.3%  📁 DawnWebGPUCache                |  544.4 KiB
-  ○ 14. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    0.3%  📁 DawnGraphiteCache              |  544.4 KiB
-  ○ 15. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    0.2%  📁 Dictionaries                   |  441.4 KiB
+  ○  1. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬   59.9%  🗂️ WebStorage                     |  109.4 MiB
+  ○  2. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬   11.5%  🗂️ CachedExtensionVSIXs           |   21.0 MiB
+  ✓  3.  ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    6.8%  🗂️ Cache                          |   12.4 MiB
+  ○  4. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    5.6%  🗂️ User                           |   10.3 MiB
+  ○  5. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    5.3%  🗂️ CachedData                     |    9.7 MiB
+  ○  6. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    4.3%  🗂️ GPUCache                       |    7.9 MiB
+▶ ✓  7.  ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    1.6%  🗂️ logs                           |    2.8 MiB
+  ○  8. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    1.1%  🗂️ clp                            |    2.0 MiB
+  ○  9. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    0.9%  🗂️ Partitions                     |    1.7 MiB
+  ○ 10. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    0.9%  🗂️ process-monitor                |    1.6 MiB
+  ○ 11. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    0.6%  🗂️ CachedProfilesData             |    1.1 MiB
+  ○ 12. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    0.4%  🗂️ Local Storage                  |  789.5 KiB
+  ○ 13. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    0.3%  🗂️ DawnWebGPUCache                |  544.4 KiB
+  ○ 14. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    0.3%  🗂️ DawnGraphiteCache              |  544.4 KiB
+  ○ 15. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    0.2%  🗂️ Dictionaries                   |  441.4 KiB
 
 
   Page 1/3 | ↑↓←→ | A:All | F:Open Folder | R:Reload | S:Sort ↓ | Space:Select
 
  ☉ Selected Items to Remove: Enter:Delete
-   • 📁 Cache                                 • 📁 logs
+   • 🗂️ Cache                                 • 🗂️ logs
 ```
 
 ## Technical Advantages

@@ -226,7 +226,7 @@ def get_age_hint(path: Path) -> str:
 def build_analysis_entry(name: str, path: Path, size: int, total_size: int) -> dict[str, Any]:
     """Build a disk-analysis row with Linux cache metadata."""
     is_cleanable = has_valid_cachedir_tag(path)
-    icon = "🧹" if is_cleanable else "📁" if path.is_dir() else "📄"
+    icon = "🧹" if is_cleanable else "🗂️" if path.is_dir() else "📄"
     return {
         "name": name,
         "path": path,
@@ -466,7 +466,7 @@ def run_deep_analysis(target_path: Path = None):
                                 "size": size,
                                 "percent": (size / total_used) * 100,
                                 "color": t["color"],
-                                "icon": "📊" if str(t["path"]) == "/" else "📁",
+                                "icon": "📊" if str(t["path"]) == "/" else "🗂️",
                                 "age_hint": get_age_hint(t["path"]),
                             }
                         )

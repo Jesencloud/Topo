@@ -728,7 +728,7 @@ class AnalyzeSelector(_PagedSelector):
                 bar_str = f"{bar}  " if bar_w > 0 else ""
                 style = "\033[1;35m" if is_hover else ""
                 name_padded = pad_and_truncate(item["name"], name_w)
-                icon = item.get("icon", "📁")
+                icon = item.get("icon", "🗂️")
                 if is_hover:
                     focus_line = _frame_line_count(buf)
                 buf.append(
@@ -759,7 +759,7 @@ class AnalyzeSelector(_PagedSelector):
                 line = ""
                 for idx in pair:
                     item = self.items[idx]
-                    icon = item.get("icon", "📁")
+                    icon = item.get("icon", "🗂️")
                     name_padded = pad_and_truncate(item["name"], 35)
                     line += f"   {THEME_TITLE}•{RESET} {icon} {name_padded}"
                 buf.append(line + "\033[K\n")

@@ -61,8 +61,7 @@ def run_install_link(silent=False):
     if silent:
         return True
 
-    print("\n" + "=" * 70)
-    print(f" {BLUE}Success! 'topo' is now available.{RESET}")
+    print(f" {BLUE}🎉 Success! 'topo' is now available.{RESET}")
 
     path_env = os.environ.get("PATH", "")
     if str(target_dir) not in path_env.split(os.pathsep):
@@ -97,5 +96,4 @@ def run_install_link(silent=False):
             print(f" {GRAY}{export_line}{RESET}")
     else:
         print(f" You can now run {BOLD}topo{RESET} from any directory.")
-    print("=" * 70 + "\n")
     return True
