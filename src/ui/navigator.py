@@ -684,10 +684,11 @@ class AnalyzeSelector(_PagedSelector):
 
         buf.append(f"\n {THEME_TITLE}{self.title}{RESET}\033[K\n\n")
 
+        total_disk = bytes_to_human(shutil.disk_usage("/").total)
         hint = (
             f"{GRAY}Select a location to explore (Type numbers or Space to select):{RESET}"
             if self.can_select
-            else f"{GRAY}Select a category to explore:{RESET}"
+            else f"{GRAY}Select a category to explore (Total: {total_disk}):{RESET}"
         )
         buf.append(f"{hint}\033[K\n\n")
 
