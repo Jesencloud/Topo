@@ -2,7 +2,7 @@
 
 ## Project: topo (Topo) - Unified Aesthetics & Deep System Cleanup
 
-Today's session focused on unifying the visual theme, implementing low-level system optimization tasks, and hardening the test suite against environment-specific failures.
+Today's session focused on unifying the visual theme, implementing low-level system optimization tasks, hardening the test suite against environment-specific failures, and — driven by a white-box security audit of the deletion core — closing a prioritized set of deletion-safety findings (uninstall residue, sudo deletion, symlink amplification).
 
 ### 1. Unified Theme & Visual Polish
 *   **Centralized Theme Constant**: Introduced `THEME_TITLE` in `src/core/constants.py` (defaulting to Bright Purple `\033[1;95m`). This replaces various hardcoded ANSI sequences and ensures consistent branding across all TUI and CLI components.
@@ -28,9 +28,36 @@ Today's session focused on unifying the visual theme, implementing low-level sys
 *   **Error Handling Verification**: Refined `test_get_size_error_handling` to mock `Path.exists` returning `True` alongside `stat` failures, accurately testing the recursive error recovery logic.
 *   **Regression Coverage**: Added 8 new test cases covering orphaned package detection (DNF/APT/Pacman) and zombie process signaling.
 
-### 5. Verification
-*   **Ruff**: `ruff check .` — **All checks passed**.
-*   **Pytest**: `pytest` — **186 passed** (100% pass rate).
+### 5. [Security] White-Box Audit — Uninstall & Deletion Hardening
+A focused white-box review of the deletion core (`whitelist`/`file_ops`/`analyze` + every `clean/*` module + the Rust engine) drove a prioritized fix pass. Each fix ships with regression coverage; the existing defense-in-depth (centralized `validate_path_for_deletion()`, hard-protection list, list-form command execution with no `shell=True`, read-only Rust engine) was confirmed intact.
+
+#### [High] H1 — Uninstall residue matching could permanently delete a user workspace
+*   **Root Cause**: `find_residue_paths()`'s home-root "deep search" fuzzily matched **visible** top-level home folders by the app's display name. An app with a common name (e.g. "Notes", "Studio") prefix-matched `~/notes-backup`, `~/studio-projects`, etc.; `execute_uninstall()` then removed them via `safe_remove(use_trash=False, allow_app_data_removal=True)` — a **permanent, non-recoverable** wipe of directories that sit outside every protection list.
+*   **Fix (recoverable)**: Residue removal now uses `use_trash=True`, so a heuristic mis-match is recoverable from the trash. Hard protection (whitelist, credentials, XDG user-data dirs) still applies.
+*   **Fix (scope)**: The home-root deep search now considers **only hidden dot-directories** (`~/.someapp`); visible workspaces (`~/Projects`, `~/IdeaProjects`, ...) are never eligible as residue. The `search_roots` substring contract (e.g. `~/.local/share/vendor-myapp-state`) is preserved unchanged.
+*   **Fix (visibility)**: The uninstall preview now flags home-root paths in yellow with a `⚠` marker so the user reviews them before confirming.
+*   **Regression Coverage**: Added `test_find_residue_paths_skips_visible_home_workspace` (visible workspace excluded while a hidden dotdir is still cleaned) and `test_execute_uninstall_residue_goes_to_trash`.
+
+#### [Med] M1 — `sudo rm -rf` validated and executed on different paths
+*   **Root Cause**: Analyze's `_sudo_remove()` validated the symlink-*resolved* path but handed the raw (unresolved) string to `rm -rf` under sudo — it could validate path A yet delete path B.
+*   **Fix**: It now resolves once up front and runs validation, the existence check, the size read, and `rm -rf` all against that single `target_path`.
+*   **Regression Coverage**: `test_sudo_remove_operates_on_resolved_path` (the resolved real directory is deleted, never the raw symlink path).
+
+#### [Med] M2 — Proactive detection could amplify deletion through symlinks
+*   **Root Cause**: `proactive_app_detection()` resolved a `~/.cache/<cmd>` symlink to its target and registered the target for cleanup, so `clean_app_generic()` could wipe the contents of an out-of-tree directory the link pointed at.
+*   **Fix**: Detection now skips symlinks entirely, managing only real directories that physically live under the scanned roots.
+*   **Regression Coverage**: `test_proactive_app_detection_skips_symlinks`.
+
+#### [Low] L1 — Audit-log line forging
+*   **Root Cause**: A target rejected *for* containing control characters was still written verbatim to the deletion audit log; an embedded newline could forge a second record and a tab could shift the column layout.
+*   **Fix**: `record_deletion_audit()` now escapes `\`, `\n`, `\r`, `\t` before writing. Added `test_record_deletion_audit_escapes_control_chars`.
+
+#### [Low] L3 — Import-style consistency
+*   `clean/system.py` used absolute `from src.core...` imports (coupling the package name to `src`) while every other module uses relative imports; switched it to `from ..core...` to match.
+
+### 6. Verification
+*   **Ruff**: `ruff check src tests` — **All checks passed** (incl. `ruff format`).
+*   **Pytest**: `pytest` — **191 passed** (186 prior + 5 new security regressions).
 *   **CLI**: Verified `./topo link` and `./topo remove` behavior for installation management.
 
 ---

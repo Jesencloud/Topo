@@ -608,27 +608,31 @@ class UninstallManager:
                 paths.append(wine_p)
                 seen.add(str(wine_p))
 
-        # 6. Deep Subdirectory Search (if name is specific enough)
+        # 6. Deep Subdirectory Search (home-root residue).
+        # Only HIDDEN dot-directories at the home root (e.g. ~/.someapp) are
+        # considered here. Visible top-level home folders are user workspaces and
+        # data — ~/Projects, ~/IdeaProjects, ~/studio-projects, ~/notes-backup,
+        # ~/VirtualBox VMs — and must NEVER be matched as residue: a fuzzy name
+        # hit there would permanently delete the user's own files. XDG user-data
+        # dirs are excluded too (defence in depth; they are visible anyway).
         if len(app_name) > 3:
-            # Never treat standard XDG user-data directories (~/Music, ~/Videos,
-            # ~/Documents, ...) as app residue. An app whose display name happens
-            # to be a common word (e.g. GNOME "Music") must not wipe user data.
             protected_dir_names = {d.lower() for d in LINUX_USER_DATA_DIRS}
             try:
                 # Only scan top-level dirs in home for speed/safety
                 with os.scandir(home_path) as it:
                     for entry in it:
-                        if entry.is_dir():
-                            entry_lower = entry.name.lower()
-                            if entry_lower in protected_dir_names:
-                                continue
-                            if (
-                                self._name_matches(entry_lower, app_name.lower())
-                                and str(entry.path) not in seen
-                                and home_path in Path(entry.path).parents
-                            ):
-                                paths.append(Path(entry.path))
-                                seen.add(str(entry.path))
+                        if not entry.is_dir() or not entry.name.startswith("."):
+                            continue
+                        entry_lower = entry.name.lower()
+                        if entry_lower in protected_dir_names:
+                            continue
+                        if (
+                            self._name_matches(entry_lower, app_name.lower())
+                            and str(entry.path) not in seen
+                            and home_path in Path(entry.path).parents
+                        ):
+                            paths.append(Path(entry.path))
+                            seen.add(str(entry.path))
             except OSError:
                 pass
 
@@ -703,7 +707,12 @@ class UninstallManager:
             # but hard-protected credentials/system paths remain blocked.
             removed_details = []
             for p in paths:
-                success, _ = safe_remove(p, use_trash=False, allow_app_data_removal=True)
+                # Residue removal is recoverable (trash) rather than a permanent
+                # wipe: residue discovery is heuristic, so a mis-matched user
+                # directory must be undoable. allow_app_data_removal still lets
+                # app-owned data go, while hard-protected paths (whitelist,
+                # credentials, system, XDG user-data dirs) stay blocked.
+                success, _ = safe_remove(p, use_trash=True, allow_app_data_removal=True)
                 try:
                     removed_details.append((success, str(p.relative_to(Path.home()))))
                 except ValueError:
@@ -774,11 +783,18 @@ def run_uninstall():
                         f"  \033[1;32m✓\033[0m {BOLD}{app['name']}{RESET}{running_tag}\033[K\n"
                     )
                     for p in app_paths:
+                        # Home-root entries (e.g. ~/.someapp) sit outside the
+                        # standard cache/config containers and are the likeliest
+                        # heuristic mis-matches — flag them in yellow so the user
+                        # reviews them before confirming a destructive action.
+                        is_risky = p.parent == Path.home()
+                        mark = "\033[1;33m⚠\033[0m" if is_risky else "\033[1;34m✓\033[0m"
+                        color = YELLOW if is_risky else GRAY
                         try:
                             rel_p = f"~/{p.relative_to(Path.home())}"
-                            buf.append(f"    \033[1;34m✓\033[0m {GRAY}{rel_p}{RESET}\033[K\n")
+                            buf.append(f"    {mark} {color}{rel_p}{RESET}\033[K\n")
                         except ValueError:
-                            buf.append(f"    \033[1;34m✓\033[0m {GRAY}{p}{RESET}\033[K\n")
+                            buf.append(f"    {mark} {color}{p}{RESET}\033[K\n")
 
                 buf.append("\033[K\n")
                 buf.append("\033[K\n")  # Explicit cleared spacer line

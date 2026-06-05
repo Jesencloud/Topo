@@ -11,6 +11,7 @@ from src.core.analyze import (
     _render_scan_header,
     _scan_status_message,
     _scan_with_spinner,
+    _sudo_remove,
     build_analysis_entry,
     get_rust_scan_data,
     get_rust_tree_data,
@@ -288,3 +289,28 @@ def test_analyze_delete_system_path_requires_admin():
 
 def test_needs_admin_for_deletion_rejects_non_home_path():
     assert _needs_admin_for_deletion(Path("/usr/share/topo-test")) is True
+
+
+def test_sudo_remove_operates_on_resolved_path(test_env):
+    """Regression (M1): the path validated must be the exact path handed to
+    `rm -rf`. Operate on the resolved path so a symlinked component cannot make
+    validation and deletion disagree (validate target A, delete target B)."""
+    real_dir = test_env / "real-target"
+    real_dir.mkdir()
+    link = test_env / "link-to-target"
+    link.symlink_to(real_dir)
+
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return MagicMock(ok=True)
+
+    with (
+        patch("src.core.analyze.run_command", side_effect=fake_run),
+        patch("src.core.analyze.get_size", return_value=0),
+    ):
+        assert _sudo_remove(link) is True
+
+    # rm must target the resolved real directory, never the raw symlink path.
+    assert captured["cmd"] == ["rm", "-rf", "--", str(real_dir.resolve())]

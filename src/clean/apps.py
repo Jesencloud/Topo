@@ -49,7 +49,11 @@ def proactive_app_detection():
             continue
         try:
             for item in root.iterdir():
-                if not item.is_dir() or item.name.startswith("."):
+                # Skip symlinks: resolving one would pull its (possibly
+                # out-of-tree) target into the cleanup set, so a ~/.cache/<cmd>
+                # link pointing at real data could later have its contents wiped.
+                # Only manage real directories that physically live here.
+                if item.is_symlink() or not item.is_dir() or item.name.startswith("."):
                     continue
 
                 # SELF-PROTECTION: Never detect Topo's own configuration directory

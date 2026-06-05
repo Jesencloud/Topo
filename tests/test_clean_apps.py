@@ -43,10 +43,32 @@ def test_proactive_app_detection_write_error(test_env):
     ):
         m_dir = MagicMock()
         m_dir.is_dir.return_value = True
+        m_dir.is_symlink.return_value = False
         m_dir.name = "new_app"
         mock_iter.return_value = [m_dir]
         detected = proactive_app_detection()
         assert "new_app" in detected
+
+
+def test_proactive_app_detection_skips_symlinks(test_env):
+    """Regression (M2): a symlink in ~/.cache must not be resolved into the
+    cleanup registry, or its (out-of-tree) target's contents could be wiped."""
+    real_data = test_env / "important-data"
+    real_data.mkdir()
+    link = test_env / ".cache" / "toolname"  # named like an installed command
+    link.symlink_to(real_data)
+    registry = test_env / "detected_apps.json"
+
+    with (
+        patch("src.clean.apps.DETECTED_APPS_FILE", registry),
+        patch("shutil.which", return_value="/usr/bin/toolname"),
+    ):
+        detected = proactive_app_detection()
+
+    assert "toolname" not in detected
+    assert all(
+        "important-data" not in p for info in detected.values() for p in info.get("paths", [])
+    )
 
 
 def test_clean_flatpak_unused():

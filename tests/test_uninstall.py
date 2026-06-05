@@ -660,3 +660,44 @@ def test_run_uninstall_failed_package_not_counted(
     out = capsys.readouterr().out
     assert "Removed 0 app(s)" in out
     assert "Failed:" in out
+
+
+def test_find_residue_paths_skips_visible_home_workspace(test_env):
+    """Regression (H1): a visible top-level home folder that fuzzily matches an
+    app name (e.g. ~/notes-backup vs app 'Notes') must NOT be flagged as
+    residue. Only hidden dot-directories at the home root are eligible, so a
+    user's workspace can never be permanently removed by an uninstall."""
+    mgr = UninstallManager()
+    workspace = test_env / "notes-backup"  # visible workspace, prefix-matches "notes"
+    hidden = test_env / ".notesapp"  # hidden dotdir residue, still eligible
+    workspace.mkdir()
+    hidden.mkdir()
+
+    with patch("pathlib.Path.home", return_value=test_env):
+        paths = mgr.find_residue_paths("com.example.notes", "Notes", "Flatpak")
+
+    assert workspace not in paths
+    assert hidden in paths
+
+
+def test_execute_uninstall_residue_goes_to_trash(test_env):
+    """Regression (H1): residue removal must be recoverable (use_trash=True),
+    never a permanent wipe, since residue discovery is heuristic."""
+    mgr = UninstallManager()
+    app = {"name": "MyApp", "id": "com.example.myapp", "type": "Flatpak", "size_bytes": 0}
+    residue = test_env / ".config/myapp"
+    residue.mkdir(parents=True)
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.core.system.run_command", return_value=MagicMock(ok=True, returncode=0)),
+        patch("subprocess.run", return_value=MagicMock(returncode=1)),
+        patch(
+            "src.clean.app_manager.safe_remove", return_value=(True, "Moved to trash")
+        ) as mock_safe_remove,
+    ):
+        mgr.execute_uninstall(app, [residue])
+
+    assert mock_safe_remove.call_args_list, "safe_remove was not called for residue"
+    for call in mock_safe_remove.call_args_list:
+        assert call.kwargs.get("use_trash") is True

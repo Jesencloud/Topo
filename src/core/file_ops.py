@@ -35,6 +35,19 @@ def get_deletion_log_path() -> Path:
     return state_home / "topo" / "deletions.log"
 
 
+def _sanitize_audit_field(value: str) -> str:
+    """Escape characters that could forge or corrupt a tab-separated log line.
+
+    A rejected deletion target may contain control characters (it can be
+    rejected *for* containing them), and that raw value is still logged. Without
+    escaping, an embedded newline would inject a forged audit record and a tab
+    would shift the column layout.
+    """
+    return (
+        value.replace("\\", "\\\\").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
+    )
+
+
 def record_deletion_audit(
     path: str | Path,
     mode: str,
@@ -51,7 +64,8 @@ def record_deletion_audit(
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("a", encoding="utf-8") as f:
-            f.write(f"{timestamp}\t{mode}\t{size}\t{status}\t{Path(path).expanduser()}\n")
+            safe_path = _sanitize_audit_field(str(Path(path).expanduser()))
+            f.write(f"{timestamp}\t{mode}\t{size}\t{status}\t{safe_path}\n")
     except OSError:
         pass
 

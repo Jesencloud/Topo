@@ -374,3 +374,22 @@ def test_clean_path_by_age(test_env):
         size, items = clean_path_by_age(cache_dir, days=10)
         assert size == 0
         assert items == 0
+
+
+def test_record_deletion_audit_escapes_control_chars(test_env):
+    """Regression (L1): a rejected path containing newlines/tabs must not forge
+    extra audit records or shift the tab-separated column layout."""
+    from src.core.file_ops import record_deletion_audit
+    from src.core.history import parse_deletion_history
+
+    log_path = test_env / "state" / "topo" / "deletions.log"
+    with patch.dict("os.environ", {"TOPO_DELETE_LOG": str(log_path)}):
+        record_deletion_audit("/tmp/evil\nFORGED\trow", "permanent", "rejected-validation")
+
+    content = log_path.read_text()
+    # The embedded newline is escaped, so the file holds exactly one record line.
+    assert content.count("\n") == 1
+    assert "\\nFORGED" in content
+    # The parser sees a single event, never a forged second one.
+    sessions = parse_deletion_history(log_path)
+    assert sum(len(s.events) for s in sessions) == 1

@@ -291,23 +291,35 @@ def _needs_admin_for_deletion(path: Path) -> bool:
 def _sudo_remove(path: Path) -> bool:
     """Remove a validated Analyze target with sudo and record an audit event."""
     raw_path = Path(path).expanduser()
-    valid, reason = validate_path_for_deletion(raw_path)
+    # Resolve once and operate on that exact path for the rest of the function.
+    # Validation, the existence check, the size read and `rm -rf` must all act on
+    # the SAME byte-for-byte path — otherwise validation could clear the
+    # symlink-resolved target while `rm` (run as root) acts on the raw string,
+    # i.e. validate path A but delete path B.
+    try:
+        target_path = raw_path.resolve(strict=False)
+    except OSError:
+        target_path = raw_path.absolute()
+
+    valid, reason = validate_path_for_deletion(target_path)
     if not valid:
-        record_deletion_audit(raw_path, "sudo-permanent", "rejected-validation")
-        print(f" {RED}✗{RESET} {raw_path}: {reason}")
+        record_deletion_audit(target_path, "sudo-permanent", "rejected-validation")
+        print(f" {RED}✗{RESET} {target_path}: {reason}")
         return False
 
-    if not raw_path.exists() and not raw_path.is_symlink():
-        record_deletion_audit(raw_path, "sudo-permanent", "missing", 0)
+    if not target_path.exists() and not target_path.is_symlink():
+        record_deletion_audit(target_path, "sudo-permanent", "missing", 0)
         return False
 
-    size_bytes = get_size(raw_path)
-    res = run_command(["rm", "-rf", "--", str(raw_path)], use_sudo=True, capture=True, timeout=300)
+    size_bytes = get_size(target_path)
+    res = run_command(
+        ["rm", "-rf", "--", str(target_path)], use_sudo=True, capture=True, timeout=300
+    )
     if res.ok:
-        record_deletion_audit(raw_path, "sudo-permanent", "deleted", size_bytes)
+        record_deletion_audit(target_path, "sudo-permanent", "deleted", size_bytes)
         return True
 
-    record_deletion_audit(raw_path, "sudo-permanent", "failed", size_bytes)
+    record_deletion_audit(target_path, "sudo-permanent", "failed", size_bytes)
     return False
 
 

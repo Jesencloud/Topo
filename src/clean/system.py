@@ -1,7 +1,7 @@
 import shutil
 
-from src.core.file_ops import bytes_to_human, parse_size_from_text
-from src.core.system import get_os_id, run_command
+from ..core.file_ops import bytes_to_human, parse_size_from_text
+from ..core.system import get_os_id, run_command
 
 
 def clean_snaps(dry_run=False):
