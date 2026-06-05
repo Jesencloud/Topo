@@ -41,6 +41,7 @@ topo-core/target/
 .claude/settings.local.json
 scheduled_tasks.lock
 settings.local.json
+.rsync-filter
 
 # --- Sensitive Info ---
 .env

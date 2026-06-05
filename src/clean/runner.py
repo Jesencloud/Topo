@@ -1,4 +1,5 @@
 import os
+import select
 import shutil
 import sys
 import termios
@@ -37,7 +38,18 @@ def _read_sudo_choice() -> str:
     old_settings = termios.tcgetattr(fd)
     try:
         tty.setraw(fd)
-        return sys.stdin.read(1)
+        while True:
+            choice = sys.stdin.read(1)
+            if choice in ("\r", "\n", " "):
+                return choice
+            if choice == "\x1b":
+                # Arrow/function keys start with ESC. Treat only a lone ESC as cancel.
+                ready, _, _ = select.select([sys.stdin], [], [], 0.05)
+                if not ready:
+                    return choice
+                while ready:
+                    sys.stdin.read(1)
+                    ready, _, _ = select.select([sys.stdin], [], [], 0)
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
@@ -48,7 +60,9 @@ def run_clean(dry_run=False):
 
     # 1. Prepare categories
     print(f"\n{PURPLE}Clean Your Linux{RESET}\n")
-    print(f"{GRAY}● Use --dry-run to preview, --whitelist to manage protected paths{RESET}")
+    print(
+        f"{GRAY}● Use 'topo clean --dry-run' to preview, 'topo whitelist --help' for whitelist details.{RESET}"
+    )
 
     run_system_tasks = True
     # Pre-authorize sudo to avoid interrupting the progress list

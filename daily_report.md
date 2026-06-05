@@ -75,6 +75,25 @@ A focused white-box review of the deletion core (`whitelist`/`file_ops`/`analyze
 *   **Pytest**: `pytest` — **193 passed** (186 prior + 7 new security regressions across both fix batches).
 *   **CLI**: Verified `./topo link` and `./topo remove` behavior for installation management.
 
+### 7. CLI Help Modernization & Dry-Run Command Routing
+*   **Modern Help Layout**: Reworked the top-level `topo --help` output into a clearer `Quick Start` / `Whitelist` / `Notes` structure, with concise examples and command-specific follow-up guidance.
+*   **Stable Program Name**: Set `argparse`'s `prog` to `topo`, so help output is consistent whether launched through `./topo` or `python -m src.main`.
+*   **Subcommand Help**: Added focused help text and examples for `clean`, `optimize`, `purge`, `all`, `remove`, `history`, and `whitelist`.
+*   **Dry-Run Placement**: Removed global `--dry-run` support. Preview flags now live only on the commands that actually support them, so `topo clean --dry-run` works and `topo --dry-run clean` is rejected.
+*   **Dry-Run Default Fix**: Fixed the `Namespace` crash in `topo all` and other non-preview invocations by reading `dry_run` with a safe default of `False`.
+*   **Whitelist CLI Polish**: Removed duplicated handwritten usage text from normal whitelist output, improved metavar/help labels, and switched missing-path errors to standard `argparse` errors.
+*   **README Help Refresh**: Updated the README's run/help section to match the new CLI help output and replaced the old home screenshot reference with the current terminal menu example.
+
+### 8. Sudo Prompt Key Handling
+*   **Strict Key Acceptance**: Updated the clean and optimize sudo pre-prompts so only `Enter`, `Space`, and standalone `ESC` are accepted. Other keys are ignored instead of falling through to password input.
+*   **Escape Sequence Safety**: Direction keys and other terminal escape sequences are consumed and ignored, so they are not mistaken for an `ESC` cancellation.
+*   **Clean Skip Semantics Preserved**: `Space` at the clean sudo prompt still skips the current clean flow rather than continuing with non-sudo cleanup tasks, avoiding misleading behavior.
+
+### 9. Follow-Up Regression Coverage
+*   **CLI Help Tests**: Added `tests/test_cli_help.py` to lock the top-level help and whitelist help wording that documents manual protection rules.
+*   **Sudo Choice Tests**: Added `tests/test_sudo_choice.py` to verify unrecognized keys are ignored, escape sequences are consumed safely, and `Space` skips clean without sudo authorization or follow-on cleanup execution.
+*   **Focused Verification**: Re-ran `tests/test_cli_help.py`, `tests/test_sudo_choice.py`, `tests/test_clean_system.py`, and `tests/test_clean_user.py`, plus Python bytecode compilation for the edited modules.
+
 ---
 
 # Daily Modification Report - 2026-06-04

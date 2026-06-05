@@ -30,33 +30,67 @@
 
 **Automated Installation (Recommended)**
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/Jesencloud/Topo/main/install.sh | bash
-```
-
 > Note: The script automatically detects your architecture (**x86_64** or **ARM64**) and provisions the optimized engine.
 
-<p align="center">
-  <img src="assets/topo_home.png" alt="Topo - Clean Your Linux" width="800" />
-</p>
+```bash
+  ████████  ██████  ██████   ██████
+     ██    ██    ██ ██   ██ ██    ██
+     ██    ██    ██ ██████  ██    ██
+     ██    ██    ██ ██      ██    ██
+     ██     ██████  ██       ██████
 
-## Run 
+  ● Topo is digging deeper 🦡 🦡 🦡
+
+ Main Menu
+
+ > 1. Clean        Free up disk space
+   2. Uninstall    Remove apps completely
+   3. Optimize     Check and maintain system
+   4. Analyze      Explore disk usage
+   5. Status       Monitor system health
+
+ ↑/↓ | M: Mute | Enter: Select | ESC: Quit
+```
+## Help
 
 ```bash
-  topo                 Start interactive TUI (Recommended)
-  topo clean           Run one-key safe cleanup
-  topo analyze         Start interactive disk usage explorer
-  topo status          Check system health and metrics
-  topo history         Show recent cleanup deletion history
-  topo history --limit 5  Show latest 5 history sessions
-  topo update          Upgrade to the latest version
-  topo whitelist list  View currently protected paths
-  topo --dry-run clean Preview files to be cleaned without deleting
-
 options:
   -h, --help   show this help message and exit
-  --dry-run    Preview changes without deleting
   --version    show program's version number and exit
+
+commands:
+  COMMAND
+    clean      One-key safe disk cleanup
+    analyze    Interactive disk usage explorer
+    uninstall  Completely remove applications and residues
+    optimize   Run system maintenance (fstrim, databases, etc.)
+    purge      Interactive project artifact purging
+    status     Monitor system health and resource usage
+    history    Show recent deletion history
+    all        Run all cleanup and purge tasks sequentially
+    authorize  Setup passwordless sudo for faster cleanup
+    update     Update topo to the latest version
+    remove     Uninstall topo from the system
+    link       Create a symbolic link for the 'topo' command
+    whitelist  Manage manual path protection whitelist
+
+Quick Start:
+  topo                     Open the interactive TUI
+  topo clean --dry-run     Preview cleanup without deleting
+  topo analyze             Explore disk usage
+  topo status              Show system health
+  topo history --limit 5   Show the last 5 cleanup sessions
+
+Whitelist:
+  topo whitelist list         Show manual protection rules.
+  topo whitelist add PATH     Protect PATH from cleanup.
+  topo whitelist remove PATH  Remove a manual rule.
+
+Notes:
+  An empty whitelist is normal before you add a path.
+  Built-in protections cover system paths, credentials, and XDG folders.
+  Run topo whitelist --help for whitelist details.
+  Run topo COMMAND --help for command-specific options.
 
 ```
 
@@ -66,14 +100,12 @@ Topo is built for performance but governed by safety. It uses **Home Directory I
 
 It adopts a **Zero-Interruption** policy: administrative tasks are pre-authorized so your "One-Key Clean" runs unattended from start to finish.
 
-## Features in Detail
-
 ### Deep System Cleanup
 
 ```bash
 Clean Your Linux
 
-● Use --dry-run to preview, --whitelist to manage protected paths
+● Use 'topo clean --dry-run' to preview, 'topo whitelist --help' for whitelist details.
 ➔ System caches need sudo. Enter continue, Space skip: 
 ➔ System cleanup requires admin access
 ➔ Password: 
