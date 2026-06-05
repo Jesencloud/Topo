@@ -20,7 +20,12 @@ from ..core.file_ops import bytes_to_human
 from ..core.history import record_history_session
 from .apps import clean_apps_deep, proactive_app_detection
 from .dev import clean_developer_tools
-from .system import clean_journal, clean_package_manager
+from .system import (
+    clean_journal,
+    clean_orphaned_packages,
+    clean_package_manager,
+    clean_zombies,
+)
 from .user import clean_user_data
 
 
@@ -88,7 +93,9 @@ def run_clean(dry_run=False):
                 f"{THEME_TITLE}➤ System & Package Manager{RESET}",
                 [
                     ("Package Manager Cache", clean_package_manager),
+                    ("Orphaned Packages", clean_orphaned_packages),
                     ("System Journal Logs", clean_journal),
+                    ("Zombie Processes", clean_zombies),
                 ],
             )
         )

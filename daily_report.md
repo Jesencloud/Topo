@@ -1,3 +1,40 @@
+# Daily Modification Report - 2026-06-05
+
+## Project: topo (Topo) - Unified Aesthetics & Deep System Cleanup
+
+Today's session focused on unifying the visual theme, implementing low-level system optimization tasks, and hardening the test suite against environment-specific failures.
+
+### 1. Unified Theme & Visual Polish
+*   **Centralized Theme Constant**: Introduced `THEME_TITLE` in `src/core/constants.py` (defaulting to Bright Purple `\033[1;95m`). This replaces various hardcoded ANSI sequences and ensures consistent branding across all TUI and CLI components.
+*   **TUI Consistency Sweep**: Updated all selectors (`InteractiveMenu`, `AnalyzeSelector`, `UninstallSelector`, `TopFilesSelector`) to use `THEME_TITLE` for their headers. Added leading spaces to aligned headers for a more balanced viewport.
+*   **Consistent Bullet Points**: Standardized selection summaries (☉) and bullet points (•) to use the theme color across all modules.
+*   **Icon Modernization**: Replaced the standard folder emoji `📁` with the more professional card index dividers `🗂️` throughout the codebase, including the interactive analyzer and the `README.md` examples.
+
+### 2. Deep System Cleanup (Package & Process)
+*   **Orphaned Package Removal**: Implemented `clean_orphaned_packages()` with cross-distro support:
+    *   **DNF**: `dnf autoremove` for Fedora/RHEL.
+    *   **APT**: `apt-get autoremove` for Ubuntu/Debian.
+    *   **Pacman**: Two-stage removal using `pacman -Qtdq` and `pacman -Rns` for Arch.
+*   **Zombie Process Reaping**: Added `clean_zombies()` to detect processes in the `Z` (defunct) state. Instead of simple detection, it now signals the parent processes via `SIGCHLD` to trigger standard Unix reaping, reclaiming system PID resources safely.
+*   **Runner Integration**: Integrated both tasks into the "System & Package Manager" category in `run_clean()`, with full support for `--dry-run` previews and accurate space-freed parsing.
+
+### 3. Code Quality & Linting
+*   **Idiomatic Error Handling**: Resolved Ruff `SIM105` violation in `app_manager.py` by replacing a `try-except-pass` block with the more readable `contextlib.suppress(OSError)`.
+*   **Import Optimization**: Centralized `contextlib` imports at the top level and removed redundant local imports across the application management module.
+
+### 4. Test Robustness & Compatibility
+*   **Precise Stat Mocking**: Fixed a `TypeError` in `test_clean_path_by_age` reported on Ubuntu by switching from `MagicMock` to a real `os.stat_result` object for file age simulation. This ensures compatibility with Python 3.14+ type checking.
+*   **Environment Isolation**: Fixed `test_clean_podman` by routing it through the `test_env` fixture and mocking `Path.exists`, preventing failures caused by the presence (or absence) of local container caches.
+*   **Error Handling Verification**: Refined `test_get_size_error_handling` to mock `Path.exists` returning `True` alongside `stat` failures, accurately testing the recursive error recovery logic.
+*   **Regression Coverage**: Added 8 new test cases covering orphaned package detection (DNF/APT/Pacman) and zombie process signaling.
+
+### 5. Verification
+*   **Ruff**: `ruff check .` — **All checks passed**.
+*   **Pytest**: `pytest` — **186 passed** (100% pass rate).
+*   **CLI**: Verified `./topo link` and `./topo remove` behavior for installation management.
+
+---
+
 # Daily Modification Report - 2026-06-04
 
 ## Project: topo (Topo) - Security & Correctness Bug-Fix Sweep

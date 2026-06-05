@@ -39,11 +39,18 @@ def test_clean_docker_execution(mock_sub_run, mock_run_cmd, mock_which):
 
 @patch("shutil.which")
 @patch("src.clean.dev.run_command")
-def test_clean_podman(mock_run_cmd, mock_which):
+def test_clean_podman(mock_run_cmd, mock_which, test_env):
     mock_which.return_value = "/usr/bin/podman"
     mock_run_cmd.return_value = MagicMock(returncode=0)
 
-    with patch("src.clean.dev.clean_path_by_age", return_value=(100, 1)):
+    # Ensure the cache path exists for the test
+    cache_path = test_env / ".cache/containers"
+    cache_path.mkdir(parents=True, exist_ok=True)
+
+    with (
+        patch("src.clean.dev.clean_path_by_age", return_value=(100, 1)),
+        patch("pathlib.Path.exists", return_value=True),
+    ):
         size, items = clean_podman(dry_run=False)
         assert items == 2  # 1 for prune, 1 for cache
         mock_run_cmd.assert_called_with(["podman", "system", "prune", "-f"], capture=True)

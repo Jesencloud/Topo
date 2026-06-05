@@ -211,12 +211,14 @@ def test_get_size_error_handling():
 
     # Mock OSError during stat AND scandir
     with (
+        patch("pathlib.Path.exists", return_value=True),
         patch("pathlib.Path.is_file", return_value=True),
         patch("pathlib.Path.stat", side_effect=OSError),
     ):
         assert get_size(Path("/tmp")) == 0
 
     with (
+        patch("pathlib.Path.exists", return_value=True),
         patch("pathlib.Path.is_file", return_value=False),
         patch("pathlib.Path.is_symlink", return_value=False),
         patch("os.scandir", side_effect=OSError),
@@ -348,10 +350,13 @@ def test_clean_path_by_age(test_env):
     current_time = time.time()
     old_time = current_time - (15 * 86400)
 
+    # Use a real os.stat_result to avoid TypeError on some platforms/Python versions
+    import os
+
+    mock_st = os.stat_result((0, 0, 0, 0, 0, 0, 10, old_time, old_time, old_time))
+
     # We mock the lstat object used to judge entry age
-    with patch("pathlib.Path.lstat") as mock_lstat:
-        mock_lstat.return_value.st_atime = old_time
-        mock_lstat.return_value.st_mtime = old_time
+    with patch("pathlib.Path.lstat", return_value=mock_st):
         # Both files look old by atime AND mtime
 
         # Dry run
