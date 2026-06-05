@@ -55,11 +55,10 @@ jobs:
             topo-core-${{ matrix.arch }}
             topo-core-${{ matrix.arch }}.sha256
 
-  release:
-    name: Attach Release Assets
+  package:
+    name: Build Debian/RPM Packages
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
     steps:
       - uses: actions/checkout@v4
 
@@ -67,9 +66,6 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-
-      - name: Verify Release Notes
-        run: test -f "docs/releases/${{ github.ref_name }}.md"
 
       - name: Install Packaging Tools
         run: |
@@ -83,6 +79,111 @@ jobs:
             --x86_64-engine artifacts/topo-core-x86_64/topo-core-x86_64 \
             --aarch64-engine artifacts/topo-core-aarch64/topo-core-aarch64 \
             --output-dir dist/packages
+
+      - name: Verify Package Checksums
+        working-directory: dist/packages
+        run: sha256sum -c *.sha256
+
+      - name: Upload Package Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: topo-linux-packages
+          path: dist/packages/*
+
+  smoke-ubuntu:
+    name: Smoke Test DEB on Ubuntu
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Package Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: topo-linux-packages
+          path: dist/packages
+
+      - name: Install and Verify DEB
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt install -y ./dist/packages/topo_*_amd64.deb
+
+          topo --version
+          test "$(cat /usr/lib/topo/.topo-install-source)" = "package"
+
+          update_output="$(topo update)"
+          printf '%s\n' "$update_output"
+          grep -F "sudo apt upgrade topo" <<<"$update_output"
+          ! grep -F "sudo dnf upgrade topo" <<<"$update_output"
+
+          remove_output="$(topo remove)"
+          printf '%s\n' "$remove_output"
+          grep -F "sudo apt remove topo" <<<"$remove_output"
+          ! grep -F "sudo dnf remove topo" <<<"$remove_output"
+
+          sudo apt remove -y topo
+
+  smoke-fedora:
+    name: Smoke Test RPM on Fedora
+    needs: package
+    runs-on: ubuntu-latest
+    container: fedora:44
+    steps:
+      - name: Download Package Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: topo-linux-packages
+          path: dist/packages
+
+      - name: Install and Verify RPM
+        shell: bash
+        run: |
+          set -euo pipefail
+          dnf install -y ./dist/packages/topo-*-1.x86_64.rpm
+
+          topo --version
+          test "$(cat /usr/lib/topo/.topo-install-source)" = "package"
+
+          update_output="$(topo update)"
+          printf '%s\n' "$update_output"
+          grep -F "sudo dnf upgrade topo" <<<"$update_output"
+          ! grep -F "sudo apt upgrade topo" <<<"$update_output"
+
+          remove_output="$(topo remove)"
+          printf '%s\n' "$remove_output"
+          grep -F "sudo dnf remove topo" <<<"$remove_output"
+          ! grep -F "sudo apt remove topo" <<<"$remove_output"
+
+          dnf remove -y topo
+
+  release:
+    name: Attach Release Assets
+    needs: [package, smoke-ubuntu, smoke-fedora]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download x86_64 Core Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: topo-core-x86_64
+          path: artifacts/topo-core-x86_64
+
+      - name: Download aarch64 Core Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: topo-core-aarch64
+          path: artifacts/topo-core-aarch64
+
+      - name: Download Package Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: topo-linux-packages
+          path: dist/packages
+
+      - name: Verify Release Notes
+        run: test -f "docs/releases/${{ github.ref_name }}.md"
 
       - name: Attach Assets to Release
         uses: softprops/action-gh-release@v2

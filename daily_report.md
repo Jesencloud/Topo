@@ -35,8 +35,11 @@ Today's session completed the first package-manager distribution milestone: GitH
 
 ### 4. GitHub Actions Release Integration
 *   **Existing Engine Build Reused**: `.github/workflows/build-engine.yml` already cross-compiles `topo-core-x86_64` and `topo-core-aarch64`.
-*   **Release Job Extended**: The release job now installs Ruby/RPM tooling, installs `fpm`, runs `packaging/build-linux-packages.sh`, and uploads the `.deb`/`.rpm` files alongside the raw Rust engine assets.
+*   **Package Build Job**: The workflow now installs Ruby/RPM tooling in the dedicated `package` job, installs `fpm`, runs `packaging/build-linux-packages.sh`, verifies checksums, and uploads `topo-linux-packages` as a workflow artifact for smoke testing and release upload.
 *   **Checksum Uploads**: Release assets now include `.deb.sha256` and `.rpm.sha256` files as first-party integrity checks for package downloads.
+*   **Ubuntu Smoke Test Job**: Added `smoke-ubuntu`, which installs the generated `amd64` `.deb` with `sudo apt install`, checks `topo --version`, verifies `/usr/lib/topo/.topo-install-source`, and confirms `topo update` / `topo remove` show apt-only lifecycle commands.
+*   **Fedora Smoke Test Job**: Added `smoke-fedora`, which runs inside a `fedora:44` container, installs the generated `x86_64` `.rpm` with `dnf install`, checks `topo --version`, verifies the install-source marker, and confirms dnf-only lifecycle commands.
+*   **Release Gate**: The release job now depends on both smoke-test jobs, so `.deb` / `.rpm` assets are attached only after package installation checks pass.
 *   **Release Notes Gate Preserved**: Tag releases still require `docs/releases/${TAG}.md` before assets are attached.
 
 ### 5. Local Command Usage
@@ -100,9 +103,9 @@ Today's session completed the first package-manager distribution milestone: GitH
 *   **Latest Full Suite**: Re-ran the suite with a writable temporary home (`env HOME=/tmp/topo_pytest_home pytest -q`) after the distro-aware prompt change: **208 passed**.
 *   **Regenerated Packages**: Rebuilt all four local packages after the prompt fix so Ubuntu installs receive the corrected apt-only lifecycle messages.
 *   **Checksum Verification**: Ran `sha256sum -c *.sha256` inside `dist/packages`; all four package checksums returned `OK`.
+*   **Workflow Syntax**: Parsed `.github/workflows/build-engine.yml` locally with Ruby YAML loading after adding package smoke-test jobs.
 
 ### 7. Future Work
-*   **Smoke-Test Package Installation**: Test `sudo dnf install ./topo-...rpm`, `topo --version`, `topo update`, `topo remove`, and `sudo dnf remove topo` in a clean Fedora container/VM. Repeat for Debian/Ubuntu with `apt install ./topo_...deb`.
 *   **Sign Release Assets**: Add GPG signing for packages and checksums before publishing a package repository.
 *   **Create First-Party APT/DNF Repositories**: After GitHub Release packages are stable, publish repository metadata so users can run `sudo apt install topo` or `sudo dnf install topo` after adding the Topo repo.
 *   **Long-Term Official Repo Path**: Later evaluate Debian/Fedora official inclusion for higher user trust, enterprise acceptance, and native distro update workflows.
