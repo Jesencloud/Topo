@@ -27,7 +27,11 @@
 - **Live monitoring**: Real-time dashboard showing CPU, GPU, memory, and top resource-consuming processes.
 
 ## Quick Start
+**Automated Installation (Recommended)**
 
+```bash
+curl -fsSL https://raw.githubusercontent.com/Jesencloud/Topo/main/install.sh | bash
+```
 **Automated Installation (Recommended)**
 
 > Note: The script automatically detects your architecture (**x86_64** or **ARM64**) and provisions the optimized engine.
