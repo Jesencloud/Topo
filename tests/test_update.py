@@ -11,6 +11,21 @@ def test_should_update_uses_semantic_version_ordering():
     assert _should_update("1.10.0", "not-a-version") is False
 
 
+@patch("src.manage.update.get_install_source", return_value="package")
+@patch("src.manage.update.subprocess.run")
+@patch("src.manage.update.subprocess.check_output")
+def test_run_update_delegates_package_installs_to_package_manager(
+    mock_check_output, mock_run, _mock_install_source, capsys
+):
+    run_update()
+
+    output = capsys.readouterr().out
+    assert "sudo apt upgrade topo" in output
+    assert "sudo dnf upgrade topo" in output
+    mock_check_output.assert_not_called()
+    mock_run.assert_not_called()
+
+
 @patch("src.manage.update.subprocess.run")
 @patch("src.manage.update.subprocess.check_output")
 def test_run_update_does_not_install_when_remote_is_older(mock_check_output, mock_run):

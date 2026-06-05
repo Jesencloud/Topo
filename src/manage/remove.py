@@ -5,6 +5,7 @@ from pathlib import Path
 
 from ..core.constants import BLUE, BOLD, GRAY, GREEN, MAGENTA, RED, RESET
 from ..core.file_ops import bytes_to_human, get_size
+from ..core.install_source import PACKAGE_INSTALL, get_install_source
 
 
 def _launcher_points_to_topo(launcher_path: Path, internal_dir: Path) -> bool:
@@ -60,6 +61,13 @@ def _strip_topo_path_lines() -> bool:
 
 def run_remove(dry_run=False):
     """Removes topo from the system."""
+
+    if get_install_source() == PACKAGE_INSTALL:
+        print(f"\n {MAGENTA}☉ Topo was installed by a system package manager.{RESET}\n")
+        print(f" {GRAY}Use your package manager to remove it:{RESET}")
+        print(f"   {BOLD}sudo apt remove topo{RESET}")
+        print(f"   {BOLD}sudo dnf remove topo{RESET}")
+        return
 
     print(f"\n {MAGENTA}☉ Removing topo from your system...{RESET}\n")
 

@@ -6,6 +6,7 @@ from pathlib import Path
 from packaging.version import InvalidVersion, Version
 
 from ..core.constants import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
+from ..core.install_source import PACKAGE_INSTALL, get_install_source
 
 
 def _parse_version(version_text: str) -> Version | None:
@@ -32,6 +33,13 @@ def _fetch_latest_release_tag() -> str:
 
 def run_update():
     """Updates topo from the latest GitHub Release when its tag is newer."""
+
+    if get_install_source() == PACKAGE_INSTALL:
+        print(f" {CYAN}Topo was installed by a system package manager.{RESET}")
+        print(f" {GRAY}Use your package manager to update it:{RESET}")
+        print(f"   {BOLD}sudo apt upgrade topo{RESET}")
+        print(f"   {BOLD}sudo dnf upgrade topo{RESET}")
+        return
 
     # 1. Get current local version
     # Since we are running from src/manage/update.py,

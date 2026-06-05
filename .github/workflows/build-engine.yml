@@ -71,6 +71,19 @@ jobs:
       - name: Verify Release Notes
         run: test -f "docs/releases/${{ github.ref_name }}.md"
 
+      - name: Install Packaging Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ruby ruby-dev build-essential rpm
+          sudo gem install --no-document fpm
+
+      - name: Build Debian and RPM Packages
+        run: |
+          packaging/build-linux-packages.sh \
+            --x86_64-engine artifacts/topo-core-x86_64/topo-core-x86_64 \
+            --aarch64-engine artifacts/topo-core-aarch64/topo-core-aarch64 \
+            --output-dir dist/packages
+
       - name: Attach Assets to Release
         uses: softprops/action-gh-release@v2
         with:
@@ -80,6 +93,8 @@ jobs:
             artifacts/topo-core-x86_64/topo-core-x86_64.sha256
             artifacts/topo-core-aarch64/topo-core-aarch64
             artifacts/topo-core-aarch64/topo-core-aarch64.sha256
+            dist/packages/*.deb
+            dist/packages/*.rpm
           draft: false
           prerelease: ${{ contains(github.ref_name, '-rc.') || contains(github.ref_name, '-beta.') || contains(github.ref_name, '-alpha.') }}
           fail_on_unmatched_files: true

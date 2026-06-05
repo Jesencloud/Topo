@@ -164,6 +164,7 @@ if [ "$MINIMAL" = false ]; then
     echo -e "  ${GRAY}🧹 Refining installation directory...${NC}"
 fi
 cd "$INSTALL_DIR"
+printf 'script\n' > .topo-install-source
 
 ARCH=$(uname -m)
 BIN_DIR="src/core/bin"

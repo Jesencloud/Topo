@@ -1,3 +1,94 @@
+# Daily Modification Report - 2026-06-06
+
+## Project: topo (Topo) - GitHub Release Debian/RPM Distribution
+
+Today's session completed the first package-manager distribution milestone: GitHub Releases can now attach `.deb` and `.rpm` installers while preserving the existing one-line `curl | bash` installer. The project now has two clear installation channels: script installs under `~/.topo`, and package-manager installs under `/usr/lib/topo` with `/usr/bin/topo` as the launcher.
+
+### 1. Distribution Strategy
+*   **Kept the existing installer**: `curl -fsSL https://raw.githubusercontent.com/Jesencloud/Topo/main/install.sh | bash` remains supported for users who prefer the current GitHub-based install/update flow.
+*   **Added package-manager-ready layout**: Debian/RPM packages stage Topo into `/usr/lib/topo`, expose `/usr/bin/topo`, include the architecture-specific Rust engine, and keep user state/config under XDG paths.
+*   **Separated lifecycle behavior**: Script installs keep `topo update` / `topo remove`; package installs delegate updates/removal to `apt` or `dnf`.
+
+### 2. Install Source Detection
+*   **Marker File**: Added `.topo-install-source` to distinguish `script` from `package` installs.
+*   **Script Install Marker**: `install.sh` now writes `script` into the marker after fetching/refining the runtime tree.
+*   **Package Install Marker**: The packaging script writes `package` into `/usr/lib/topo/.topo-install-source`.
+*   **Runtime Guardrails**:
+    *   Package-mode `topo update` prints:
+        `sudo apt upgrade topo` or `sudo dnf upgrade topo`.
+    *   Package-mode `topo remove` prints:
+        `sudo apt remove topo` or `sudo dnf remove topo`.
+
+### 3. Packaging Script
+*   **New Script**: Added `packaging/build-linux-packages.sh`, powered by `fpm`.
+*   **Generated Outputs**:
+    *   `topo_${VERSION}_amd64.deb` - Debian/Ubuntu x86_64.
+    *   `topo_${VERSION}_arm64.deb` - Debian/Ubuntu ARM64.
+    *   `topo-${VERSION}-1.x86_64.rpm` - Fedora/RHEL x86_64.
+    *   `topo-${VERSION}-1.aarch64.rpm` - Fedora/RHEL ARM64.
+*   **Naming Note**: Debian uses `amd64`/`arm64`; RPM uses `x86_64`/`aarch64`. The RPM `-1` is the package release/iteration, not the Topo upstream version.
+*   **Clean Staging**: The packaging script removes `__pycache__`, `.pyc`, `.pyo`, and `$py.class` files from the staged runtime tree so local test caches never enter release packages.
+*   **Runtime Contents**: Packages include `topo`, `src/`, `VERSION`, bundled WAV assets, `LICENSE`, `README.md`, and exactly one matching `topo-core-$ARCH` binary.
+
+### 4. GitHub Actions Release Integration
+*   **Existing Engine Build Reused**: `.github/workflows/build-engine.yml` already cross-compiles `topo-core-x86_64` and `topo-core-aarch64`.
+*   **Release Job Extended**: The release job now installs Ruby/RPM tooling, installs `fpm`, runs `packaging/build-linux-packages.sh`, and uploads the `.deb`/`.rpm` files alongside the raw Rust engine assets.
+*   **Release Notes Gate Preserved**: Tag releases still require `docs/releases/${TAG}.md` before assets are attached.
+
+### 5. Local Command Usage
+*   **Install local packaging tools on Fedora**:
+    ```bash
+    sudo dnf install -y ruby ruby-devel gcc make rpm-build redhat-rpm-config dpkg
+    sudo gem install --no-document fpm
+    ```
+*   **Verify tooling**:
+    ```bash
+    fpm --version
+    rpmbuild --version
+    dpkg-deb --version
+    ```
+*   **Build local packages**:
+    ```bash
+    packaging/build-linux-packages.sh
+    ```
+*   **Build with an explicit ARM64 engine**:
+    ```bash
+    packaging/build-linux-packages.sh \
+      --aarch64-engine /path/to/topo-core-aarch64
+    ```
+*   **Inspect RPM metadata and contents**:
+    ```bash
+    rpm -qip dist/packages/topo-0.9.0-1.x86_64.rpm
+    rpm -qlp dist/packages/topo-0.9.0-1.x86_64.rpm
+    ```
+*   **Inspect DEB metadata and contents**:
+    ```bash
+    dpkg-deb -I dist/packages/topo_0.9.0_amd64.deb
+    dpkg-deb -c dist/packages/topo_0.9.0_amd64.deb
+    ```
+*   **Check for accidental Python cache files**:
+    ```bash
+    rpm -qlp dist/packages/topo-0.9.0-1.x86_64.rpm | rg '__pycache__|\.pyc|\.pyo|\$py\.class'
+    dpkg-deb -c dist/packages/topo_0.9.0_amd64.deb | rg '__pycache__|\.pyc|\.pyo|\$py\.class'
+    ```
+
+### 6. Verification
+*   **Shell Syntax**: `bash -n packaging/build-linux-packages.sh` and `bash -n install.sh` passed.
+*   **Python Quality**: `ruff check .` and `ruff format --check .` passed.
+*   **Test Suite**: `pytest -q` passed with **205 tests**.
+*   **Local Package Build**: Confirmed all four local package files exist in `dist/packages/`.
+*   **Package Hygiene**: Verified RPM and DEB contents no longer include `__pycache__` or `.pyc` files.
+
+### 7. Future Work
+*   **Smoke-Test Package Installation**: Test `sudo dnf install ./topo-...rpm`, `topo --version`, `topo update`, `topo remove`, and `sudo dnf remove topo` in a clean Fedora container/VM. Repeat for Debian/Ubuntu with `apt install ./topo_...deb`.
+*   **Add Package Checksums**: Generate and upload `.sha256` files for `.deb` and `.rpm` release assets, not only for raw `topo-core` binaries.
+*   **Sign Release Assets**: Add GPG signing for packages and checksums before publishing a package repository.
+*   **Create First-Party APT/DNF Repositories**: After GitHub Release packages are stable, publish repository metadata so users can run `sudo apt install topo` or `sudo dnf install topo` after adding the Topo repo.
+*   **Long-Term Official Repo Path**: Later evaluate Debian/Fedora official inclusion for higher user trust, enterprise acceptance, and native distro update workflows.
+*   **Standardize Python Packaging**: Consider converting the runtime to a standard Python package with `[project]` metadata and console entry points once the first release-package path is stable.
+
+---
+
 # Daily Modification Report - 2026-06-05
 
 ## Project: topo (Topo) - Unified Aesthetics & Deep System Cleanup
