@@ -73,12 +73,8 @@ def record_deletion_audit(
 def validate_path_for_deletion(
     path: str | Path,
     allow_app_data_removal: bool = False,
-    bypass_whitelist: bool | None = None,
 ) -> tuple[bool, str]:
     """Validate a raw deletion target before size checks or unlink attempts."""
-    if bypass_whitelist is not None:
-        allow_app_data_removal = bypass_whitelist
-
     raw_text = os.fspath(path)
     if not raw_text:
         return False, "Path is empty"
@@ -191,10 +187,8 @@ def safe_remove(
     use_trash: bool = True,
     dry_run: bool = False,
     allow_app_data_removal: bool = False,
-    bypass_whitelist: bool = False,
 ) -> tuple[bool, str]:
     """Safe removal with trash support and protection checks."""
-    allow_app_data_removal = allow_app_data_removal or bypass_whitelist
     raw_path = Path(path).expanduser()
     mode = "trash" if use_trash else "permanent"
 

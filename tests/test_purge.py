@@ -47,3 +47,27 @@ def test_recursive_scan(test_env):
 
     assert p1 in projects
     assert p2 in projects
+
+
+def test_scan_artifacts_bin_requires_dotnet_project(test_env):
+    """L4: a bare 'bin' dir is purged only when a .NET project file sits beside
+    it; otherwise it may be a script/binary dir and must be left alone."""
+    scanner = Scanner([])
+
+    # Non-.NET project: bin/ must be ignored, other artifacts still collected.
+    plain = test_env / "plain_project"
+    plain.mkdir()
+    (plain / "package.json").touch()
+    (plain / "bin").mkdir()
+    (plain / "node_modules").mkdir()
+    plain_names = [p.name for p in scanner.scan_artifacts(plain)]
+    assert "bin" not in plain_names
+    assert "node_modules" in plain_names
+
+    # .NET project: bin/ is a genuine build artifact.
+    dotnet = test_env / "dotnet_project"
+    dotnet.mkdir()
+    (dotnet / "App.csproj").touch()
+    (dotnet / "bin").mkdir()
+    dotnet_names = [p.name for p in scanner.scan_artifacts(dotnet)]
+    assert "bin" in dotnet_names

@@ -61,3 +61,18 @@ def test_run_update_rejects_unsafe_tag(mock_check_output, mock_run):
     run_update()
 
     mock_run.assert_not_called()
+
+
+@patch("src.manage.update.subprocess.run")
+@patch("src.manage.update.subprocess.check_output")
+def test_run_update_rejects_non_script_payload(mock_check_output, mock_run):
+    # L2: a downloaded "installer" that isn't a script (e.g. a CDN/error page or
+    # a truncated body) must never be piped into bash.
+    mock_check_output.side_effect = [
+        '{"tag_name": "v999.0.0"}',
+        "<html><body>503 Service Unavailable</body></html>",
+    ]
+
+    run_update()
+
+    mock_run.assert_not_called()

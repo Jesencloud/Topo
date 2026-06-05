@@ -61,12 +61,21 @@ class Scanner:
         """Finds heavy artifacts within a discovered project root."""
         artifacts = []
         try:
-            with os.scandir(project_path) as it:
-                for entry in it:
-                    if entry.is_dir() and entry.name in PURGE_TARGETS:
-                        artifacts.append(Path(entry.path))
+            entries = list(os.scandir(project_path))
         except OSError:
-            pass
+            return artifacts
+        # "bin" is a build-output directory only for .NET projects; without this
+        # guard any project's bin/ (shell scripts, vendored binaries) would be
+        # treated as purgeable. Require a .NET project file alongside it.
+        has_dotnet_project = any(
+            entry.name.endswith((".csproj", ".sln", ".fsproj", ".vbproj")) for entry in entries
+        )
+        for entry in entries:
+            if not (entry.is_dir() and entry.name in PURGE_TARGETS):
+                continue
+            if entry.name == "bin" and not has_dotnet_project:
+                continue
+            artifacts.append(Path(entry.path))
         return artifacts
 
 

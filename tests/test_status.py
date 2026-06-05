@@ -84,9 +84,9 @@ def test_get_ip_info_does_not_fetch_public_ip_by_default():
 
 
 def test_get_ip_info_fetches_public_ip_when_enabled():
-    response = mock_open(read_data=b'{"status":"success","query":"203.0.113.1","countryCode":"CN"}')
+    response = mock_open(read_data=b'{"ip":"203.0.113.1","country":"CN"}')
     response.return_value.__enter__.return_value.read.return_value = (
-        b'{"status":"success","query":"203.0.113.1","countryCode":"CN"}'
+        b'{"ip":"203.0.113.1","country":"CN"}'
     )
 
     with (

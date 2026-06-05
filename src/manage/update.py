@@ -90,6 +90,13 @@ def run_update():
         print(f"\n {RED}❌ Failed to download installer: {e}{RESET}")
         return
 
+    # Sanity-check the payload before piping it into `bash`. The tag-pinned URL
+    # over HTTPS already fixes the content for an untampered repo; this refuses
+    # obviously-wrong bodies (CDN/error pages, truncated or empty downloads).
+    if not script.lstrip().startswith("#!"):
+        print(f"\n {RED}❌ Downloaded installer is not a valid script; aborting update.{RESET}")
+        return
+
     try:
         process = subprocess.run(
             ["bash", "-s", "--", "--minimal", "--version", remote_tag],

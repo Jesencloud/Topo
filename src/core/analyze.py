@@ -597,8 +597,11 @@ def run_deep_analysis(target_path: Path = None):
                 }
                 is_archive = p.suffix.lower() in archive_exts
                 is_exec = os.access(p, os.X_OK)
+                # .desktop entries can launch arbitrary actions through xdg-open,
+                # so treat them like executables and reveal the parent instead.
+                is_launchable = p.suffix.lower() == ".desktop"
 
-                if is_archive or is_exec:
+                if is_archive or is_exec or is_launchable:
                     # Open parent directory instead for safety
                     run_command(["xdg-open", str(p.parent)], capture=True, timeout=10)
                 else:

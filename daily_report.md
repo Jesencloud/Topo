@@ -55,9 +55,24 @@ A focused white-box review of the deletion core (`whitelist`/`file_ops`/`analyze
 #### [Low] L3 — Import-style consistency
 *   `clean/system.py` used absolute `from src.core...` imports (coupling the package name to `src`) while every other module uses relative imports; switched it to `from ..core...` to match.
 
+#### [Low] L2 — Self-update validates the downloaded installer before executing
+*   `run_update()` piped the downloaded `install.sh` straight into `bash`. The tag-pinned HTTPS URL already fixes the content for an untampered repo, but a CDN/error page or truncated body would still be executed. It now refuses any payload that does not begin with a `#!` shebang. Added `test_run_update_rejects_non_script_payload`.
+
+#### [Low] L4 — Project purge no longer treats every `bin/` as a build artifact
+*   `PURGE_TARGETS` includes `bin` (.NET output) but `scan_artifacts()` had no guard, so any project's `bin/` (scripts, vendored binaries) was purgeable despite the "(guarded)" comment. `bin/` is now collected only when a .NET project file (`.csproj`/`.sln`/`.fsproj`/`.vbproj`) sits beside it. Added `test_scan_artifacts_bin_requires_dotnet_project`.
+
+#### [Low] L5 — Analyze reveals `.desktop` files instead of launching them
+*   Opening a file in Analyze sent non-archive / non-executable files straight to `xdg-open`. A `.desktop` entry can launch arbitrary actions that way, so `.desktop` files are now treated like executables and open their parent directory instead.
+
+#### [Low] L6 — Public-IP lookup uses HTTPS
+*   The opt-in `topo status` public-IP lookup queried `http://ip-api.com` in cleartext. Switched to `https://ipinfo.io/json` (HTTPS), preserving the `[CC] IP` output format. Updated the status test for the new endpoint fields.
+
+#### [Cleanup] N1 — Removed the misleading `bypass_whitelist` parameter
+*   `safe_remove()` / `validate_path_for_deletion()` carried a `bypass_whitelist` keyword that was merely an alias for `allow_app_data_removal` and never actually bypassed the user whitelist (which lives in hard protection). With no remaining callers, it was removed in favour of the single, accurately-named `allow_app_data_removal`.
+
 ### 6. Verification
 *   **Ruff**: `ruff check src tests` — **All checks passed** (incl. `ruff format`).
-*   **Pytest**: `pytest` — **191 passed** (186 prior + 5 new security regressions).
+*   **Pytest**: `pytest` — **193 passed** (186 prior + 7 new security regressions across both fix batches).
 *   **CLI**: Verified `./topo link` and `./topo remove` behavior for installation management.
 
 ---

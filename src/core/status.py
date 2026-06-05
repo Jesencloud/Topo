@@ -139,12 +139,14 @@ def get_ip_info(include_public: bool | None = None):
 
 
 def _get_public_ip_info():
+    # ipinfo.io serves over HTTPS (ip-api.com's free tier is HTTP-only), so this
+    # opt-in lookup is no longer sent in cleartext. Fields: {"ip", "country"}.
     try:
-        with urllib.request.urlopen("http://ip-api.com/json/", timeout=2.0) as response:
+        with urllib.request.urlopen("https://ipinfo.io/json", timeout=2.0) as response:
             data = json.loads(response.read().decode())
-            if data.get("status") == "success":
-                ip = data.get("query")
-                cc = data.get("countryCode", "")
+            ip = data.get("ip")
+            if ip:
+                cc = data.get("country", "")
                 return f"[{cc}] {ip}" if cc else ip
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, urllib.error.URLError):
         pass
