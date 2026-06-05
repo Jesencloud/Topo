@@ -14,10 +14,12 @@ Today's session completed the first package-manager distribution milestone: GitH
 *   **Script Install Marker**: `install.sh` now writes `script` into the marker after fetching/refining the runtime tree.
 *   **Package Install Marker**: The packaging script writes `package` into `/usr/lib/topo/.topo-install-source`.
 *   **Runtime Guardrails**:
-    *   Package-mode `topo update` prints:
-        `sudo apt upgrade topo` or `sudo dnf upgrade topo`.
-    *   Package-mode `topo remove` prints:
-        `sudo apt remove topo` or `sudo dnf remove topo`.
+    *   Package-mode `topo update` no longer runs the GitHub installer; it delegates to the system package manager.
+    *   Package-mode `topo remove` no longer deletes `/usr/lib/topo`; it delegates to the system package manager.
+*   **Distro-Aware Package Commands**: Added package-manager command selection based on `/etc/os-release`:
+    *   Ubuntu/Debian-family systems show only `sudo apt upgrade topo` / `sudo apt remove topo`.
+    *   Fedora/RHEL-family systems show only `sudo dnf upgrade topo` / `sudo dnf remove topo`.
+    *   Unknown systems fall back to showing both common command families.
 
 ### 3. Packaging Script
 *   **New Script**: Added `packaging/build-linux-packages.sh`, powered by `fpm`.
@@ -51,6 +53,15 @@ Today's session completed the first package-manager distribution milestone: GitH
     ```bash
     packaging/build-linux-packages.sh
     ```
+*   **Reinstall a local DEB after packaging-code changes**:
+    ```bash
+    sudo apt install --reinstall ./topo_0.9.0_amd64.deb
+    ```
+*   **Install or reinstall a local RPM after packaging-code changes**:
+    ```bash
+    sudo dnf install ./topo-0.9.0-1.x86_64.rpm
+    sudo dnf reinstall ./topo-0.9.0-1.x86_64.rpm
+    ```
 *   **Build with an explicit ARM64 engine**:
     ```bash
     packaging/build-linux-packages.sh \
@@ -78,6 +89,9 @@ Today's session completed the first package-manager distribution milestone: GitH
 *   **Test Suite**: `pytest -q` passed with **205 tests**.
 *   **Local Package Build**: Confirmed all four local package files exist in `dist/packages/`.
 *   **Package Hygiene**: Verified RPM and DEB contents no longer include `__pycache__` or `.pyc` files.
+*   **Distro-Aware Prompt Tests**: Verified package-mode `topo update` / `topo remove` command selection with focused tests for Ubuntu/Fedora/unknown systems.
+*   **Latest Full Suite**: Re-ran the suite with a writable temporary home (`env HOME=/tmp/topo_pytest_home pytest -q`) after the distro-aware prompt change: **208 passed**.
+*   **Regenerated Packages**: Rebuilt all four local packages after the prompt fix so Ubuntu installs receive the corrected apt-only lifecycle messages.
 
 ### 7. Future Work
 *   **Smoke-Test Package Installation**: Test `sudo dnf install ./topo-...rpm`, `topo --version`, `topo update`, `topo remove`, and `sudo dnf remove topo` in a clean Fedora container/VM. Repeat for Debian/Ubuntu with `apt install ./topo_...deb`.

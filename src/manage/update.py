@@ -6,7 +6,11 @@ from pathlib import Path
 from packaging.version import InvalidVersion, Version
 
 from ..core.constants import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
-from ..core.install_source import PACKAGE_INSTALL, get_install_source
+from ..core.install_source import (
+    PACKAGE_INSTALL,
+    get_install_source,
+    get_package_manager_commands,
+)
 
 
 def _parse_version(version_text: str) -> Version | None:
@@ -37,8 +41,8 @@ def run_update():
     if get_install_source() == PACKAGE_INSTALL:
         print(f" {CYAN}Topo was installed by a system package manager.{RESET}")
         print(f" {GRAY}Use your package manager to update it:{RESET}")
-        print(f"   {BOLD}sudo apt upgrade topo{RESET}")
-        print(f"   {BOLD}sudo dnf upgrade topo{RESET}")
+        for command in get_package_manager_commands("update"):
+            print(f"   {BOLD}{command}{RESET}")
         return
 
     # 1. Get current local version

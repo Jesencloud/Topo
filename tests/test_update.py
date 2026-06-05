@@ -12,16 +12,17 @@ def test_should_update_uses_semantic_version_ordering():
 
 
 @patch("src.manage.update.get_install_source", return_value="package")
+@patch("src.manage.update.get_package_manager_commands", return_value=["sudo apt upgrade topo"])
 @patch("src.manage.update.subprocess.run")
 @patch("src.manage.update.subprocess.check_output")
 def test_run_update_delegates_package_installs_to_package_manager(
-    mock_check_output, mock_run, _mock_install_source, capsys
+    mock_check_output, mock_run, _mock_commands, _mock_install_source, capsys
 ):
     run_update()
 
     output = capsys.readouterr().out
     assert "sudo apt upgrade topo" in output
-    assert "sudo dnf upgrade topo" in output
+    assert "sudo dnf upgrade topo" not in output
     mock_check_output.assert_not_called()
     mock_run.assert_not_called()
 

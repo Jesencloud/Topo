@@ -4,12 +4,15 @@ from src.manage.remove import _launcher_points_to_topo, _strip_topo_path_lines, 
 
 
 @patch("src.manage.remove.get_install_source", return_value="package")
-def test_run_remove_delegates_package_installs_to_package_manager(_mock_install_source, capsys):
+@patch("src.manage.remove.get_package_manager_commands", return_value=["sudo apt remove topo"])
+def test_run_remove_delegates_package_installs_to_package_manager(
+    _mock_commands, _mock_install_source, capsys
+):
     run_remove()
 
     output = capsys.readouterr().out
     assert "sudo apt remove topo" in output
-    assert "sudo dnf remove topo" in output
+    assert "sudo dnf remove topo" not in output
 
 
 def test_strip_topo_path_lines(test_env):
