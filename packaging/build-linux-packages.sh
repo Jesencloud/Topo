@@ -62,7 +62,6 @@ done
 require_command() {
     if ! command -v "$1" >/dev/null 2>&1; then
         echo "Error: required command '$1' was not found." >&2
-        echo "Install fpm before running this script." >&2
         exit 1
     fi
 }
@@ -158,9 +157,14 @@ build_one() {
         -C "$root"
     )
 
-    rm -f "$package_path"
+    rm -f "$package_path" "$package_path.sha256"
     fpm "${fpm_args[@]}" .
+    (
+        cd "$(dirname "$package_path")"
+        sha256sum "$(basename "$package_path")" > "$(basename "$package_path").sha256"
+    )
     echo "Built $package_path"
+    echo "Built $package_path.sha256"
 }
 
 if [[ -z "$VERSION" ]]; then
@@ -169,6 +173,7 @@ if [[ -z "$VERSION" ]]; then
 fi
 
 require_command fpm
+require_command sha256sum
 mkdir -p "$OUTPUT_DIR"
 OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
 

@@ -31,10 +31,12 @@ Today's session completed the first package-manager distribution milestone: GitH
 *   **Naming Note**: Debian uses `amd64`/`arm64`; RPM uses `x86_64`/`aarch64`. The RPM `-1` is the package release/iteration, not the Topo upstream version.
 *   **Clean Staging**: The packaging script removes `__pycache__`, `.pyc`, `.pyo`, and `$py.class` files from the staged runtime tree so local test caches never enter release packages.
 *   **Runtime Contents**: Packages include `topo`, `src/`, `VERSION`, bundled WAV assets, `LICENSE`, `README.md`, and exactly one matching `topo-core-$ARCH` binary.
+*   **Package Checksums**: Each generated `.deb` and `.rpm` now receives a sibling `.sha256` file, e.g. `topo_0.9.0_amd64.deb.sha256` and `topo-0.9.0-1.x86_64.rpm.sha256`.
 
 ### 4. GitHub Actions Release Integration
 *   **Existing Engine Build Reused**: `.github/workflows/build-engine.yml` already cross-compiles `topo-core-x86_64` and `topo-core-aarch64`.
 *   **Release Job Extended**: The release job now installs Ruby/RPM tooling, installs `fpm`, runs `packaging/build-linux-packages.sh`, and uploads the `.deb`/`.rpm` files alongside the raw Rust engine assets.
+*   **Checksum Uploads**: Release assets now include `.deb.sha256` and `.rpm.sha256` files as first-party integrity checks for package downloads.
 *   **Release Notes Gate Preserved**: Tag releases still require `docs/releases/${TAG}.md` before assets are attached.
 
 ### 5. Local Command Usage
@@ -82,6 +84,11 @@ Today's session completed the first package-manager distribution milestone: GitH
     rpm -qlp dist/packages/topo-0.9.0-1.x86_64.rpm | rg '__pycache__|\.pyc|\.pyo|\$py\.class'
     dpkg-deb -c dist/packages/topo_0.9.0_amd64.deb | rg '__pycache__|\.pyc|\.pyo|\$py\.class'
     ```
+*   **Verify package checksums**:
+    ```bash
+    cd dist/packages
+    sha256sum -c *.sha256
+    ```
 
 ### 6. Verification
 *   **Shell Syntax**: `bash -n packaging/build-linux-packages.sh` and `bash -n install.sh` passed.
@@ -92,10 +99,10 @@ Today's session completed the first package-manager distribution milestone: GitH
 *   **Distro-Aware Prompt Tests**: Verified package-mode `topo update` / `topo remove` command selection with focused tests for Ubuntu/Fedora/unknown systems.
 *   **Latest Full Suite**: Re-ran the suite with a writable temporary home (`env HOME=/tmp/topo_pytest_home pytest -q`) after the distro-aware prompt change: **208 passed**.
 *   **Regenerated Packages**: Rebuilt all four local packages after the prompt fix so Ubuntu installs receive the corrected apt-only lifecycle messages.
+*   **Checksum Verification**: Ran `sha256sum -c *.sha256` inside `dist/packages`; all four package checksums returned `OK`.
 
 ### 7. Future Work
 *   **Smoke-Test Package Installation**: Test `sudo dnf install ./topo-...rpm`, `topo --version`, `topo update`, `topo remove`, and `sudo dnf remove topo` in a clean Fedora container/VM. Repeat for Debian/Ubuntu with `apt install ./topo_...deb`.
-*   **Add Package Checksums**: Generate and upload `.sha256` files for `.deb` and `.rpm` release assets, not only for raw `topo-core` binaries.
 *   **Sign Release Assets**: Add GPG signing for packages and checksums before publishing a package repository.
 *   **Create First-Party APT/DNF Repositories**: After GitHub Release packages are stable, publish repository metadata so users can run `sudo apt install topo` or `sudo dnf install topo` after adding the Topo repo.
 *   **Long-Term Official Repo Path**: Later evaluate Debian/Fedora official inclusion for higher user trust, enterprise acceptance, and native distro update workflows.

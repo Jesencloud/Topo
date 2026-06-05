@@ -94,7 +94,9 @@ jobs:
             artifacts/topo-core-aarch64/topo-core-aarch64
             artifacts/topo-core-aarch64/topo-core-aarch64.sha256
             dist/packages/*.deb
+            dist/packages/*.deb.sha256
             dist/packages/*.rpm
+            dist/packages/*.rpm.sha256
           draft: false
           prerelease: ${{ contains(github.ref_name, '-rc.') || contains(github.ref_name, '-beta.') || contains(github.ref_name, '-alpha.') }}
           fail_on_unmatched_files: true
