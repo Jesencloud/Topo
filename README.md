@@ -27,14 +27,25 @@
 - **Live monitoring**: Real-time dashboard showing CPU, GPU, memory, and top resource-consuming processes.
 
 ## Quick Start
-**Automated Installation (Recommended)**
+
+**Script Installation**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Jesencloud/Topo/main/install.sh | bash
 ```
-**Automated Installation (Recommended)**
 
-> Note: The script automatically detects your architecture (**x86_64** or **ARM64**) and provisions the optimized engine.
+The script installer keeps Topo under `~/.topo`, detects **x86_64** or **ARM64**, provisions the optimized engine, and uses Topo's built-in `topo update` / `topo remove` lifecycle.
+
+**GitHub Release Packages**
+
+Download the matching package from the [latest release](https://github.com/Jesencloud/Topo/releases/latest), then install it with your system package manager:
+
+```bash
+sudo apt install ./topo_0.9.2_amd64.deb
+sudo dnf install ./topo-0.9.2-1.x86_64.rpm
+```
+
+Use `topo_0.9.2_arm64.deb` on Debian/Ubuntu ARM64 systems and `topo-0.9.2-1.aarch64.rpm` on Fedora/RHEL ARM64 systems. Package installs place Topo under `/usr/lib/topo` and expose `/usr/bin/topo`; updates and removal are handled by `apt` or `dnf`.
 
 ```bash
   ████████  ██████  ██████   ██████

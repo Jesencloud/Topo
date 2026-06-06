@@ -185,11 +185,31 @@ jobs:
       - name: Verify Release Notes
         run: test -f "docs/releases/${{ github.ref_name }}.md"
 
-      - name: Attach Assets to Release
-        uses: softprops/action-gh-release@v2
-        with:
-          body_path: docs/releases/${{ github.ref_name }}.md
-          files: |
+      - name: Import GPG Release Key
+        shell: bash
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GPG_PRIVATE_KEY}" ]; then
+            echo "::error::GPG_PRIVATE_KEY secret is required to sign release assets."
+            exit 1
+          fi
+          printf '%s' "${GPG_PRIVATE_KEY}" | gpg --batch --import
+
+      - name: Sign Release Assets
+        shell: bash
+        env:
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GPG_PASSPHRASE}" ]; then
+            echo "::error::GPG_PASSPHRASE secret is required to sign release assets."
+            exit 1
+          fi
+
+          shopt -s nullglob
+          files=(
             artifacts/topo-core-x86_64/topo-core-x86_64
             artifacts/topo-core-x86_64/topo-core-x86_64.sha256
             artifacts/topo-core-aarch64/topo-core-aarch64
@@ -198,6 +218,31 @@ jobs:
             dist/packages/*.deb.sha256
             dist/packages/*.rpm
             dist/packages/*.rpm.sha256
+          )
+
+          for file in "${files[@]}"; do
+            gpg --batch --yes --pinentry-mode loopback \
+              --passphrase "${GPG_PASSPHRASE}" \
+              --armor --detach-sign "${file}"
+          done
+
+      - name: Attach Assets to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: docs/releases/${{ github.ref_name }}.md
+          files: |
+            artifacts/topo-core-x86_64/topo-core-x86_64
+            artifacts/topo-core-x86_64/topo-core-x86_64.sha256
+            artifacts/topo-core-x86_64/*.asc
+            artifacts/topo-core-aarch64/topo-core-aarch64
+            artifacts/topo-core-aarch64/topo-core-aarch64.sha256
+            artifacts/topo-core-aarch64/*.asc
+            dist/packages/*.deb
+            dist/packages/*.deb.sha256
+            dist/packages/*.rpm
+            dist/packages/*.rpm.sha256
+            dist/packages/*.asc
+            assets/topo-release-public.asc
           draft: false
           prerelease: ${{ contains(github.ref_name, '-rc.') || contains(github.ref_name, '-beta.') || contains(github.ref_name, '-alpha.') }}
           fail_on_unmatched_files: true

@@ -40,6 +40,9 @@ Today's session completed the first package-manager distribution milestone: GitH
 *   **Ubuntu Smoke Test Job**: Added `smoke-ubuntu`, which installs the generated `amd64` `.deb` with `sudo apt install`, checks `topo --version`, verifies `/usr/lib/topo/.topo-install-source`, and confirms `topo update` / `topo remove` show apt-only lifecycle commands.
 *   **Fedora Smoke Test Job**: Added `smoke-fedora`, which runs inside a `fedora:44` container, installs the generated `x86_64` `.rpm` with `dnf install`, checks `topo --version`, verifies the install-source marker, and confirms dnf-only lifecycle commands.
 *   **Release Gate**: The release job now depends on both smoke-test jobs, so `.deb` / `.rpm` assets are attached only after package installation checks pass.
+*   **GPG Detached Signatures**: The release job now imports a maintainer-provided GPG key from `GPG_PRIVATE_KEY`, signs raw engine assets, `.deb`/`.rpm` packages, and `.sha256` files with detached armored `.asc` signatures, then uploads those signatures alongside the assets.
+*   **Required Release Secrets**: GPG signing requires GitHub Secrets `GPG_PRIVATE_KEY` and `GPG_PASSPHRASE`; both secrets were configured for the repository after the release key was generated.
+*   **Public Release Key**: Added `assets/topo-release-public.asc` and configured the release workflow to upload it as a Release asset. Fingerprint: `4B35 C17C F8E6 6373 2726  A99F 5008 6DB9 98B4 D883`.
 *   **Release Notes Gate Preserved**: Tag releases still require `docs/releases/${TAG}.md` before assets are attached.
 
 ### 5. Local Command Usage
@@ -60,12 +63,12 @@ Today's session completed the first package-manager distribution milestone: GitH
     ```
 *   **Reinstall a local DEB after packaging-code changes**:
     ```bash
-    sudo apt install --reinstall ./topo_0.9.0_amd64.deb
+    sudo apt install --reinstall ./topo_0.9.2_amd64.deb
     ```
 *   **Install or reinstall a local RPM after packaging-code changes**:
     ```bash
-    sudo dnf install ./topo-0.9.0-1.x86_64.rpm
-    sudo dnf reinstall ./topo-0.9.0-1.x86_64.rpm
+    sudo dnf install ./topo-0.9.2-1.x86_64.rpm
+    sudo dnf reinstall ./topo-0.9.2-1.x86_64.rpm
     ```
 *   **Build with an explicit ARM64 engine**:
     ```bash
@@ -74,23 +77,30 @@ Today's session completed the first package-manager distribution milestone: GitH
     ```
 *   **Inspect RPM metadata and contents**:
     ```bash
-    rpm -qip dist/packages/topo-0.9.0-1.x86_64.rpm
-    rpm -qlp dist/packages/topo-0.9.0-1.x86_64.rpm
+    rpm -qip dist/packages/topo-0.9.2-1.x86_64.rpm
+    rpm -qlp dist/packages/topo-0.9.2-1.x86_64.rpm
     ```
 *   **Inspect DEB metadata and contents**:
     ```bash
-    dpkg-deb -I dist/packages/topo_0.9.0_amd64.deb
-    dpkg-deb -c dist/packages/topo_0.9.0_amd64.deb
+    dpkg-deb -I dist/packages/topo_0.9.2_amd64.deb
+    dpkg-deb -c dist/packages/topo_0.9.2_amd64.deb
     ```
 *   **Check for accidental Python cache files**:
     ```bash
-    rpm -qlp dist/packages/topo-0.9.0-1.x86_64.rpm | rg '__pycache__|\.pyc|\.pyo|\$py\.class'
-    dpkg-deb -c dist/packages/topo_0.9.0_amd64.deb | rg '__pycache__|\.pyc|\.pyo|\$py\.class'
+    rpm -qlp dist/packages/topo-0.9.2-1.x86_64.rpm | rg '__pycache__|\.pyc|\.pyo|\$py\.class'
+    dpkg-deb -c dist/packages/topo_0.9.2_amd64.deb | rg '__pycache__|\.pyc|\.pyo|\$py\.class'
     ```
 *   **Verify package checksums**:
     ```bash
     cd dist/packages
     sha256sum -c *.sha256
+    ```
+*   **Verify package GPG signatures**:
+    ```bash
+    curl -fsSLO https://github.com/Jesencloud/Topo/releases/latest/download/topo-release-public.asc
+    gpg --import topo-release-public.asc
+    gpg --fingerprint "Topo Release"
+    gpg --verify PACKAGE.asc PACKAGE
     ```
 
 ### 6. Verification
@@ -104,9 +114,13 @@ Today's session completed the first package-manager distribution milestone: GitH
 *   **Regenerated Packages**: Rebuilt all four local packages after the prompt fix so Ubuntu installs receive the corrected apt-only lifecycle messages.
 *   **Checksum Verification**: Ran `sha256sum -c *.sha256` inside `dist/packages`; all four package checksums returned `OK`.
 *   **Workflow Syntax**: Parsed `.github/workflows/build-engine.yml` locally with Ruby YAML loading after adding package smoke-test jobs.
+*   **README Install Docs**: Updated the README Quick Start section with script install and GitHub Release `.deb`/`.rpm` install commands. Integrity and GPG verification details stay in this development report for now.
+*   **v0.9.2 Release Notes**: Rewrote `docs/releases/v0.9.2.md` to focus on GPG detached signatures, public release key upload, package install documentation, and release workflow polish.
+*   **Obsolete Asset Removal**: Confirmed `assets/topo_home.png` is no longer referenced by the current README or release notes, so it is intentionally removed in the v0.9.2 release commit.
 
 ### 7. Future Work
-*   **Sign Release Assets**: Add GPG signing for packages and checksums before publishing a package repository.
+*   **Release Signing Rollout**: The next tag release should verify that `.asc` signatures and `topo-release-public.asc` appear in GitHub Release assets after `GPG_PRIVATE_KEY` and `GPG_PASSPHRASE` are configured.
+*   **Package Stability Window**: Keep using GitHub Release `.deb`/`.rpm` packages for several stable versions before building first-party APT/DNF repositories, so install/upgrade/remove behavior and release automation can mature under real usage.
 *   **Create First-Party APT/DNF Repositories**: After GitHub Release packages are stable, publish repository metadata so users can run `sudo apt install topo` or `sudo dnf install topo` after adding the Topo repo.
 *   **Long-Term Official Repo Path**: Later evaluate Debian/Fedora official inclusion for higher user trust, enterprise acceptance, and native distro update workflows.
 *   **Standardize Python Packaging**: Consider converting the runtime to a standard Python package with `[project]` metadata and console entry points once the first release-package path is stable.
