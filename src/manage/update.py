@@ -42,6 +42,7 @@ def _fetch_latest_release_tag() -> str:
                 "User-Agent: topo-updater",
                 latest_release_url,
             ],
+            stderr=subprocess.DEVNULL,
             text=True,
             timeout=15,
         )
@@ -63,6 +64,7 @@ def _fetch_latest_release_tag() -> str:
             "topo-updater",
             "https://github.com/Jesencloud/Topo/releases/latest",
         ],
+        stderr=subprocess.DEVNULL,
         text=True,
         timeout=15,
     )

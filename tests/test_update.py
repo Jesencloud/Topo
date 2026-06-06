@@ -28,6 +28,7 @@ def test_fetch_latest_release_tag_uses_api_headers(mock_check_output):
     argv = mock_check_output.call_args.args[0]
     assert "Accept: application/vnd.github+json" in argv
     assert "User-Agent: topo-updater" in argv
+    assert mock_check_output.call_args.kwargs["stderr"] is subprocess.DEVNULL
 
 
 @patch("src.manage.update.subprocess.check_output")
@@ -42,6 +43,8 @@ def test_fetch_latest_release_tag_falls_back_to_release_redirect(mock_check_outp
     fallback_argv = mock_check_output.call_args_list[1].args[0]
     assert "https://github.com/Jesencloud/Topo/releases/latest" in fallback_argv
     assert "topo-updater" in fallback_argv
+    assert mock_check_output.call_args_list[0].kwargs["stderr"] is subprocess.DEVNULL
+    assert mock_check_output.call_args_list[1].kwargs["stderr"] is subprocess.DEVNULL
 
 
 @patch("src.manage.update.subprocess.check_call")
