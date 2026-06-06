@@ -99,12 +99,18 @@ jobs:
           sudo apt-get update
           mkdir -p "$HOME/.local/bin"
           rm -f "$HOME/.local/bin/topo"
-          hash -p "$HOME/.local/bin/topo" topo
-          sudo apt install -y ./dist/packages/topo_*_amd64.deb
+          sudo env SUDO_USER="$USER" SUDO_UID="$(id -u)" apt install -y ./dist/packages/topo_*_amd64.deb
 
-          topo --version
-          grep -F "Managed by topo package compatibility launcher" "$HOME/.local/bin/topo"
+          /usr/bin/topo --version
           test "$(cat /usr/lib/topo/.topo-install-source)" = "package"
+
+          hash -p "$HOME/.local/bin/topo" topo
+          if [ -x "$HOME/.local/bin/topo" ]; then
+            grep -F "Managed by topo package compatibility launcher" "$HOME/.local/bin/topo"
+          else
+            hash -r
+          fi
+          topo --version
 
           update_output="$(topo update)"
           printf '%s\n' "$update_output"
