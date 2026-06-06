@@ -41,11 +41,11 @@ The script installer keeps Topo under `~/.topo`, detects **x86_64** or **ARM64**
 Download the matching package from the [latest release](https://github.com/Jesencloud/Topo/releases/latest), then install it with your system package manager:
 
 ```bash
-sudo apt install ./topo_0.9.3_amd64.deb
-sudo dnf install ./topo-0.9.3-1.x86_64.rpm
+sudo apt install ./topo_xxx_amd64.deb
+sudo dnf install ./topo-xxx-1.x86_64.rpm
 ```
 
-Use `topo_0.9.3_arm64.deb` on Debian/Ubuntu ARM64 systems and `topo-0.9.3-1.aarch64.rpm` on Fedora/RHEL ARM64 systems. Package installs place Topo under `/usr/lib/topo` and expose `/usr/bin/topo`; updates and removal are handled by `apt` or `dnf`.
+Replace `xxx` with the version from the release you downloaded. Use `topo_xxx_arm64.deb` on Debian/Ubuntu ARM64 systems and `topo-xxx-1.aarch64.rpm` on Fedora/RHEL ARM64 systems. Package installs place Topo under `/usr/lib/topo` and expose `/usr/bin/topo`; updates and removal are handled by `apt` or `dnf`.
 
 ```bash
   ████████  ██████  ██████   ██████
