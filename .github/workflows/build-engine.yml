@@ -122,7 +122,10 @@ jobs:
           printf '%s\n' "$remove_output"
           grep -F "apt remove -y topo" <<<"$remove_output"
           ! grep -F "dnf remove -y topo" <<<"$remove_output"
-          ! dpkg-query -W topo
+          if dpkg-query -W -f='${Status}' topo 2>/dev/null | grep -F "install ok installed"; then
+            echo "topo package is still installed"
+            exit 1
+          fi
 
   smoke-fedora:
     name: Smoke Test RPM on Fedora
