@@ -31,16 +31,17 @@ Today's session completed the first package-manager distribution milestone: GitH
 *   **Naming Note**: Debian uses `amd64`/`arm64`; RPM uses `x86_64`/`aarch64`. The RPM `-1` is the package release/iteration, not the Topo upstream version.
 *   **Clean Staging**: The packaging script removes `__pycache__`, `.pyc`, `.pyo`, and `$py.class` files from the staged runtime tree so local test caches never enter release packages.
 *   **Runtime Contents**: Packages include `topo`, `src/`, `VERSION`, bundled WAV assets, `LICENSE`, `README.md`, and exactly one matching `topo-core-$ARCH` binary.
-*   **Package Checksums**: Each generated `.deb` and `.rpm` now receives a sibling `.sha256` file, e.g. `topo_0.9.0_amd64.deb.sha256` and `topo-0.9.0-1.x86_64.rpm.sha256`.
+*   **Package Checksums**: The final release job now creates one compact `SHA256SUMS` manifest covering the raw engine binaries and all `.deb` / `.rpm` packages instead of uploading one `.sha256` file per asset. The manifest records final Release asset filenames, so users can verify downloads from one local directory.
 
 ### 4. GitHub Actions Release Integration
 *   **Existing Engine Build Reused**: `.github/workflows/build-engine.yml` already cross-compiles `topo-core-x86_64` and `topo-core-aarch64`.
-*   **Package Build Job**: The workflow now installs Ruby/RPM tooling in the dedicated `package` job, installs `fpm`, runs `packaging/build-linux-packages.sh`, verifies checksums, and uploads `topo-linux-packages` as a workflow artifact for smoke testing and release upload.
-*   **Checksum Uploads**: Release assets now include `.deb.sha256` and `.rpm.sha256` files as first-party integrity checks for package downloads.
+*   **Package Build Job**: The workflow now installs Ruby/RPM tooling in the dedicated `package` job, installs `fpm`, runs `packaging/build-linux-packages.sh`, and uploads `topo-linux-packages` as a workflow artifact for smoke testing and release upload.
+*   **Release Asset Staging**: The release job now copies final user-facing files into `release-assets/` before checksum generation and upload. This keeps the GitHub Release attachment list compact because per-file `.sha256`, per-file `.asc`, and `.sha256.asc` sidecars are no longer uploaded.
+*   **Checksum Uploads**: Release assets now include `SHA256SUMS` and `SHA256SUMS.asc` as first-party integrity checks for package downloads.
 *   **Ubuntu Smoke Test Job**: Added `smoke-ubuntu`, which installs the generated `amd64` `.deb` with `sudo apt install`, checks `topo --version`, verifies `/usr/lib/topo/.topo-install-source`, and confirms `topo update` / `topo remove` show apt-only lifecycle commands.
 *   **Fedora Smoke Test Job**: Added `smoke-fedora`, which runs inside a `fedora:44` container, installs the generated `x86_64` `.rpm` with `dnf install`, checks `topo --version`, verifies the install-source marker, and confirms dnf-only lifecycle commands.
 *   **Release Gate**: The release job now depends on both smoke-test jobs, so `.deb` / `.rpm` assets are attached only after package installation checks pass.
-*   **GPG Detached Signatures**: The release job now imports a maintainer-provided GPG key from `GPG_PRIVATE_KEY`, signs raw engine assets, `.deb`/`.rpm` packages, and `.sha256` files with detached armored `.asc` signatures, then uploads those signatures alongside the assets.
+*   **GPG Detached Signatures**: The release job now imports a maintainer-provided GPG key from `GPG_PRIVATE_KEY`, signs the `SHA256SUMS` manifest with a detached armored `SHA256SUMS.asc` signature, then uploads the manifest and signature alongside the assets.
 *   **Required Release Secrets**: GPG signing requires GitHub Secrets `GPG_PRIVATE_KEY` and `GPG_PASSPHRASE`; both secrets were configured for the repository after the release key was generated.
 *   **Public Release Key**: Added `assets/topo-release-public.asc` and configured the release workflow to upload it as a Release asset. Fingerprint: `4B35 C17C F8E6 6373 2726  A99F 5008 6DB9 98B4 D883`.
 *   **Release Notes Gate Preserved**: Tag releases still require `docs/releases/${TAG}.md` before assets are attached.
@@ -63,12 +64,12 @@ Today's session completed the first package-manager distribution milestone: GitH
     ```
 *   **Reinstall a local DEB after packaging-code changes**:
     ```bash
-    sudo apt install --reinstall ./topo_0.9.2_amd64.deb
+    sudo apt install --reinstall ./topo_0.9.3_amd64.deb
     ```
 *   **Install or reinstall a local RPM after packaging-code changes**:
     ```bash
-    sudo dnf install ./topo-0.9.2-1.x86_64.rpm
-    sudo dnf reinstall ./topo-0.9.2-1.x86_64.rpm
+    sudo dnf install ./topo-0.9.3-1.x86_64.rpm
+    sudo dnf reinstall ./topo-0.9.3-1.x86_64.rpm
     ```
 *   **Build with an explicit ARM64 engine**:
     ```bash
@@ -77,30 +78,29 @@ Today's session completed the first package-manager distribution milestone: GitH
     ```
 *   **Inspect RPM metadata and contents**:
     ```bash
-    rpm -qip dist/packages/topo-0.9.2-1.x86_64.rpm
-    rpm -qlp dist/packages/topo-0.9.2-1.x86_64.rpm
+    rpm -qip dist/packages/topo-0.9.3-1.x86_64.rpm
+    rpm -qlp dist/packages/topo-0.9.3-1.x86_64.rpm
     ```
 *   **Inspect DEB metadata and contents**:
     ```bash
-    dpkg-deb -I dist/packages/topo_0.9.2_amd64.deb
-    dpkg-deb -c dist/packages/topo_0.9.2_amd64.deb
+    dpkg-deb -I dist/packages/topo_0.9.3_amd64.deb
+    dpkg-deb -c dist/packages/topo_0.9.3_amd64.deb
     ```
 *   **Check for accidental Python cache files**:
     ```bash
-    rpm -qlp dist/packages/topo-0.9.2-1.x86_64.rpm | rg '__pycache__|\.pyc|\.pyo|\$py\.class'
-    dpkg-deb -c dist/packages/topo_0.9.2_amd64.deb | rg '__pycache__|\.pyc|\.pyo|\$py\.class'
+    rpm -qlp dist/packages/topo-0.9.3-1.x86_64.rpm | rg '__pycache__|\.pyc|\.pyo|\$py\.class'
+    dpkg-deb -c dist/packages/topo_0.9.3_amd64.deb | rg '__pycache__|\.pyc|\.pyo|\$py\.class'
     ```
 *   **Verify package checksums**:
     ```bash
-    cd dist/packages
-    sha256sum -c *.sha256
+    sha256sum -c SHA256SUMS
     ```
-*   **Verify package GPG signatures**:
+*   **Verify the checksum manifest GPG signature**:
     ```bash
     curl -fsSLO https://github.com/Jesencloud/Topo/releases/latest/download/topo-release-public.asc
     gpg --import topo-release-public.asc
     gpg --fingerprint "Topo Release"
-    gpg --verify PACKAGE.asc PACKAGE
+    gpg --verify SHA256SUMS.asc SHA256SUMS
     ```
 
 ### 6. Verification
@@ -112,14 +112,14 @@ Today's session completed the first package-manager distribution milestone: GitH
 *   **Distro-Aware Prompt Tests**: Verified package-mode `topo update` / `topo remove` command selection with focused tests for Ubuntu/Fedora/unknown systems.
 *   **Latest Full Suite**: Re-ran the suite with a writable temporary home (`env HOME=/tmp/topo_pytest_home pytest -q`) after the distro-aware prompt change: **208 passed**.
 *   **Regenerated Packages**: Rebuilt all four local packages after the prompt fix so Ubuntu installs receive the corrected apt-only lifecycle messages.
-*   **Checksum Verification**: Ran `sha256sum -c *.sha256` inside `dist/packages`; all four package checksums returned `OK`.
-*   **Workflow Syntax**: Parsed `.github/workflows/build-engine.yml` locally with Ruby YAML loading after adding package smoke-test jobs.
+*   **Checksum Verification**: Release-time checksum verification now uses a single `sha256sum -c SHA256SUMS` manifest with Release asset filenames instead of internal CI paths.
+*   **Workflow Syntax**: Parsed `.github/workflows/build-engine.yml` locally with Ruby YAML loading after adding package smoke-test jobs and the compact `release-assets/` upload flow.
 *   **README Install Docs**: Updated the README Quick Start section with script install and GitHub Release `.deb`/`.rpm` install commands. Integrity and GPG verification details stay in this development report for now.
-*   **v0.9.2 Release Notes**: Rewrote `docs/releases/v0.9.2.md` to focus on GPG detached signatures, public release key upload, package install documentation, and release workflow polish.
-*   **Obsolete Asset Removal**: Confirmed `assets/topo_home.png` is no longer referenced by the current README or release notes, so it is intentionally removed in the v0.9.2 release commit.
+*   **v0.9.3 Release Notes**: Consolidated the exploratory v0.9.1 and v0.9.2 package-release notes into `docs/releases/v0.9.3.md` as the formal Debian/RPM package distribution release note, then removed the old v0.9.1/v0.9.2 release-note files.
+*   **Obsolete Asset Removal**: Confirmed `assets/topo_home.png` is no longer referenced by the current README or release notes, so it is intentionally removed in the v0.9.3 release commit.
 
 ### 7. Future Work
-*   **Release Signing Rollout**: The next tag release should verify that `.asc` signatures and `topo-release-public.asc` appear in GitHub Release assets after `GPG_PRIVATE_KEY` and `GPG_PASSPHRASE` are configured.
+*   **Release Signing Rollout**: The next tag release should verify that `SHA256SUMS`, `SHA256SUMS.asc`, and `topo-release-public.asc` appear in GitHub Release assets after `GPG_PRIVATE_KEY` and `GPG_PASSPHRASE` are configured.
 *   **Package Stability Window**: Keep using GitHub Release `.deb`/`.rpm` packages for several stable versions before building first-party APT/DNF repositories, so install/upgrade/remove behavior and release automation can mature under real usage.
 *   **Create First-Party APT/DNF Repositories**: After GitHub Release packages are stable, publish repository metadata so users can run `sudo apt install topo` or `sudo dnf install topo` after adding the Topo repo.
 *   **Long-Term Official Repo Path**: Later evaluate Debian/Fedora official inclusion for higher user trust, enterprise acceptance, and native distro update workflows.

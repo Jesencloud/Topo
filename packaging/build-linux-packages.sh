@@ -157,14 +157,9 @@ build_one() {
         -C "$root"
     )
 
-    rm -f "$package_path" "$package_path.sha256"
+    rm -f "$package_path"
     fpm "${fpm_args[@]}" .
-    (
-        cd "$(dirname "$package_path")"
-        sha256sum "$(basename "$package_path")" > "$(basename "$package_path").sha256"
-    )
     echo "Built $package_path"
-    echo "Built $package_path.sha256"
 }
 
 if [[ -z "$VERSION" ]]; then
@@ -173,9 +168,17 @@ if [[ -z "$VERSION" ]]; then
 fi
 
 require_command fpm
-require_command sha256sum
 mkdir -p "$OUTPUT_DIR"
 OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
+rm -f \
+    "$OUTPUT_DIR"/topo_*.deb \
+    "$OUTPUT_DIR"/topo_*.deb.sha256 \
+    "$OUTPUT_DIR"/topo_*.deb.asc \
+    "$OUTPUT_DIR"/topo_*.deb.sha256.asc \
+    "$OUTPUT_DIR"/topo-*.rpm \
+    "$OUTPUT_DIR"/topo-*.rpm.sha256 \
+    "$OUTPUT_DIR"/topo-*.rpm.asc \
+    "$OUTPUT_DIR"/topo-*.rpm.sha256.asc
 
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/topo-packaging.XXXXXX")"
 trap 'rm -rf "$WORK_DIR"' EXIT

@@ -44,16 +44,11 @@ jobs:
           cargo build --release --target ${{ matrix.target }}
           mv target/${{ matrix.target }}/release/topo-core ../topo-core-${{ matrix.arch }}
 
-      - name: Generate Checksum
-        run: sha256sum topo-core-${{ matrix.arch }} > topo-core-${{ matrix.arch }}.sha256
-
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: topo-core-${{ matrix.arch }}
-          path: |
-            topo-core-${{ matrix.arch }}
-            topo-core-${{ matrix.arch }}.sha256
+          path: topo-core-${{ matrix.arch }}
 
   package:
     name: Build Debian/RPM Packages
@@ -79,10 +74,6 @@ jobs:
             --x86_64-engine artifacts/topo-core-x86_64/topo-core-x86_64 \
             --aarch64-engine artifacts/topo-core-aarch64/topo-core-aarch64 \
             --output-dir dist/packages
-
-      - name: Verify Package Checksums
-        working-directory: dist/packages
-        run: sha256sum -c *.sha256
 
       - name: Upload Package Artifacts
         uses: actions/upload-artifact@v4
@@ -197,7 +188,32 @@ jobs:
           fi
           printf '%s' "${GPG_PRIVATE_KEY}" | gpg --batch --import
 
-      - name: Sign Release Assets
+      - name: Stage Release Assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf release-assets
+          mkdir -p release-assets
+          cp artifacts/topo-core-x86_64/topo-core-x86_64 release-assets/
+          cp artifacts/topo-core-aarch64/topo-core-aarch64 release-assets/
+          cp dist/packages/*.deb release-assets/
+          cp dist/packages/*.rpm release-assets/
+
+      - name: Generate Release Checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-assets
+          rm -f SHA256SUMS
+          sha256sum \
+            topo-core-x86_64 \
+            topo-core-aarch64 \
+            *.deb \
+            *.rpm \
+            > SHA256SUMS
+          sha256sum -c SHA256SUMS
+
+      - name: Sign Checksum Manifest
         shell: bash
         env:
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
@@ -207,41 +223,21 @@ jobs:
             echo "::error::GPG_PASSPHRASE secret is required to sign release assets."
             exit 1
           fi
-
-          shopt -s nullglob
-          files=(
-            artifacts/topo-core-x86_64/topo-core-x86_64
-            artifacts/topo-core-x86_64/topo-core-x86_64.sha256
-            artifacts/topo-core-aarch64/topo-core-aarch64
-            artifacts/topo-core-aarch64/topo-core-aarch64.sha256
-            dist/packages/*.deb
-            dist/packages/*.deb.sha256
-            dist/packages/*.rpm
-            dist/packages/*.rpm.sha256
-          )
-
-          for file in "${files[@]}"; do
-            gpg --batch --yes --pinentry-mode loopback \
-              --passphrase "${GPG_PASSPHRASE}" \
-              --armor --detach-sign "${file}"
-          done
+          gpg --batch --yes --pinentry-mode loopback \
+            --passphrase "${GPG_PASSPHRASE}" \
+            --armor --detach-sign release-assets/SHA256SUMS
 
       - name: Attach Assets to Release
         uses: softprops/action-gh-release@v2
         with:
           body_path: docs/releases/${{ github.ref_name }}.md
           files: |
-            artifacts/topo-core-x86_64/topo-core-x86_64
-            artifacts/topo-core-x86_64/topo-core-x86_64.sha256
-            artifacts/topo-core-x86_64/*.asc
-            artifacts/topo-core-aarch64/topo-core-aarch64
-            artifacts/topo-core-aarch64/topo-core-aarch64.sha256
-            artifacts/topo-core-aarch64/*.asc
-            dist/packages/*.deb
-            dist/packages/*.deb.sha256
-            dist/packages/*.rpm
-            dist/packages/*.rpm.sha256
-            dist/packages/*.asc
+            release-assets/topo-core-x86_64
+            release-assets/topo-core-aarch64
+            release-assets/*.deb
+            release-assets/*.rpm
+            release-assets/SHA256SUMS
+            release-assets/SHA256SUMS.asc
             assets/topo-release-public.asc
           draft: false
           prerelease: ${{ contains(github.ref_name, '-rc.') || contains(github.ref_name, '-beta.') || contains(github.ref_name, '-alpha.') }}
