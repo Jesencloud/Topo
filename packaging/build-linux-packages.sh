@@ -152,6 +152,9 @@ build_one() {
         --url "https://github.com/Jesencloud/Topo"
         --description "Linux cleanup, app removal, disk analysis, and status checks."
         --category utils
+        --after-install "$REPO_ROOT/packaging/scripts/after-install.sh"
+        --after-remove "$REPO_ROOT/packaging/scripts/after-remove.sh"
+        --depends curl
         --depends python3
         --depends python3-packaging
         -C "$root"

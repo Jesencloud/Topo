@@ -59,6 +59,23 @@ if ! python3 -c "import packaging" >/dev/null 2>&1; then
 fi
 if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓ python packaging installed${NC}"; fi
 
+if [ "$MINIMAL" = false ]; then
+    PACKAGE_REMOVE_COMMAND=""
+    if command -v rpm >/dev/null 2>&1 && rpm -q topo >/dev/null 2>&1; then
+        PACKAGE_REMOVE_COMMAND="sudo dnf remove topo"
+    elif command -v dpkg-query >/dev/null 2>&1 && \
+        dpkg-query -W -f='${Status}' topo 2>/dev/null | grep -q "install ok installed"; then
+        PACKAGE_REMOVE_COMMAND="sudo apt remove topo"
+    fi
+
+    if [ -n "$PACKAGE_REMOVE_COMMAND" ]; then
+        echo -e "  ${YELLOW}⚠ A system package install of Topo is still registered.${NC}"
+        echo -e "  ${GRAY}It may shadow this script install through an old /usr/bin/topo path.${NC}"
+        echo -e "  ${GRAY}Remove the package install with:${NC} ${BOLD}${PACKAGE_REMOVE_COMMAND}${NC}"
+        echo -e "  ${GRAY}Then refresh your shell command cache with:${NC} ${BOLD}hash -r${NC}"
+    fi
+fi
+
 if [ -z "$TARGET_REF" ]; then
     if [ "$MINIMAL" = false ]; then echo -e "  ${GRAY}↺ Resolving latest stable release...${NC}"; fi
     TARGET_REF=$(
@@ -246,4 +263,5 @@ if [ "$MINIMAL" = false ]; then
     echo -e " ${CYAN}●${NC} ${BOLD}Topo v${TOPO_VER}${NC} ${GRAY}is digging deeper 🦡 🦡 🦡${NC}\n"
     
     echo -e "${GRAY}Type '${NC}topo${GRAY}' to start the interactive TUI, or '${NC}topo --help${GRAY}' to explore all commands.${NC}"
+    echo -e "${GRAY}If your shell still tries an old '${NC}/usr/bin/topo${GRAY}' path, run '${NC}hash -r${GRAY}' or reopen the terminal.${NC}"
 fi

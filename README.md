@@ -45,7 +45,7 @@ sudo apt install ./topo_xxx_amd64.deb
 sudo dnf install ./topo-xxx-1.x86_64.rpm
 ```
 
-Replace `xxx` with the version from the release you downloaded. Use `topo_xxx_arm64.deb` on Debian/Ubuntu ARM64 systems and `topo-xxx-1.aarch64.rpm` on Fedora/RHEL ARM64 systems. Package installs place Topo under `/usr/lib/topo` and expose `/usr/bin/topo`; updates and removal are handled by `apt` or `dnf`.
+Replace `xxx` with the version from the release you downloaded. Use `topo_xxx_arm64.deb` on Debian/Ubuntu ARM64 systems and `topo-xxx-1.aarch64.rpm` on Fedora/RHEL ARM64 systems. Package installs place Topo under `/usr/lib/topo` and expose `/usr/bin/topo`; after installation, use `topo update` and `topo remove` for lifecycle management.
 
 ```bash
   ████████  ██████  ██████   ██████

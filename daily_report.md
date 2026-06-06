@@ -7,18 +7,18 @@ Today's session completed the first package-manager distribution milestone: GitH
 ### 1. Distribution Strategy
 *   **Kept the existing installer**: `curl -fsSL https://raw.githubusercontent.com/Jesencloud/Topo/main/install.sh | bash` remains supported for users who prefer the current GitHub-based install/update flow.
 *   **Added package-manager-ready layout**: Debian/RPM packages stage Topo into `/usr/lib/topo`, expose `/usr/bin/topo`, include the architecture-specific Rust engine, and keep user state/config under XDG paths.
-*   **Separated lifecycle behavior**: Script installs keep `topo update` / `topo remove`; package installs delegate updates/removal to `apt` or `dnf`.
+*   **Unified lifecycle commands**: Users can use `topo update` / `topo remove` for both script installs and package installs. Topo chooses the correct implementation based on install source.
 
 ### 2. Install Source Detection
 *   **Marker File**: Added `.topo-install-source` to distinguish `script` from `package` installs.
 *   **Script Install Marker**: `install.sh` now writes `script` into the marker after fetching/refining the runtime tree.
 *   **Package Install Marker**: The packaging script writes `package` into `/usr/lib/topo/.topo-install-source`.
 *   **Runtime Guardrails**:
-    *   Package-mode `topo update` no longer runs the GitHub installer; it delegates to the system package manager.
-    *   Package-mode `topo remove` no longer deletes `/usr/lib/topo`; it delegates to the system package manager.
+    *   Package-mode `topo update` no longer runs the GitHub installer; it checks the latest GitHub Release, downloads the matching `.deb` or `.rpm`, verifies it against `SHA256SUMS`, and upgrades it through `apt` or `dnf`.
+    *   Package-mode `topo remove` no longer deletes `/usr/lib/topo`; it directly calls `apt remove -y topo` or `dnf remove -y topo`.
 *   **Distro-Aware Package Commands**: Added package-manager command selection based on `/etc/os-release`:
-    *   Ubuntu/Debian-family systems show only `sudo apt upgrade topo` / `sudo apt remove topo`.
-    *   Fedora/RHEL-family systems show only `sudo dnf upgrade topo` / `sudo dnf remove topo`.
+    *   Ubuntu/Debian-family systems use `.deb` assets and `apt` commands.
+    *   Fedora/RHEL-family systems use `.rpm` assets and `dnf` commands.
     *   Unknown systems fall back to showing both common command families.
 
 ### 3. Packaging Script
@@ -31,6 +31,9 @@ Today's session completed the first package-manager distribution milestone: GitH
 *   **Naming Note**: Debian uses `amd64`/`arm64`; RPM uses `x86_64`/`aarch64`. The RPM `-1` is the package release/iteration, not the Topo upstream version.
 *   **Clean Staging**: The packaging script removes `__pycache__`, `.pyc`, `.pyo`, and `$py.class` files from the staged runtime tree so local test caches never enter release packages.
 *   **Runtime Contents**: Packages include `topo`, `src/`, `VERSION`, bundled WAV assets, `LICENSE`, `README.md`, and exactly one matching `topo-core-$ARCH` binary.
+*   **Runtime Dependencies**: Packages depend on `curl`, `python3`, and `python3-packaging` so package-mode `topo update` can query/download GitHub Release assets and compare versions.
+*   **Package Install Compatibility Launcher**: Added package `after-install` / `after-remove` scripts. When a package is installed through `sudo`, the post-install script creates a managed `~/.local/bin/topo` compatibility launcher for the invoking user if that path is missing, a symlink, or already Topo-managed. This makes `topo` work immediately even when the current shell cached an older script-install launcher path.
+*   **Package Remove Cleanup**: Verified that package removal deleted the RPM-owned files but could leave an empty `/usr/lib/topo` directory tree and user configuration under `~/.config/topo`. Updated package post-remove cleanup to remove empty `/usr/lib/topo` directories, and updated package-mode `topo remove` to remove Topo user config/cache/state, script-install remnants, and Topo-managed launchers after the package manager succeeds.
 *   **Package Checksums**: The final release job now creates one compact `SHA256SUMS` manifest covering the raw engine binaries and all `.deb` / `.rpm` packages instead of uploading one `.sha256` file per asset. The manifest records final Release asset filenames, so users can verify downloads from one local directory.
 
 ### 4. GitHub Actions Release Integration
@@ -38,8 +41,8 @@ Today's session completed the first package-manager distribution milestone: GitH
 *   **Package Build Job**: The workflow now installs Ruby/RPM tooling in the dedicated `package` job, installs `fpm`, runs `packaging/build-linux-packages.sh`, and uploads `topo-linux-packages` as a workflow artifact for smoke testing and release upload.
 *   **Release Asset Staging**: The release job now copies final user-facing files into `release-assets/` before checksum generation and upload. This keeps the GitHub Release attachment list compact because per-file `.sha256`, per-file `.asc`, and `.sha256.asc` sidecars are no longer uploaded.
 *   **Checksum Uploads**: Release assets now include `SHA256SUMS` and `SHA256SUMS.asc` as first-party integrity checks for package downloads.
-*   **Ubuntu Smoke Test Job**: Added `smoke-ubuntu`, which installs the generated `amd64` `.deb` with `sudo apt install`, checks `topo --version`, verifies `/usr/lib/topo/.topo-install-source`, and confirms `topo update` / `topo remove` show apt-only lifecycle commands.
-*   **Fedora Smoke Test Job**: Added `smoke-fedora`, which runs inside a `fedora:44` container, installs the generated `x86_64` `.rpm` with `dnf install`, checks `topo --version`, verifies the install-source marker, and confirms dnf-only lifecycle commands.
+*   **Ubuntu Smoke Test Job**: Added `smoke-ubuntu`, which installs the generated `amd64` `.deb` with `sudo apt install`, simulates a stale Bash command cache for `~/.local/bin/topo`, checks `topo --version`, verifies `/usr/lib/topo/.topo-install-source`, confirms `topo update` uses the package-mode update path, and confirms `topo remove` removes the package through apt.
+*   **Fedora Smoke Test Job**: Added `smoke-fedora`, which runs inside a `fedora:44` container, installs the generated `x86_64` `.rpm` with `dnf install`, checks `topo --version`, verifies the install-source marker, confirms `topo update` uses the package-mode update path, and confirms `topo remove` removes the package through dnf.
 *   **Release Gate**: The release job now depends on both smoke-test jobs, so `.deb` / `.rpm` assets are attached only after package installation checks pass.
 *   **GPG Detached Signatures**: The release job now imports a maintainer-provided GPG key from `GPG_PRIVATE_KEY`, signs the `SHA256SUMS` manifest with a detached armored `SHA256SUMS.asc` signature, then uploads the manifest and signature alongside the assets.
 *   **Required Release Secrets**: GPG signing requires GitHub Secrets `GPG_PRIVATE_KEY` and `GPG_PASSPHRASE`; both secrets were configured for the repository after the release key was generated.
@@ -64,12 +67,12 @@ Today's session completed the first package-manager distribution milestone: GitH
     ```
 *   **Reinstall a local DEB after packaging-code changes**:
     ```bash
-    sudo apt install --reinstall ./topo_0.9.3_amd64.deb
+    sudo apt install --reinstall ./topo_0.9.4_amd64.deb
     ```
 *   **Install or reinstall a local RPM after packaging-code changes**:
     ```bash
-    sudo dnf install ./topo-0.9.3-1.x86_64.rpm
-    sudo dnf reinstall ./topo-0.9.3-1.x86_64.rpm
+    sudo dnf install ./topo-0.9.4-1.x86_64.rpm
+    sudo dnf reinstall ./topo-0.9.4-1.x86_64.rpm
     ```
 *   **Build with an explicit ARM64 engine**:
     ```bash
@@ -78,18 +81,18 @@ Today's session completed the first package-manager distribution milestone: GitH
     ```
 *   **Inspect RPM metadata and contents**:
     ```bash
-    rpm -qip dist/packages/topo-0.9.3-1.x86_64.rpm
-    rpm -qlp dist/packages/topo-0.9.3-1.x86_64.rpm
+    rpm -qip dist/packages/topo-0.9.4-1.x86_64.rpm
+    rpm -qlp dist/packages/topo-0.9.4-1.x86_64.rpm
     ```
 *   **Inspect DEB metadata and contents**:
     ```bash
-    dpkg-deb -I dist/packages/topo_0.9.3_amd64.deb
-    dpkg-deb -c dist/packages/topo_0.9.3_amd64.deb
+    dpkg-deb -I dist/packages/topo_0.9.4_amd64.deb
+    dpkg-deb -c dist/packages/topo_0.9.4_amd64.deb
     ```
 *   **Check for accidental Python cache files**:
     ```bash
-    rpm -qlp dist/packages/topo-0.9.3-1.x86_64.rpm | rg '__pycache__|\.pyc|\.pyo|\$py\.class'
-    dpkg-deb -c dist/packages/topo_0.9.3_amd64.deb | rg '__pycache__|\.pyc|\.pyo|\$py\.class'
+    rpm -qlp dist/packages/topo-0.9.4-1.x86_64.rpm | rg '__pycache__|\.pyc|\.pyo|\$py\.class'
+    dpkg-deb -c dist/packages/topo_0.9.4_amd64.deb | rg '__pycache__|\.pyc|\.pyo|\$py\.class'
     ```
 *   **Verify package checksums**:
     ```bash
@@ -104,22 +107,27 @@ Today's session completed the first package-manager distribution milestone: GitH
     ```
 
 ### 6. Verification
-*   **Shell Syntax**: `bash -n packaging/build-linux-packages.sh` and `bash -n install.sh` passed.
+*   **Shell Syntax**: `bash -n install.sh`, `bash -n packaging/build-linux-packages.sh`, `bash -n packaging/scripts/after-install.sh`, and `bash -n packaging/scripts/after-remove.sh` passed.
 *   **Python Quality**: `ruff check .` and `ruff format --check .` passed.
-*   **Test Suite**: `pytest -q` passed with **205 tests**.
+*   **Test Suite**: `env HOME=/tmp/topo_pytest_home pytest -q` passed with **223 tests**.
 *   **Local Package Build**: Confirmed all four local package files exist in `dist/packages/`.
 *   **Package Hygiene**: Verified RPM and DEB contents no longer include `__pycache__` or `.pyc` files.
-*   **Distro-Aware Prompt Tests**: Verified package-mode `topo update` / `topo remove` command selection with focused tests for Ubuntu/Fedora/unknown systems.
-*   **Latest Full Suite**: Re-ran the suite with a writable temporary home (`env HOME=/tmp/topo_pytest_home pytest -q`) after the distro-aware prompt change: **208 passed**.
-*   **Regenerated Packages**: Rebuilt all four local packages after the prompt fix so Ubuntu installs receive the corrected apt-only lifecycle messages.
+*   **Distro-Aware Package Lifecycle Tests**: Verified package-mode `topo update` / `topo remove` behavior with focused tests for Ubuntu/Fedora/unknown systems, including architecture-aware GitHub Release package filenames, SHA256 verification, direct package upgrade commands, and direct package removal commands.
+*   **GitHub Latest Release Fallback**: Hardened `topo update` against GitHub API 403 responses by adding GitHub API request headers and falling back to the `/releases/latest` redirect URL when the API request fails.
+*   **Launcher Cleanup Regression**: Added coverage so package-mode removal ignores arbitrary binary user launcher files instead of trying to decode or delete them.
+*   **Regenerated Packages**: Rebuilt all four local packages after package lifecycle fixes so Ubuntu/Fedora installs receive the corrected package-mode behavior.
+*   **Package Metadata Checks**: Verified regenerated DEB/RPM packages depend on `curl`, `python3`, and `python3-packaging`, include package post-install/post-remove scripts, and leave `dist/packages` with only the four user-facing `.deb` / `.rpm` files.
 *   **Checksum Verification**: Release-time checksum verification now uses a single `sha256sum -c SHA256SUMS` manifest with Release asset filenames instead of internal CI paths.
 *   **Workflow Syntax**: Parsed `.github/workflows/build-engine.yml` locally with Ruby YAML loading after adding package smoke-test jobs and the compact `release-assets/` upload flow.
 *   **README Install Docs**: Updated the README Quick Start section with script install and GitHub Release `.deb`/`.rpm` install commands. Integrity and GPG verification details stay in this development report for now.
 *   **v0.9.3 Release Notes**: Consolidated the exploratory v0.9.1 and v0.9.2 package-release notes into `docs/releases/v0.9.3.md` as the formal Debian/RPM package distribution release note, then removed the old v0.9.1/v0.9.2 release-note files.
+*   **v0.9.4 Release Notes**: Added `docs/releases/v0.9.4.md` for the package lifecycle hardening release.
 *   **Obsolete Asset Removal**: Confirmed `assets/topo_home.png` is no longer referenced by the current README or release notes, so it is intentionally removed in the v0.9.3 release commit.
+*   **Shell Command Cache Guidance**: Added install/link messaging that tells users to run `hash -r` or reopen the terminal if a previous package install left the current shell trying a stale `/usr/bin/topo` command path.
+*   **Script-vs-Package Migration Warning**: Updated `install.sh` to detect an already-registered RPM/DEB Topo package during script installation and tell users to remove the package install first, preventing `/usr/bin/topo` from shadowing the script install under `~/.local/bin/topo`.
 
 ### 7. Future Work
-*   **Release Signing Rollout**: The next tag release should verify that `SHA256SUMS`, `SHA256SUMS.asc`, and `topo-release-public.asc` appear in GitHub Release assets after `GPG_PRIVATE_KEY` and `GPG_PASSPHRASE` are configured.
+*   **Automatic GPG Verification**: `topo update` currently verifies downloaded packages with `SHA256SUMS`; the next hardening step is automatic verification of `SHA256SUMS.asc` with the Topo release public key.
 *   **Package Stability Window**: Keep using GitHub Release `.deb`/`.rpm` packages for several stable versions before building first-party APT/DNF repositories, so install/upgrade/remove behavior and release automation can mature under real usage.
 *   **Create First-Party APT/DNF Repositories**: After GitHub Release packages are stable, publish repository metadata so users can run `sudo apt install topo` or `sudo dnf install topo` after adding the Topo repo.
 *   **Long-Term Official Repo Path**: Later evaluate Debian/Fedora official inclusion for higher user trust, enterprise acceptance, and native distro update workflows.

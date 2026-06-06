@@ -1,5 +1,6 @@
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -8,7 +9,7 @@ from ..core.file_ops import bytes_to_human, get_size
 from ..core.install_source import (
     PACKAGE_INSTALL,
     get_install_source,
-    get_package_manager_commands,
+    get_package_remove_argv,
 )
 
 
@@ -28,7 +29,7 @@ def _launcher_points_to_topo(launcher_path: Path, internal_dir: Path) -> bool:
         return resolved == expected or os.path.normpath(target) == os.path.normpath(expected)
     try:
         return launcher_path.resolve() == expected
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return False
 
 
@@ -63,14 +64,99 @@ def _strip_topo_path_lines() -> bool:
     return changed
 
 
+def _launcher_points_to_package(launcher_path: Path) -> bool:
+    if launcher_path.is_symlink():
+        raw = Path(os.readlink(launcher_path))
+        target = raw if raw.is_absolute() else launcher_path.parent / raw
+        normalized = os.path.normpath(target)
+        return normalized in {
+            os.path.normpath("/usr/bin/topo"),
+            os.path.normpath("/usr/lib/topo/topo"),
+        }
+    try:
+        return (
+            launcher_path.is_file()
+            and "Managed by topo package compatibility launcher" in launcher_path.read_text()
+        )
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
+def _remove_path(path: Path) -> bool:
+    try:
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        elif path.exists() or path.is_symlink():
+            path.unlink()
+        else:
+            return False
+    except OSError:
+        return False
+    return True
+
+
+def _remove_package_user_residue() -> list[str]:
+    removed: list[str] = []
+    home = Path.home()
+    internal_dir = home / ".topo"
+    launcher_path = home / ".local/bin/topo"
+
+    if (
+        (launcher_path.exists() or launcher_path.is_symlink())
+        and (
+            _launcher_points_to_topo(launcher_path, internal_dir)
+            or _launcher_points_to_package(launcher_path)
+        )
+        and _remove_path(launcher_path)
+    ):
+        removed.append("Launcher compatibility entry")
+
+    for path, label in (
+        (internal_dir, "Script install directory"),
+        (home / ".config/topo", "Configuration and whitelist"),
+        (home / ".cache/topo", "Temporary scan cache"),
+        (
+            Path(os.environ.get("XDG_STATE_HOME", str(home / ".local/state"))).expanduser()
+            / "topo",
+            "Deletion history / state",
+        ),
+    ):
+        if _remove_path(path):
+            removed.append(label)
+
+    if _strip_topo_path_lines():
+        removed.append("Shell PATH entry")
+
+    return removed
+
+
 def run_remove(dry_run=False):
     """Removes topo from the system."""
 
     if get_install_source() == PACKAGE_INSTALL:
-        print(f"\n {MAGENTA}☉ Topo was installed by a system package manager.{RESET}\n")
-        print(f" {GRAY}Use your package manager to remove it:{RESET}")
-        for command in get_package_manager_commands("remove"):
-            print(f"   {BOLD}{command}{RESET}")
+        command = get_package_remove_argv()
+        if not command:
+            print(f"\n {RED}✗ Unsupported Linux distribution for package removal.{RESET}")
+            return
+        print(f"\n {MAGENTA}☉ Removing Topo through the system package manager.{RESET}\n")
+        print(f" {GRAY}Running:{RESET} {BOLD}{' '.join(command)}{RESET}")
+        if dry_run:
+            print(f" {GREEN}✓{RESET} Dry run complete. Package removal command was not executed.")
+            return
+        try:
+            process = subprocess.run(command)
+        except (OSError, subprocess.SubprocessError) as e:
+            print(f" {RED}✗ Package removal failed: {e}{RESET}")
+            return
+        if process.returncode == 0:
+            print(f"\n {GREEN}✓{RESET} Topo package removal completed.")
+            for label in _remove_package_user_residue():
+                print(f"  {GREEN}✓{RESET} Removed {label}")
+            print(
+                f" {GRAY}If your shell still uses an old command path, run:{RESET} {BOLD}hash -r{RESET}"
+            )
+        else:
+            print(f"\n {RED}✗ Package removal failed with exit code {process.returncode}.{RESET}")
         return
 
     print(f"\n {MAGENTA}☉ Removing topo from your system...{RESET}\n")

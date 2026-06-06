@@ -97,22 +97,26 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
+          mkdir -p "$HOME/.local/bin"
+          rm -f "$HOME/.local/bin/topo"
+          hash -p "$HOME/.local/bin/topo" topo
           sudo apt install -y ./dist/packages/topo_*_amd64.deb
 
           topo --version
+          grep -F "Managed by topo package compatibility launcher" "$HOME/.local/bin/topo"
           test "$(cat /usr/lib/topo/.topo-install-source)" = "package"
 
           update_output="$(topo update)"
           printf '%s\n' "$update_output"
-          grep -F "sudo apt upgrade topo" <<<"$update_output"
+          grep -F "Checking for updates" <<<"$update_output"
+          ! grep -F "sudo apt upgrade topo" <<<"$update_output"
           ! grep -F "sudo dnf upgrade topo" <<<"$update_output"
 
           remove_output="$(topo remove)"
           printf '%s\n' "$remove_output"
-          grep -F "sudo apt remove topo" <<<"$remove_output"
-          ! grep -F "sudo dnf remove topo" <<<"$remove_output"
-
-          sudo apt remove -y topo
+          grep -F "apt remove -y topo" <<<"$remove_output"
+          ! grep -F "dnf remove -y topo" <<<"$remove_output"
+          ! dpkg-query -W topo
 
   smoke-fedora:
     name: Smoke Test RPM on Fedora
@@ -137,15 +141,15 @@ jobs:
 
           update_output="$(topo update)"
           printf '%s\n' "$update_output"
-          grep -F "sudo dnf upgrade topo" <<<"$update_output"
+          grep -F "Checking for updates" <<<"$update_output"
           ! grep -F "sudo apt upgrade topo" <<<"$update_output"
+          ! grep -F "sudo dnf upgrade topo" <<<"$update_output"
 
           remove_output="$(topo remove)"
           printf '%s\n' "$remove_output"
-          grep -F "sudo dnf remove topo" <<<"$remove_output"
-          ! grep -F "sudo apt remove topo" <<<"$remove_output"
-
-          dnf remove -y topo
+          grep -F "dnf remove -y topo" <<<"$remove_output"
+          ! grep -F "apt remove -y topo" <<<"$remove_output"
+          ! rpm -q topo
 
   release:
     name: Attach Release Assets

@@ -96,4 +96,8 @@ def run_install_link(silent=False):
             print(f" {GRAY}{export_line}{RESET}")
     else:
         print(f" You can now run {BOLD}topo{RESET} from any directory.")
+        print(
+            f" If your shell still tries an old system path, run {BOLD}hash -r{RESET} "
+            "or reopen the terminal."
+        )
     return True
