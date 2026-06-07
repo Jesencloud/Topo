@@ -100,6 +100,7 @@ def test_linux_browser_cache_paths_are_cleanable_inside_protected_profiles(test_
     cleanable_paths = [
         test_env / ".config/google-chrome/Default/Cache",
         test_env / ".config/google-chrome/Default/Code Cache/js",
+        test_env / ".config/google-chrome/Default/Service Worker/CacheStorage/index",
         test_env / ".config/chromium/Default/GPUCache/data.bin",
         test_env / ".config/BraveSoftware/Brave-Browser/Default/ShaderCache/data.bin",
         test_env / ".config/microsoft-edge/Default/DawnWebGPUCache/data.bin",
@@ -124,6 +125,7 @@ def test_linux_browser_profile_roots_and_credentials_stay_protected(test_env):
         test_env / ".config/google-chrome/Default",
         test_env / ".config/google-chrome/Default/Login Data",
         test_env / ".config/google-chrome/Default/Cookies",
+        test_env / ".config/google-chrome/Default/Service Worker",
         test_env / ".config/microsoft-edge/Default",
         test_env / ".config/microsoft-edge/Default/Login Data",
         test_env / ".config/BraveSoftware/Brave-Browser/Default/Cookies",

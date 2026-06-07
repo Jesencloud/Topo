@@ -1,13 +1,15 @@
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 from src.clean.apps import (
     clean_app_generic,
+    clean_browser_caches,
     clean_generic_xdg_caches,
     clean_orphaned_remnants,
     clean_snap_cache,
     proactive_app_detection,
 )
+from src.core.app_cache import find_cleanable_cache_dirs_in_roots
 from src.core.file_ops import CACHEDIR_TAG_SIGNATURE
 
 
@@ -128,6 +130,89 @@ def test_clean_generic_xdg_caches_dry_run_keeps_cachedir_tagged_directory(test_e
     assert cache_dir.exists()
 
 
+def test_find_cleanable_cache_dirs_in_roots_finds_browser_cache_children_only(test_env):
+    chrome_profile = test_env / ".config/google-chrome/Default"
+    cache_dir = chrome_profile / "Cache"
+    cache_storage = chrome_profile / "Service Worker/CacheStorage"
+    service_worker_db = chrome_profile / "Service Worker/Database"
+    firefox_disk_cache = test_env / ".cache/mozilla/firefox/profile.default/cache2"
+    cache_dir.mkdir(parents=True)
+    cache_storage.mkdir(parents=True)
+    service_worker_db.mkdir(parents=True)
+    firefox_disk_cache.mkdir(parents=True)
+    (chrome_profile / "Login Data").write_text("{}")
+
+    paths = find_cleanable_cache_dirs_in_roots(
+        [".config/google-chrome", ".cache/mozilla"], include_named_cache_dirs=True
+    )
+
+    assert cache_dir in paths
+    assert cache_storage in paths
+    assert firefox_disk_cache in paths
+    assert chrome_profile not in paths
+    assert chrome_profile / "Service Worker" not in paths
+    assert service_worker_db not in paths
+
+
+def test_clean_browser_caches_removes_known_browser_cache_children(test_env):
+    chrome_profile = test_env / ".config/google-chrome/Default"
+    chrome_cache = chrome_profile / "Cache"
+    chrome_cache.mkdir(parents=True)
+    chrome_cache_file = chrome_cache / "data.bin"
+    chrome_cache_file.write_bytes(b"c" * 256)
+    chrome_login_db = chrome_profile / "Login Data"
+    chrome_login_db.write_text("{}")
+
+    firefox_profile = test_env / ".mozilla/firefox/profile.default"
+    firefox_cache = test_env / ".cache/mozilla/firefox/profile.default/cache2"
+    firefox_startup_cache = firefox_profile / "startupCache"
+    firefox_cache.mkdir(parents=True)
+    firefox_startup_cache.mkdir(parents=True)
+    firefox_cache_file = firefox_cache / "entry.bin"
+    firefox_startup_file = firefox_startup_cache / "startup.bin"
+    firefox_cache_file.write_bytes(b"f" * 128)
+    firefox_startup_file.write_bytes(b"s" * 128)
+    firefox_login_db = firefox_profile / "logins.json"
+    firefox_login_db.write_text("{}")
+
+    with patch("src.clean.apps.is_app_running", return_value=False):
+        size, items, categories = clean_browser_caches(dry_run=False)
+
+    assert size >= 512
+    assert items == 3
+    assert categories == 2
+    assert chrome_cache.exists()
+    assert firefox_cache.exists()
+    assert firefox_startup_cache.exists()
+    assert not chrome_cache_file.exists()
+    assert not firefox_cache_file.exists()
+    assert not firefox_startup_file.exists()
+    assert chrome_login_db.exists()
+    assert firefox_login_db.exists()
+
+
+def test_clean_browser_caches_skips_running_browser(test_env):
+    firefox_profile = test_env / ".mozilla/firefox/profile.default"
+    firefox_cache = firefox_profile / "cache2"
+    firefox_cache.mkdir(parents=True)
+    cache_file = firefox_cache / "entry.bin"
+    cache_file.write_bytes(b"f" * 128)
+
+    with (
+        patch(
+            "src.clean.apps.BROWSER_CACHE_DEFS",
+            {"Firefox": {"roots": [".mozilla"], "procs": ["firefox"]}},
+        ),
+        patch("src.clean.apps.is_app_running", return_value=True),
+    ):
+        size, items, categories = clean_browser_caches(dry_run=False)
+
+    assert size == 0
+    assert items == 0
+    assert categories == 0
+    assert cache_file.exists()
+
+
 def test_clean_orphaned_remnants(test_env):
     with (
         patch("pathlib.Path.home", return_value=test_env),
@@ -187,6 +272,24 @@ def test_clean_app_generic_execution(test_env):
     assert items == 1
     assert app_cache_dir.exists()
     assert not (app_cache_dir / "data.bin").exists()
+
+
+def test_clean_app_generic_reuses_fast_size_for_safe_remove(test_env):
+    app_cache_dir = test_env / ".config/myapp/Cache"
+    app_cache_dir.mkdir(parents=True)
+    cache_file = app_cache_dir / "data.bin"
+    cache_file.write_bytes(b"0" * 100)
+
+    with (
+        patch("src.clean.apps.get_size_fast", return_value=100) as mock_size,
+        patch("src.clean.apps.safe_remove", return_value=(True, "deleted")) as mock_remove,
+    ):
+        freed, items = clean_app_generic("MyApp", [str(app_cache_dir)], dry_run=False)
+
+    assert freed == 100
+    assert items == 1
+    mock_size.assert_has_calls([call(cache_file)])
+    mock_remove.assert_called_once_with(cache_file, use_trash=False, known_size_bytes=100)
 
 
 def test_clean_app_generic_keeps_protected_desktop_config(test_env):

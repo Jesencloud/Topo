@@ -187,6 +187,7 @@ def safe_remove(
     use_trash: bool = True,
     dry_run: bool = False,
     allow_app_data_removal: bool = False,
+    known_size_bytes: int | None = None,
 ) -> tuple[bool, str]:
     """Safe removal with trash support and protection checks."""
     raw_path = Path(path).expanduser()
@@ -204,7 +205,13 @@ def safe_remove(
         record_deletion_audit(raw_path, mode, "missing", 0)
         return False, "Path does not exist"
 
-    size_bytes = get_size(raw_path)
+    if known_size_bytes is None:
+        size_bytes = get_size(raw_path)
+    else:
+        try:
+            size_bytes = max(int(known_size_bytes), 0)
+        except (TypeError, ValueError):
+            size_bytes = get_size(raw_path)
     if dry_run:
         record_deletion_audit(raw_path, mode, "dry-run", size_bytes)
         return True, "Dry run"

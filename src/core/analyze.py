@@ -9,6 +9,7 @@ from typing import Any
 
 from ..ui.navigator import AnalyzeSelector, Navigator, TopFilesSelector
 from . import system
+from .app_cache import find_cleanable_cache_dirs
 from .constants import BLUE, CYAN, GREEN, MAGENTA, PURPLE, RED, RESET, YELLOW
 from .file_ops import (
     get_size,
@@ -18,11 +19,7 @@ from .file_ops import (
     validate_path_for_deletion,
 )
 from .system import run_command
-from .whitelist import (
-    get_hard_protection_reason,
-    is_cleanable_linux_app_data,
-    is_sensitive_linux_app_data,
-)
+from .whitelist import is_cleanable_linux_app_data
 
 SCAN_SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 
@@ -331,38 +328,6 @@ def _sudo_remove(path: Path) -> bool:
     return False
 
 
-def _resolve_for_delete(path: Path) -> Path:
-    raw_path = Path(path).expanduser()
-    try:
-        return raw_path.resolve(strict=False)
-    except OSError:
-        return raw_path.absolute()
-
-
-def _find_cleanable_app_data_children(path: Path) -> list[Path]:
-    """Find cache-like descendants under a protected app-data directory."""
-    raw_path = Path(path).expanduser()
-    resolved_path = _resolve_for_delete(raw_path)
-    if (
-        not raw_path.is_dir()
-        or get_hard_protection_reason(resolved_path) is not None
-        or is_cleanable_linux_app_data(resolved_path)
-        or not is_sensitive_linux_app_data(resolved_path)
-    ):
-        return []
-
-    cleanable_paths: list[Path] = []
-    for root, dirnames, _filenames in os.walk(raw_path):
-        for dirname in list(dirnames):
-            child = Path(root) / dirname
-            child_resolved = _resolve_for_delete(child)
-            if is_cleanable_linux_app_data(child_resolved):
-                cleanable_paths.append(child)
-                dirnames.remove(dirname)
-
-    return cleanable_paths
-
-
 def _safe_remove_analyze_path(path: Path) -> bool:
     removed, reason = safe_remove(path, use_trash=True)
     if removed:
@@ -370,7 +335,7 @@ def _safe_remove_analyze_path(path: Path) -> bool:
 
     cleaned_child = False
     if reason == "Path is whitelisted":
-        for child in _find_cleanable_app_data_children(path):
+        for child in find_cleanable_cache_dirs(path, require_sensitive_app_data_root=True):
             child_removed, child_reason = safe_remove(child, use_trash=True)
             if child_removed:
                 cleaned_child = True

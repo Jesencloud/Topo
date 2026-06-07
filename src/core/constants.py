@@ -102,21 +102,6 @@ APP_DEFS = {
         "procs": ["slack"],
     },
     "Spotify": {"paths": [HOME / ".cache/spotify/Data"], "procs": ["spotify"]},
-    "Google Chrome": {
-        "paths": [
-            HOME / ".config/google-chrome/Default/Cache",
-            HOME / ".config/google-chrome/Default/Code Cache",
-        ],
-        "procs": ["google-chrome"],
-    },
-    "Brave Browser": {
-        "paths": [HOME / ".config/BraveSoftware/Brave-Browser/Default/Cache"],
-        "procs": ["brave"],
-    },
-    "Microsoft Edge": {
-        "paths": [HOME / ".config/microsoft-edge/Default/Cache"],
-        "procs": ["microsoft-edge"],
-    },
     "Zoom": {"paths": [HOME / ".zoom/data"], "procs": ["zoom"]},
     "Microsoft Teams": {"paths": [HOME / ".config/Microsoft/Teams/Cache"], "procs": ["teams"]},
     "VLC": {"paths": [HOME / ".cache/vlc"], "procs": ["vlc"]},

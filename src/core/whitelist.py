@@ -1,6 +1,11 @@
 import json
 from pathlib import Path
 
+from .browser_cache import (
+    BROWSER_FLATPAK_APP_IDS,
+    BROWSER_PROFILE_PATHS,
+    CLEANABLE_APP_CACHE_DIR_NAMES,
+)
 from .paths import get_config_dir
 
 
@@ -32,34 +37,6 @@ DELETION_CRITICAL_EXACT_PATHS = tuple(
     Path(path) for path in ("/", "/home", "/mnt", "/media", "/srv", "/usr", "/var", "/tmp", "/boot")
 )
 
-LINUX_BROWSER_PROFILE_PATHS = [
-    # Firefox family
-    ".mozilla",
-    ".librewolf",
-    ".floorp",
-    ".waterfox",
-    ".zen",
-    # Chromium family
-    ".config/google-chrome",
-    ".config/google-chrome-beta",
-    ".config/google-chrome-unstable",
-    ".config/chromium",
-    ".config/ungoogled-chromium",
-    ".config/BraveSoftware",
-    ".config/microsoft-edge",
-    ".config/microsoft-edge-beta",
-    ".config/microsoft-edge-dev",
-    ".config/vivaldi",
-    ".config/vivaldi-snapshot",
-    ".config/opera",
-    ".config/opera-beta",
-    ".config/opera-developer",
-    ".config/thorium",
-    ".config/Thorium",
-    ".config/yandex-browser",
-    ".config/yandex-browser-beta",
-]
-
 LINUX_PROTECTED_HOME_PATHS = [
     # Credentials and encryption material
     ".ssh",
@@ -70,7 +47,7 @@ LINUX_PROTECTED_HOME_PATHS = [
     ".config/sops",
     ".config/age",
     # Browser profiles
-    *LINUX_BROWSER_PROFILE_PATHS,
+    *BROWSER_PROFILE_PATHS,
     ".thunderbird",
     # Messaging and social
     ".local/share/TelegramDesktop",
@@ -194,23 +171,11 @@ LINUX_USER_DATA_DIRS = [
 ]
 
 LINUX_PROTECTED_FLATPAK_APP_IDS = [
-    "app.zen_browser.zen",
-    "com.github.Eloston.UngoogledChromium",
+    *BROWSER_FLATPAK_APP_IDS,
     "com.bitwarden.desktop",
-    "com.brave.Browser",
-    "com.google.Chrome",
-    "com.google.ChromeDev",
-    "com.microsoft.Edge",
-    "com.microsoft.EdgeDev",
-    "com.opera.Opera",
-    "com.vivaldi.Vivaldi",
-    "io.github.ungoogled_software.ungoogled_chromium",
-    "io.gitlab.librewolf-community",
     "md.obsidian.Obsidian",
-    "org.chromium.Chromium",
     "org.gnome.World.Secrets",
     "org.keepassxc.KeePassXC",
-    "org.mozilla.firefox",
     "org.mozilla.Thunderbird",
     "org.pgadmin.pgadmin4",
     "org.telegram.desktop",
@@ -218,37 +183,6 @@ LINUX_PROTECTED_FLATPAK_APP_IDS = [
     "com.slack.Slack",
     "im.riot.Riot",
 ]
-
-LINUX_CLEANABLE_APP_DATA_DIR_NAMES = frozenset(
-    {
-        "Cache",
-        "Cache_Data",
-        "cache",
-        "cache2",
-        "CacheStorage",
-        "CachedData",
-        "Code Cache",
-        "component_crx_cache",
-        "Crash Reports",
-        "Crashpad",
-        "DawnCache",
-        "DawnGraphiteCache",
-        "DawnWebGPUCache",
-        "extensions_crx_cache",
-        "GPUCache",
-        "GraphiteDawnCache",
-        "GrShaderCache",
-        "jumpListCache",
-        "logs",
-        "Logs",
-        "Media Cache",
-        "OfflineCache",
-        "ScriptCache",
-        "Service Worker",
-        "ShaderCache",
-        "startupCache",
-    }
-)
 
 
 def _ensure_config():
@@ -413,7 +347,7 @@ def is_cleanable_linux_app_data(path: Path) -> bool:
     except (OSError, ValueError):
         return False
 
-    return any(part in LINUX_CLEANABLE_APP_DATA_DIR_NAMES for part in rel_parts)
+    return any(part in CLEANABLE_APP_CACHE_DIR_NAMES for part in rel_parts)
 
 
 def is_sensitive_linux_app_data(path: Path) -> bool:

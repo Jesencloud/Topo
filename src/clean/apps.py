@@ -2,12 +2,14 @@ import json
 import shutil
 from pathlib import Path
 
+from ..core.app_cache import find_cleanable_cache_dirs_in_roots
+from ..core.browser_cache import BROWSER_CACHE_DEFS, BROWSER_CACHE_ROOT_NAMES
 from ..core.constants import APP_DEFS, DETECTED_APPS_FILE
 from ..core.file_ops import (
     CLEANED_PATHS,
     bytes_to_human,
     clean_path_by_age,
-    get_size,
+    get_size_fast,
     has_valid_cachedir_tag,
     is_app_running,
     parse_size_from_text,
@@ -40,6 +42,8 @@ def proactive_app_detection():
 
     # 2. Discovery: Find new apps
     handled_names = {n.lower() for n in APP_DEFS}
+    handled_names.update(n.lower() for n in BROWSER_CACHE_DEFS)
+    handled_names.update(BROWSER_CACHE_ROOT_NAMES)
     handled_names.update(n.lower() for n in detected)
 
     new_found = False
@@ -101,21 +105,22 @@ def clean_app_generic(name, paths, process_names=None, dry_run=False):
         register_cleaned_path(path)
         if path.exists():
             found = True
-            size = get_size(path)
             if dry_run:
-                safe_remove(path, use_trash=False, dry_run=True)
+                size = get_size_fast(path)
+                safe_remove(path, use_trash=False, dry_run=True, known_size_bytes=size)
                 total_freed += size
                 items_cleaned += 1
                 continue
             try:
                 if path.is_dir():
                     for item in path.iterdir():
-                        s = get_size(item)
-                        if safe_remove(item, use_trash=False)[0]:
+                        s = get_size_fast(item)
+                        if safe_remove(item, use_trash=False, known_size_bytes=s)[0]:
                             total_freed += s
                             items_cleaned += 1
                 else:
-                    if safe_remove(path, use_trash=False)[0]:
+                    size = get_size_fast(path)
+                    if safe_remove(path, use_trash=False, known_size_bytes=size)[0]:
                         total_freed += size
                         items_cleaned += 1
             except OSError:
@@ -126,6 +131,30 @@ def clean_app_generic(name, paths, process_names=None, dry_run=False):
         print(f"  \033[0;32m✓\033[0m {name} ({bytes_to_human(total_freed)}) {status}")
         return total_freed, items_cleaned
     return 0, 0
+
+
+def clean_browser_caches(dry_run=False):
+    """Clean cache directories for known browser profile layouts."""
+    total_size = 0
+    total_items = 0
+    total_categories = 0
+    for name, info in BROWSER_CACHE_DEFS.items():
+        paths = find_cleanable_cache_dirs_in_roots(
+            info.get("roots", []), include_named_cache_dirs=True
+        )
+        if not paths:
+            continue
+        s, i = clean_app_generic(
+            f"{name} Cache",
+            paths,
+            info.get("procs"),
+            dry_run=dry_run,
+        )
+        if i > 0:
+            total_size += s
+            total_items += i
+            total_categories += 1
+    return total_size, total_items, total_categories
 
 
 def clean_flatpak_unused(dry_run=False):
@@ -157,8 +186,13 @@ def clean_generic_xdg_caches(days=30, dry_run=False):
             is_obvious_junk = any(kw in item.name.lower() for kw in ["cache", "log", "tmp", "temp"])
             is_tagged_cache = has_valid_cachedir_tag(item)
             if is_tagged_cache:
-                s = get_size(item)
-                removed = safe_remove(item, use_trash=False, dry_run=dry_run)[0]
+                s = get_size_fast(item)
+                removed = safe_remove(
+                    item,
+                    use_trash=False,
+                    dry_run=dry_run,
+                    known_size_bytes=s,
+                )[0]
                 i = 1 if removed else 0
             else:
                 age_days = min(days, 3) if is_obvious_junk else days
@@ -323,6 +357,11 @@ def clean_apps_deep(dry_run=False, detected_apps=None):
     total_categories = 0
     if detected_apps is None:
         detected_apps = proactive_app_detection()
+
+    s, i, c = clean_browser_caches(dry_run=dry_run)
+    total_size += s
+    total_items += i
+    total_categories += c
 
     # Combined loop for defined and detected apps
     all_apps = {**APP_DEFS, **detected_apps}
