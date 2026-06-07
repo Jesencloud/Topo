@@ -186,7 +186,10 @@ def test_run_full_scan_rpm(mock_run, mock_which):
     mock_which.side_effect = lambda x: "/usr/bin/rpm" if x == "rpm" else None
     # Name\tSize\tInstallTime
     # Make size > 100MB (104857600) to pass the new user app filter
-    mock_run.return_value = MagicMock(returncode=0, stdout="heavy-app\t150000000\t1700000000\n")
+    mock_run.return_value = MagicMock(
+        returncode=0,
+        stdout=("older-heavy-app\t250000000\t1600000000\nheavy-app\t150000000\t1700000000\n"),
+    )
 
     mgr = UninstallManager()
     with patch("src.core.system.get_os_id", return_value="fedora"):
@@ -197,6 +200,7 @@ def test_run_full_scan_rpm(mock_run, mock_which):
     assert heavy_app is not None
     assert heavy_app["size_bytes"] == 150000000
     assert heavy_app["install_time"] == 1700000000
+    assert apps[0]["id"] == "heavy-app"
 
 
 @patch("shutil.which")

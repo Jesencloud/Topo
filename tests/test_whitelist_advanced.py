@@ -4,6 +4,7 @@ from src.core.whitelist import (
     add_to_whitelist,
     get_whitelist,
     get_whitelist_file,
+    is_cleanable_linux_app_data,
     is_protected,
     remove_from_whitelist,
 )
@@ -56,6 +57,10 @@ def test_linux_sensitive_app_data_is_protected(test_env):
         test_env / ".gnupg/private-keys-v1.d/key.key",
         test_env / ".mozilla/firefox/profile.default/logins.json",
         test_env / ".config/google-chrome/Default/Login Data",
+        test_env / ".config/microsoft-edge/Default/Cookies",
+        test_env / ".config/BraveSoftware/Brave-Browser/Default/Login Data",
+        test_env / ".config/vivaldi/Default/Local State",
+        test_env / ".librewolf/profile.default/key4.db",
         test_env / ".config/Bitwarden/data.json",
         test_env / ".config/fcitx5/profile",
         test_env / ".config/rime/default.custom.yaml",
@@ -88,6 +93,50 @@ def test_linux_sensitive_app_data_is_protected(test_env):
     ]
 
     for path in sensitive_paths:
+        assert is_protected(path) is True
+
+
+def test_linux_browser_cache_paths_are_cleanable_inside_protected_profiles(test_env):
+    cleanable_paths = [
+        test_env / ".config/google-chrome/Default/Cache",
+        test_env / ".config/google-chrome/Default/Code Cache/js",
+        test_env / ".config/chromium/Default/GPUCache/data.bin",
+        test_env / ".config/BraveSoftware/Brave-Browser/Default/ShaderCache/data.bin",
+        test_env / ".config/microsoft-edge/Default/DawnWebGPUCache/data.bin",
+        test_env / ".config/vivaldi/Default/GrShaderCache/data.bin",
+        test_env / ".config/opera/Default/Crashpad/completed/report.dmp",
+        test_env / ".mozilla/firefox/profile.default/cache2/entries/abc",
+        test_env / ".mozilla/firefox/profile.default/startupCache/startupCache.8.little",
+        test_env / ".librewolf/profile.default/jumpListCache/icon.bin",
+        test_env
+        / ".var/app/org.mozilla.firefox/.mozilla/firefox/profile.default/cache2/entries/abc",
+        test_env / ".var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser/Default/Cache",
+    ]
+
+    for path in cleanable_paths:
+        assert is_cleanable_linux_app_data(path) is True
+        assert is_protected(path) is False
+
+
+def test_linux_browser_profile_roots_and_credentials_stay_protected(test_env):
+    protected_paths = [
+        test_env / ".config/google-chrome",
+        test_env / ".config/google-chrome/Default",
+        test_env / ".config/google-chrome/Default/Login Data",
+        test_env / ".config/google-chrome/Default/Cookies",
+        test_env / ".config/microsoft-edge/Default",
+        test_env / ".config/microsoft-edge/Default/Login Data",
+        test_env / ".config/BraveSoftware/Brave-Browser/Default/Cookies",
+        test_env / ".mozilla/firefox/profile.default",
+        test_env / ".mozilla/firefox/profile.default/logins.json",
+        test_env / ".mozilla/firefox/profile.default/key4.db",
+        test_env / ".mozilla/firefox/profile.default/cookies.sqlite",
+        test_env / ".librewolf/profile.default",
+        test_env / ".var/app/org.mozilla.firefox/.mozilla/firefox/profile.default/logins.json",
+    ]
+
+    for path in protected_paths:
+        assert is_cleanable_linux_app_data(path) is False
         assert is_protected(path) is True
 
 

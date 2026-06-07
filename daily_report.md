@@ -1,3 +1,48 @@
+# Daily Modification Report - 2026-06-07
+
+## Project: topo (Topo) - Analyze Browser Cache Safety & App Removal Sorting
+
+Today's session focused on making the interactive disk analyzer safer and more useful for browser profile directories, improving the app-removal list ordering, and locking the behavior with regression tests.
+
+### 1. Analyze Disk Browser Cache Cleanup
+*   **Problem Found**: `Analyze > Explore disk usage` could not delete content under paths such as `/home/jiantai/.config/google-chrome` because browser profile directories are intentionally protected as sensitive app data.
+*   **Safety Boundary Preserved**: The fix does **not** allow deleting an entire browser profile root such as `.config/google-chrome`, `.mozilla`, or a `Default` profile directory. Credentials and state files remain protected, including `Login Data`, `Cookies`, `logins.json`, `key4.db`, and `cookies.sqlite`.
+*   **Generic Browser Profile Rules**: Added `LINUX_BROWSER_PROFILE_PATHS` to centralize known browser profile roots instead of special-casing Google Chrome. Covered Firefox-family and Chromium-family browsers, including Firefox, LibreWolf, Floorp, Waterfox, Zen, Chrome, Chromium, Ungoogled Chromium, Brave, Edge, Vivaldi, Opera, Thorium, and Yandex Browser.
+*   **Flatpak Browser Protection**: Extended protected Flatpak browser app IDs for Chrome/Chrome Dev, Brave, Edge/Edge Dev, Opera, LibreWolf, Ungoogled Chromium, Firefox, Chromium, Vivaldi, and Zen.
+*   **Cleanable Cache Names**: Added a reusable `LINUX_CLEANABLE_APP_DATA_DIR_NAMES` set for cache-like directories such as `Cache`, `Code Cache`, `GPUCache`, `ShaderCache`, `DawnWebGPUCache`, `Crashpad`, `cache2`, `startupCache`, and `jumpListCache`.
+*   **Analyze Delete Behavior**: When a user selects a protected browser profile root in Analyze, Topo now searches only inside the selected directory for known cache children and removes those cache directories. It does not scan the whole system and does not remove the profile root itself.
+*   **Visible Skip Reasons**: Analyze now prints a skip message when a selected path is rejected by validation, instead of failing silently.
+*   **Cleanable UI Metadata**: Browser cache directories are marked as cleanable entries with the `App cache` reason, matching the existing cleanable-entry model used for `CACHEDIR.TAG`.
+
+### 2. App Removal List Ordering
+*   **Default Sort Changed**: The `Select Application to Remove` view now defaults to sorting apps by install time instead of size, so recently installed apps appear first.
+*   **Sort Stability**: Missing install times are handled safely, and size is used as a secondary sort key when install times are equal.
+*   **Tests Updated**: Added and updated navigator/uninstall tests to verify install-time ordering in the UI and scanned package list.
+
+### 3. Output Polish
+*   **Analyze Progress Text**: Replaced the separate `Analyzing Linux Insights...` message with a more consistent Rust-engine progress line: `Rust Engine: Analyzing Linux insights, please wait . . .`.
+*   **Status Icon**: Updated the `Top Processes` status output icon from `🚀` to `🔝` to better match the meaning of the line.
+
+### 4. Regression Coverage
+*   **Whitelist Coverage**: Added tests proving browser cache paths are cleanable across Chrome/Chromium/Brave/Edge/Vivaldi/Opera/Firefox/LibreWolf and Flatpak browser layouts.
+*   **Credential Protection Coverage**: Added tests proving browser profile roots and credential/state files remain protected.
+*   **File Removal Coverage**: Added tests proving `safe_remove()` can remove browser cache directories but refuses profile roots.
+*   **Analyze Coverage**: Added tests proving selecting Chrome and Firefox profile roots cleans only cache children while keeping profile directories and login databases.
+*   **Navigator Coverage**: Added tests for the new install-time default sort in the uninstall selector.
+
+### 5. Verification
+*   **Focused Tests**: `pytest -q tests/test_whitelist_advanced.py tests/test_file_ops.py tests/test_analyze.py` passed with **56 tests**.
+*   **Full Test Suite**: `pytest -q` passed with **230 tests**.
+*   **Ruff Check**: `python -m ruff check` passed.
+*   **Ruff Format**: `python -m ruff format --check` passed.
+*   **Diff Hygiene**: `git diff --check` passed.
+
+### 6. Follow-Up Notes
+*   New browser support should usually be added by extending `LINUX_BROWSER_PROFILE_PATHS` and/or `LINUX_CLEANABLE_APP_DATA_DIR_NAMES`; the Analyze deletion flow should not need browser-specific logic.
+*   Whole-profile deletion should remain blocked in Analyze. If Topo later adds a dedicated browser-data cleanup workflow, it should expose explicit categories such as cache, cookies, history, and saved sessions instead of deleting profile roots.
+
+---
+
 # Daily Modification Report - 2026-06-06
 
 ## Project: topo (Topo) - GitHub Release Debian/RPM Distribution

@@ -939,7 +939,7 @@ class UninstallSelector(_PagedSelector):
         self.items = items
         self.selected_index = 0
         self.selected_ids = set()
-        self.sort_key = "size_bytes"
+        self.sort_key = "install_time"
         self.sort_reverse = True
         self.page_size = 15
         self.current_page = 0
@@ -947,9 +947,14 @@ class UninstallSelector(_PagedSelector):
 
     def _sort_items(self):
         if self.sort_key == "name":
-            self.items.sort(key=lambda x: x["name"].lower(), reverse=not self.sort_reverse)
+            self.items.sort(key=lambda x: x.get("name", "").lower(), reverse=not self.sort_reverse)
+        elif self.sort_key == "install_time":
+            self.items.sort(
+                key=lambda x: (x.get("install_time", 0), x.get("size_bytes", 0)),
+                reverse=self.sort_reverse,
+            )
         else:
-            self.items.sort(key=lambda x: x[self.sort_key], reverse=self.sort_reverse)
+            self.items.sort(key=lambda x: x.get(self.sort_key, 0), reverse=self.sort_reverse)
 
     def _format_time_ago(self, timestamp):
         if timestamp == 0:

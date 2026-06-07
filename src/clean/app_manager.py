@@ -550,7 +550,11 @@ class UninstallManager:
             except (OSError, subprocess.SubprocessError):
                 pass
 
-        self.apps = sorted(apps, key=lambda x: x["size_bytes"], reverse=True)
+        self.apps = sorted(
+            apps,
+            key=lambda x: (x.get("install_time", 0), x.get("size_bytes", 0)),
+            reverse=True,
+        )
         return self.apps
 
     def find_residue_paths(self, app_id: str, app_name: str, app_type: str) -> list[Path]:

@@ -77,6 +77,37 @@ def test_safe_remove_prevents_sensitive_linux_app_data(test_env):
     assert login_db.exists()
 
 
+def test_safe_remove_allows_browser_cache_inside_sensitive_app_data(test_env):
+    cache_dirs = [
+        test_env / ".config/google-chrome/Default/Cache",
+        test_env / ".mozilla/firefox/profile.default/cache2",
+    ]
+
+    for cache_dir in cache_dirs:
+        cache_dir.mkdir(parents=True)
+        cache_file = cache_dir / "data.bin"
+        cache_file.write_text("cache")
+
+        success, message = safe_remove(cache_dir, use_trash=False)
+
+        assert success is True
+        assert "Permanently deleted" in message
+        assert not cache_dir.exists()
+
+
+def test_safe_remove_keeps_browser_profile_root_and_credentials(test_env):
+    profile_dir = test_env / ".config/google-chrome/Default"
+    profile_dir.mkdir(parents=True)
+    login_db = profile_dir / "Login Data"
+    login_db.write_text("{}")
+
+    success, message = safe_remove(profile_dir, use_trash=False)
+
+    assert success is False
+    assert "whitelisted" in message.lower()
+    assert login_db.exists()
+
+
 def test_safe_remove_bypass_allows_app_data_cleanup(test_env):
     app_dir = test_env / ".config/discord"
     app_dir.mkdir(parents=True)

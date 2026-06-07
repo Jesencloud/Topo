@@ -254,6 +254,17 @@ def test_build_analysis_entry_marks_cachedir_tag_as_cleanable(test_env):
     assert entry["percent"] == 50
 
 
+def test_build_analysis_entry_marks_browser_cache_as_cleanable(test_env):
+    cache_dir = test_env / ".mozilla/firefox/profile.default/cache2"
+    cache_dir.mkdir(parents=True)
+
+    entry = build_analysis_entry("Cache", cache_dir, size=512, total_size=1024)
+
+    assert entry["is_cleanable"] is True
+    assert entry["cleanable_reason"] == "App cache"
+    assert entry["icon"] == "🧹"
+
+
 def test_analyze_delete_user_writable_path_without_admin(test_env):
     target = test_env / "owned-file.txt"
     target.write_text("remove me")
@@ -269,6 +280,49 @@ def test_analyze_delete_user_writable_path_without_admin(test_env):
     mock_admin_check.assert_called_once_with([target])
     mock_safe.assert_called_once_with(target, use_trash=True)
     mock_sudo.assert_not_called()
+
+
+def test_analyze_delete_browser_profile_root_cleans_cache_children(test_env):
+    chrome_root = test_env / ".config/google-chrome"
+    chrome_profile_dir = chrome_root / "Default"
+    chrome_cache_dir = chrome_profile_dir / "Cache"
+    chrome_code_cache_dir = chrome_profile_dir / "Code Cache"
+    chrome_login_db = chrome_profile_dir / "Login Data"
+    chrome_cache_dir.mkdir(parents=True)
+    chrome_code_cache_dir.mkdir()
+    (chrome_cache_dir / "data.bin").write_text("cache")
+    (chrome_code_cache_dir / "script.bin").write_text("cache")
+    chrome_login_db.write_text("{}")
+
+    firefox_root = test_env / ".mozilla"
+    firefox_profile_dir = firefox_root / "firefox/profile.default"
+    firefox_cache_dir = firefox_profile_dir / "cache2"
+    firefox_startup_cache_dir = firefox_profile_dir / "startupCache"
+    firefox_login_db = firefox_profile_dir / "logins.json"
+    firefox_cache_dir.mkdir(parents=True)
+    firefox_startup_cache_dir.mkdir()
+    (firefox_cache_dir / "entry.bin").write_text("cache")
+    (firefox_startup_cache_dir / "startup.bin").write_text("cache")
+    firefox_login_db.write_text("{}")
+
+    with (
+        patch("src.core.analyze._ensure_admin_for_delete", return_value=True),
+        patch("src.core.file_ops.shutil.which", return_value=None),
+        patch("src.core.analyze.Navigator.play_delete") as mock_play_delete,
+    ):
+        assert _delete_analyze_paths([chrome_root, firefox_root]) is True
+
+    assert chrome_root.exists()
+    assert chrome_profile_dir.exists()
+    assert chrome_login_db.exists()
+    assert not chrome_cache_dir.exists()
+    assert not chrome_code_cache_dir.exists()
+    assert firefox_root.exists()
+    assert firefox_profile_dir.exists()
+    assert firefox_login_db.exists()
+    assert not firefox_cache_dir.exists()
+    assert not firefox_startup_cache_dir.exists()
+    mock_play_delete.assert_called_once()
 
 
 def test_analyze_delete_system_path_requires_admin():

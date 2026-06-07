@@ -18,6 +18,11 @@ from .file_ops import (
     validate_path_for_deletion,
 )
 from .system import run_command
+from .whitelist import (
+    get_hard_protection_reason,
+    is_cleanable_linux_app_data,
+    is_sensitive_linux_app_data,
+)
 
 SCAN_SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 
@@ -225,7 +230,10 @@ def get_age_hint(path: Path) -> str:
 
 def build_analysis_entry(name: str, path: Path, size: int, total_size: int) -> dict[str, Any]:
     """Build a disk-analysis row with Linux cache metadata."""
-    is_cleanable = has_valid_cachedir_tag(path)
+    cachedir_tag = has_valid_cachedir_tag(path)
+    app_cache = is_cleanable_linux_app_data(path)
+    is_cleanable = cachedir_tag or app_cache
+    cleanable_reason = "CACHEDIR.TAG" if cachedir_tag else "App cache" if app_cache else ""
     icon = "🧹" if is_cleanable else "🗂️" if path.is_dir() else "📄"
     return {
         "name": name,
@@ -234,7 +242,7 @@ def build_analysis_entry(name: str, path: Path, size: int, total_size: int) -> d
         "percent": (size / (total_size or 1)) * 100,
         "icon": icon,
         "is_cleanable": is_cleanable,
-        "cleanable_reason": "CACHEDIR.TAG" if is_cleanable else "",
+        "cleanable_reason": cleanable_reason,
         "age_hint": get_age_hint(path),
     }
 
@@ -323,6 +331,59 @@ def _sudo_remove(path: Path) -> bool:
     return False
 
 
+def _resolve_for_delete(path: Path) -> Path:
+    raw_path = Path(path).expanduser()
+    try:
+        return raw_path.resolve(strict=False)
+    except OSError:
+        return raw_path.absolute()
+
+
+def _find_cleanable_app_data_children(path: Path) -> list[Path]:
+    """Find cache-like descendants under a protected app-data directory."""
+    raw_path = Path(path).expanduser()
+    resolved_path = _resolve_for_delete(raw_path)
+    if (
+        not raw_path.is_dir()
+        or get_hard_protection_reason(resolved_path) is not None
+        or is_cleanable_linux_app_data(resolved_path)
+        or not is_sensitive_linux_app_data(resolved_path)
+    ):
+        return []
+
+    cleanable_paths: list[Path] = []
+    for root, dirnames, _filenames in os.walk(raw_path):
+        for dirname in list(dirnames):
+            child = Path(root) / dirname
+            child_resolved = _resolve_for_delete(child)
+            if is_cleanable_linux_app_data(child_resolved):
+                cleanable_paths.append(child)
+                dirnames.remove(dirname)
+
+    return cleanable_paths
+
+
+def _safe_remove_analyze_path(path: Path) -> bool:
+    removed, reason = safe_remove(path, use_trash=True)
+    if removed:
+        return True
+
+    cleaned_child = False
+    if reason == "Path is whitelisted":
+        for child in _find_cleanable_app_data_children(path):
+            child_removed, child_reason = safe_remove(child, use_trash=True)
+            if child_removed:
+                cleaned_child = True
+            else:
+                print(f" {YELLOW}⚠{RESET} Skipped {child}: {child_reason}")
+
+    if cleaned_child:
+        return True
+
+    print(f" {YELLOW}⚠{RESET} Skipped {Path(path).expanduser()}: {reason}")
+    return False
+
+
 def _ensure_admin_for_delete(paths: list[Path]) -> bool:
     """Prompts for sudo only if any path in the list requires admin privileges."""
     admin_paths = [p for p in paths if _needs_admin_for_deletion(p)]
@@ -351,7 +412,7 @@ def _delete_analyze_paths(paths: list[Path]) -> bool:
     admin_paths = [p for p in paths if _needs_admin_for_deletion(p)]
     changed = False
     for p in paths:
-        removed = _sudo_remove(p) if p in admin_paths else safe_remove(p, use_trash=True)[0]
+        removed = _sudo_remove(p) if p in admin_paths else _safe_remove_analyze_path(p)
         if removed:
             changed = True
     if changed:
@@ -450,7 +511,11 @@ def run_deep_analysis(target_path: Path = None):
                 # Collect every path that needs a Rust scan and run them concurrently.
                 # Home is already scanned (total_scan_size); smart views use a Python
                 # age-filter instead of a full scan.
-                print("   🔍 Analyzing Linux Insights...", end="\r")
+                print(
+                    "\r   • Rust Engine: Analyzing Linux insights, please wait . . .\033[K",
+                    end="",
+                    flush=True,
+                )
                 rust_paths = [
                     t["path"]
                     for t in targets

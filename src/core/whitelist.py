@@ -32,6 +32,34 @@ DELETION_CRITICAL_EXACT_PATHS = tuple(
     Path(path) for path in ("/", "/home", "/mnt", "/media", "/srv", "/usr", "/var", "/tmp", "/boot")
 )
 
+LINUX_BROWSER_PROFILE_PATHS = [
+    # Firefox family
+    ".mozilla",
+    ".librewolf",
+    ".floorp",
+    ".waterfox",
+    ".zen",
+    # Chromium family
+    ".config/google-chrome",
+    ".config/google-chrome-beta",
+    ".config/google-chrome-unstable",
+    ".config/chromium",
+    ".config/ungoogled-chromium",
+    ".config/BraveSoftware",
+    ".config/microsoft-edge",
+    ".config/microsoft-edge-beta",
+    ".config/microsoft-edge-dev",
+    ".config/vivaldi",
+    ".config/vivaldi-snapshot",
+    ".config/opera",
+    ".config/opera-beta",
+    ".config/opera-developer",
+    ".config/thorium",
+    ".config/Thorium",
+    ".config/yandex-browser",
+    ".config/yandex-browser-beta",
+]
+
 LINUX_PROTECTED_HOME_PATHS = [
     # Credentials and encryption material
     ".ssh",
@@ -42,14 +70,8 @@ LINUX_PROTECTED_HOME_PATHS = [
     ".config/sops",
     ".config/age",
     # Browser profiles
-    ".mozilla",
+    *LINUX_BROWSER_PROFILE_PATHS,
     ".thunderbird",
-    ".config/google-chrome",
-    ".config/chromium",
-    ".config/BraveSoftware",
-    ".config/microsoft-edge",
-    ".config/vivaldi",
-    ".config/opera",
     # Messaging and social
     ".local/share/TelegramDesktop",
     ".config/Signal",
@@ -173,12 +195,17 @@ LINUX_USER_DATA_DIRS = [
 
 LINUX_PROTECTED_FLATPAK_APP_IDS = [
     "app.zen_browser.zen",
+    "com.github.Eloston.UngoogledChromium",
     "com.bitwarden.desktop",
     "com.brave.Browser",
     "com.google.Chrome",
+    "com.google.ChromeDev",
     "com.microsoft.Edge",
+    "com.microsoft.EdgeDev",
+    "com.opera.Opera",
     "com.vivaldi.Vivaldi",
     "io.github.ungoogled_software.ungoogled_chromium",
+    "io.gitlab.librewolf-community",
     "md.obsidian.Obsidian",
     "org.chromium.Chromium",
     "org.gnome.World.Secrets",
@@ -191,6 +218,37 @@ LINUX_PROTECTED_FLATPAK_APP_IDS = [
     "com.slack.Slack",
     "im.riot.Riot",
 ]
+
+LINUX_CLEANABLE_APP_DATA_DIR_NAMES = frozenset(
+    {
+        "Cache",
+        "Cache_Data",
+        "cache",
+        "cache2",
+        "CacheStorage",
+        "CachedData",
+        "Code Cache",
+        "component_crx_cache",
+        "Crash Reports",
+        "Crashpad",
+        "DawnCache",
+        "DawnGraphiteCache",
+        "DawnWebGPUCache",
+        "extensions_crx_cache",
+        "GPUCache",
+        "GraphiteDawnCache",
+        "GrShaderCache",
+        "jumpListCache",
+        "logs",
+        "Logs",
+        "Media Cache",
+        "OfflineCache",
+        "ScriptCache",
+        "Service Worker",
+        "ShaderCache",
+        "startupCache",
+    }
+)
 
 
 def _ensure_config():
@@ -335,11 +393,27 @@ def is_protected(path) -> bool:
         return True
 
     if is_sensitive_linux_app_data(path):
-        cache_names = {"Cache", "cache", "logs", "Code Cache", "GPUCache", "Service Worker"}
-        home_parts_len = len(Path.home().resolve().parts)
-        return not any(name in path.parts[home_parts_len:] for name in cache_names)
+        return not is_cleanable_linux_app_data(path)
 
     return False
+
+
+def is_cleanable_linux_app_data(path: Path) -> bool:
+    """Return True for cache-like paths inside otherwise sensitive Linux app data."""
+    path = _resolve_path(path)
+
+    if is_hard_protected(path):
+        return False
+    if not is_sensitive_linux_app_data(path):
+        return False
+
+    try:
+        home = Path.home().resolve()
+        rel_parts = path.relative_to(home).parts
+    except (OSError, ValueError):
+        return False
+
+    return any(part in LINUX_CLEANABLE_APP_DATA_DIR_NAMES for part in rel_parts)
 
 
 def is_sensitive_linux_app_data(path: Path) -> bool:

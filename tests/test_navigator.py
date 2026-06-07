@@ -151,9 +151,32 @@ def test_analyze_empty_view_waits_for_back():
 # --- UninstallSelector ---
 def test_uninstall_space_then_enter_returns_indices():
     sel = UninstallSelector("t", _uninstall_items())
-    # selection is sorted by size desc; index 0 is the largest
     result = drive(sel, [Navigator.SPACE, "\r"])
     assert result == [0]
+
+
+def test_uninstall_defaults_to_install_time_sort():
+    items = [
+        {
+            "id": "old-large",
+            "name": "old-large",
+            "size_bytes": 999_000,
+            "size_str": "999 KB",
+            "install_time": 100,
+        },
+        {
+            "id": "new-small",
+            "name": "new-small",
+            "size_bytes": 1_000,
+            "size_str": "1 KB",
+            "install_time": 200,
+        },
+    ]
+
+    sel = UninstallSelector("t", items)
+
+    assert sel.sort_key == "install_time"
+    assert [item["id"] for item in sel.items] == ["new-small", "old-large"]
 
 
 def test_uninstall_enter_without_selection_does_not_confirm_hovered_app():

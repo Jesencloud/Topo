@@ -386,6 +386,6 @@ def show_status():
     print(f"🌐 Network:      ↓ {rx} / ↑ {tx}{ip_str}")
 
     if top_procs:
-        print(f"🚀 Top Processes: {', '.join(top_procs)}")
+        print(f"🔝 Top Processes: {', '.join(top_procs)}")
 
     print()
