@@ -148,6 +148,27 @@ def test_analyze_empty_view_waits_for_back():
     assert idx is None
 
 
+def test_analyze_render_keeps_space_between_icon_and_name():
+    items = [
+        {"name": "larger", "path": Path("/tmp/larger"), "size": 200, "percent": 2.0, "icon": "🗂️"},
+        {"name": "folder", "path": Path("/tmp/folder"), "size": 100, "percent": 1.0, "icon": "🗂️"},
+    ]
+    sel = AnalyzeSelector("t", items, can_select=True)
+    sel.selected_items.add(1)
+
+    with (
+        patch(
+            "src.ui.navigator.shutil.get_terminal_size", return_value=os.terminal_size((100, 24))
+        ),
+        patch("sys.stdout.write") as write,
+        patch("sys.stdout.flush"),
+    ):
+        sel.render()
+
+    output = write.call_args.args[0]
+    assert "🗂️  folder" in output
+
+
 # --- UninstallSelector ---
 def test_uninstall_space_then_enter_returns_indices():
     sel = UninstallSelector("t", _uninstall_items())
