@@ -181,6 +181,9 @@ def find_cleanable_cache_dirs(
     for current, dirnames, _filenames in os.walk(raw_root):
         for dirname in list(dirnames):
             child = Path(current) / dirname
+            if child.is_symlink():
+                dirnames.remove(dirname)
+                continue
             resolved_child = resolve_cache_path(child)
             if resolved_child in seen:
                 dirnames.remove(dirname)

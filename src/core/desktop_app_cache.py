@@ -47,11 +47,6 @@ DESKTOP_APP_DEFS = {
     },
     "WeChat": {
         "cache_paths": (".var/app/com.tencent.WeChat/cache",),
-        "extra_cleanup_paths": (
-            ".var/app/com.tencent.WeChat/config/xwechat",
-            ".xwechat",
-            "Documents/WeChat Files",
-        ),
         "procs": ("wechat", "wechat-uos", "wechat-universal", "WeChat.exe", "wechat.exe"),
     },
 }

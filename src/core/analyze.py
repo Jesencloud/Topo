@@ -227,7 +227,7 @@ def build_analysis_entry(name: str, path: Path, size: int, total_size: int) -> d
     """Build a disk-analysis row with Linux cache metadata."""
     cleanable_reason = get_cache_cleanable_reason(path)
     is_cleanable = bool(cleanable_reason)
-    icon = "🧹" if is_cleanable else "🗂️" if path.is_dir() else "📄"
+    icon = "🗂️" if path.is_dir() else "📄"
     return {
         "name": name,
         "path": path,

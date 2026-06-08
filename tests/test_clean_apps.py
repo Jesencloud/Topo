@@ -217,8 +217,38 @@ def test_desktop_app_cache_defs_resolve_home_dynamically(test_env):
     defs = get_desktop_app_cleanup_defs()
 
     assert test_env / ".config/discord/Cache" in defs["Discord"]["paths"]
+    assert test_env / ".var/app/com.tencent.WeChat/cache" in defs["WeChat"]["paths"]
+    assert test_env / ".var/app/com.tencent.WeChat/config/xwechat" not in defs["WeChat"]["paths"]
+    assert test_env / ".xwechat" not in defs["WeChat"]["paths"]
+    assert test_env / "Documents/WeChat Files" not in defs["WeChat"]["paths"]
     assert is_desktop_app_cache_path(test_env / ".cache/spotify/Data") is True
     assert is_desktop_app_cache_path(test_env / "Documents/WeChat Files") is False
+
+
+def test_clean_apps_deep_keeps_wechat_user_data(test_env):
+    wechat_cache = test_env / ".var/app/com.tencent.WeChat/cache"
+    wechat_cache.mkdir(parents=True)
+    cache_file = wechat_cache / "cache.bin"
+    cache_file.write_bytes(b"cache")
+
+    flatpak_user_data = test_env / ".var/app/com.tencent.WeChat/config/xwechat"
+    legacy_user_data = test_env / ".xwechat"
+    documents_data = test_env / "Documents/WeChat Files"
+    for path in (flatpak_user_data, legacy_user_data, documents_data):
+        path.mkdir(parents=True)
+        (path / "message.db").write_text("keep")
+
+    with patch("src.clean.apps.is_app_running", return_value=False):
+        size, items, categories = clean_apps_deep(dry_run=False, detected_apps={})
+
+    assert size >= len(b"cache")
+    assert items >= 1
+    assert categories >= 1
+    assert wechat_cache.exists()
+    assert not cache_file.exists()
+    assert (flatpak_user_data / "message.db").exists()
+    assert (legacy_user_data / "message.db").exists()
+    assert (documents_data / "message.db").exists()
 
 
 def test_clean_apps_deep_uses_desktop_app_cache_defs(test_env):
@@ -259,6 +289,21 @@ def test_find_cleanable_cache_dirs_in_roots_finds_browser_cache_children_only(te
     assert chrome_profile not in paths
     assert chrome_profile / "Service Worker" not in paths
     assert service_worker_db not in paths
+
+
+def test_find_cleanable_cache_dirs_in_roots_skips_symlinked_named_cache_dirs(test_env):
+    external = test_env / "valuable"
+    external.mkdir()
+    link = test_env / ".config/google-chrome/Default/Cache"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(external, target_is_directory=True)
+
+    paths = find_cleanable_cache_dirs_in_roots(
+        [".config/google-chrome"], include_named_cache_dirs=True
+    )
+
+    assert link not in paths
+    assert external not in paths
 
 
 def test_find_cleanable_cache_dirs_in_roots_finds_desktop_app_cache_children(test_env):
@@ -319,6 +364,26 @@ def test_clean_browser_caches_removes_known_browser_cache_children(test_env):
     assert firefox_login_db.exists()
 
 
+def test_clean_browser_caches_does_not_follow_symlinked_named_cache_dir(test_env):
+    external = test_env / "valuable"
+    external.mkdir()
+    important_file = external / "important.txt"
+    important_file.write_text("keep")
+
+    link = test_env / ".config/google-chrome/Default/Cache"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(external, target_is_directory=True)
+
+    with patch("src.clean.apps.is_app_running", return_value=False):
+        size, items, categories = clean_browser_caches(dry_run=False)
+
+    assert size == 0
+    assert items == 0
+    assert categories == 0
+    assert important_file.exists()
+    assert link.is_symlink()
+
+
 def test_clean_browser_caches_skips_running_browser(test_env):
     firefox_profile = test_env / ".mozilla/firefox/profile.default"
     firefox_cache = firefox_profile / "cache2"
@@ -339,6 +404,23 @@ def test_clean_browser_caches_skips_running_browser(test_env):
     assert items == 0
     assert categories == 0
     assert cache_file.exists()
+
+
+def test_clean_app_generic_does_not_follow_symlinked_cache_root(test_env):
+    external = test_env / "valuable"
+    external.mkdir()
+    important_file = external / "important.txt"
+    important_file.write_text("keep")
+
+    link = test_env / ".cache/app-cache"
+    link.symlink_to(external, target_is_directory=True)
+
+    freed, items = clean_app_generic("App Cache", [str(link)], dry_run=False)
+
+    assert freed == 0
+    assert items == 0
+    assert important_file.exists()
+    assert link.is_symlink()
 
 
 def test_clean_orphaned_remnants(test_env):
@@ -402,13 +484,40 @@ def test_clean_app_generic_execution(test_env):
     assert not (app_cache_dir / "data.bin").exists()
 
 
-def test_clean_app_generic_reuses_fast_size_for_safe_remove(test_env):
+def test_clean_app_generic_reuses_parent_fast_scan_for_child_sizes(test_env):
+    app_cache_dir = test_env / ".config/myapp/Cache"
+    app_cache_dir.mkdir(parents=True)
+    cache_file_a = app_cache_dir / "a.bin"
+    cache_file_b = app_cache_dir / "b.bin"
+    cache_file_a.write_bytes(b"0" * 100)
+    cache_file_b.write_bytes(b"0" * 200)
+
+    with (
+        patch(
+            "src.core.analyze.get_rust_scan_data",
+            return_value={"total_size_bytes": 300, "subdirs": {"a.bin": 100, "b.bin": 200}},
+        ) as mock_scan,
+        patch("src.clean.apps.get_size_fast") as mock_size,
+        patch("src.clean.apps.safe_remove", return_value=(True, "deleted")) as mock_remove,
+    ):
+        freed, items = clean_app_generic("MyApp", [str(app_cache_dir)], dry_run=False)
+
+    assert freed == 300
+    assert items == 2
+    mock_scan.assert_called_once_with(app_cache_dir.resolve())
+    mock_size.assert_not_called()
+    assert call(cache_file_a, use_trash=False, known_size_bytes=100) in mock_remove.call_args_list
+    assert call(cache_file_b, use_trash=False, known_size_bytes=200) in mock_remove.call_args_list
+
+
+def test_clean_app_generic_falls_back_when_parent_fast_scan_unavailable(test_env):
     app_cache_dir = test_env / ".config/myapp/Cache"
     app_cache_dir.mkdir(parents=True)
     cache_file = app_cache_dir / "data.bin"
     cache_file.write_bytes(b"0" * 100)
 
     with (
+        patch("src.core.analyze.get_rust_scan_data", return_value=None),
         patch("src.clean.apps.get_size_fast", return_value=100) as mock_size,
         patch("src.clean.apps.safe_remove", return_value=(True, "deleted")) as mock_remove,
     ):
@@ -416,7 +525,7 @@ def test_clean_app_generic_reuses_fast_size_for_safe_remove(test_env):
 
     assert freed == 100
     assert items == 1
-    mock_size.assert_has_calls([call(cache_file)])
+    mock_size.assert_called_once_with(cache_file)
     mock_remove.assert_called_once_with(cache_file, use_trash=False, known_size_bytes=100)
 
 

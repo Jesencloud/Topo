@@ -18,6 +18,7 @@ from ..core.file_ops import (
     CLEANED_PATHS,
     bytes_to_human,
     clean_path_by_age,
+    get_direct_child_sizes_fast,
     get_size_fast,
     is_app_running,
     parse_size_from_text,
@@ -110,7 +111,10 @@ def clean_app_generic(name, paths, process_names=None, dry_run=False):
     items_cleaned = 0
     found = False
     for p_str in paths:
-        path = Path(p_str).expanduser().resolve()
+        raw_path = Path(p_str).expanduser()
+        if raw_path.is_symlink():
+            continue
+        path = raw_path.resolve()
         register_cleaned_path(path)
         if path.exists():
             found = True
@@ -122,8 +126,13 @@ def clean_app_generic(name, paths, process_names=None, dry_run=False):
                 continue
             try:
                 if path.is_dir():
+                    child_sizes = get_direct_child_sizes_fast(path)
                     for item in path.iterdir():
-                        s = get_size_fast(item)
+                        s = (
+                            get_size_fast(item)
+                            if child_sizes is None
+                            else child_sizes.get(item.name, 0)
+                        )
                         if safe_remove(item, use_trash=False, known_size_bytes=s)[0]:
                             total_freed += s
                             items_cleaned += 1

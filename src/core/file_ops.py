@@ -4,6 +4,7 @@ import shutil
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from .system import run_command
 from .whitelist import (
@@ -168,6 +169,21 @@ def get_size(path: str | Path) -> int:
     return total
 
 
+def _coerce_non_negative_size(value: object) -> int | None:
+    try:
+        return max(int(value), 0)
+    except (TypeError, ValueError):
+        return None
+
+
+def _get_fast_scan_data(path: Path) -> dict[str, Any] | None:
+    # Lazy import breaks the analyze <-> file_ops import cycle.
+    from .analyze import get_rust_scan_data
+
+    data = get_rust_scan_data(path)
+    return data if isinstance(data, dict) else None
+
+
 def get_size_fast(path: str | Path) -> int:
     """Size of a directory using the Rust engine, falling back to get_size().
 
@@ -178,13 +194,37 @@ def get_size_fast(path: str | Path) -> int:
     """
     p = Path(path)
     if p.is_dir():
-        # Lazy import breaks the analyze <-> file_ops import cycle.
-        from .analyze import get_rust_scan_data
-
-        data = get_rust_scan_data(p)
+        data = _get_fast_scan_data(p)
         if data is not None:
-            return data.get("total_size_bytes", 0)
+            return _coerce_non_negative_size(data.get("total_size_bytes")) or 0
     return get_size(p)
+
+
+def get_direct_child_sizes_fast(path: str | Path) -> dict[str, int] | None:
+    """Return immediate child sizes from one Rust scan.
+
+    None means no usable fast scan is available and callers should fall back to
+    per-child sizing. An empty dict means the scan succeeded but found no
+    non-zero direct children.
+    """
+    p = Path(path)
+    if not p.is_dir():
+        return None
+
+    data = _get_fast_scan_data(p)
+    if data is None:
+        return None
+
+    subdirs = data.get("subdirs")
+    if not isinstance(subdirs, dict):
+        return None
+
+    child_sizes: dict[str, int] = {}
+    for name, size in subdirs.items():
+        size_bytes = _coerce_non_negative_size(size)
+        if size_bytes is not None:
+            child_sizes[str(name)] = size_bytes
+    return child_sizes
 
 
 def safe_remove(

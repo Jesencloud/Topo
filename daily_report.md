@@ -39,7 +39,7 @@ Today's session continued the cache-cleanup refactor after the browser-cache wor
 *   **XDG Cache Coverage**: Added tests for generic XDG candidate classification, Analyze `XDG cache` metadata, symlink skip behavior, and non-interference with browser cache discovery.
 
 ### 6. Verification
-*   **Full Test Suite**: `pytest -q` passed with **243 tests**.
+*   **Full Test Suite**: `pytest -q` passed with **248 tests** after the follow-up cache safety and performance hardening.
 *   **Ruff Check**: `python -m ruff check` passed.
 *   **Ruff Format**: `python -m ruff format --check` passed.
 *   **Diff Hygiene**: `git diff --check` passed.
@@ -47,6 +47,15 @@ Today's session continued the cache-cleanup refactor after the browser-cache wor
 ### 7. Follow-Up Notes
 *   The next shared-cache candidates worth considering are package-manager, container, and AI/model caches. Those should likely share metadata for Analyze display, but keep command-based cleanup in Clean because they often require package-manager or tool-specific commands instead of direct file deletion.
 *   Analyze should continue to mark cache-like entries and provide safe deletion fallback only where validation allows it; broad automated cleanup should remain in Clean.
+
+### 8. Follow-Up Cache Safety and Performance Review
+*   **Analyze Icon Reverted**: Cleanable cache entries in Analyze no longer use the `🧹` icon. They now keep the regular directory/file icons while preserving `is_cleanable` and `cleanable_reason` metadata, avoiding the impression that every marked item will be automatically cleaned.
+*   **Browser Cache Symlink Guard**: `find_cleanable_cache_dirs()` now prunes symlinked child directories before matching named cache directories such as `Cache` or `cache2`. This prevents browser-cache cleanup from following a profile-local symlink into external user data.
+*   **Clean Root Symlink Guard**: `clean_app_generic()` now skips cleanup roots that are themselves symlinks before resolving paths, adding defense in depth for any future caller that passes a symlinked cache root directly.
+*   **WeChat User Data Protection**: WeChat cleanup now keeps `.xwechat`, Flatpak `config/xwechat`, and `Documents/WeChat Files` out of Clean definitions. Only the explicit Flatpak cache path remains cleanable, so chat files and user documents are preserved.
+*   **Fast Child Size Accounting**: Added `get_direct_child_sizes_fast()` in `src/core/file_ops.py` so Clean can scan a cache parent once with the Rust engine and reuse direct child sizes when calling `safe_remove()`. If the engine is unavailable or returns incompatible data, cleanup falls back to per-child `get_size_fast()`.
+*   **Duplication Review Result**: Moved Rust child-size parsing out of `src/clean/apps.py` and into `file_ops`, keeping fast-size logic centralized with `get_size_fast()`. The remaining symlink and WeChat tests cover different safety layers, so they were kept intentionally rather than collapsed.
+*   **Regression Coverage**: Added tests for symlinked browser cache discovery, symlinked cleanup roots, WeChat data preservation, Analyze icon expectations, parent-scan size reuse, and fallback sizing behavior.
 
 ---
 
