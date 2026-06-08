@@ -265,6 +265,30 @@ def test_build_analysis_entry_marks_browser_cache_as_cleanable(test_env):
     assert entry["icon"] == "🧹"
 
 
+def test_build_analysis_entry_marks_desktop_app_cache_as_cleanable(test_env):
+    cache_dir = test_env / ".cache/spotify/Data"
+    cache_dir.mkdir(parents=True)
+
+    entry = build_analysis_entry("Data", cache_dir, size=512, total_size=1024)
+
+    assert entry["is_cleanable"] is True
+    assert entry["cleanable_reason"] == "App cache"
+    assert entry["icon"] == "🧹"
+
+
+def test_build_analysis_entry_marks_generic_xdg_cache_as_cleanable(test_env):
+    cache_dir = test_env / ".cache/random-tool"
+    cache_dir.mkdir(parents=True)
+
+    entry = build_analysis_entry("random-tool", cache_dir, size=512, total_size=1024)
+    root_entry = build_analysis_entry(".cache", test_env / ".cache", size=512, total_size=1024)
+
+    assert entry["is_cleanable"] is True
+    assert entry["cleanable_reason"] == "XDG cache"
+    assert entry["icon"] == "🧹"
+    assert root_entry["is_cleanable"] is False
+
+
 def test_analyze_delete_user_writable_path_without_admin(test_env):
     target = test_env / "owned-file.txt"
     target.write_text("remove me")

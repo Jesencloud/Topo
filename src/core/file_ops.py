@@ -132,7 +132,12 @@ def has_valid_cachedir_tag(path: str | Path) -> bool:
     path = Path(path).expanduser()
     tag_path = path / CACHEDIR_TAG_FILE
     try:
-        if not path.is_dir() or tag_path.is_symlink() or not tag_path.is_file():
+        if (
+            path.is_symlink()
+            or not path.is_dir()
+            or tag_path.is_symlink()
+            or not tag_path.is_file()
+        ):
             return False
         with tag_path.open("r", encoding="utf-8", errors="ignore") as f:
             return f.read(len(CACHEDIR_TAG_SIGNATURE)) == CACHEDIR_TAG_SIGNATURE

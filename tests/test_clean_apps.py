@@ -3,13 +3,24 @@ from unittest.mock import MagicMock, call, patch
 
 from src.clean.apps import (
     clean_app_generic,
+    clean_apps_deep,
     clean_browser_caches,
     clean_generic_xdg_caches,
     clean_orphaned_remnants,
     clean_snap_cache,
     proactive_app_detection,
 )
-from src.core.app_cache import find_cleanable_cache_dirs_in_roots
+from src.core.app_cache import (
+    find_cleanable_cache_dirs_in_roots,
+    find_standard_cache_dirs,
+    find_xdg_cache_candidates,
+    get_cache_cleanable_reason,
+    is_generic_xdg_cache_path,
+)
+from src.core.desktop_app_cache import (
+    get_desktop_app_cleanup_defs,
+    is_desktop_app_cache_path,
+)
 from src.core.file_ops import CACHEDIR_TAG_SIGNATURE
 
 
@@ -102,6 +113,43 @@ def test_clean_generic_xdg_caches(test_env):
         mock_clean_age.assert_called_with(cache_dir, days=3, dry_run=True)
 
 
+def test_find_xdg_cache_candidates_classifies_top_level_cache_dirs(test_env):
+    obvious_cache = test_env / ".cache/build-cache"
+    stale_app_cache = test_env / ".cache/randomapp"
+    nested_cache = stale_app_cache / "nested-cache"
+    for path in (obvious_cache, nested_cache):
+        path.mkdir(parents=True)
+
+    candidates = find_xdg_cache_candidates(days=30)
+    by_path = {candidate.path: candidate for candidate in candidates}
+
+    assert by_path[obvious_cache].age_days == 3
+    assert by_path[obvious_cache].label == "Generic Cache"
+    assert by_path[stale_app_cache].age_days == 30
+    assert by_path[stale_app_cache].label == "Stale App Data"
+    assert nested_cache not in by_path
+    assert is_generic_xdg_cache_path(obvious_cache) is True
+    assert is_generic_xdg_cache_path(test_env / ".cache") is False
+
+
+def test_clean_generic_xdg_caches_skips_symlinked_cache_dirs(test_env):
+    real_data = test_env / "important-cache-target"
+    real_data.mkdir()
+    marker = real_data / "data.bin"
+    marker.write_bytes(b"keep")
+    link = test_env / ".cache/link-cache"
+    link.symlink_to(real_data)
+
+    with patch("pathlib.Path.home", return_value=test_env):
+        size, items = clean_generic_xdg_caches(days=0, dry_run=False)
+
+    assert size == 0
+    assert items == 0
+    assert marker.exists()
+    assert link.exists()
+    assert is_generic_xdg_cache_path(link) is False
+
+
 def test_clean_generic_xdg_caches_removes_cachedir_tagged_directory(test_env):
     cache_dir = test_env / ".cache/tagged-cache"
     cache_dir.mkdir(parents=True)
@@ -130,6 +178,65 @@ def test_clean_generic_xdg_caches_dry_run_keeps_cachedir_tagged_directory(test_e
     assert cache_dir.exists()
 
 
+def test_find_standard_cache_dirs_finds_tagged_dirs_and_prunes(test_env):
+    cache_root = test_env / ".cache"
+    tagged = cache_root / "tagged-cache"
+    nested_under_tagged = tagged / "nested"
+    nested_tagged = cache_root / "app" / "nested-tagged"
+    tagged.mkdir(parents=True)
+    nested_under_tagged.mkdir()
+    nested_tagged.mkdir(parents=True)
+    (tagged / "CACHEDIR.TAG").write_text(f"{CACHEDIR_TAG_SIGNATURE}\n")
+    (nested_under_tagged / "CACHEDIR.TAG").write_text(f"{CACHEDIR_TAG_SIGNATURE}\n")
+    (nested_tagged / "CACHEDIR.TAG").write_text(f"{CACHEDIR_TAG_SIGNATURE}\n")
+
+    top_level = find_standard_cache_dirs(cache_root, max_depth=1)
+    recursive = find_standard_cache_dirs(cache_root)
+
+    assert top_level == [tagged]
+    assert tagged in recursive
+    assert nested_tagged in recursive
+    assert nested_under_tagged not in recursive
+    assert get_cache_cleanable_reason(tagged) == "CACHEDIR.TAG"
+
+
+def test_find_standard_cache_dirs_skips_tagged_symlinked_dirs(test_env):
+    target = test_env / "external-cache"
+    target.mkdir()
+    (target / "CACHEDIR.TAG").write_text(f"{CACHEDIR_TAG_SIGNATURE}\n")
+    link = test_env / ".cache/linked-cache"
+    link.symlink_to(target)
+
+    paths = find_standard_cache_dirs(test_env / ".cache")
+
+    assert link not in paths
+    assert get_cache_cleanable_reason(link) == ""
+
+
+def test_desktop_app_cache_defs_resolve_home_dynamically(test_env):
+    defs = get_desktop_app_cleanup_defs()
+
+    assert test_env / ".config/discord/Cache" in defs["Discord"]["paths"]
+    assert is_desktop_app_cache_path(test_env / ".cache/spotify/Data") is True
+    assert is_desktop_app_cache_path(test_env / "Documents/WeChat Files") is False
+
+
+def test_clean_apps_deep_uses_desktop_app_cache_defs(test_env):
+    discord_cache = test_env / ".config/discord/Cache"
+    discord_cache.mkdir(parents=True)
+    cache_file = discord_cache / "blob.bin"
+    cache_file.write_bytes(b"d" * 256)
+
+    with patch("src.clean.apps.is_app_running", return_value=False):
+        size, items, categories = clean_apps_deep(dry_run=False, detected_apps={})
+
+    assert size >= 256
+    assert items >= 1
+    assert categories >= 1
+    assert discord_cache.exists()
+    assert not cache_file.exists()
+
+
 def test_find_cleanable_cache_dirs_in_roots_finds_browser_cache_children_only(test_env):
     chrome_profile = test_env / ".config/google-chrome/Default"
     cache_dir = chrome_profile / "Cache"
@@ -151,6 +258,27 @@ def test_find_cleanable_cache_dirs_in_roots_finds_browser_cache_children_only(te
     assert firefox_disk_cache in paths
     assert chrome_profile not in paths
     assert chrome_profile / "Service Worker" not in paths
+    assert service_worker_db not in paths
+
+
+def test_find_cleanable_cache_dirs_in_roots_finds_desktop_app_cache_children(test_env):
+    slack_root = test_env / ".config/Slack"
+    cache_dir = slack_root / "Cache"
+    cache_storage = slack_root / "Service Worker/CacheStorage"
+    service_worker_db = slack_root / "Service Worker/Database"
+    cache_dir.mkdir(parents=True)
+    cache_storage.mkdir(parents=True)
+    service_worker_db.mkdir(parents=True)
+    (slack_root / "storage.json").write_text("{}")
+
+    paths = find_cleanable_cache_dirs_in_roots(
+        [".config/Slack"], require_sensitive_app_data_root=True
+    )
+
+    assert cache_dir in paths
+    assert cache_storage in paths
+    assert slack_root not in paths
+    assert slack_root / "Service Worker" not in paths
     assert service_worker_db not in paths
 
 

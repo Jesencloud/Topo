@@ -9,17 +9,15 @@ from typing import Any
 
 from ..ui.navigator import AnalyzeSelector, Navigator, TopFilesSelector
 from . import system
-from .app_cache import find_cleanable_cache_dirs
+from .app_cache import find_cleanable_cache_dirs, get_cache_cleanable_reason
 from .constants import BLUE, CYAN, GREEN, MAGENTA, PURPLE, RED, RESET, YELLOW
 from .file_ops import (
     get_size,
-    has_valid_cachedir_tag,
     record_deletion_audit,
     safe_remove,
     validate_path_for_deletion,
 )
 from .system import run_command
-from .whitelist import is_cleanable_linux_app_data
 
 SCAN_SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 
@@ -227,10 +225,8 @@ def get_age_hint(path: Path) -> str:
 
 def build_analysis_entry(name: str, path: Path, size: int, total_size: int) -> dict[str, Any]:
     """Build a disk-analysis row with Linux cache metadata."""
-    cachedir_tag = has_valid_cachedir_tag(path)
-    app_cache = is_cleanable_linux_app_data(path)
-    is_cleanable = cachedir_tag or app_cache
-    cleanable_reason = "CACHEDIR.TAG" if cachedir_tag else "App cache" if app_cache else ""
+    cleanable_reason = get_cache_cleanable_reason(path)
+    is_cleanable = bool(cleanable_reason)
     icon = "🧹" if is_cleanable else "🗂️" if path.is_dir() else "📄"
     return {
         "name": name,

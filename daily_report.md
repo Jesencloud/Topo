@@ -1,3 +1,55 @@
+# Daily Modification Report - 2026-06-08
+
+## Project: topo (Topo) - Shared Cache Classification for Clean and Analyze
+
+Today's session continued the cache-cleanup refactor after the browser-cache work. The goal was to reduce duplicated cache rules between Clean and Analyze while keeping deletion behavior conservative: Clean owns automatic cleanup, Analyze only marks or safely handles paths that match shared cache metadata.
+
+### 1. Desktop Application Cache Definitions
+*   **Single Desktop App Cache Source**: Added `src/core/desktop_app_cache.py` to centralize high-precision desktop application cache definitions for Discord, Telegram, Slack, Spotify, Zoom, Microsoft Teams, VLC, OBS Studio, and WeChat.
+*   **Cache vs Extra Cleanup Split**: Desktop app definitions now separate `cache_paths` from `extra_cleanup_paths`. Clean can still process app-specific cleanup paths, but Analyze only marks explicit cache paths as `App cache`.
+*   **Dynamic Home Resolution**: Desktop app paths are resolved with `Path.home()` at runtime instead of being frozen when `constants.py` is imported. This improves test isolation and avoids stale HOME assumptions.
+*   **Reduced Constants Bloat**: Removed the old `APP_DEFS` block from `src/core/constants.py`; Clean now calls `get_desktop_app_cleanup_defs()`.
+*   **Duplicate Detection Avoidance**: `proactive_app_detection()` now skips known desktop app cache/config roots via `DESKTOP_APP_DETECTION_NAMES`, avoiding duplicate registry entries for apps already handled by shared definitions.
+
+### 2. CACHEDIR.TAG Standard Cache Handling
+*   **Shared Standard Cache Logic**: Moved standard cache classification into `src/core/app_cache.py` with `is_standard_cache_dir()`, `find_standard_cache_dirs()`, and `get_cache_cleanable_reason()`.
+*   **Analyze Reason Reuse**: `build_analysis_entry()` no longer hardcodes `CACHEDIR.TAG` vs `App cache` logic. It now asks `get_cache_cleanable_reason()` for the shared reason string.
+*   **Clean Discovery Reuse**: `clean_generic_xdg_caches()` now uses `find_standard_cache_dirs()` before generic XDG cache cleanup, so tagged cache discovery is shared instead of local to Clean.
+*   **Symlink Safety**: `has_valid_cachedir_tag()` now rejects symlinked directories and symlinked tag files, preventing a tagged symlink from pulling an external directory into cleanup.
+*   **Traversal Pruning**: Standard cache discovery prunes below a matched tagged cache directory so nested tags inside an already-cleanable cache root do not create duplicate cleanup targets.
+
+### 3. Generic XDG Cache Classification
+*   **Shared XDG Candidate Model**: Added `XdgCacheCandidate` and `find_xdg_cache_candidates()` in `src/core/app_cache.py` for top-level `~/.cache/<app>` candidates.
+*   **Consistent Age Policy**: Generic XDG cache classification now carries its cleanup policy with the candidate:
+    *   Names containing `cache`, `log`, `tmp`, or `temp` are labeled `Generic Cache` and use the conservative 3-day policy.
+    *   Other top-level `~/.cache/<app>` entries are labeled `Stale App Data` and use the 30-day policy.
+*   **Analyze Metadata**: Analyze now marks `~/.cache/<app>` entries as `XDG cache`, while the `~/.cache` root itself remains unmarked to avoid encouraging whole-root deletion.
+*   **Profile Discovery Boundary**: Generic XDG classification is intentionally not used inside browser/profile child discovery. This prevents broad `~/.cache/mozilla/...` matching from hiding more precise cache children such as `cache2`.
+*   **Symlink Safety**: Generic XDG candidate discovery skips symlinked cache entries so cleanup cannot follow `~/.cache/<name>` links into external data.
+
+### 4. Code Simplification
+*   **Removed Dead Helper**: Dropped the unused `is_cleanable_cache_path()` helper after the discovery path was narrowed.
+*   **Avoided Double Handling**: `find_xdg_cache_candidates()` now skips `CACHEDIR.TAG` directories, so Clean no longer needs a separate `handled_tagged_cache_paths` set.
+*   **Simplified Desktop App Cache Iteration**: Removed the internal-only `get_desktop_app_cache_defs()` helper; `iter_desktop_app_cache_paths()` now derives paths directly from `DESKTOP_APP_DEFS`.
+*   **Cleaner Detection Setup**: Removed an unnecessary temporary variable from `proactive_app_detection()` when building known handled app names.
+
+### 5. Regression Coverage
+*   **Desktop App Coverage**: Added tests proving desktop app cache definitions resolve against the current HOME, Clean uses those definitions, Analyze marks desktop app cache paths as `App cache`, and WeChat extra cleanup paths are not marked as cache.
+*   **Standard Cache Coverage**: Added tests for `CACHEDIR.TAG` discovery, recursive pruning, and symlinked tagged directory rejection.
+*   **XDG Cache Coverage**: Added tests for generic XDG candidate classification, Analyze `XDG cache` metadata, symlink skip behavior, and non-interference with browser cache discovery.
+
+### 6. Verification
+*   **Full Test Suite**: `pytest -q` passed with **243 tests**.
+*   **Ruff Check**: `python -m ruff check` passed.
+*   **Ruff Format**: `python -m ruff format --check` passed.
+*   **Diff Hygiene**: `git diff --check` passed.
+
+### 7. Follow-Up Notes
+*   The next shared-cache candidates worth considering are package-manager, container, and AI/model caches. Those should likely share metadata for Analyze display, but keep command-based cleanup in Clean because they often require package-manager or tool-specific commands instead of direct file deletion.
+*   Analyze should continue to mark cache-like entries and provide safe deletion fallback only where validation allows it; broad automated cleanup should remain in Clean.
+
+---
+
 # Daily Modification Report - 2026-06-07
 
 ## Project: topo (Topo) - Browser Cache Cleanup Refactor, Analyze Safety & App Removal Sorting

@@ -2,15 +2,23 @@ import json
 import shutil
 from pathlib import Path
 
-from ..core.app_cache import find_cleanable_cache_dirs_in_roots
+from ..core.app_cache import (
+    find_cleanable_cache_dirs_in_roots,
+    find_standard_cache_dirs,
+    find_xdg_cache_candidates,
+    resolve_cache_path,
+)
 from ..core.browser_cache import BROWSER_CACHE_DEFS, BROWSER_CACHE_ROOT_NAMES
-from ..core.constants import APP_DEFS, DETECTED_APPS_FILE
+from ..core.constants import DETECTED_APPS_FILE
+from ..core.desktop_app_cache import (
+    DESKTOP_APP_DETECTION_NAMES,
+    get_desktop_app_cleanup_defs,
+)
 from ..core.file_ops import (
     CLEANED_PATHS,
     bytes_to_human,
     clean_path_by_age,
     get_size_fast,
-    has_valid_cachedir_tag,
     is_app_running,
     parse_size_from_text,
     register_cleaned_path,
@@ -41,7 +49,8 @@ def proactive_app_detection():
         del detected[name]
 
     # 2. Discovery: Find new apps
-    handled_names = {n.lower() for n in APP_DEFS}
+    handled_names = {n.lower() for n in get_desktop_app_cleanup_defs()}
+    handled_names.update(DESKTOP_APP_DETECTION_NAMES)
     handled_names.update(n.lower() for n in BROWSER_CACHE_DEFS)
     handled_names.update(BROWSER_CACHE_ROOT_NAMES)
     handled_names.update(n.lower() for n in detected)
@@ -180,35 +189,37 @@ def clean_generic_xdg_caches(days=30, dry_run=False):
     total_size = 0
     total_items = 0
     try:
-        for item in cache_root.iterdir():
-            if not item.is_dir() or str(item.resolve()) in CLEANED_PATHS:
+        for item in find_standard_cache_dirs(cache_root, max_depth=1):
+            resolved = str(resolve_cache_path(item))
+            if resolved in CLEANED_PATHS:
                 continue
-            is_obvious_junk = any(kw in item.name.lower() for kw in ["cache", "log", "tmp", "temp"])
-            is_tagged_cache = has_valid_cachedir_tag(item)
-            if is_tagged_cache:
-                s = get_size_fast(item)
-                removed = safe_remove(
-                    item,
-                    use_trash=False,
-                    dry_run=dry_run,
-                    known_size_bytes=s,
-                )[0]
-                i = 1 if removed else 0
-            else:
-                age_days = min(days, 3) if is_obvious_junk else days
-                s, i = clean_path_by_age(item, days=age_days, dry_run=dry_run)
+            register_cleaned_path(item)
+            s = get_size_fast(item)
+            removed = safe_remove(
+                item,
+                use_trash=False,
+                dry_run=dry_run,
+                known_size_bytes=s,
+            )[0]
+            if removed:
+                total_size += s
+                total_items += 1
+                if not dry_run:
+                    print(f"  \033[0;32m✓\033[0m Tagged Cache: {item.name} ({bytes_to_human(s)})")
+
+        for candidate in find_xdg_cache_candidates(cache_root, days=days):
+            item = candidate.path
+            resolved = str(resolve_cache_path(item))
+            if resolved in CLEANED_PATHS:
+                continue
+            s, i = clean_path_by_age(item, days=candidate.age_days, dry_run=dry_run)
             if i > 0:
                 total_size += s
                 total_items += i
                 if not dry_run:
-                    tag = (
-                        "Tagged Cache"
-                        if is_tagged_cache
-                        else "Generic Cache"
-                        if is_obvious_junk
-                        else "Stale App Data"
+                    print(
+                        f"  \033[0;32m✓\033[0m {candidate.label}: {item.name} ({bytes_to_human(s)})"
                     )
-                    print(f"  \033[0;32m✓\033[0m {tag}: {item.name} ({bytes_to_human(s)})")
     except OSError:
         pass
     if dry_run and total_size > 0:
@@ -327,7 +338,7 @@ def clean_snap_cache(dry_run=False):
             # Snap cache is usually in <app>/common/.cache
             cache_path = app_dir / "common" / ".cache"
             if cache_path.exists():
-                # For cache dirs, we clean everything (0 days) to match APP_DEFS behavior
+                # For app cache dirs, clean all cache files.
                 s, i = clean_path_by_age(cache_path, days=0, dry_run=dry_run)
                 if i > 0:
                     total_size += s
@@ -364,7 +375,7 @@ def clean_apps_deep(dry_run=False, detected_apps=None):
     total_categories += c
 
     # Combined loop for defined and detected apps
-    all_apps = {**APP_DEFS, **detected_apps}
+    all_apps = {**get_desktop_app_cleanup_defs(), **detected_apps}
     for name, info in all_apps.items():
         s, i = clean_app_generic(name, info["paths"], info.get("procs"), dry_run=dry_run)
         if i > 0:
