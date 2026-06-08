@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from src.ui.navigator import (
+    ANSI_CSI_RE,
     AnalyzeSelector,
     CleanSelector,
     ConfirmSelector,
@@ -150,8 +151,14 @@ def test_analyze_empty_view_waits_for_back():
 
 def test_analyze_render_keeps_space_between_icon_and_name():
     items = [
-        {"name": "larger", "path": Path("/tmp/larger"), "size": 200, "percent": 2.0, "icon": "🗂️"},
         {"name": "folder", "path": Path("/tmp/folder"), "size": 100, "percent": 1.0, "icon": "🗂️"},
+        {
+            "name": "file.txt",
+            "path": Path("/tmp/file.txt"),
+            "size": 50,
+            "percent": 0.5,
+            "icon": "📄",
+        },
     ]
     sel = AnalyzeSelector("t", items, can_select=True)
     sel.selected_items.add(1)
@@ -166,7 +173,10 @@ def test_analyze_render_keeps_space_between_icon_and_name():
         sel.render()
 
     output = write.call_args.args[0]
-    assert "🗂️  folder" in output
+    visible_output = ANSI_CSI_RE.sub("", output)
+    assert "🗂️  folder" in visible_output
+    assert "📄 file.txt" in visible_output
+    assert "📄  file.txt" not in visible_output
 
 
 # --- UninstallSelector ---

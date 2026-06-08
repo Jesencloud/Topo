@@ -83,11 +83,52 @@ def _release_download_url(tag: str, asset_name: str) -> str:
     return f"https://github.com/Jesencloud/Topo/releases/download/{tag}/{asset_name}"
 
 
-def _download_file(url: str, destination: Path, timeout: int = 60) -> None:
-    subprocess.check_call(
-        ["curl", "-fL", "--retry", "2", "-A", "topo-updater", url, "-o", str(destination)],
-        timeout=timeout,
-    )
+def _download_file(url: str, destination: Path, timeout: int = 60, attempts: int = 4) -> None:
+    attempts = max(1, attempts)
+    partial = destination.with_name(f"{destination.name}.part")
+    last_error: OSError | subprocess.SubprocessError | None = None
+
+    for attempt in range(1, attempts + 1):
+        try:
+            partial.unlink(missing_ok=True)
+            argv = [
+                "curl",
+                "-fsSL",
+                "--retry",
+                "2",
+                "--retry-delay",
+                "1",
+                "--retry-connrefused",
+                "-A",
+                "topo-updater",
+                url,
+                "-o",
+                str(partial),
+            ]
+            result = subprocess.run(
+                argv,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=timeout,
+            )
+            if result.returncode == 0:
+                partial.replace(destination)
+                return
+            last_error = subprocess.CalledProcessError(
+                result.returncode,
+                argv,
+                stderr=result.stderr,
+            )
+        except (OSError, subprocess.SubprocessError) as e:
+            last_error = e
+
+        partial.unlink(missing_ok=True)
+        if attempt < attempts:
+            print(f" {GRAY}Download interrupted, retrying ({attempt + 1}/{attempts})...{RESET}")
+
+    if last_error is not None:
+        raise last_error
 
 
 def _expected_sha256(sha256sums_path: Path, asset_name: str) -> str | None:
@@ -107,6 +148,14 @@ def _file_sha256(path: Path) -> str:
         for chunk in iter(lambda: file.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _subprocess_stderr_tail(error: BaseException) -> str:
+    stderr = getattr(error, "stderr", None)
+    if not isinstance(stderr, str):
+        return ""
+    lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+    return lines[-1] if lines else ""
 
 
 def _verify_release_checksum(package_path: Path, sha256sums_path: Path) -> bool:
@@ -149,6 +198,8 @@ def _run_package_update(local_version: str, remote_tag: str) -> None:
             _download_file(_release_download_url(remote_tag, "SHA256SUMS"), sha256sums_path)
         except (OSError, subprocess.SubprocessError) as e:
             print(f" {RED}❌ Failed to download package update: {e}{RESET}")
+            if detail := _subprocess_stderr_tail(e):
+                print(f" {GRAY}{detail}{RESET}")
             return
 
         if not _verify_release_checksum(package_path, sha256sums_path):

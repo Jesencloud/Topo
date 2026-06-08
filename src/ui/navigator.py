@@ -730,10 +730,11 @@ class AnalyzeSelector(_PagedSelector):
                 style = "\033[1;35m" if is_hover else ""
                 name_padded = pad_and_truncate(item["name"], name_w)
                 icon = item.get("icon", "🗂️")
+                icon_gap = "  " if icon == "🗂️" else " "
                 if is_hover:
                     focus_line = _frame_line_count(buf)
                 buf.append(
-                    f"{cursor} {checkbox_str}{RESET}{bar_str}{item['percent']:>5.1f}%  {icon}  {style}{name_padded}{RESET} | {style}{bytes_to_human(item['size']):>10}{RESET}\033[K\n"
+                    f"{cursor} {checkbox_str}{RESET}{bar_str}{item['percent']:>5.1f}%  {icon}{icon_gap}{style}{name_padded}{RESET} | {style}{bytes_to_human(item['size']):>10}{RESET}\033[K\n"
                 )
 
         order_icon = "↓" if self.sort_reverse else "↑"
@@ -761,8 +762,9 @@ class AnalyzeSelector(_PagedSelector):
                 for idx in pair:
                     item = self.items[idx]
                     icon = item.get("icon", "🗂️")
+                    icon_gap = "  " if icon == "🗂️" else " "
                     name_padded = pad_and_truncate(item["name"], 35)
-                    line += f"   {THEME_TITLE}•{RESET} {icon}  {name_padded}"
+                    line += f"   {THEME_TITLE}•{RESET} {icon}{icon_gap}{name_padded}"
                 buf.append(line + "\033[K\n")
 
         if self.confirming_delete:

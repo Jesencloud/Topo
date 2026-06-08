@@ -57,6 +57,14 @@ Today's session continued the cache-cleanup refactor after the browser-cache wor
 *   **Duplication Review Result**: Moved Rust child-size parsing out of `src/clean/apps.py` and into `file_ops`, keeping fast-size logic centralized with `get_size_fast()`. The remaining symlink and WeChat tests cover different safety layers, so they were kept intentionally rather than collapsed.
 *   **Regression Coverage**: Added tests for symlinked browser cache discovery, symlinked cleanup roots, WeChat data preservation, Analyze icon expectations, parent-scan size reuse, and fallback sizing behavior.
 
+### 9. Post-v0.9.5 Follow-Up Fixes
+*   **Package Update Partial Download Retry**: Hardened package-mode `topo update` against intermittent GitHub Release/CDN short downloads such as `curl: (18) Transferred a partial file`. Downloads now write to `PACKAGE.part`, delete partial files on failure, retry up to four times, and only replace the final package path after a successful transfer.
+*   **Package Update Error Detail**: `topo update` keeps curl stderr quiet during recoverable retries, but if all attempts fail it prints the final curl error detail below the user-facing failure message.
+*   **Checksum Boundary Preserved**: The retry fix does not weaken package integrity checks. The downloaded `.deb` / `.rpm` still must match the Release `SHA256SUMS` entry before apt/dnf upgrade runs.
+*   **Analyze Disk Icon Spacing**: Refined the v0.9.5 Analyze Disk spacing polish so folder rows show `🗂️  name`, while file rows show `📄 name` with only one visible space. This keeps folder names visually separated without making file rows look over-spaced.
+*   **Regression Coverage**: Added update tests for User-Agent downloads, partial transfer retry, partial file cleanup after repeated failures, and navigator tests for folder/file icon spacing in Analyze Disk.
+*   **Verification**: Re-ran `pytest -q` with **251 tests**, `ruff check`, `ruff format --check`, and `git diff --check`; all passed.
+
 ---
 
 # Daily Modification Report - 2026-06-07

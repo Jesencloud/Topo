@@ -47,15 +47,68 @@ def test_fetch_latest_release_tag_falls_back_to_release_redirect(mock_check_outp
     assert mock_check_output.call_args_list[1].kwargs["stderr"] is subprocess.DEVNULL
 
 
-@patch("src.manage.update.subprocess.check_call")
-def test_download_file_uses_user_agent(mock_check_call, tmp_path):
+@patch("src.manage.update.subprocess.run")
+def test_download_file_uses_user_agent(mock_run, tmp_path):
     destination = tmp_path / "asset"
+
+    def fake_run(argv, **_kwargs):
+        partial = argv[-1]
+        assert partial.endswith(".part")
+        destination.with_name("asset.part").write_bytes(b"asset")
+        return MagicMock(returncode=0, stderr="")
+
+    mock_run.side_effect = fake_run
 
     _download_file("https://example.test/asset", destination)
 
-    argv = mock_check_call.call_args.args[0]
+    argv = mock_run.call_args.args[0]
     assert "-A" in argv
     assert "topo-updater" in argv
+    assert destination.read_bytes() == b"asset"
+    assert not destination.with_name("asset.part").exists()
+
+
+@patch("src.manage.update.subprocess.run")
+def test_download_file_retries_partial_transfer(mock_run, tmp_path, capsys):
+    destination = tmp_path / "asset"
+
+    def fake_run(argv, **_kwargs):
+        partial = destination.with_name("asset.part")
+        if mock_run.call_count == 1:
+            partial.write_bytes(b"partial")
+            return MagicMock(returncode=18, stderr="curl: (18) Transferred a partial file")
+        partial.write_bytes(b"complete")
+        return MagicMock(returncode=0, stderr="")
+
+    mock_run.side_effect = fake_run
+
+    _download_file("https://example.test/asset", destination)
+
+    assert mock_run.call_count == 2
+    assert destination.read_bytes() == b"complete"
+    assert not destination.with_name("asset.part").exists()
+    assert "Download interrupted, retrying (2/4)" in capsys.readouterr().out
+
+
+@patch("src.manage.update.subprocess.run")
+def test_download_file_removes_partial_after_failed_attempts(mock_run, tmp_path):
+    destination = tmp_path / "asset"
+
+    def fake_run(_argv, **_kwargs):
+        destination.with_name("asset.part").write_bytes(b"partial")
+        return MagicMock(returncode=18, stderr="curl: (18) Transferred a partial file")
+
+    mock_run.side_effect = fake_run
+
+    try:
+        _download_file("https://example.test/asset", destination, attempts=2)
+    except subprocess.CalledProcessError as e:
+        assert e.returncode == 18
+    else:
+        raise AssertionError("Expected download failure")
+
+    assert not destination.exists()
+    assert not destination.with_name("asset.part").exists()
 
 
 def test_verify_release_checksum_accepts_matching_asset(tmp_path):
