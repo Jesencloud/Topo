@@ -36,6 +36,18 @@ Today's session completed the next shared-cache refactor after the 2026-06-08 wo
 *   **Ruff Format**: `ruff format --check` passed.
 *   **Diff Hygiene**: `git diff --check` passed.
 
+### 6. Package Update GPG Verification
+*   **Automatic Signature Verification**: Package-mode `topo update` now verifies the Release checksum manifest before installing downloaded `.deb` / `.rpm` packages when `gpg` is available.
+*   **Release Assets Used**: The updater downloads `SHA256SUMS`, `SHA256SUMS.asc`, and `topo-release-public.asc` alongside the target package. It verifies the manifest signature first, then verifies the package hash against `SHA256SUMS`.
+*   **Temporary GPG Home**: Signature verification imports the release public key into a temporary `gnupg` directory under the update temp directory, so user keyrings are not modified.
+*   **Pinned Signer Binding**: Verification no longer trusts a key merely because the expected Topo fingerprint exists in the temporary keyring. It parses `gpg --status-fd=1 --verify` output and requires the `VALIDSIG` primary-key fingerprint to match the pinned Topo release fingerprint `4B35 C17C F8E6 6373 2726 A99F 5008 6DB9 98B4 D883`.
+*   **Multi-Key Attack Rejection**: Added coverage for the case where a downloaded public-key asset contains both the real Topo public key and another key, but `SHA256SUMS.asc` is signed by the other key. That update is now rejected.
+*   **No-GPG Fallback Warning**: If `gpg` is not installed, package-mode update falls back to SHA256-only verification and prints that SHA256 detects corrupted downloads but does not authenticate the release publisher.
+*   **Fail-Closed With GPG**: If `gpg` is installed, missing or invalid signature/key assets stop the update. Release publishing must continue to attach `SHA256SUMS.asc` and `topo-release-public.asc` for every package release.
+*   **README Trust Boundary Note**: The package install section now states that `topo update` verifies `SHA256SUMS.asc` when `gpg` exists, and that SHA256-only fallback does not authenticate the publisher.
+*   **Regression Coverage**: Added update tests for no-`gpg` fallback messaging, pinned `VALIDSIG` parsing, foreign signer rejection, multi-key public-key asset rejection, and signature asset download behavior.
+*   **Verification**: Re-ran `pytest -q` with **264 tests**, `ruff check`, `ruff format --check`, and `git diff --check`; all passed.
+
 ---
 
 # Daily Modification Report - 2026-06-08

@@ -3,10 +3,13 @@ from hashlib import sha256
 from unittest.mock import MagicMock, patch
 
 from src.manage.update import (
+    TOPO_RELEASE_KEY_FINGERPRINT,
     _download_file,
     _fetch_latest_release_tag,
+    _release_signature_status_matches,
     _should_update,
     _verify_release_checksum,
+    _verify_release_signature,
     run_update,
 )
 
@@ -130,6 +133,129 @@ def test_verify_release_checksum_rejects_mismatch(tmp_path):
     assert _verify_release_checksum(package, sha256sums) is False
 
 
+def test_release_signature_status_matches_pinned_primary_fingerprint():
+    signing_subkey_fingerprint = "A" * 40
+    output = (
+        "[GNUPG:] NEWSIG\n"
+        f"[GNUPG:] VALIDSIG {signing_subkey_fingerprint} "
+        f"2026-06-09 1781000000 0 4 0 1 10 00 {TOPO_RELEASE_KEY_FINGERPRINT}\n"
+    )
+
+    assert _release_signature_status_matches(output) is True
+
+
+def test_release_signature_status_rejects_foreign_primary_fingerprint():
+    attacker_fingerprint = "A" * 40
+    output = (
+        "[GNUPG:] NEWSIG\n"
+        f"[GNUPG:] VALIDSIG {attacker_fingerprint} "
+        f"2026-06-09 1781000000 0 4 0 1 10 00 {attacker_fingerprint}\n"
+    )
+
+    assert _release_signature_status_matches(output) is False
+
+
+@patch("src.manage.update.shutil.which", return_value=None)
+def test_verify_release_signature_falls_back_without_gpg(_mock_which, tmp_path, capsys):
+    assert (
+        _verify_release_signature(
+            tmp_path / "SHA256SUMS",
+            tmp_path / "SHA256SUMS.asc",
+            tmp_path / "topo-release-public.asc",
+        )
+        is True
+    )
+
+    output = capsys.readouterr().out
+    assert "falling back to SHA256 verification only" in output
+    assert "does not authenticate the release publisher" in output
+
+
+@patch("src.manage.update.shutil.which", return_value="/usr/bin/gpg")
+@patch("src.manage.update.subprocess.run")
+def test_verify_release_signature_checks_pinned_key_and_signature(mock_run, _mock_which, tmp_path):
+    sha256sums = tmp_path / "SHA256SUMS"
+    signature = tmp_path / "SHA256SUMS.asc"
+    public_key = tmp_path / "topo-release-public.asc"
+
+    mock_run.side_effect = [
+        MagicMock(returncode=0, stderr=""),
+        MagicMock(
+            returncode=0,
+            stdout=(
+                f"[GNUPG:] VALIDSIG {TOPO_RELEASE_KEY_FINGERPRINT} "
+                f"2026-06-09 1781000000 0 4 0 1 10 00 {TOPO_RELEASE_KEY_FINGERPRINT}\n"
+            ),
+            stderr="gpg: Good signature",
+        ),
+    ]
+
+    assert _verify_release_signature(sha256sums, signature, public_key) is True
+
+    assert mock_run.call_count == 2
+    assert "--import" in mock_run.call_args_list[0].args[0]
+    assert "--status-fd=1" in mock_run.call_args_list[1].args[0]
+    assert "--verify" in mock_run.call_args_list[1].args[0]
+
+
+@patch("src.manage.update.shutil.which", return_value="/usr/bin/gpg")
+@patch("src.manage.update.subprocess.run")
+def test_verify_release_signature_rejects_unexpected_key(mock_run, _mock_which, tmp_path):
+    attacker_fingerprint = "A" * 40
+    mock_run.side_effect = [
+        MagicMock(returncode=0, stderr=""),
+        MagicMock(
+            returncode=0,
+            stdout=(
+                f"[GNUPG:] VALIDSIG {attacker_fingerprint} "
+                f"2026-06-09 1781000000 0 4 0 1 10 00 {attacker_fingerprint}\n"
+            ),
+            stderr="gpg: Good signature",
+        ),
+    ]
+
+    assert (
+        _verify_release_signature(
+            tmp_path / "SHA256SUMS",
+            tmp_path / "SHA256SUMS.asc",
+            tmp_path / "topo-release-public.asc",
+        )
+        is False
+    )
+
+    assert mock_run.call_count == 2
+
+
+@patch("src.manage.update.shutil.which", return_value="/usr/bin/gpg")
+@patch("src.manage.update.subprocess.run")
+def test_verify_release_signature_rejects_foreign_signature_even_if_topo_key_is_imported(
+    mock_run, _mock_which, tmp_path
+):
+    attacker_fingerprint = "A" * 40
+    mock_run.side_effect = [
+        MagicMock(returncode=0, stderr="gpg: imported Topo and attacker public keys"),
+        MagicMock(
+            returncode=0,
+            stdout=(
+                f"[GNUPG:] VALIDSIG {attacker_fingerprint} "
+                f"2026-06-09 1781000000 0 4 0 1 10 00 {attacker_fingerprint}\n"
+            ),
+            stderr="gpg: Good signature from attacker",
+        ),
+    ]
+
+    assert (
+        _verify_release_signature(
+            tmp_path / "SHA256SUMS",
+            tmp_path / "SHA256SUMS.asc",
+            tmp_path / "topo-release-public.asc",
+        )
+        is False
+    )
+
+    assert mock_run.call_count == 2
+
+
 @patch("src.manage.update.get_install_source", return_value="package")
 @patch("src.manage.update._read_local_version", return_value="0.9.1")
 @patch("src.manage.update._fetch_latest_release_tag", return_value="v0.9.3")
@@ -147,6 +273,7 @@ def test_run_update_downloads_and_installs_package_update(
     capsys,
 ):
     package_bytes = b"rpm package"
+    monkeypatch.setattr("src.manage.update.shutil.which", lambda _name: None)
 
     def fake_download(_url, destination, timeout=60):
         if destination.name == "SHA256SUMS":
@@ -174,6 +301,57 @@ def test_run_update_downloads_and_installs_package_update(
     argv = mock_run.call_args.args[0]
     assert argv[:4] == ["sudo", "dnf", "upgrade", "-y"]
     assert argv[4].endswith("topo-0.9.3-1.x86_64.rpm")
+
+
+@patch("src.manage.update.get_install_source", return_value="package")
+@patch("src.manage.update._read_local_version", return_value="0.9.1")
+@patch("src.manage.update._fetch_latest_release_tag", return_value="v0.9.3")
+@patch("src.manage.update.get_package_asset_name", return_value="topo-0.9.3-1.x86_64.rpm")
+@patch("src.manage.update.get_package_upgrade_argv")
+@patch("src.manage.update._verify_release_signature", return_value=True)
+@patch("src.manage.update.subprocess.run")
+def test_run_update_downloads_signature_assets_when_gpg_is_available(
+    mock_run,
+    _mock_verify_signature,
+    mock_upgrade_argv,
+    _mock_asset_name,
+    _mock_remote_tag,
+    _mock_local_version,
+    _mock_install_source,
+    monkeypatch,
+):
+    package_bytes = b"rpm package"
+    downloaded = []
+    monkeypatch.setattr(
+        "src.manage.update.shutil.which", lambda name: "/usr/bin/gpg" if name == "gpg" else None
+    )
+
+    def fake_download(_url, destination, timeout=60):
+        downloaded.append(destination.name)
+        if destination.name == "SHA256SUMS":
+            checksum = sha256(package_bytes).hexdigest()
+            destination.write_text(f"{checksum}  topo-0.9.3-1.x86_64.rpm\n")
+        else:
+            destination.write_bytes(package_bytes)
+
+    monkeypatch.setattr("src.manage.update._download_file", fake_download)
+    mock_upgrade_argv.side_effect = lambda package_path: [
+        "sudo",
+        "dnf",
+        "upgrade",
+        "-y",
+        str(package_path),
+    ]
+    mock_run.return_value = MagicMock(returncode=0)
+
+    run_update()
+
+    assert downloaded == [
+        "topo-0.9.3-1.x86_64.rpm",
+        "SHA256SUMS",
+        "SHA256SUMS.asc",
+        "topo-release-public.asc",
+    ]
 
 
 @patch("src.manage.update.subprocess.run")

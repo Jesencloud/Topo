@@ -45,7 +45,7 @@ sudo apt install ./topo_xxx_amd64.deb
 sudo dnf install ./topo-xxx-1.x86_64.rpm
 ```
 
-Replace `xxx` with the version from the release you downloaded. Use `topo_xxx_arm64.deb` on Debian/Ubuntu ARM64 systems and `topo-xxx-1.aarch64.rpm` on Fedora/RHEL ARM64 systems. Package installs place Topo under `/usr/lib/topo` and expose `/usr/bin/topo`; after installation, use `topo update` and `topo remove` for lifecycle management.
+Replace `xxx` with the version from the release you downloaded. Use `topo_xxx_arm64.deb` on Debian/Ubuntu ARM64 systems and `topo-xxx-1.aarch64.rpm` on Fedora/RHEL ARM64 systems. Package installs place Topo under `/usr/lib/topo` and expose `/usr/bin/topo`; after installation, use `topo update` and `topo remove` for lifecycle management. During package updates, Topo verifies `SHA256SUMS.asc` when `gpg` is installed; without `gpg`, it falls back to SHA256 integrity checks only, which detect corrupted downloads but do not authenticate the release publisher.
 
 ```bash
   ████████  ██████  ██████   ██████
@@ -161,15 +161,8 @@ Select apps to remove and Topo will find all associated residues.
   ○  6. java-25-openjdk-headless                236.8 MiB | 20d ago
   ○  7. clash-verge                             235.8 MiB | 6d ago
   ○  8. glibc-all-langpacks                     227.2 MiB | 20d ago
-  ○  9. rust-std-static                         162.7 MiB | 6d ago
-  ○ 10. llvm-libs                               140.5 MiB | 4d ago
-  ○ 11. cldr-emoji-annotation                   122.4 MiB | 1mo ago
-  ○ 12. gcc                                     120.8 MiB | 14d ago
-  ○ 13. libreoffice-calc                         27.4 MiB | 11d ago
-  ○ 14. orca                                     22.2 MiB | 20d ago
-  ○ 15. papers                                   14.6 MiB | 20d ago
 
- Page 1/4 | ↑↓←→ | A: All | N: Name | S: Size ↓ | T: Time | Space: Select
+ Page 1/4 | ↑↓←→ | PgUp/PgDn:Page | A: All | N: Name | S: Size ↓ | T: Time | Space: Select
 
  ☉ Selected Apps to Remove: Press Enter to Uninstall, ESC to Exit
    • brave-browser                         • Thunderbird           
@@ -209,16 +202,9 @@ Select a location to explore (Type numbers or Space to select):
   ○  6. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    4.3%  🗂️ GPUCache                       |    7.9 MiB
 ▶ ✓  7.  ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    1.6%  🗂️ logs                           |    2.8 MiB
   ○  8. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    1.1%  🗂️ clp                            |    2.0 MiB
-  ○  9. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    0.9%  🗂️ Partitions                     |    1.7 MiB
-  ○ 10. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    0.9%  🗂️ process-monitor                |    1.6 MiB
-  ○ 11. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    0.6%  🗂️ CachedProfilesData             |    1.1 MiB
-  ○ 12. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    0.4%  🗂️ Local Storage                  |  789.5 KiB
-  ○ 13. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    0.3%  🗂️ DawnWebGPUCache                |  544.4 KiB
-  ○ 14. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    0.3%  🗂️ DawnGraphiteCache              |  544.4 KiB
-  ○ 15. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    0.2%  🗂️ Dictionaries                   |  441.4 KiB
 
 
-  Page 1/3 | ↑↓←→ | A:All | F:Open Folder | R:Reload | S:Sort ↓ | Space:Select
+  Page 1/3 | ↑↓←→ | PgUp/PgDn:Page | A:All | F:Open Folder | R:Reload | S:Sort ↓ | Space:Select
 
  ☉ Selected Items to Remove: Enter:Delete
    • 🗂️ Cache                                 • 🗂️ logs

@@ -1,5 +1,6 @@
 import json
 import re
+import shutil
 import subprocess
 from hashlib import sha256
 from pathlib import Path
@@ -14,6 +15,10 @@ from ..core.install_source import (
     get_package_asset_name,
     get_package_upgrade_argv,
 )
+
+RELEASE_KEY_ASSET_NAME = "topo-release-public.asc"
+RELEASE_SIGNATURE_ASSET_NAME = "SHA256SUMS.asc"
+TOPO_RELEASE_KEY_FINGERPRINT = "4B35C17CF8E663732726A99F50086DB998B4D883"
 
 
 def _parse_version(version_text: str) -> Version | None:
@@ -158,6 +163,97 @@ def _subprocess_stderr_tail(error: BaseException) -> str:
     return lines[-1] if lines else ""
 
 
+def _normalized_gpg_fingerprint(value: str) -> str | None:
+    fingerprint = value.upper()
+    if re.fullmatch(r"[0-9A-F]{40}", fingerprint):
+        return fingerprint
+    return None
+
+
+def _release_signature_status_matches(status_output: str) -> bool:
+    for line in status_output.splitlines():
+        payload = line.partition("[GNUPG:] ")[2]
+        if not payload:
+            continue
+        fields = payload.split()
+        if len(fields) < 2 or fields[0] != "VALIDSIG":
+            continue
+
+        signing_fingerprint = _normalized_gpg_fingerprint(fields[1])
+        primary_fingerprint = _normalized_gpg_fingerprint(fields[-1])
+        if primary_fingerprint == TOPO_RELEASE_KEY_FINGERPRINT:
+            return True
+        if primary_fingerprint is None and signing_fingerprint == TOPO_RELEASE_KEY_FINGERPRINT:
+            return True
+    return False
+
+
+def _verify_release_signature(
+    sha256sums_path: Path, signature_path: Path, public_key_path: Path
+) -> bool:
+    if not shutil.which("gpg"):
+        print(f" {YELLOW}⚠️  gpg not found; falling back to SHA256 verification only.{RESET}")
+        print(
+            f" {GRAY}SHA256 detects download corruption but does not authenticate "
+            f"the release publisher. Install gnupg for signature verification.{RESET}"
+        )
+        return True
+
+    gpg_home = sha256sums_path.parent / "gnupg"
+    try:
+        gpg_home.mkdir(mode=0o700, exist_ok=True)
+        gpg_home.chmod(0o700)
+    except OSError as e:
+        print(f" {RED}❌ Failed to prepare temporary GPG home: {e}{RESET}")
+        return False
+
+    base_argv = ["gpg", "--batch", "--homedir", str(gpg_home)]
+
+    try:
+        import_result = subprocess.run(
+            [*base_argv, "--import", str(public_key_path)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f" {RED}❌ Failed to import Topo release key: {e}{RESET}")
+        return False
+
+    if import_result.returncode != 0:
+        print(f" {RED}❌ Failed to import Topo release key.{RESET}")
+        if detail := _subprocess_stderr_tail(import_result):
+            print(f" {GRAY}{detail}{RESET}")
+        return False
+
+    try:
+        verify_result = subprocess.run(
+            [
+                *base_argv,
+                "--status-fd=1",
+                "--verify",
+                str(signature_path),
+                str(sha256sums_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f" {RED}❌ Failed to verify SHA256SUMS signature: {e}{RESET}")
+        return False
+
+    if verify_result.returncode != 0 or not _release_signature_status_matches(verify_result.stdout):
+        print(f" {RED}❌ SHA256SUMS signature verification failed.{RESET}")
+        if detail := _subprocess_stderr_tail(verify_result):
+            print(f" {GRAY}{detail}{RESET}")
+        return False
+
+    print(f" {GREEN}✓{RESET} Verified SHA256SUMS signature with Topo release key")
+    return True
+
+
 def _verify_release_checksum(package_path: Path, sha256sums_path: Path) -> bool:
     expected = _expected_sha256(sha256sums_path, package_path.name)
     if not expected:
@@ -190,16 +286,31 @@ def _run_package_update(local_version: str, remote_tag: str) -> None:
         download_dir = Path(temp_dir)
         package_path = download_dir / asset_name
         sha256sums_path = download_dir / "SHA256SUMS"
+        signature_path = download_dir / RELEASE_SIGNATURE_ASSET_NAME
+        public_key_path = download_dir / RELEASE_KEY_ASSET_NAME
+        gpg_available = shutil.which("gpg") is not None
 
         try:
             print(f" {GRAY}↓ Downloading {asset_name}...{RESET}")
             _download_file(_release_download_url(remote_tag, asset_name), package_path)
             print(f" {GRAY}↓ Downloading SHA256SUMS...{RESET}")
             _download_file(_release_download_url(remote_tag, "SHA256SUMS"), sha256sums_path)
+            if gpg_available:
+                print(f" {GRAY}↓ Downloading {RELEASE_SIGNATURE_ASSET_NAME}...{RESET}")
+                _download_file(
+                    _release_download_url(remote_tag, RELEASE_SIGNATURE_ASSET_NAME), signature_path
+                )
+                print(f" {GRAY}↓ Downloading {RELEASE_KEY_ASSET_NAME}...{RESET}")
+                _download_file(
+                    _release_download_url(remote_tag, RELEASE_KEY_ASSET_NAME), public_key_path
+                )
         except (OSError, subprocess.SubprocessError) as e:
             print(f" {RED}❌ Failed to download package update: {e}{RESET}")
             if detail := _subprocess_stderr_tail(e):
                 print(f" {GRAY}{detail}{RESET}")
+            return
+
+        if not _verify_release_signature(sha256sums_path, signature_path, public_key_path):
             return
 
         if not _verify_release_checksum(package_path, sha256sums_path):

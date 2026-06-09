@@ -742,7 +742,7 @@ class AnalyzeSelector(_PagedSelector):
 
         if self.can_select:
             prompts = [
-                f" {page_info} ↑↓←→ | A:All | F:Open Folder | R:Reload | S:Sort {order_icon} | Space:Select"
+                f" {page_info} ↑↓←→ | PgUp/PgDn:Page | A:All | F:Open Folder | R:Reload | S:Sort {order_icon} | Space:Select"
             ]
         else:
             prompts = [f" {page_info} ↑↓→ | F:Open Folder | R:Reload | S:Sort {order_icon}"]
@@ -1022,7 +1022,7 @@ class UninstallSelector(_PagedSelector):
             )
             buf.append(
                 f"\n Page {self.current_page + 1}/{total_pages} | "
-                f"{GRAY}↑↓←→ | A: All | {sort_hint} | Space: Select{RESET}\033[K\n"
+                f"{GRAY}↑↓←→ | PgUp/PgDn:Page | A: All | {sort_hint} | Space: Select{RESET}\033[K\n"
             )
 
         if self.selected_ids:
