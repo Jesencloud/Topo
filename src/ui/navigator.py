@@ -652,7 +652,7 @@ class InteractiveMenu:
 
 
 class AnalyzeSelector(_PagedSelector):
-    def __init__(self, title, items, show_banner=None, can_select=True):
+    def __init__(self, title, items, show_banner=None, can_select=True, notice=""):
         self.title = title
         self.items = items
         self.selected_index = 0
@@ -660,6 +660,7 @@ class AnalyzeSelector(_PagedSelector):
         self.sort_reverse = True
         self.show_banner = show_banner
         self.can_select = can_select
+        self.notice = notice
         self.page_size = 15
         self.current_page = 0
         self.confirming_delete = False
@@ -690,7 +691,10 @@ class AnalyzeSelector(_PagedSelector):
             if self.can_select
             else f"{GRAY}Select a category to explore (Total: {total_disk}):{RESET}"
         )
-        buf.append(f"{hint}\033[K\n\n")
+        buf.append(f"{hint}\033[K\n")
+        if self.notice:
+            buf.append(f"{YELLOW}⚠ {self.notice}{RESET}\033[K\n")
+        buf.append("\033[K\n")
 
         columns = shutil.get_terminal_size().columns
         available = columns - (2 + 5 + 8 + 3 + 2 + 5 + 12 + 5)

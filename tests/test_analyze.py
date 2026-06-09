@@ -6,16 +6,21 @@ from unittest.mock import MagicMock, patch
 from src.core.analyze import (
     ScanCache,
     _delete_analyze_paths,
+    _direct_child_count_exceeds,
     _needs_admin_for_deletion,
     _prime_cache_from_tree,
     _render_scan_header,
     _scan_status_message,
     _scan_with_spinner,
+    _shallow_preview_notice,
+    _should_use_shallow_preview,
+    _should_use_tree_scan,
     _sudo_remove,
     build_analysis_entry,
     build_linux_insights,
     get_rust_scan_data,
     get_rust_tree_data,
+    get_shallow_preview_data,
     run_deep_analysis,
 )
 from src.core.file_ops import CACHEDIR_TAG_SIGNATURE, has_valid_cachedir_tag
@@ -143,6 +148,98 @@ def test_prime_cache_from_tree_keys(test_env):
     assert ScanCache.get(root / "docs" / "sub")["total_size_bytes"] == 20
 
 
+def test_direct_child_count_exceeds_stops_after_limit(test_env):
+    root = test_env / "wide"
+    root.mkdir()
+    for index in range(3):
+        (root / f"item-{index}").write_text("x")
+
+    assert _direct_child_count_exceeds(root, limit=2) is True
+    assert _direct_child_count_exceeds(root, limit=3) is False
+
+
+def test_should_use_tree_scan_skips_cache_and_large_fanout_paths(test_env):
+    cache_profile = test_env / ".cache/BraveSoftware/Brave-Browser/Default"
+    cache_profile.mkdir(parents=True)
+    node_modules = test_env / "project/node_modules/pkg"
+    node_modules.mkdir(parents=True)
+    wide = test_env / "wide"
+    wide.mkdir()
+    for index in range(3):
+        (wide / f"item-{index}").write_text("x")
+
+    assert _should_use_tree_scan(cache_profile) is False
+    assert _should_use_tree_scan(node_modules) is False
+    assert _should_use_tree_scan(wide, direct_entry_limit=2) is False
+
+
+def test_should_use_shallow_preview_for_large_cache_leaf_only(test_env):
+    cache_data = test_env / ".cache/BraveSoftware/Brave-Browser/Default/Cache/Cache_Data"
+    cache_data.mkdir(parents=True)
+    profile = test_env / ".cache/BraveSoftware/Brave-Browser/Default"
+    node_modules = test_env / "project/node_modules/pkg"
+    node_modules.mkdir(parents=True)
+    for root in (cache_data, profile, node_modules):
+        for index in range(3):
+            (root / f"item-{index}").write_text("x")
+
+    assert _should_use_shallow_preview(cache_data, direct_entry_limit=2) is True
+    assert _should_use_shallow_preview(node_modules, direct_entry_limit=2) is True
+    assert _should_use_shallow_preview(profile, direct_entry_limit=2) is False
+
+
+def test_shallow_preview_data_is_bounded_and_non_recursive(test_env):
+    ScanCache.clear()
+    root = test_env / "Cache_Data"
+    nested = root / "nested"
+    nested.mkdir(parents=True)
+    (root / "a").write_bytes(b"a")
+    (root / "b").write_bytes(b"bb")
+    (nested / "inner").write_bytes(b"inner-data")
+
+    data = get_shallow_preview_data(root, entry_limit=10)
+
+    assert data is not None
+    assert data["is_shallow_preview"] is True
+    assert data["preview_truncated"] is False
+    assert data["total_size_bytes"] == 3
+    assert data["file_count"] == 2
+    assert data["preview_sampled_entries"] == 3
+    assert data["subdirs"]["nested"] == 0
+    assert "inner" not in data["subdirs"]
+
+
+def test_shallow_preview_data_stops_at_entry_limit(test_env):
+    ScanCache.clear()
+    root = test_env / "Cache_Data"
+    root.mkdir()
+    for index in range(3):
+        (root / f"item-{index}").write_text("x")
+
+    data = get_shallow_preview_data(root, entry_limit=2)
+
+    assert data is not None
+    assert data["preview_truncated"] is True
+    assert data["preview_sampled_entries"] == 2
+    assert len(data["subdirs"]) == 2
+
+
+def test_shallow_preview_notice_explains_truncation():
+    notice = _shallow_preview_notice(
+        {
+            "is_shallow_preview": True,
+            "preview_entry_limit": 500,
+            "preview_sampled_entries": 500,
+            "preview_truncated": True,
+            "subdirs": {"a": 1, "b": 2},
+        }
+    )
+
+    assert "sampled first 500 direct entries" in notice
+    assert "listing largest 50" in notice
+    assert "not a complete size ranking" in notice
+
+
 @patch("src.core.analyze.AnalyzeSelector")
 @patch("src.core.analyze._get_rust_scan_data_with_spinner")
 @patch("src.core.analyze._tree_scan_with_spinner")
@@ -164,6 +261,59 @@ def test_drill_after_tree_scan_hits_cache(mock_tree, mock_single, mock_selector,
     mock_tree.assert_called_once()
     # The drill into B is served from the primed cache; no single-level fallback.
     mock_single.assert_not_called()
+
+
+@patch("src.core.analyze.AnalyzeSelector")
+@patch("src.core.analyze._get_rust_scan_data_with_spinner")
+@patch("src.core.analyze._tree_scan_with_spinner")
+@patch("src.core.analyze._shallow_preview_with_spinner")
+@patch("src.core.analyze._should_use_shallow_preview", return_value=True)
+def test_large_cache_leaf_uses_shallow_preview(
+    _mock_should_shallow, mock_shallow, mock_tree, mock_single, mock_selector, test_env
+):
+    ScanCache.clear()
+    cache_data = test_env / ".cache/BraveSoftware/Brave-Browser/Default/Cache/Cache_Data"
+    cache_data.mkdir(parents=True)
+    mock_shallow.return_value = {
+        "total_size_bytes": 2,
+        "subdirs": {"a": 1, "b": 1},
+        "top_files": [],
+        "is_shallow_preview": True,
+        "preview_entry_limit": 500,
+        "preview_sampled_entries": 500,
+        "preview_truncated": True,
+    }
+    mock_selector.return_value.run.side_effect = [("QUIT", None)]
+
+    run_deep_analysis(cache_data)
+
+    mock_shallow.assert_called_once()
+    mock_tree.assert_not_called()
+    mock_single.assert_not_called()
+    assert "sampled first 500 direct entries" in mock_selector.call_args.kwargs["notice"]
+    assert "listing largest 50" in mock_selector.call_args.kwargs["notice"]
+    assert "not a complete size ranking" in mock_selector.call_args.kwargs["notice"]
+
+
+@patch("src.core.analyze.AnalyzeSelector")
+@patch("src.core.analyze._get_rust_scan_data_with_spinner")
+@patch("src.core.analyze._tree_scan_with_spinner")
+def test_cache_profile_uses_single_scan_not_tree(mock_tree, mock_single, mock_selector, test_env):
+    """Browser/cache profile dirs should avoid whole-subtree JSON/cache priming."""
+    ScanCache.clear()
+    profile = test_env / ".cache/BraveSoftware/Brave-Browser/Default"
+    profile.mkdir(parents=True)
+    mock_single.return_value = {
+        "total_size_bytes": 500,
+        "subdirs": {"Cache": 300, "Code Cache": 200},
+        "top_files": [],
+    }
+    mock_selector.return_value.run.side_effect = [("QUIT", None)]
+
+    run_deep_analysis(profile)
+
+    mock_tree.assert_not_called()
+    mock_single.assert_called_once()
 
 
 @patch("src.core.analyze.AnalyzeSelector")

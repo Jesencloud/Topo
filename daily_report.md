@@ -48,6 +48,17 @@ Today's session completed the next shared-cache refactor after the 2026-06-08 wo
 *   **Regression Coverage**: Added update tests for no-`gpg` fallback messaging, pinned `VALIDSIG` parsing, foreign signer rejection, multi-key public-key asset rejection, and signature asset download behavior.
 *   **Verification**: Re-ran `pytest -q` with **264 tests**, `ruff check`, `ruff format --check`, and `git diff --check`; all passed.
 
+### 7. Analyze Large Cache Directory Preview
+*   **Problem Found**: Entering browser cache leaf directories such as `~/.cache/BraveSoftware/Brave-Browser/Default/Cache/Cache_Data` could still feel stuck because the directory contains many direct small files. Avoiding `--tree` was not enough; a single-level Rust scan still had to stat every file before the UI could open.
+*   **Tree Scan Guard**: Analyze now skips whole-subtree `--tree` cache priming for browser/cache/profile paths, `node_modules`, `.git`, known cache directory names, and very wide directories. Normal directories still use `--tree` so drill-down remains fast where it helps.
+*   **Shallow Preview Mode**: Large leaf cache paths now use a bounded direct-child preview instead of a full scan. If a cache-like leaf has more than **500** direct entries, Analyze samples the first **500** direct entries and then shows the largest **50** rows from that sample.
+*   **Clear UI Notice**: `AnalyzeSelector` now supports a notice row. Shallow preview views display: `Preview mode: sampled first 500 direct entries; listing largest 50 from that sample, not a complete size ranking.`
+*   **Explicit Tradeoff**: The preview opens quickly but is intentionally not a complete size ranking. Full browser/cache cleanup remains better handled by `topo clean`, or by selecting the whole cache directory from its parent view.
+*   **Preview Cache**: Shallow preview results are stored in `ScanCache`, so returning to the parent and entering the same cache leaf again is served from memory during the same Topo session.
+*   **Test Runtime Fix**: Added `preview_sampled_entries` metadata so tests can verify the 500-entry preview message without constructing 500 fake result rows. `tests/test_analyze.py` dropped from about **4.6s** to about **0.4s** with durations enabled.
+*   **Regression Coverage**: Added tests for wide-directory detection, cache/profile single-level fallback, shallow preview triggering, bounded non-recursive preview data, preview notice rendering, and cached preview behavior.
+*   **Verification**: Re-ran `pytest -q` with **273 tests**, `ruff check`, `ruff format --check`, and `git diff --check`; all passed.
+
 ---
 
 # Daily Modification Report - 2026-06-08

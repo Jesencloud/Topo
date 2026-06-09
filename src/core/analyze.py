@@ -10,6 +10,7 @@ from typing import Any
 from ..ui.navigator import AnalyzeSelector, Navigator, TopFilesSelector
 from . import system
 from .app_cache import find_cleanable_cache_dirs, get_cache_cleanable_reason
+from .browser_cache import BROWSER_CACHE_ROOT_NAMES, CLEANABLE_APP_CACHE_DIR_NAMES
 from .constants import BLUE, CYAN, GREEN, MAGENTA, PURPLE, RED, RESET, YELLOW
 from .file_ops import (
     get_size,
@@ -26,6 +27,24 @@ SCAN_SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "
 # Scans that finish within this window redraw in place like a cache hit, so fast
 # small-directory scans don't flash/jitter; only slower scans show the spinner.
 SCAN_SPINNER_DELAY = 0.15
+ANALYZE_RESULT_LIMIT = 50
+TREE_SCAN_DIRECT_ENTRY_LIMIT = 2000
+SHALLOW_PREVIEW_ENTRY_LIMIT = 500
+SHALLOW_PREVIEW_DIRECT_ENTRY_LIMIT = SHALLOW_PREVIEW_ENTRY_LIMIT
+
+CLEANABLE_APP_CACHE_DIR_NAMES_LOWER = frozenset(
+    name.lower() for name in CLEANABLE_APP_CACHE_DIR_NAMES
+)
+
+TREE_SCAN_SKIP_DIR_NAMES = frozenset(
+    {
+        ".cache",
+        ".git",
+        "node_modules",
+        *CLEANABLE_APP_CACHE_DIR_NAMES_LOWER,
+        *BROWSER_CACHE_ROOT_NAMES,
+    }
+)
 
 
 # --- Internal Cache System ---
@@ -121,6 +140,127 @@ def _prime_cache_from_tree(root: Path, tree: dict[str, Any]) -> None:
         ScanCache.set(key, node)
 
 
+def _direct_child_count_exceeds(path: Path, limit: int = TREE_SCAN_DIRECT_ENTRY_LIMIT) -> bool:
+    try:
+        with os.scandir(path) as entries:
+            for count, _entry in enumerate(entries, 1):
+                if count > limit:
+                    return True
+    except OSError:
+        return False
+    return False
+
+
+def _is_heavy_fanout_leaf_path(path: Path) -> bool:
+    parts = [part.lower() for part in path.parts]
+    part_set = set(parts)
+    if part_set & CLEANABLE_APP_CACHE_DIR_NAMES_LOWER:
+        return True
+    if "node_modules" in part_set:
+        return True
+    return ".git" in part_set and "objects" in part_set
+
+
+def _should_use_shallow_preview(
+    path: Path, direct_entry_limit: int = SHALLOW_PREVIEW_DIRECT_ENTRY_LIMIT
+) -> bool:
+    return _is_heavy_fanout_leaf_path(path) and _direct_child_count_exceeds(
+        path, direct_entry_limit
+    )
+
+
+def _should_use_tree_scan(
+    path: Path, direct_entry_limit: int = TREE_SCAN_DIRECT_ENTRY_LIMIT
+) -> bool:
+    """Use subtree cache priming only where it is likely to help.
+
+    Browser profiles, generic cache roots, node_modules, and huge fan-out
+    directories can produce very large --tree JSON and expensive Python cache
+    priming. For those, keep the Rust engine but use the single-level output.
+    """
+    parts = {part.lower() for part in path.parts}
+    if parts & TREE_SCAN_SKIP_DIR_NAMES:
+        return False
+    return not _direct_child_count_exceeds(path, direct_entry_limit)
+
+
+def get_shallow_preview_data(
+    path: Path, entry_limit: int = SHALLOW_PREVIEW_ENTRY_LIMIT
+) -> dict[str, Any] | None:
+    """Build a bounded direct-child preview without recursively scanning.
+
+    This is for leaf cache directories with tens of thousands of small direct
+    files where even a single-level Rust scan must stat every file before the UI
+    can open. Sizes are intentionally limited to direct files in the preview.
+    """
+    cached = ScanCache.get(path)
+    if cached:
+        return cached
+
+    subdirs: dict[str, int] = {}
+    total_size = 0
+    file_count = 0
+    sampled_entries = 0
+    truncated = False
+    try:
+        with os.scandir(path) as entries:
+            for count, entry in enumerate(entries, 1):
+                if count > entry_limit:
+                    truncated = True
+                    break
+                sampled_entries = count
+                try:
+                    if entry.is_symlink():
+                        continue
+                    if entry.is_file(follow_symlinks=False):
+                        size = entry.stat(follow_symlinks=False).st_size
+                        file_count += 1
+                    elif entry.is_dir(follow_symlinks=False):
+                        size = 0
+                    else:
+                        continue
+                except OSError:
+                    continue
+
+                subdirs[entry.name] = size
+                total_size += size
+    except OSError:
+        return None
+
+    data = {
+        "path": str(path),
+        "total_size_bytes": total_size,
+        "file_count": file_count,
+        "subdirs": subdirs,
+        "top_files": [],
+        "is_shallow_preview": True,
+        "preview_entry_limit": entry_limit,
+        "preview_sampled_entries": sampled_entries,
+        "preview_truncated": truncated,
+    }
+    ScanCache.set(path, data)
+    return data
+
+
+def _shallow_preview_notice(data: dict[str, Any] | None) -> str:
+    if not data or not data.get("is_shallow_preview"):
+        return ""
+    sampled = data.get("preview_sampled_entries", len(data.get("subdirs", {})))
+    shown = min(sampled, ANALYZE_RESULT_LIMIT)
+    limit = data.get("preview_entry_limit", SHALLOW_PREVIEW_ENTRY_LIMIT)
+    if data.get("preview_truncated"):
+        return (
+            f"Preview mode: sampled first {sampled or limit} direct entries; "
+            f"listing largest {shown} from that sample, not a complete size ranking."
+        )
+    if sampled > ANALYZE_RESULT_LIMIT:
+        return (
+            f"Preview mode: direct entries only; listing largest {ANALYZE_RESULT_LIMIT}; "
+            "nested sizes are not scanned."
+        )
+    return "Preview mode: direct entries only; nested sizes are not scanned."
+
+
 def _parallel_scan_sizes(paths: list[Path]) -> dict[Path, int]:
     """Scan multiple paths concurrently via the Rust engine.
 
@@ -205,6 +345,14 @@ def _tree_scan_with_spinner(
 ) -> dict[str, Any] | None:
     return _scan_with_spinner(
         lambda: get_rust_tree_data(path), scan_reason, target_label, view_title
+    )
+
+
+def _shallow_preview_with_spinner(
+    path: Path, scan_reason: str, target_label: str, view_title: str
+) -> dict[str, Any] | None:
+    return _scan_with_spinner(
+        lambda: get_shallow_preview_data(path), scan_reason, target_label, view_title
     )
 
 
@@ -422,18 +570,34 @@ def run_deep_analysis(target_path: Path = None):
                 # doesn't blank/flash and shift vertically on every page turn.
                 data = cached
             elif current_target is not None:
-                # Exploring inside a directory: scan the WHOLE subtree once and
-                # prime the cache for every level, so subsequent drilling never
-                # rescans. The scan screen only appears if the scan is slow (see
-                # _scan_with_spinner); fast small-dir scans redraw in place.
-                # Falls back to a single-level scan for engines predating --tree.
-                tree = _tree_scan_with_spinner(
-                    target_to_scan, scan_reason, target_label, view_title
-                )
-                if tree:
-                    _prime_cache_from_tree(target_to_scan, tree)
-                    data = ScanCache.get(target_to_scan)
+                if _should_use_shallow_preview(target_to_scan):
+                    # Huge leaf cache directories can contain tens of thousands
+                    # of tiny direct files. Use a bounded direct-child preview so
+                    # the UI opens quickly; full cache cleanup belongs in Clean
+                    # or by selecting the cache directory from its parent.
+                    data = _shallow_preview_with_spinner(
+                        target_to_scan, scan_reason, target_label, view_title
+                    )
+                elif _should_use_tree_scan(target_to_scan):
+                    # Exploring inside a normal directory: scan the WHOLE subtree
+                    # once and prime the cache for every level, so subsequent
+                    # drilling never rescans. Falls back to a single-level scan
+                    # for engines predating --tree.
+                    tree = _tree_scan_with_spinner(
+                        target_to_scan, scan_reason, target_label, view_title
+                    )
+                    if tree:
+                        _prime_cache_from_tree(target_to_scan, tree)
+                        data = ScanCache.get(target_to_scan)
+                    else:
+                        data = _get_rust_scan_data_with_spinner(
+                            target_to_scan, scan_reason, target_label, view_title
+                        )
                 else:
+                    # Cache/profile and huge fan-out directories are faster and
+                    # less memory-heavy with single-level Rust output. The engine
+                    # still computes direct-child sizes; Python just avoids
+                    # materializing/cache-priming the entire descendant tree.
                     data = _get_rust_scan_data_with_spinner(
                         target_to_scan, scan_reason, target_label, view_title
                     )
@@ -552,7 +716,7 @@ def run_deep_analysis(target_path: Path = None):
                     full_path = current_target / name
                     results.append(build_analysis_entry(name, full_path, size, total_path_size))
                 results.sort(key=lambda x: x["size"], reverse=True)
-                results = results[:50]
+                results = results[:ANALYZE_RESULT_LIMIT]
             needs_scan = False
             scan_reason = "scan"
 
@@ -560,6 +724,7 @@ def run_deep_analysis(target_path: Path = None):
             view_title,
             results,
             can_select=(current_target is not None),
+            notice=_shallow_preview_notice(data),
         )
         action, idx = selector.run()
 

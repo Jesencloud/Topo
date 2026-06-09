@@ -179,6 +179,28 @@ def test_analyze_render_keeps_space_between_icon_and_name():
     assert "📄  file.txt" not in visible_output
 
 
+def test_analyze_render_shows_notice():
+    sel = AnalyzeSelector(
+        "t",
+        _analyze_items(),
+        can_select=True,
+        notice="Preview mode: sampled first 500 direct entries; listing largest 50.",
+    )
+
+    with (
+        patch(
+            "src.ui.navigator.shutil.get_terminal_size", return_value=os.terminal_size((100, 24))
+        ),
+        patch("sys.stdout.write") as write,
+        patch("sys.stdout.flush"),
+    ):
+        sel.render()
+
+    output = write.call_args.args[0]
+    visible_output = ANSI_CSI_RE.sub("", output)
+    assert "Preview mode: sampled first 500 direct entries; listing largest 50." in visible_output
+
+
 # --- UninstallSelector ---
 def test_uninstall_space_then_enter_returns_indices():
     sel = UninstallSelector("t", _uninstall_items())
