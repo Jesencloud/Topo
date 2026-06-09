@@ -1,3 +1,43 @@
+# Daily Modification Report - 2026-06-09
+
+## Project: topo (Topo) - Shared Heavy Cache Metadata for Analyze and Clean
+
+Today's session completed the next shared-cache refactor after the 2026-06-08 work. Package-manager caches, container cache roots, and AI/model caches now share metadata between Analyze and Clean, while destructive cleanup behavior remains owned by Clean and still uses tool-specific commands or age-based cleanup rules.
+
+### 1. Shared Heavy Cache Definitions
+*   **New Metadata Module**: Added `src/core/heavy_cache.py` as the shared source for heavyweight cache families.
+*   **Package Manager Cache Roots**: Centralized Analyze metadata for APT, DNF, and Pacman cache paths.
+*   **Container Cache Roots**: Centralized Analyze metadata for Docker user data, Docker system data, Podman transfer cache, and Flatpak data.
+*   **AI/Model Cache Roots**: Centralized Analyze metadata for Ollama models, HuggingFace Hub, LM Studio, PyTorch kernel cache, OpenAI Triton cache, and NVIDIA CUDA cache.
+*   **Dynamic Home Resolution**: Shared definitions store paths as strings and resolve `~` at runtime, keeping tests and user environments isolated from import-time `HOME` values.
+*   **Analyze Integration**: `run_deep_analysis()` now builds Linux insights through `build_linux_insights(home)`, replacing the previous hardcoded Docker/APT/Ollama list.
+*   **Display Threshold Metadata**: Analyze now reads `min_display_bytes` from each shared definition, while keeping the default 10 MB threshold for ordinary insight entries.
+
+### 2. Clean Integration Boundary
+*   **Clean Still Owns Cleanup**: The shared metadata is used for discovery and consistency, but actual cleanup remains in Clean because package managers, containers, and model tools need command-specific or age-specific behavior.
+*   **Package Manager Cleaner Mapping**: `clean_package_manager()` now uses shared cleaner definitions for `apt-get clean`, `dnf clean all`, and `pacman -Sc --noconfirm` instead of maintaining local command branches.
+*   **AI/Model Cleanup Rules**: `clean_ai_models()` now iterates shared age-based cleanup definitions, including HuggingFace Hub, Ollama blobs, PyTorch, Triton, CUDA, and LM Studio caches.
+*   **Podman Cache Reuse**: `clean_podman()` now resolves the Podman transfer cache path from shared container metadata.
+*   **Podman Storage Policy**: `Podman Storage` is intentionally not shown as an Analyze cache item because `~/.local/share/containers` is real container storage. Podman cleanup should stay command-driven through Clean instead of direct Analyze deletion.
+
+### 3. Duplication and API Cleanup
+*   **Removed Duplicate AI Cache Constants**: Deleted HuggingFace, Ollama, Triton, Torch, and CUDA entries from `DEV_CACHES`; that constant now only keeps developer-tool caches for npm, pip, cargo, and Go.
+*   **Removed Dead Category Metadata**: Dropped the unused `cache_category` plumbing and related category constants after review showed production code did not consume them.
+*   **Stronger Container Lookup API**: `get_container_cache_def()` now raises an explicit `KeyError` with the missing key instead of leaking a bare `StopIteration`.
+
+### 4. Regression Coverage
+*   **Heavy Cache Tests**: Added `tests/test_heavy_cache.py` to verify shared package-manager, container, and AI/model definitions, dynamic home resolution, cleaner commands, missing-key behavior, and removal of duplicate AI entries from `DEV_CACHES`.
+*   **Analyze Tests**: Added coverage proving Linux insights are built from shared metadata and that `Podman Storage` is not surfaced as an Analyze cache target.
+*   **Clean Tests**: Added coverage proving AI/model cleanup uses the shared age-based cleanup definitions.
+
+### 5. Verification
+*   **Full Test Suite**: `pytest -q` passed with **257 tests**.
+*   **Ruff Check**: `ruff check` passed.
+*   **Ruff Format**: `ruff format --check` passed.
+*   **Diff Hygiene**: `git diff --check` passed.
+
+---
+
 # Daily Modification Report - 2026-06-08
 
 ## Project: topo (Topo) - Shared Cache Classification for Clean and Analyze

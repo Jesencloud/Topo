@@ -17,6 +17,7 @@ from .file_ops import (
     safe_remove,
     validate_path_for_deletion,
 )
+from .heavy_cache import get_analyze_cache_defs
 from .system import run_command
 
 SCAN_SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
@@ -240,6 +241,21 @@ def build_analysis_entry(name: str, path: Path, size: int, total_size: int) -> d
     }
 
 
+def build_linux_insights(home: Path) -> list[dict[str, Any]]:
+    insights: list[dict[str, Any]] = [
+        {"name": "Old Downloads (90d+)", "path": home / "Downloads", "is_smart": True}
+    ]
+    insights.extend(
+        {
+            "name": definition.label,
+            "path": definition.resolved_path(),
+            "min_display_bytes": definition.min_display_bytes,
+        }
+        for definition in get_analyze_cache_defs()
+    )
+    return insights
+
+
 def get_old_items_info(dir_path: Path, days_threshold: int = 90) -> list[dict[str, Any]]:
     """Returns a list of items in a directory older than X days."""
     old_items = []
@@ -458,16 +474,7 @@ def run_deep_analysis(target_path: Path = None):
 
                 # --- LINUX INSIGHTS: Detect hidden space killers ---
                 home = Path.home()
-                insights = [
-                    {"name": "Old Downloads (90d+)", "path": home / "Downloads", "is_smart": True},
-                    {"name": "Docker Data", "path": home / ".docker"},
-                    {"name": "Docker System", "path": Path("/var/lib/docker")},
-                    {"name": "Apt Cache", "path": Path("/var/cache/apt/archives")},
-                    {"name": "Pacman Cache", "path": Path("/var/cache/pacman/pkg")},
-                    {"name": "Dnf Cache", "path": Path("/var/cache/dnf")},
-                    {"name": "Flatpak Data", "path": home / ".local/share/flatpak"},
-                    {"name": "Ollama Models", "path": home / ".ollama" / "models"},
-                ]
+                insights = build_linux_insights(home)
 
                 # Collect every path that needs a Rust scan and run them concurrently.
                 # Home is already scanned (total_scan_size); smart views use a Python
@@ -520,7 +527,8 @@ def run_deep_analysis(target_path: Path = None):
                         else:
                             size = scan_sizes.get(p, 0)
 
-                        if size > 10 * 1024 * 1024:  # Only show if > 10MB to keep Root clean
+                        min_display_bytes = ins.get("min_display_bytes", 10 * 1024 * 1024)
+                        if size > min_display_bytes:  # Only show large entries to keep Root clean
                             results.append(
                                 {
                                     "name": ins["name"],

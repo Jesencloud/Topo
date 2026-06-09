@@ -84,11 +84,6 @@ DEV_CACHES = {
     "pip": HOME / ".cache/pip",
     "cargo": HOME / ".cargo/registry",
     "go": HOME / ".cache/go-build",
-    "huggingface": HOME / ".cache/huggingface/hub",
-    "ollama": HOME / ".ollama/models/blobs",
-    "triton": HOME / ".triton/cache",
-    "torch": HOME / ".cache/torch/kernels",
-    "cuda": HOME / ".nv/ComputeCache",
 }
 
 # --- UI / ANSI Colors ---

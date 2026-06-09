@@ -13,6 +13,7 @@ from src.core.analyze import (
     _scan_with_spinner,
     _sudo_remove,
     build_analysis_entry,
+    build_linux_insights,
     get_rust_scan_data,
     get_rust_tree_data,
     run_deep_analysis,
@@ -287,6 +288,20 @@ def test_build_analysis_entry_marks_generic_xdg_cache_as_cleanable(test_env):
     assert entry["cleanable_reason"] == "XDG cache"
     assert entry["icon"] == "🗂️"
     assert root_entry["is_cleanable"] is False
+
+
+def test_build_linux_insights_uses_shared_heavy_cache_metadata(test_env):
+    insights = build_linux_insights(test_env)
+    by_name = {item["name"]: item for item in insights}
+
+    assert by_name["Apt Cache"]["path"] == Path("/var/cache/apt/archives")
+    assert by_name["Dnf Cache"]["path"] == Path("/var/cache/dnf")
+    assert by_name["Docker System"]["path"] == Path("/var/lib/docker")
+    assert by_name["Podman Transfer Cache"]["path"] == test_env / ".cache/containers"
+    assert "Podman Storage" not in by_name
+    assert by_name["HuggingFace Hub"]["path"] == test_env / ".cache/huggingface/hub"
+    assert by_name["LM Studio Cache"]["path"] == test_env / ".cache/lm-studio"
+    assert by_name["Old Downloads (90d+)"]["is_smart"] is True
 
 
 def test_analyze_delete_user_writable_path_without_admin(test_env):

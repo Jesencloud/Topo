@@ -9,6 +9,7 @@ from ..core.file_ops import (
     register_cleaned_path,
     safe_remove,
 )
+from ..core.heavy_cache import get_ai_model_cleanup_defs, get_container_cache_def
 from ..core.system import run_command
 
 
@@ -77,7 +78,7 @@ def clean_podman(dry_run=False):
                 items += 1
 
         # Clean storage cache
-        cache_path = Path.home() / ".cache/containers"
+        cache_path = get_container_cache_def("podman-cache").resolved_path()
         if cache_path.exists():
             register_cleaned_path(cache_path)
             s, i = clean_path_by_age(cache_path, days=0, dry_run=dry_run)
@@ -106,23 +107,15 @@ def clean_ai_models(dry_run=False):
     total_size = 0
     total_items = 0
 
-    targets = [
-        (DEV_CACHES["huggingface"], "HuggingFace Hub", 14),
-        (DEV_CACHES["ollama"], "Ollama Blobs", 14),
-        (DEV_CACHES["torch"], "PyTorch Kernel Cache", 7),
-        (DEV_CACHES["triton"], "OpenAI Triton Cache", 7),
-        (DEV_CACHES["cuda"], "NVIDIA CUDA Cache", 7),
-        (Path.home() / ".cache/lm-studio", "LM Studio Cache", 7),
-    ]
-
-    for path, desc, days in targets:
+    for target in get_ai_model_cleanup_defs():
+        path = target.resolved_path()
         register_cleaned_path(path)
-        s, i = clean_path_by_age(path, days=days, dry_run=dry_run)
+        s, i = clean_path_by_age(path, days=target.age_days, dry_run=dry_run)
         if i > 0:
             total_size += s
             total_items += i
             status = "would be cleaned" if dry_run else "cleaned"
-            print(f"  \033[0;32m✓\033[0m {desc} ({bytes_to_human(s)}) {status}")
+            print(f"  \033[0;32m✓\033[0m {target.label} ({bytes_to_human(s)}) {status}")
     return total_size, total_items
 
 

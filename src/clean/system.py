@@ -1,6 +1,7 @@
 import shutil
 
 from ..core.file_ops import bytes_to_human, parse_size_from_text
+from ..core.heavy_cache import get_package_manager_cleaner
 from ..core.system import get_os_id, run_command
 
 
@@ -40,37 +41,28 @@ def clean_package_manager(dry_run=False):
     snap_items = 0
     snap_cats = 0
     os_id = get_os_id()
-    cmd = []
-    desc = ""
+    cleaner = get_package_manager_cleaner(os_id)
 
-    if os_id in ("fedora", "rhel", "centos") and shutil.which("dnf"):
-        cmd = ["dnf", "clean", "all"]
-        desc = "DNF cache"
-    elif os_id in ("ubuntu", "debian") and shutil.which("apt-get"):
-        cmd = ["apt-get", "clean"]
-        desc = "APT cache"
+    if cleaner and cleaner.key == "apt" and shutil.which(cleaner.executable):
         # Old Snap revisions are a separate cleanup category; keep their stats.
         s, snap_items, snap_cats = clean_snaps(dry_run=dry_run)
         freed += s
-    elif os_id == "arch" and shutil.which("pacman"):
-        cmd = ["pacman", "-Sc", "--noconfirm"]
-        desc = "Pacman cache"
 
-    if not cmd:
+    if not cleaner or not shutil.which(cleaner.executable):
         return freed, snap_items, snap_cats
 
     if dry_run:
-        print(f"  \033[0;32m✓\033[0m {desc} would be cleaned")
+        print(f"  \033[0;32m✓\033[0m {cleaner.label} would be cleaned")
         return freed, snap_items, snap_cats + 1
 
-    res = run_command(cmd, use_sudo=True, capture=True)
+    res = run_command(list(cleaner.command), use_sudo=True, capture=True)
     if res.ok and res.stdout:
         freed += parse_size_from_text(res.stdout)
-        print(f"  \033[0;32m✓\033[0m Cleaned {desc} ({bytes_to_human(freed)})")
+        print(f"  \033[0;32m✓\033[0m Cleaned {cleaner.label} ({bytes_to_human(freed)})")
         return freed, snap_items + 1, snap_cats + 1
 
-    if res.ok and desc == "APT cache":  # apt-get clean is silent
-        print(f"  \033[0;32m✓\033[0m Cleaned {desc}")
+    if res.ok and cleaner.key == "apt":  # apt-get clean is silent
+        print(f"  \033[0;32m✓\033[0m Cleaned {cleaner.label}")
         return freed, snap_items + 1, snap_cats + 1
 
     return freed, snap_items, snap_cats

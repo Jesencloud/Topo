@@ -8,6 +8,7 @@ from src.clean.dev import (
     clean_podman,
     clean_tool_cache,
 )
+from src.core.heavy_cache import get_ai_model_cleanup_defs
 
 
 def test_clean_tool_cache_dry_run():
@@ -72,6 +73,17 @@ def test_clean_ai_models(mock_clean_age):
     size, items = clean_ai_models(dry_run=True)
     assert size > 0
     assert items > 0
+
+
+@patch("src.clean.dev.clean_path_by_age")
+def test_clean_ai_models_uses_shared_cleanup_defs(mock_clean_age, test_env):
+    mock_clean_age.return_value = (0, 0)
+
+    clean_ai_models(dry_run=True)
+
+    calls_by_path = {call.args[0]: call.kwargs["days"] for call in mock_clean_age.call_args_list}
+    for definition in get_ai_model_cleanup_defs():
+        assert calls_by_path[definition.resolved_path()] == definition.age_days
 
 
 @patch("shutil.which")
