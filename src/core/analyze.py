@@ -151,22 +151,10 @@ def _direct_child_count_exceeds(path: Path, limit: int = TREE_SCAN_DIRECT_ENTRY_
     return False
 
 
-def _is_heavy_fanout_leaf_path(path: Path) -> bool:
-    parts = [part.lower() for part in path.parts]
-    part_set = set(parts)
-    if part_set & CLEANABLE_APP_CACHE_DIR_NAMES_LOWER:
-        return True
-    if "node_modules" in part_set:
-        return True
-    return ".git" in part_set and "objects" in part_set
-
-
 def _should_use_shallow_preview(
     path: Path, direct_entry_limit: int = SHALLOW_PREVIEW_DIRECT_ENTRY_LIMIT
 ) -> bool:
-    return _is_heavy_fanout_leaf_path(path) and _direct_child_count_exceeds(
-        path, direct_entry_limit
-    )
+    return _direct_child_count_exceeds(path, direct_entry_limit)
 
 
 def _should_use_tree_scan(
@@ -189,9 +177,9 @@ def get_shallow_preview_data(
 ) -> dict[str, Any] | None:
     """Build a bounded direct-child preview without recursively scanning.
 
-    This is for leaf cache directories with tens of thousands of small direct
-    files where even a single-level Rust scan must stat every file before the UI
-    can open. Sizes are intentionally limited to direct files in the preview.
+    This is for wide directories with many small direct files where even a
+    single-level Rust scan must stat every file before the UI can open. Sizes are
+    intentionally limited to direct files in the preview.
     """
     cached = ScanCache.get(path)
     if cached:
@@ -571,10 +559,9 @@ def run_deep_analysis(target_path: Path = None):
                 data = cached
             elif current_target is not None:
                 if _should_use_shallow_preview(target_to_scan):
-                    # Huge leaf cache directories can contain tens of thousands
-                    # of tiny direct files. Use a bounded direct-child preview so
-                    # the UI opens quickly; full cache cleanup belongs in Clean
-                    # or by selecting the cache directory from its parent.
+                    # Very wide directories can contain tens of thousands of
+                    # direct files. Use a bounded direct-child preview so the UI
+                    # opens quickly instead of stat'ing every entry before render.
                     data = _shallow_preview_with_spinner(
                         target_to_scan, scan_reason, target_label, view_title
                     )

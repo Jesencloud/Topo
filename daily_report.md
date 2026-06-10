@@ -36,6 +36,18 @@ Today's session refined Topo's terminal interaction model. The main menu and sta
     *   `ruff format --check` passed.
     *   `git diff --check` passed.
 
+### 6. Analyze High-Fanout Directory Guard
+*   **Problem Found**: Entering directories with many direct small files, such as `~/.cache/gnome-software/icons`, could still make Analyze expensive because even a single-level Rust scan must `stat` every entry before rendering.
+*   **Generalized Shallow Preview**: Changed shallow-preview selection from a hardcoded set of cache-like leaf names to any directory whose direct child count exceeds the preview threshold. This keeps browser `Cache_Data`, `node_modules`, GNOME Software icon caches, and ordinary high-fanout directories responsive.
+*   **Preserved Real Filesystem Display**: The idea of hiding `~/.cache` from Analyze was reviewed and rejected. Analyze continues to show the real directory tree; Topo does not hide or rewrite the user's filesystem view.
+*   **Clean Boundary**: Cache cleanup remains the responsibility of `topo clean`. Analyze only protects responsiveness by using bounded preview mode for very wide directories.
+*   **Regression Coverage**: Updated Analyze tests to cover `~/.cache/gnome-software/icons`, ordinary wide directories, `node_modules`, and small directories that should not trigger shallow preview.
+*   **Verification Commands**:
+    *   `pytest -q` passed with **279 tests**.
+    *   `ruff check` passed.
+    *   `ruff format --check` passed.
+    *   `git diff --check` passed.
+
 ---
 
 # Daily Modification Report - 2026-06-09

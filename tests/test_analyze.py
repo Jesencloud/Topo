@@ -173,19 +173,28 @@ def test_should_use_tree_scan_skips_cache_and_large_fanout_paths(test_env):
     assert _should_use_tree_scan(wide, direct_entry_limit=2) is False
 
 
-def test_should_use_shallow_preview_for_large_cache_leaf_only(test_env):
+def test_should_use_shallow_preview_for_wide_directories(test_env):
     cache_data = test_env / ".cache/BraveSoftware/Brave-Browser/Default/Cache/Cache_Data"
     cache_data.mkdir(parents=True)
-    profile = test_env / ".cache/BraveSoftware/Brave-Browser/Default"
+    icon_cache = test_env / ".cache/gnome-software/icons"
+    icon_cache.mkdir(parents=True)
+    wide_regular_dir = test_env / "wide-regular-dir"
+    wide_regular_dir.mkdir()
+    small_dir = test_env / "small"
+    small_dir.mkdir()
     node_modules = test_env / "project/node_modules/pkg"
     node_modules.mkdir(parents=True)
-    for root in (cache_data, profile, node_modules):
+    for root in (cache_data, icon_cache, wide_regular_dir, node_modules):
         for index in range(3):
             (root / f"item-{index}").write_text("x")
+    for index in range(2):
+        (small_dir / f"item-{index}").write_text("x")
 
     assert _should_use_shallow_preview(cache_data, direct_entry_limit=2) is True
+    assert _should_use_shallow_preview(icon_cache, direct_entry_limit=2) is True
+    assert _should_use_shallow_preview(wide_regular_dir, direct_entry_limit=2) is True
     assert _should_use_shallow_preview(node_modules, direct_entry_limit=2) is True
-    assert _should_use_shallow_preview(profile, direct_entry_limit=2) is False
+    assert _should_use_shallow_preview(small_dir, direct_entry_limit=2) is False
 
 
 def test_shallow_preview_data_is_bounded_and_non_recursive(test_env):
