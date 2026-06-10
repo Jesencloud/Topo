@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..core.config import get_show_scrollbar
 from ..core.constants import BOLD, GRAY, GREEN, PURPLE, RED, RESET, THEME_TITLE, WHITE, YELLOW
 from ..core.file_ops import bytes_to_human
 
@@ -33,6 +34,7 @@ class FrameState:
     height: int
     total_lines: int
     top: int
+    scrollable: bool
     scrollbar_visible: bool
     thumb_top: int = 0
     thumb_height: int = 0
@@ -122,10 +124,12 @@ def _write_scrollable_frame(parts, focus_line=None, scroll_top=None):
     size = shutil.get_terminal_size(fallback=(80, 24))
     width = max(1, size.columns)
     height = max(1, size.lines)
-    content_width = max(0, width - 1)
 
     lines = _frame_lines(parts)
     total_lines = len(lines)
+    scrollable = total_lines > height
+    scrollbar_visible = scrollable and width > 1 and get_show_scrollbar()
+    content_width = max(0, width - 1) if scrollbar_visible else width
     focus = 0 if focus_line is None else focus_line
     max_top = max(0, total_lines - height)
     if scroll_top is None:
@@ -139,7 +143,6 @@ def _write_scrollable_frame(parts, focus_line=None, scroll_top=None):
         line = _fit_ansi_line(lines[idx], content_width) if idx < total_lines else ""
         out.append(f"\033[{row + 1};1H{line}\033[K")
 
-    scrollbar_visible = total_lines > height and width > 1
     thumb_top = 0
     thumb_height = 0
     if scrollbar_visible:
@@ -147,26 +150,31 @@ def _write_scrollable_frame(parts, focus_line=None, scroll_top=None):
         thumb_top = round(top * (height - thumb_height) / max_top) if max_top else 0
         for row in range(height):
             is_thumb = thumb_top <= row < thumb_top + thumb_height
-            char = "┃" if is_thumb else "│"
-            out.append(f"\033[{row + 1};{width}H{RESET}{char}")
+            char = "▐" if is_thumb else " "
+            color = GRAY if is_thumb else ""
+            out.append(f"\033[{row + 1};{width}H{RESET}{color}{char}{RESET}")
 
     # Clear any potential artifacts below the current frame (important on resize)
     out.append(f"\033[{height};{width}H\033[J")
     out.append(RESET)
     sys.stdout.write("".join(out))
     sys.stdout.flush()
-    return FrameState(width, height, total_lines, top, scrollbar_visible, thumb_top, thumb_height)
+    return FrameState(
+        width, height, total_lines, top, scrollable, scrollbar_visible, thumb_top, thumb_height
+    )
 
 
 def _render_scrollable_frame(owner, parts, focus_line=None):
     scroll_top = getattr(owner, "_scroll_top", None)
     state = _write_scrollable_frame(parts, focus_line, scroll_top)
     owner._frame_state = state
-    if not state.scrollbar_visible:
+    if not state.scrollable:
         owner._scroll_top = None
         owner._scrollbar_dragging = False
     elif scroll_top is not None:
         owner._scroll_top = state.top
+    if not state.scrollbar_visible:
+        owner._scrollbar_dragging = False
     return state
 
 
@@ -188,7 +196,7 @@ def _scroll_top_from_mouse_y(state, y, offset=0):
 
 def _handle_scrollbar_mouse(owner, event):
     state = getattr(owner, "_frame_state", None)
-    if state is None or not state.scrollbar_visible:
+    if state is None or not state.scrollable:
         return False
 
     if event.action == "wheel_up":
@@ -210,6 +218,9 @@ def _handle_scrollbar_mouse(owner, event):
     if event.action == "release":
         owner._scrollbar_dragging = False
         return dragging
+
+    if not state.scrollbar_visible:
+        return False
 
     if event.action == "press":
         if event.button != 0 or event.x != state.width:
@@ -626,7 +637,7 @@ class InteractiveMenu:
     def run(self):
         if not self.options:
             return None
-        with _selector_session(enable_mouse=False) as fd:
+        with _selector_session(enable_mouse=True) as fd:
             while True:
                 self.render()
                 key = Navigator.get_key(fd)

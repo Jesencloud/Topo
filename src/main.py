@@ -108,6 +108,24 @@ def alternate_screen():
         sys.stdout.flush()
 
 
+def _clear_screen():
+    sys.stdout.write("\033[2J\033[H")
+    sys.stdout.flush()
+
+
+def _run_terminal_tui_command(command, *args):
+    result = command(*args)
+    if result is False:
+        return True
+    return Navigator.wait_for_return()
+
+
+def _run_alternate_tui(command, *args):
+    with alternate_screen():
+        _clear_screen()
+        return command(*args)
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="topo",
@@ -253,33 +271,25 @@ def main():
 
     # If no command is provided, enter TUI
     if args.command is None:
-        with alternate_screen():
-            while True:
+        while True:
+            with alternate_screen():
                 choice = main_menu()
-                if choice == "1":
-                    sys.stdout.write("\033[2J\033[H")
-                    sys.stdout.flush()
-                    result = run_clean(dry_run)
-                    if result is not False and not Navigator.wait_for_return():
-                        break
-                elif choice == "2":
-                    run_uninstall()
-                elif choice == "3":
-                    result = optimize_system(dry_run)
-                    if result is not False and not Navigator.wait_for_return():
-                        break
-                elif choice == "4":
-                    sys.stdout.write("\033[2J\033[H")
-                    sys.stdout.flush()
-                    run_deep_analysis()
-                elif choice == "5":
-                    sys.stdout.write("\033[2J\033[H")
-                    sys.stdout.flush()
-                    show_status()
-                    if not Navigator.wait_for_return():
-                        break
-                elif choice == "0" or choice.lower() == "q":
+
+            if choice == "1":
+                if not _run_terminal_tui_command(run_clean, dry_run):
                     break
+            elif choice == "2":
+                _run_alternate_tui(run_uninstall)
+            elif choice == "3":
+                if not _run_terminal_tui_command(optimize_system, dry_run):
+                    break
+            elif choice == "4":
+                _run_alternate_tui(run_deep_analysis)
+            elif choice == "5":
+                if not _run_terminal_tui_command(show_status):
+                    break
+            elif choice == "0" or choice.lower() == "q":
+                break
         return
 
     # CLI Mode Execution

@@ -1,3 +1,43 @@
+# Daily Modification Report - 2026-06-10
+
+## Project: topo (Topo) - CLI-First Scrolling and Main Menu Mouse Support
+
+Today's session refined Topo's terminal interaction model. The main menu and stateful selectors still use Topo's TUI rendering, while command-style result output from Clean, Optimize, and Status now uses the terminal's native scrollback like other CLI tools.
+
+### 1. Main Menu Mouse Scrolling
+*   **Root Cause**: `InteractiveMenu.run()` entered the selector session with mouse tracking disabled, so the main menu could draw a scrollbar but could not receive mouse wheel or scrollbar drag events after terminal resizing.
+*   **Fix**: Enabled mouse tracking for the main menu by switching `InteractiveMenu.run()` to `_selector_session(enable_mouse=True)`.
+*   **Regression Coverage**: Added tests proving the main menu enables mouse tracking and that mouse wheel input scrolls a short terminal viewport.
+
+### 2. Lightweight TUI Scrollbar and Hide Option
+*   **Lighter Visual Style**: Replaced the heavier `┃` / `│` scrollbar rendering with a minimal gray `▐` thumb and blank track, making the TUI scrollbar less visually dominant.
+*   **Configurable Visibility**: Added `show_scrollbar` to `~/.config/topo/config.json`, defaulting to `true`.
+*   **Hidden Scrollbar Behavior**: When `show_scrollbar` is `false`, the right-edge scrollbar is hidden but mouse wheel scrolling still works for scrollable TUI views.
+*   **Internal State Split**: Split frame state into `scrollable` and `scrollbar_visible`, so content scrolling and visual scrollbar rendering are no longer coupled.
+
+### 3. CLI-First Result Output
+*   **Design Change**: Clean, Optimize, and Status launched from the main menu now exit the alternate screen before printing results, so the terminal's native scrollback and default scrollbar handle long output.
+*   **TUI Boundary**: Main menu, Analyze, Uninstall, and other stateful selectors still use Topo's alternate-screen TUI because they need active cursor state, keyboard navigation, and mouse handling.
+*   **Return Flow**: After Clean, Optimize, or Status finishes in the normal terminal screen, `Navigator.wait_for_return()` is used to return to the main menu or exit.
+*   **Helper Cleanup**: Added small helpers in `src/main.py` for clearing alternate-screen views, running normal terminal commands, and running alternate-screen TUI commands.
+
+### 4. Removed Abandoned Result Viewer Path
+*   **No Internal Result Viewer Left**: Removed the temporary `OutputViewer` approach that would have shown command results inside Topo's own scrollable frame.
+*   **Residual Code Audit**: Checked for abandoned symbols such as `OutputViewer`, `_run_scrollable_tui_command`, `_StdoutTee`, and `redirect_stdout`; none remain from the discarded result-viewer implementation.
+*   **Expected Existing Uses**: Remaining `io.StringIO` usage is unrelated and still valid: banner capture in `navigator.py` and grouped Clean subtask output in `clean/runner.py`.
+
+### 5. Regression Coverage and Verification
+*   **Main Flow Tests**: Added `tests/test_main.py` to verify terminal-mode command execution waits for return and skips the wait when a command returns `False`.
+*   **Navigator Tests**: Extended selector tests for main-menu mouse tracking, mouse-wheel scrolling, lightweight scrollbar rendering, hidden scrollbar behavior, and continued wheel scrolling without a visible scrollbar.
+*   **Config Tests**: Extended config normalization coverage for `show_scrollbar`.
+*   **Verification Commands**:
+    *   `pytest -q` passed with **279 tests**.
+    *   `ruff check` passed.
+    *   `ruff format --check` passed.
+    *   `git diff --check` passed.
+
+---
+
 # Daily Modification Report - 2026-06-09
 
 ## Project: topo (Topo) - Shared Heavy Cache Metadata for Analyze and Clean

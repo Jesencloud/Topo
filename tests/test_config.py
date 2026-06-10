@@ -55,6 +55,7 @@ def test_normalize_config_rejects_invalid_types():
             "use_trash": "yes",
             "min_age_days": -1,
             "status_public_ip": "false",
+            "show_scrollbar": "no",
             "theme_color": "",
         }
     )
@@ -69,6 +70,7 @@ def test_normalize_config_accepts_valid_values():
             "use_trash": False,
             "min_age_days": 3,
             "status_public_ip": True,
+            "show_scrollbar": False,
             "theme_color": "magenta",
         }
     )
@@ -77,4 +79,5 @@ def test_normalize_config_accepts_valid_values():
     assert config["use_trash"] is False
     assert config["min_age_days"] == 3
     assert config["status_public_ip"] is True
+    assert config["show_scrollbar"] is False
     assert config["theme_color"] == "magenta"

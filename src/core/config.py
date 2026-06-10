@@ -16,6 +16,7 @@ DEFAULT_CONFIG = {
     "use_trash": True,
     "min_age_days": 7,
     "status_public_ip": False,
+    "show_scrollbar": True,
     "theme_color": "cyan",
 }
 
@@ -55,7 +56,7 @@ def normalize_config(user_config: Any) -> dict[str, Any]:
     if isinstance(min_age_days, int) and min_age_days >= 0:
         config["min_age_days"] = min_age_days
 
-    for key in ("use_trash", "status_public_ip"):
+    for key in ("use_trash", "status_public_ip", "show_scrollbar"):
         value = user_config.get(key)
         if isinstance(value, bool):
             config[key] = value
@@ -76,6 +77,13 @@ def save_config(config: dict[str, Any]):
 def get_purge_paths() -> list[str]:
     config = load_config()
     return config.get("purge_search_paths", DEFAULT_CONFIG["purge_search_paths"])
+
+
+def get_show_scrollbar() -> bool:
+    config_file = get_config_file()
+    if not config_file.exists():
+        return DEFAULT_CONFIG["show_scrollbar"]
+    return bool(load_config().get("show_scrollbar", DEFAULT_CONFIG["show_scrollbar"]))
 
 
 def add_purge_path(path_str: str) -> bool:

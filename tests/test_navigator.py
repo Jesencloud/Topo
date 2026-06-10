@@ -15,6 +15,7 @@ from src.ui.navigator import (
     AnalyzeSelector,
     CleanSelector,
     ConfirmSelector,
+    InteractiveMenu,
     MouseEvent,
     Navigator,
     PaginatedSelector,
@@ -89,6 +90,50 @@ def test_confirm_left_then_enter_selects_yes():
 
 def test_confirm_esc_is_false():
     assert drive(ConfirmSelector("ok?"), [Navigator.ESC]) is False
+
+
+# --- InteractiveMenu ---
+def test_interactive_menu_enables_mouse_tracking():
+    calls = []
+
+    @contextmanager
+    def fake_raw_mode(*args, **kwargs):
+        calls.append(kwargs)
+        yield 0
+
+    menu = InteractiveMenu("Main Menu", [("Clean", "Free up disk space")])
+
+    with (
+        patch.object(Navigator, "hide_cursor"),
+        patch.object(Navigator, "show_cursor"),
+        patch.object(Navigator, "raw_mode", fake_raw_mode),
+        patch.object(Navigator, "get_key", return_value=Navigator.ESC),
+        patch("sys.stdout.write"),
+        patch("sys.stdout.flush"),
+    ):
+        assert menu.run() is None
+
+    assert calls == [{"enable_mouse": True}]
+
+
+def test_interactive_menu_mouse_wheel_scrolls_short_terminal_view():
+    options = [(f"Option {index}", "menu item") for index in range(12)]
+    menu = InteractiveMenu("Main Menu", options)
+    keys = [
+        MouseEvent("wheel_down", 1, 40, 5),
+        MouseEvent("wheel_down", 1, 40, 5),
+        Navigator.ESC,
+    ]
+
+    with patch(
+        "src.ui.navigator.shutil.get_terminal_size",
+        return_value=os.terminal_size((40, 5)),
+    ):
+        result, writes = drive_with_writes(menu, keys)
+
+    output = "".join(call.args[0] for call in writes)
+    assert result is None
+    assert "Option 8" in output
 
 
 # --- AnalyzeSelector ---
@@ -267,6 +312,7 @@ def test_short_terminal_render_draws_right_edge_scrollbar():
 
     with (
         patch("src.ui.navigator.shutil.get_terminal_size", return_value=os.terminal_size((40, 5))),
+        patch("src.ui.navigator.get_show_scrollbar", return_value=True),
         patch("sys.stdout.write") as write,
         patch("sys.stdout.flush"),
     ):
@@ -276,10 +322,34 @@ def test_short_terminal_render_draws_right_edge_scrollbar():
     assert "\033[1;40H" in output
     assert "\033[5;40H" in output
     assert "\033[5;40H\033[J" in output
-    assert "┃" in output
+    assert "▐" in output
+    assert "┃" not in output
+    assert selector._frame_state.scrollable is True
+    assert selector._frame_state.scrollbar_visible is True
     assert "\033[1;37m" not in output
     assert "task7" in output
     assert "task0" not in output
+
+
+def test_short_terminal_render_can_hide_right_edge_scrollbar():
+    items = [{"name": f"task{i}", "size": 100 + i, "desc": "cleanup target"} for i in range(8)]
+    selector = CleanSelector("t", items)
+    selector.selected_index = 7
+
+    with (
+        patch("src.ui.navigator.shutil.get_terminal_size", return_value=os.terminal_size((40, 5))),
+        patch("src.ui.navigator.get_show_scrollbar", return_value=False),
+        patch("sys.stdout.write") as write,
+        patch("sys.stdout.flush"),
+    ):
+        selector.render()
+
+    output = write.call_args.args[0]
+    assert "▐" not in output
+    assert "┃" not in output
+    assert selector._frame_state.scrollable is True
+    assert selector._frame_state.scrollbar_visible is False
+    assert "task7" in output
 
 
 def test_sgr_mouse_drag_sequence_is_parsed():
@@ -298,14 +368,42 @@ def test_scrollbar_drag_scrolls_short_terminal_view():
         Navigator.ESC,
     ]
 
-    with patch(
-        "src.ui.navigator.shutil.get_terminal_size",
-        return_value=os.terminal_size((40, 5)),
+    with (
+        patch(
+            "src.ui.navigator.shutil.get_terminal_size",
+            return_value=os.terminal_size((40, 5)),
+        ),
+        patch("src.ui.navigator.get_show_scrollbar", return_value=True),
     ):
         result, writes = drive_with_writes(selector, keys)
 
     output = "".join(call.args[0] for call in writes)
     assert result == []
+    assert "task9" in output
+
+
+def test_mouse_wheel_still_scrolls_when_right_edge_scrollbar_is_hidden():
+    items = [{"name": f"task{i}", "size": 100 + i, "desc": "cleanup target"} for i in range(10)]
+    selector = CleanSelector("t", items)
+    keys = [
+        MouseEvent("wheel_down", 1, 20, 3),
+        MouseEvent("wheel_down", 1, 20, 3),
+        MouseEvent("wheel_down", 1, 20, 3),
+        Navigator.ESC,
+    ]
+
+    with (
+        patch(
+            "src.ui.navigator.shutil.get_terminal_size",
+            return_value=os.terminal_size((40, 5)),
+        ),
+        patch("src.ui.navigator.get_show_scrollbar", return_value=False),
+    ):
+        result, writes = drive_with_writes(selector, keys)
+
+    output = "".join(call.args[0] for call in writes)
+    assert result == []
+    assert "▐" not in output
     assert "task9" in output
 
 
