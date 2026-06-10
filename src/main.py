@@ -114,6 +114,7 @@ def _clear_screen():
 
 
 def _run_terminal_tui_command(command, *args):
+    _clear_screen()
     result = command(*args)
     if result is False:
         return True

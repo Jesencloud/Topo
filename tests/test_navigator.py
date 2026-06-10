@@ -116,7 +116,7 @@ def test_interactive_menu_enables_mouse_tracking():
     assert calls == [{"enable_mouse": True}]
 
 
-def test_interactive_menu_mouse_wheel_scrolls_short_terminal_view():
+def test_interactive_menu_mouse_wheel_moves_cursor():
     options = [(f"Option {index}", "menu item") for index in range(12)]
     menu = InteractiveMenu("Main Menu", options)
     keys = [
@@ -133,7 +133,8 @@ def test_interactive_menu_mouse_wheel_scrolls_short_terminal_view():
 
     output = "".join(call.args[0] for call in writes)
     assert result is None
-    assert "Option 8" in output
+    assert menu.selected_index == 2
+    assert "Option 2" in output
 
 
 # --- AnalyzeSelector ---
@@ -178,6 +179,20 @@ def test_analyze_down_moves_cursor():
     sel = AnalyzeSelector("t", _analyze_items(), can_select=True)
     drive(sel, [Navigator.DOWN, Navigator.DOWN, Navigator.ESC])
     assert sel.selected_index == 2
+
+
+def test_analyze_mouse_wheel_moves_cursor():
+    sel = AnalyzeSelector("t", _analyze_items(), can_select=True)
+    drive(
+        sel, [MouseEvent("wheel_down", 1, 20, 5), MouseEvent("wheel_up", 1, 20, 5), Navigator.ESC]
+    )
+    assert sel.selected_index == 0
+
+
+def test_analyze_mouse_wheel_moves_cursor_for_three_item_view():
+    sel = AnalyzeSelector("t", _analyze_items(3), can_select=False)
+    drive(sel, [MouseEvent("wheel_down", 1, 20, 5), Navigator.ESC])
+    assert sel.selected_index == 1
 
 
 def test_analyze_enter_drills_down():
@@ -360,6 +375,12 @@ def test_uninstall_enter_without_selection_does_not_confirm_hovered_app():
     assert result == []
 
 
+def test_uninstall_mouse_wheel_moves_cursor():
+    sel = UninstallSelector("t", _uninstall_items())
+    drive(sel, [MouseEvent("wheel_down", 1, 20, 5), Navigator.ESC])
+    assert sel.selected_index == 1
+
+
 def test_uninstall_delete_key_does_not_confirm_selected_app():
     sel = UninstallSelector("t", _uninstall_items())
     result = drive(sel, [Navigator.SPACE, "\x1b[3~", Navigator.ESC])
@@ -459,7 +480,7 @@ def test_scrollbar_drag_scrolls_short_terminal_view():
     assert "task9" in output
 
 
-def test_mouse_wheel_still_scrolls_when_right_edge_scrollbar_is_hidden():
+def test_mouse_wheel_moves_cursor_when_right_edge_scrollbar_is_hidden():
     items = [{"name": f"task{i}", "size": 100 + i, "desc": "cleanup target"} for i in range(10)]
     selector = CleanSelector("t", items)
     keys = [
@@ -480,8 +501,9 @@ def test_mouse_wheel_still_scrolls_when_right_edge_scrollbar_is_hidden():
 
     output = "".join(call.args[0] for call in writes)
     assert result == []
+    assert selector.selected_index == 3
     assert "▐" not in output
-    assert "task9" in output
+    assert "task3" in output
 
 
 def test_clean_selector_empty_items_returns_without_error():

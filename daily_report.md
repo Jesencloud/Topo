@@ -1,3 +1,32 @@
+# Daily Modification Report - 2026-06-11
+
+## Project: topo (Topo) - Main Menu Output Clearing and Mouse Wheel Selection
+
+Today's session fixed two terminal interaction regressions found after the CLI-first scrolling work: command-style screens launched from the main menu now clear consistently, and mouse wheel input once again moves the active selection arrow in TUI lists.
+
+### 1. Main Menu Command Output Clearing
+*   **Problem Found**: Entering Optimize from the main menu cleared the previous screen before showing `System Optimization`, but Clean and Status could leave prior terminal content visible.
+*   **Fix**: `_run_terminal_tui_command()` now calls `_clear_screen()` before running command-style actions. Clean, Optimize, and Status launched from the main menu now start from a clean terminal screen consistently.
+*   **Scope**: This only affects main-menu command execution. Direct CLI commands such as `topo clean`, `topo optimize`, and `topo status` keep their existing command-line behavior.
+
+### 2. Mouse Wheel Selection Regression
+*   **Problem Found**: Mouse wheel events were being consumed by the lightweight scrollbar path. In Main menu, Analyze Disk, Uninstall, and other selector lists, the wheel could scroll the frame or play a click sound without moving the highlighted arrow.
+*   **Fix**: Mouse wheel events now first move the active selection by one row. This restores the old, predictable behavior for list navigation.
+*   **Analyze Edge Case**: The initial wheel-selection fix used a 3-row step, which could wrap a 3-item Analyze list back to the same index. The final behavior uses a 1-row step so the arrow visibly moves even in small lists.
+*   **Scrollbar Drag Preserved**: Direct right-edge scrollbar dragging still controls manual frame scrolling. Wheel input is treated as list navigation for selector screens.
+
+### 3. Review and Verification
+*   **Local Diff Review**: Reviewed `src/main.py`, `src/ui/navigator.py`, `tests/test_main.py`, and `tests/test_navigator.py`. No unrelated or abnormal changes were found.
+*   **Regression Coverage**: Added tests for command-screen clearing, main-menu mouse wheel selection, Analyze mouse wheel selection including a 3-item view, Uninstall mouse wheel selection, and hidden-scrollbar wheel behavior.
+*   **Verification Commands**:
+    *   `pytest -q` passed with **280 tests**.
+    *   `pytest -q tests/test_navigator.py tests/test_main.py` passed with **37 tests**.
+    *   `ruff check` passed.
+    *   `ruff format --check` passed.
+    *   `git diff --check` passed.
+
+---
+
 # Daily Modification Report - 2026-06-10
 
 ## Project: topo (Topo) - CLI-First Scrolling and Main Menu Mouse Support

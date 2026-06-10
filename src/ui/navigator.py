@@ -244,8 +244,40 @@ def _handle_scrollbar_mouse(owner, event):
     return False
 
 
+def _move_selection_with_wheel(owner, event, step=1):
+    if event.action not in ("wheel_up", "wheel_down"):
+        return False
+
+    delta = -step if event.action == "wheel_up" else step
+
+    if hasattr(owner, "_move_cursor"):
+        items = getattr(owner, "items", None)
+        if items:
+            _clear_manual_scroll(owner)
+            owner._move_cursor(delta)
+            return True
+
+    options = getattr(owner, "options", None)
+    if options and hasattr(owner, "selected_index"):
+        _clear_manual_scroll(owner)
+        owner.selected_index = (owner.selected_index + delta) % len(options)
+        Navigator.play_click()
+        return True
+
+    items = getattr(owner, "items", None)
+    if items and hasattr(owner, "selected_index"):
+        _clear_manual_scroll(owner)
+        owner.selected_index = (owner.selected_index + delta) % len(items)
+        Navigator.play_click()
+        return True
+
+    return False
+
+
 def _consume_mouse(owner, key):
     if isinstance(key, MouseEvent):
+        if _move_selection_with_wheel(owner, key):
+            return True
         _handle_scrollbar_mouse(owner, key)
         return True
     return key == "MOUSE_EVENT"
