@@ -48,6 +48,21 @@ Today's session refined Topo's terminal interaction model. The main menu and sta
     *   `ruff format --check` passed.
     *   `git diff --check` passed.
 
+### 7. Analyze Preview Scope Correction
+*   **Avoided Over-Eager File-Manager Mode**: The first follow-up made all directory drill-downs behave like a fast file-manager listing. That opened quickly, but it removed the useful size-ranked Analyze view too early and made ordinary directory screens less useful.
+*   **Final Scope**: Ordinary directories now keep the Rust size-analysis path and continue to show calculated child sizes sorted by size. Fast Preview mode is used only when a directory has more than **500** direct children.
+*   **Bounded Preview Behavior**: For high-fanout directories, Analyze samples the first **500** direct entries, avoids recursive directory-size calculation, shows unknown folder sizes as `--`, and sorts preview rows directory-first by name.
+*   **No Manual Scan Shortcut**: No user-triggered `S` scan action was added. `S` remains the existing sort toggle.
+*   **Cache Boundary**: Preview data is intentionally built from the live directory listing and does not reuse or pollute the Rust scan cache. This prevents stale Rust analysis data from affecting high-fanout preview screens.
+*   **Redundancy Review**: Checked the final code for abandoned tree/shallow-preview symbols, unused preview fields, and stale `S:Scan`/scan-current UI paths. No Analyze-related residue remains.
+*   **Regression Coverage**: Updated Analyze and Navigator tests for threshold-based Preview selection, ordinary Rust size views, unknown folder-size rendering, directory-first name sorting, and preview deletion confirmation text.
+*   **Verification Commands**:
+    *   `pytest -q` passed with **277 tests**.
+    *   `pytest -q tests/test_analyze.py tests/test_navigator.py` passed with **59 tests**.
+    *   `ruff check` passed.
+    *   `ruff format --check` passed.
+    *   `git diff --check` passed.
+
 ---
 
 # Daily Modification Report - 2026-06-09

@@ -229,7 +229,7 @@ def test_analyze_render_shows_notice():
         "t",
         _analyze_items(),
         can_select=True,
-        notice="Preview mode: sampled first 500 direct entries; listing largest 50.",
+        notice="Preview mode: showing first 500 direct entries; folder sizes are not calculated.",
     )
 
     with (
@@ -243,7 +243,84 @@ def test_analyze_render_shows_notice():
 
     output = write.call_args.args[0]
     visible_output = ANSI_CSI_RE.sub("", output)
-    assert "Preview mode: sampled first 500 direct entries; listing largest 50." in visible_output
+    assert (
+        "Preview mode: showing first 500 direct entries; folder sizes are not calculated."
+        in visible_output
+    )
+
+
+def test_analyze_render_shows_unknown_folder_size():
+    items = [
+        {
+            "name": "folder",
+            "path": Path("/tmp/folder"),
+            "size": 0,
+            "percent": 0.0,
+            "icon": "🗂️",
+            "size_known": False,
+        }
+    ]
+    sel = AnalyzeSelector("t", items, can_select=True, sort_mode="name")
+
+    with (
+        patch(
+            "src.ui.navigator.shutil.get_terminal_size", return_value=os.terminal_size((100, 24))
+        ),
+        patch("sys.stdout.write") as write,
+        patch("sys.stdout.flush"),
+    ):
+        sel.render()
+
+    visible_output = ANSI_CSI_RE.sub("", write.call_args.args[0])
+    assert "folder" in visible_output
+    assert "|         --" in visible_output
+
+
+def test_analyze_delete_confirm_mentions_uncalculated_sizes():
+    items = [
+        {
+            "name": "folder",
+            "path": Path("/tmp/folder"),
+            "size": 0,
+            "percent": 0.0,
+            "icon": "🗂️",
+            "size_known": False,
+        },
+        {
+            "name": "file.txt",
+            "path": Path("/tmp/file.txt"),
+            "size": 4,
+            "percent": 100.0,
+            "icon": "📄",
+            "size_known": True,
+        },
+    ]
+    sel = AnalyzeSelector("t", items, can_select=True, sort_mode="name")
+
+    with patch.object(Navigator, "play_click"):
+        drive(
+            sel,
+            [Navigator.SPACE, Navigator.DOWN, Navigator.SPACE, "\r", Navigator.ESC, Navigator.ESC],
+        )
+
+    assert "4 B known, 1 uncalculated" in sel.confirm_text
+
+
+def test_analyze_name_sort_keeps_directories_first_when_reversed():
+    items = [
+        {"name": "a-file", "path": Path("/tmp/a-file"), "size": 1, "percent": 1.0, "sort_group": 1},
+        {"name": "b-dir", "path": Path("/tmp/b-dir"), "size": 0, "percent": 0.0, "sort_group": 0},
+        {"name": "a-dir", "path": Path("/tmp/a-dir"), "size": 0, "percent": 0.0, "sort_group": 0},
+        {"name": "z-file", "path": Path("/tmp/z-file"), "size": 1, "percent": 1.0, "sort_group": 1},
+    ]
+    sel = AnalyzeSelector("t", items, can_select=True, sort_mode="name")
+
+    assert [item["name"] for item in sel.items] == ["a-dir", "b-dir", "a-file", "z-file"]
+
+    sel.sort_reverse = True
+    sel._sort_items()
+
+    assert [item["name"] for item in sel.items] == ["b-dir", "a-dir", "z-file", "a-file"]
 
 
 # --- UninstallSelector ---

@@ -663,12 +663,15 @@ class InteractiveMenu:
 
 
 class AnalyzeSelector(_PagedSelector):
-    def __init__(self, title, items, show_banner=None, can_select=True, notice=""):
+    def __init__(
+        self, title, items, show_banner=None, can_select=True, notice="", sort_mode="size"
+    ):
         self.title = title
         self.items = items
         self.selected_index = 0
         self.selected_items = set()
-        self.sort_reverse = True
+        self.sort_mode = sort_mode
+        self.sort_reverse = sort_mode == "size"
         self.show_banner = show_banner
         self.can_select = can_select
         self.notice = notice
@@ -681,7 +684,11 @@ class AnalyzeSelector(_PagedSelector):
     def _sort_items(self):
         self.selected_items.clear()
         self.confirming_delete = False
-        self.items.sort(key=lambda x: x["size"], reverse=self.sort_reverse)
+        if self.sort_mode == "name":
+            self.items.sort(key=lambda x: x["name"].lower(), reverse=self.sort_reverse)
+            self.items.sort(key=lambda x: x.get("sort_group", 1))
+        else:
+            self.items.sort(key=lambda x: x["size"], reverse=self.sort_reverse)
 
     def render(self):
         buf = ["\033[H"]
@@ -740,7 +747,15 @@ class AnalyzeSelector(_PagedSelector):
                 else:
                     checkbox_str = f" {i + 1:2}. "
 
-                bar = draw_bar(item["percent"], width=bar_w)
+                size_known = item.get("size_known", True)
+                if size_known:
+                    bar = draw_bar(item["percent"], width=bar_w)
+                    percent_str = f"{item['percent']:>5.1f}%"
+                    size_str = bytes_to_human(item["size"])
+                else:
+                    bar = f"{GRAY}{' ' * bar_w}{RESET}" if bar_w > 0 else ""
+                    percent_str = "   --"
+                    size_str = "--"
                 bar_str = f"{bar}  " if bar_w > 0 else ""
                 style = "\033[1;35m" if is_hover else ""
                 name_padded = pad_and_truncate(item["name"], name_w)
@@ -749,7 +764,7 @@ class AnalyzeSelector(_PagedSelector):
                 if is_hover:
                     focus_line = _frame_line_count(buf)
                 buf.append(
-                    f"{cursor} {checkbox_str}{RESET}{bar_str}{item['percent']:>5.1f}%  {icon}{icon_gap}{style}{name_padded}{RESET} | {style}{bytes_to_human(item['size']):>10}{RESET}\033[K\n"
+                    f"{cursor} {checkbox_str}{RESET}{bar_str}{percent_str}  {icon}{icon_gap}{style}{name_padded}{RESET} | {style}{size_str:>10}{RESET}\033[K\n"
                 )
 
         order_icon = "↓" if self.sort_reverse else "↑"
@@ -847,11 +862,20 @@ class AnalyzeSelector(_PagedSelector):
                     if self.can_select and self.selected_items:
                         self.confirming_delete = True
                         count = len(self.selected_items)
-                        total_size = sum(self.items[i]["size"] for i in self.selected_items)
+                        selected = [self.items[i] for i in self.selected_items]
+                        total_size = sum(
+                            item["size"] for item in selected if item.get("size_known", True)
+                        )
+                        unknown_count = sum(
+                            1 for item in selected if not item.get("size_known", True)
+                        )
                         item_text = "item" if count == 1 else "items"
+                        size_text = bytes_to_human(total_size)
+                        if unknown_count:
+                            size_text = f"{size_text} known, {unknown_count} uncalculated"
                         self.confirm_text = (
                             f"{PURPLE}➔{RESET} Delete {count} {item_text}, "
-                            f"{bytes_to_human(total_size)}  "
+                            f"{size_text}  "
                             f"{GREEN}Enter{RESET} confirm, {GRAY}Space{RESET} cancel:"
                         )
                         continue

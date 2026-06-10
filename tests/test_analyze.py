@@ -7,20 +7,17 @@ from src.core.analyze import (
     ScanCache,
     _delete_analyze_paths,
     _direct_child_count_exceeds,
+    _explore_notice,
     _needs_admin_for_deletion,
-    _prime_cache_from_tree,
     _render_scan_header,
     _scan_status_message,
     _scan_with_spinner,
-    _shallow_preview_notice,
-    _should_use_shallow_preview,
-    _should_use_tree_scan,
+    _should_use_fast_explore,
     _sudo_remove,
     build_analysis_entry,
     build_linux_insights,
+    get_fast_explore_data,
     get_rust_scan_data,
-    get_rust_tree_data,
-    get_shallow_preview_data,
     run_deep_analysis,
 )
 from src.core.file_ops import CACHEDIR_TAG_SIGNATURE, has_valid_cachedir_tag
@@ -92,63 +89,31 @@ def test_render_scan_header_clears_screen_and_prints_title(capsys):
 
 
 @patch("src.core.analyze.AnalyzeSelector")
+@patch("src.core.analyze._should_use_fast_explore", return_value=True)
 @patch("src.core.analyze._get_rust_scan_data_with_spinner")
-@patch("src.core.analyze._tree_scan_with_spinner")
-def test_drill_into_cached_dir_skips_scan(mock_tree, mock_single, mock_selector, test_env):
-    """Drilling into an already-cached directory must not run any scan (so the
-    view redraws in place with no flash or jitter)."""
+def test_fast_explore_ignores_rust_scan_cache(
+    mock_single, _mock_should_fast, mock_selector, test_env
+):
+    """Wide-directory preview should show the live direct listing, not stale Rust cache data."""
     ScanCache.clear()
     dir_a = test_env / "A"
     dir_b = dir_a / "B"
     dir_b.mkdir(parents=True)
-    ScanCache.set(dir_a, {"total_size_bytes": 1000, "subdirs": {"B": 500}})
+    (dir_a / "fresh.txt").write_bytes(b"fresh")
+    ScanCache.set(dir_a, {"total_size_bytes": 1000, "subdirs": {"stale-only": 1000}})
     ScanCache.set(dir_b, {"total_size_bytes": 500, "subdirs": {}})
 
-    # Drill into the only entry (B), then quit.
     mock_selector.return_value.run.side_effect = [("DRILL_DOWN", 0), ("QUIT", None)]
 
     run_deep_analysis(dir_a)
 
-    mock_tree.assert_not_called()
     mock_single.assert_not_called()
+    first_items = mock_selector.call_args_list[0].args[1]
+    shown_names = {item["name"] for item in first_items}
+    assert shown_names == {"B", "fresh.txt"}
 
 
-@patch("subprocess.run")
-def test_get_rust_tree_data_parses(mock_run):
-    """--tree output parses into a per-directory map and does not touch the cache."""
-    ScanCache.clear()
-    tree = {
-        ".": {"total_size_bytes": 1000, "file_count": 3, "subdirs": {"docs": 1000}},
-        "docs": {"total_size_bytes": 1000, "file_count": 3, "subdirs": {"a.bin": 1000}},
-    }
-    mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(tree))
-
-    with patch("pathlib.Path.exists", return_value=True):
-        result = get_rust_tree_data(Path("/some/dir"))
-
-    assert result == tree
-    # The bulk scan itself must not populate the cache; priming is a separate step.
-    assert ScanCache.get(Path("/some/dir")) is None
-
-
-def test_prime_cache_from_tree_keys(test_env):
-    """Tree keys are rejoined onto the original root so they match parent/name lookups."""
-    ScanCache.clear()
-    root = test_env / "proj"
-    tree = {
-        ".": {"total_size_bytes": 30, "file_count": 3, "subdirs": {"docs": 20, "x.bin": 10}},
-        "docs": {"total_size_bytes": 20, "file_count": 2, "subdirs": {"sub": 20}},
-        "docs/sub": {"total_size_bytes": 20, "file_count": 2, "subdirs": {"y.bin": 20}},
-    }
-
-    _prime_cache_from_tree(root, tree)
-
-    assert ScanCache.get(root)["total_size_bytes"] == 30
-    assert ScanCache.get(root / "docs")["subdirs"]["sub"] == 20
-    assert ScanCache.get(root / "docs" / "sub")["total_size_bytes"] == 20
-
-
-def test_direct_child_count_exceeds_stops_after_limit(test_env):
+def test_should_use_fast_explore_only_for_wide_directories(test_env):
     root = test_env / "wide"
     root.mkdir()
     for index in range(3):
@@ -156,76 +121,42 @@ def test_direct_child_count_exceeds_stops_after_limit(test_env):
 
     assert _direct_child_count_exceeds(root, limit=2) is True
     assert _direct_child_count_exceeds(root, limit=3) is False
+    assert _should_use_fast_explore(root, direct_entry_limit=2) is True
+    assert _should_use_fast_explore(root, direct_entry_limit=3) is False
 
 
-def test_should_use_tree_scan_skips_cache_and_large_fanout_paths(test_env):
-    cache_profile = test_env / ".cache/BraveSoftware/Brave-Browser/Default"
-    cache_profile.mkdir(parents=True)
-    node_modules = test_env / "project/node_modules/pkg"
-    node_modules.mkdir(parents=True)
-    wide = test_env / "wide"
-    wide.mkdir()
-    for index in range(3):
-        (wide / f"item-{index}").write_text("x")
-
-    assert _should_use_tree_scan(cache_profile) is False
-    assert _should_use_tree_scan(node_modules) is False
-    assert _should_use_tree_scan(wide, direct_entry_limit=2) is False
-
-
-def test_should_use_shallow_preview_for_wide_directories(test_env):
-    cache_data = test_env / ".cache/BraveSoftware/Brave-Browser/Default/Cache/Cache_Data"
-    cache_data.mkdir(parents=True)
-    icon_cache = test_env / ".cache/gnome-software/icons"
-    icon_cache.mkdir(parents=True)
-    wide_regular_dir = test_env / "wide-regular-dir"
-    wide_regular_dir.mkdir()
-    small_dir = test_env / "small"
-    small_dir.mkdir()
-    node_modules = test_env / "project/node_modules/pkg"
-    node_modules.mkdir(parents=True)
-    for root in (cache_data, icon_cache, wide_regular_dir, node_modules):
-        for index in range(3):
-            (root / f"item-{index}").write_text("x")
-    for index in range(2):
-        (small_dir / f"item-{index}").write_text("x")
-
-    assert _should_use_shallow_preview(cache_data, direct_entry_limit=2) is True
-    assert _should_use_shallow_preview(icon_cache, direct_entry_limit=2) is True
-    assert _should_use_shallow_preview(wide_regular_dir, direct_entry_limit=2) is True
-    assert _should_use_shallow_preview(node_modules, direct_entry_limit=2) is True
-    assert _should_use_shallow_preview(small_dir, direct_entry_limit=2) is False
-
-
-def test_shallow_preview_data_is_bounded_and_non_recursive(test_env):
+def test_fast_explore_data_is_direct_listing_and_non_recursive(test_env):
     ScanCache.clear()
-    root = test_env / "Cache_Data"
+    root = test_env / "Explore"
     nested = root / "nested"
     nested.mkdir(parents=True)
     (root / "a").write_bytes(b"a")
     (root / "b").write_bytes(b"bb")
     (nested / "inner").write_bytes(b"inner-data")
 
-    data = get_shallow_preview_data(root, entry_limit=10)
+    data = get_fast_explore_data(root, entry_limit=10)
 
     assert data is not None
-    assert data["is_shallow_preview"] is True
+    assert data["is_fast_explore"] is True
     assert data["preview_truncated"] is False
+    assert data["preview_sampled_entries"] == 3
     assert data["total_size_bytes"] == 3
     assert data["file_count"] == 2
-    assert data["preview_sampled_entries"] == 3
     assert data["subdirs"]["nested"] == 0
+    assert data["entry_meta"]["nested"]["is_dir"] is True
+    assert data["entry_meta"]["nested"]["size_known"] is False
+    assert data["entry_meta"]["a"]["size_known"] is True
     assert "inner" not in data["subdirs"]
 
 
-def test_shallow_preview_data_stops_at_entry_limit(test_env):
+def test_fast_explore_data_stops_at_entry_limit(test_env):
     ScanCache.clear()
-    root = test_env / "Cache_Data"
+    root = test_env / "wide"
     root.mkdir()
     for index in range(3):
         (root / f"item-{index}").write_text("x")
 
-    data = get_shallow_preview_data(root, entry_limit=2)
+    data = get_fast_explore_data(root, entry_limit=2)
 
     assert data is not None
     assert data["preview_truncated"] is True
@@ -233,10 +164,10 @@ def test_shallow_preview_data_stops_at_entry_limit(test_env):
     assert len(data["subdirs"]) == 2
 
 
-def test_shallow_preview_notice_explains_truncation():
-    notice = _shallow_preview_notice(
+def test_fast_explore_notice_explains_truncation():
+    notice = _explore_notice(
         {
-            "is_shallow_preview": True,
+            "is_fast_explore": True,
             "preview_entry_limit": 500,
             "preview_sampled_entries": 500,
             "preview_truncated": True,
@@ -244,114 +175,81 @@ def test_shallow_preview_notice_explains_truncation():
         }
     )
 
-    assert "sampled first 500 direct entries" in notice
-    assert "listing largest 50" in notice
-    assert "not a complete size ranking" in notice
+    assert "Preview mode" in notice
+    assert "showing first 500 direct entries" in notice
+    assert "folder sizes are not calculated" in notice
 
 
 @patch("src.core.analyze.AnalyzeSelector")
+@patch("src.core.analyze._should_use_fast_explore", return_value=False)
 @patch("src.core.analyze._get_rust_scan_data_with_spinner")
-@patch("src.core.analyze._tree_scan_with_spinner")
-def test_drill_after_tree_scan_hits_cache(mock_tree, mock_single, mock_selector, test_env):
-    """Entering a directory tree-scans once and primes every level; drilling into
-    a child is then a pure cache hit — no second scan."""
+def test_regular_directory_uses_rust_size_view(
+    mock_single, _mock_should_fast, mock_selector, test_env
+):
     ScanCache.clear()
     dir_a = test_env / "A"
     (dir_a / "B").mkdir(parents=True)
-    mock_tree.return_value = {
-        ".": {"total_size_bytes": 1000, "file_count": 2, "subdirs": {"B": 800, "f.txt": 200}},
-        "B": {"total_size_bytes": 800, "file_count": 1, "subdirs": {"g.txt": 800}},
+    (dir_a / "a.txt").write_bytes(b"abc")
+    mock_single.return_value = {
+        "total_size_bytes": 1000,
+        "subdirs": {"B": 997, "a.txt": 3},
+        "top_files": [],
     }
-    mock_selector.return_value.run.side_effect = [("DRILL_DOWN", 0), ("QUIT", None)]
+    mock_selector.return_value.run.side_effect = [("QUIT", None)]
 
     run_deep_analysis(dir_a)
 
-    # Whole-subtree scan happens exactly once, on the initial entry.
-    mock_tree.assert_called_once()
-    # The drill into B is served from the primed cache; no single-level fallback.
-    mock_single.assert_not_called()
+    mock_single.assert_called_once()
+    assert mock_selector.call_args.kwargs["sort_mode"] == "size"
+    assert mock_selector.call_args.kwargs["notice"] == ""
+    by_name = {item["name"]: item for item in mock_selector.call_args.args[1]}
+    assert by_name["B"]["size"] == 997
+    assert by_name["a.txt"]["size"] == 3
 
 
 @patch("src.core.analyze.AnalyzeSelector")
+@patch("src.core.analyze._should_use_fast_explore", return_value=True)
 @patch("src.core.analyze._get_rust_scan_data_with_spinner")
-@patch("src.core.analyze._tree_scan_with_spinner")
-@patch("src.core.analyze._shallow_preview_with_spinner")
-@patch("src.core.analyze._should_use_shallow_preview", return_value=True)
-def test_large_cache_leaf_uses_shallow_preview(
-    _mock_should_shallow, mock_shallow, mock_tree, mock_single, mock_selector, test_env
+@patch("src.core.analyze.build_analysis_entry")
+def test_fast_explore_builds_rows_without_per_path_analysis(
+    mock_build_entry, mock_single, _mock_should_fast, mock_selector, test_env
 ):
     ScanCache.clear()
-    cache_data = test_env / ".cache/BraveSoftware/Brave-Browser/Default/Cache/Cache_Data"
-    cache_data.mkdir(parents=True)
-    mock_shallow.return_value = {
-        "total_size_bytes": 2,
-        "subdirs": {"a": 1, "b": 1},
-        "top_files": [],
-        "is_shallow_preview": True,
-        "preview_entry_limit": 500,
-        "preview_sampled_entries": 500,
-        "preview_truncated": True,
-    }
+    directory = test_env / "many"
+    (directory / "nested").mkdir(parents=True)
+    (directory / "item.txt").write_bytes(b"x")
     mock_selector.return_value.run.side_effect = [("QUIT", None)]
 
-    run_deep_analysis(cache_data)
+    run_deep_analysis(directory)
 
-    mock_shallow.assert_called_once()
-    mock_tree.assert_not_called()
     mock_single.assert_not_called()
-    assert "sampled first 500 direct entries" in mock_selector.call_args.kwargs["notice"]
-    assert "listing largest 50" in mock_selector.call_args.kwargs["notice"]
-    assert "not a complete size ranking" in mock_selector.call_args.kwargs["notice"]
+    mock_build_entry.assert_not_called()
 
 
 @patch("src.core.analyze.AnalyzeSelector")
+@patch("src.core.analyze._should_use_fast_explore", return_value=True)
 @patch("src.core.analyze._get_rust_scan_data_with_spinner")
-@patch("src.core.analyze._tree_scan_with_spinner")
-def test_cache_profile_uses_single_scan_not_tree(mock_tree, mock_single, mock_selector, test_env):
-    """Browser/cache profile dirs should avoid whole-subtree JSON/cache priming."""
+def test_wide_cache_directory_uses_fast_explore_not_rust(
+    mock_single, _mock_should_fast, mock_selector, test_env
+):
     ScanCache.clear()
-    profile = test_env / ".cache/BraveSoftware/Brave-Browser/Default"
-    profile.mkdir(parents=True)
-    mock_single.return_value = {
-        "total_size_bytes": 500,
-        "subdirs": {"Cache": 300, "Code Cache": 200},
-        "top_files": [],
-    }
+    icon_cache = test_env / ".cache/gnome-software/icons"
+    icon_cache.mkdir(parents=True)
+    for index in range(3):
+        (icon_cache / f"icon-{index}.png").write_bytes(b"x")
     mock_selector.return_value.run.side_effect = [("QUIT", None)]
 
-    run_deep_analysis(profile)
+    run_deep_analysis(icon_cache)
 
-    mock_tree.assert_not_called()
-    mock_single.assert_called_once()
-
-
-@patch("src.core.analyze.AnalyzeSelector")
-@patch("src.core.analyze._get_rust_scan_data_with_spinner")
-@patch("src.core.analyze._tree_scan_with_spinner")
-def test_tree_scan_failure_falls_back_to_single(mock_tree, mock_single, mock_selector, test_env):
-    """If the engine can't do a tree scan (e.g. an older binary), drilling falls
-    back to a single-level scan so the feature degrades gracefully."""
-    ScanCache.clear()
-    dir_a = test_env / "A"
-    dir_a.mkdir()
-    mock_tree.return_value = None  # old / failed engine
-    mock_single.return_value = {"total_size_bytes": 500, "subdirs": {}, "top_files": []}
-    mock_selector.return_value.run.side_effect = [("QUIT", None)]
-
-    run_deep_analysis(dir_a)
-
-    mock_tree.assert_called_once()
-    mock_single.assert_called_once()
+    mock_single.assert_not_called()
+    shown_names = {item["name"] for item in mock_selector.call_args.args[1]}
+    assert "icon-0.png" in shown_names
 
 
 @patch("src.core.analyze.AnalyzeSelector")
 @patch("src.core.analyze._parallel_scan_sizes")
-@patch("src.core.analyze._tree_scan_with_spinner")
 @patch("src.core.analyze._get_rust_scan_data_with_spinner")
-def test_root_view_uses_single_scan_not_tree(
-    mock_single, mock_tree, mock_parallel, mock_selector, test_env
-):
-    """The root category view must NOT trigger a whole-subtree tree scan."""
+def test_root_view_still_uses_single_scan(mock_single, mock_parallel, mock_selector, test_env):
     ScanCache.clear()
     mock_single.return_value = {"total_size_bytes": 1000, "subdirs": {}, "top_files": []}
     mock_parallel.return_value = {}
@@ -359,7 +257,6 @@ def test_root_view_uses_single_scan_not_tree(
 
     run_deep_analysis()  # no target_path -> root view (current_target is None)
 
-    mock_tree.assert_not_called()
     mock_single.assert_called_once()
 
 
