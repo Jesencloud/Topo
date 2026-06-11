@@ -251,12 +251,12 @@ def safe_remove(
         return False, "Path does not exist"
 
     if known_size_bytes is None:
-        size_bytes = get_size(raw_path)
+        size_bytes = get_size_fast(raw_path)
     else:
         try:
             size_bytes = max(int(known_size_bytes), 0)
         except (TypeError, ValueError):
-            size_bytes = get_size(raw_path)
+            size_bytes = get_size_fast(raw_path)
     if dry_run:
         record_deletion_audit(raw_path, mode, "dry-run", size_bytes)
         return True, "Dry run"
@@ -317,12 +317,12 @@ def clean_path_by_age(path: str | Path, days: int, dry_run: bool = False) -> tup
             continue
         if st.st_atime >= cutoff or st.st_mtime >= cutoff:
             continue
-        size = get_size(item)
+        size = get_size_fast(item)
         if dry_run:
-            safe_remove(item, use_trash=False, dry_run=True)
+            safe_remove(item, use_trash=False, dry_run=True, known_size_bytes=size)
             total_size += size
             items_count += 1
-        elif safe_remove(item, use_trash=False)[0]:
+        elif safe_remove(item, use_trash=False, known_size_bytes=size)[0]:
             total_size += size
             items_count += 1
     return total_size, items_count
@@ -355,6 +355,5 @@ def parse_size_to_bytes(text: str) -> int:
     return 0
 
 
-def parse_size_from_text(text: str) -> int:
-    """Parser for sizes in command output."""
-    return parse_size_to_bytes(text)
+# Alias for semantic clarity in command output parsing
+parse_size_from_text = parse_size_to_bytes

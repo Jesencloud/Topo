@@ -200,13 +200,15 @@ def run_remove(dry_run=False):
         print(f" {GREEN}✓{RESET} No system integration found to remove.")
         return
 
-    # Calculate total size
-    total_size = sum(get_size(item["path"]) for item in to_remove)
+    # Calculate total size and prepare detailed list
+    for item in to_remove:
+        item["size"] = get_size_fast(item["path"])
+    total_size = sum(item["size"] for item in to_remove)
 
     # 2. Preview
     print(f" {BOLD}The following items will be removed:{RESET}")
     for item in to_remove:
-        size_str = bytes_to_human(get_size(item["path"]))
+        size_str = bytes_to_human(item["size"])
         print(
             f"  {GREEN}✓{RESET} {str(item['path']).replace(str(Path.home()), '~'):<40} {GRAY}({item['desc']}, {size_str}){RESET}"
         )

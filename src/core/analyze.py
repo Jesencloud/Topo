@@ -12,7 +12,7 @@ from . import system
 from .app_cache import find_cleanable_cache_dirs, get_cache_cleanable_reason
 from .constants import BLUE, CYAN, GREEN, MAGENTA, PURPLE, RED, RESET, YELLOW
 from .file_ops import (
-    get_size,
+    get_size_fast,
     record_deletion_audit,
     safe_remove,
     validate_path_for_deletion,
@@ -329,7 +329,7 @@ def get_old_items_info(dir_path: Path, days_threshold: int = 90) -> list[dict[st
                         {
                             "name": item.name,
                             "path": item,
-                            "size": get_size(item),
+                            "size": get_size_fast(item),
                             "mtime": stat.st_mtime,
                         }
                     )
@@ -388,7 +388,7 @@ def _sudo_remove(path: Path) -> bool:
         record_deletion_audit(target_path, "sudo-permanent", "missing", 0)
         return False
 
-    size_bytes = get_size(target_path)
+    size_bytes = get_size_fast(target_path)
     res = run_command(
         ["rm", "-rf", "--", str(target_path)], use_sudo=True, capture=True, timeout=300
     )

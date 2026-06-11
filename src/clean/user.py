@@ -3,7 +3,7 @@ import shutil
 import time
 from pathlib import Path
 
-from ..core.file_ops import bytes_to_human, get_size, safe_remove
+from ..core.file_ops import bytes_to_human, get_size_fast, safe_remove
 from ..core.system import run_command
 
 
@@ -18,7 +18,7 @@ def clean_trash(dry_run=False):
             # We need to estimate size
             trash_path = Path.home() / ".local/share/Trash"
             if trash_path.exists():
-                size = get_size(trash_path)
+                size = get_size_fast(trash_path)
                 if size > 0:
                     print(
                         f"  \033[0;32m✓\033[0m User Trash ({bytes_to_human(size)}) would be emptied"
@@ -41,7 +41,7 @@ def clean_trash(dry_run=False):
     for td in trash_dirs:
         if not td.exists():
             continue
-        size = get_size(td)
+        size = get_size_fast(td)
         if dry_run:
             if size > 0:
                 print(f"  \033[0;32m✓\033[0m {td} ({bytes_to_human(size)}) would be cleaned")
@@ -87,7 +87,7 @@ def clean_system_temp(dry_run=False, min_age_days=3):
                     continue
                 if st.st_mtime > cutoff or st.st_atime > cutoff:
                     continue
-                size = get_size(item)
+                size = get_size_fast(item)
                 if safe_remove(item, use_trash=False, dry_run=dry_run)[0]:
                     total_size += size
                     total_items += 1

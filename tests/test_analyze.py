@@ -424,7 +424,7 @@ def test_analyze_delete_system_path_requires_admin():
     target = Path("/var/cache/topo-test")
 
     with (
-        patch("src.core.analyze.get_size", return_value=4096),
+        patch("src.core.analyze.get_size_fast", return_value=4096),
         patch("src.core.analyze._ensure_admin_for_delete", return_value=True) as mock_admin_check,
         patch("src.core.analyze.safe_remove") as mock_safe,
         patch("src.core.analyze._sudo_remove", return_value=True) as mock_sudo,
@@ -457,7 +457,7 @@ def test_sudo_remove_operates_on_resolved_path(test_env):
 
     with (
         patch("src.core.analyze.run_command", side_effect=fake_run),
-        patch("src.core.analyze.get_size", return_value=0),
+        patch("src.core.analyze.get_size_fast", return_value=0),
     ):
         assert _sudo_remove(link) is True
 

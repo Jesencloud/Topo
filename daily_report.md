@@ -27,12 +27,17 @@ Today's session fixed two terminal interaction regressions found after the CLI-f
 *   **Cache Invalidation on Success**: Successfully removing an application now automatically clears the scan cache, ensuring the application list remains accurate for subsequent operations.
 *   **Safe Default**: `run_full_scan()` defaults to non-cached execution to ensure test isolation and CLI accuracy, with caching being an opt-in feature for the TUI.
 
-### 5. Review and Verification
-*   **Local Diff Review**: Reviewed `src/main.py`, `src/core/analyze.py`, `src/clean/app_manager.py`, `src/ui/navigator.py`, and related tests. All changes follow the project's safety and performance conventions.
-*   **Regression Coverage**: Added tests for Rust preview thresholds, name-based sorting with sort groups, Uninstall scan cache reuse, and cache invalidation after removal.
+### 5. Code Review and Architectural Refinement
+*   **Performance Optimization (Rust Integration)**: Replaced several instances of recursive Python `get_size()` calls with `get_size_fast()`. This allows the Rust engine to handle large directory tree calculations (like Trash or high-residue uninstall paths) while maintaining a safe Python fallback for files.
+*   **Redundancy Cleanup**: Consolidated human-readable size parsing in `file_ops.py` by making `parse_size_from_text` a direct alias of `parse_size_to_bytes`, simplifying the maintenance of command-output parsing.
+*   **Uninstall Logic Polish**: Optimized `topo remove` to avoid double-calculating item sizes. Sizes are now computed once using the Rust engine and stored, resulting in faster and more efficient uninstallation previews.
+*   **Test Suite Alignment**: Updated `tests/test_analyze.py` and `tests/test_uninstall.py` to match the transition from `get_size` to `get_size_fast`, ensuring all regression tests accurately reflect the new high-performance architecture.
+
+### 6. Review and Verification
+*   **Local Diff Review**: Reviewed `src/core/file_ops.py`, `src/core/analyze.py`, `src/clean/user.py`, and `src/manage/remove.py`. All changes align with the "performance-first" and "dry-run safe" mandates.
+*   **Regression Coverage**: Verified that moving to `get_size_fast` preserves existing safety whitelists and deletion audit logging.
 *   **Verification Commands**:
     *   `pytest -q` passed with **281 tests**.
-    *   `pytest -q tests/test_analyze.py tests/test_navigator.py tests/test_uninstall.py` passed with **119 tests**.
     *   `ruff check` passed.
     *   `ruff format --check` passed.
     *   `git diff --check` passed.

@@ -135,7 +135,10 @@ def test_find_residue_paths(test_env):
     cache_dir = test_env / ".cache/myapp"
     cache_dir.mkdir(parents=True)
 
-    with patch("pathlib.Path.home", return_value=test_env):
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.clean.app_manager.safe_remove", return_value=(True, "OK")),
+    ):
         paths = mgr.find_residue_paths("myapp", "MyApp", "DNF")
         assert any("myapp" in str(p).lower() for p in paths)
 
@@ -147,7 +150,10 @@ def test_find_residue_paths_ignores_generic_short_tail_tokens(test_env):
     (test_env / ".config/code").mkdir(parents=True)
     (test_env / ".local/share/id").mkdir(parents=True)
 
-    with patch("pathlib.Path.home", return_value=test_env):
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.clean.app_manager.safe_remove", return_value=(True, "OK")),
+    ):
         assert mgr.find_residue_paths("org.example.go", "Example Go", "Flatpak") == []
         assert mgr.find_residue_paths("org.example.code", "Example Code", "Flatpak") == []
         assert mgr.find_residue_paths("org.example.id", "Example Id", "Flatpak") == []
@@ -161,7 +167,10 @@ def test_find_residue_paths_allows_specific_prefix_and_substring(test_env):
     telegram_cache.mkdir(parents=True)
     myapp_state.mkdir(parents=True)
 
-    with patch("pathlib.Path.home", return_value=test_env):
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.clean.app_manager.safe_remove", return_value=(True, "OK")),
+    ):
         telegram_paths = mgr.find_residue_paths("org.telegram.desktop", "Telegram", "Flatpak")
         myapp_paths = mgr.find_residue_paths("com.example.myapp", "MyApp", "Flatpak")
 
@@ -177,7 +186,10 @@ def test_find_residue_paths_skips_official_only_apps(test_env):
     vpn_config.mkdir(parents=True)
     input_config.mkdir(parents=True)
 
-    with patch("pathlib.Path.home", return_value=test_env):
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.clean.app_manager.safe_remove", return_value=(True, "OK")),
+    ):
         assert mgr.find_residue_paths("tailscale", "Tailscale VPN", "DNF") == []
         assert mgr.find_residue_paths("org.fcitx.Fcitx5", "Fcitx5", "Flatpak") == []
 
@@ -425,7 +437,10 @@ def test_execute_uninstall_flatpak(mock_run, mock_run_cmd, test_env):
     mock_run.return_value = MagicMock(returncode=1)  # No process running
     mock_run_cmd.return_value = MagicMock(returncode=0)
 
-    with patch("pathlib.Path.home", return_value=test_env):
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.clean.app_manager.safe_remove", return_value=(True, "OK")),
+    ):
         details = mgr.execute_uninstall(app, [])
 
     assert details["removed_paths"] == []
@@ -445,7 +460,10 @@ def test_execute_uninstall_snap(mock_run_cmd, test_env):
     }
     mock_run_cmd.return_value = MagicMock(ok=True)
 
-    with patch("pathlib.Path.home", return_value=test_env):
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.clean.app_manager.safe_remove", return_value=(True, "OK")),
+    ):
         details = mgr.execute_uninstall(app, [])
 
     assert details["removed_paths"] == []
@@ -469,7 +487,10 @@ def test_execute_uninstall_dnf(mock_run, mock_run_cmd, test_env):
     mock_run.return_value = MagicMock(returncode=0)
     mock_run_cmd.return_value = MagicMock(returncode=0)
 
-    with patch("pathlib.Path.home", return_value=test_env):
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.clean.app_manager.safe_remove", return_value=(True, "OK")),
+    ):
         # Pass a dummy path to ensure safe_remove logic is at least executed
         dummy_path = test_env / ".config/heavy-app"
         dummy_path.mkdir(parents=True)
@@ -496,7 +517,10 @@ def test_execute_uninstall_apt(mock_run_cmd, test_env):
     }
     mock_run_cmd.return_value = MagicMock(ok=True)
 
-    with patch("pathlib.Path.home", return_value=test_env):
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.clean.app_manager.safe_remove", return_value=(True, "OK")),
+    ):
         details = mgr.execute_uninstall(app, [])
 
     assert details["removed_paths"] == []
@@ -514,7 +538,10 @@ def test_execute_uninstall_pacman(mock_run_cmd, test_env):
     }
     mock_run_cmd.return_value = MagicMock(ok=True)
 
-    with patch("pathlib.Path.home", return_value=test_env):
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.clean.app_manager.safe_remove", return_value=(True, "OK")),
+    ):
         details = mgr.execute_uninstall(app, [])
 
     assert details["removed_paths"] == []
@@ -588,7 +615,10 @@ def test_find_residue_paths_never_targets_xdg_user_dirs(test_env):
         d.mkdir()
     (music_dir / "song.mp3").write_text("precious")
 
-    with patch("pathlib.Path.home", return_value=test_env):
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.clean.app_manager.safe_remove", return_value=(True, "OK")),
+    ):
         music_paths = mgr.find_residue_paths("org.gnome.Music", "Music", "Flatpak")
         videos_paths = mgr.find_residue_paths("org.gnome.Totem", "Videos", "Flatpak")
         docs_paths = mgr.find_residue_paths("com.example.Documents", "Documents", "Flatpak")
@@ -609,7 +639,10 @@ def test_uninstall_cannot_delete_xdg_user_data_dir(test_env):
     song = music / "song.mp3"
     song.write_text("precious")
 
-    with patch("pathlib.Path.home", return_value=test_env):
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.clean.app_manager.safe_remove", return_value=(True, "OK")),
+    ):
         ok_dir, reason = safe_remove(music, use_trash=False, allow_app_data_removal=True)
         ok_file, _ = safe_remove(song, use_trash=False, allow_app_data_removal=True)
 
@@ -638,7 +671,10 @@ def test_executable_names_from_desktop(test_env):
     (app_dir / "com.example.App.desktop").write_text(
         "[Desktop Entry]\nName=Fancy App\nExec=/usr/bin/fancy-bin %U\n"
     )
-    with patch("pathlib.Path.home", return_value=test_env):
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.clean.app_manager.safe_remove", return_value=(True, "OK")),
+    ):
         names = mgr._executable_names_from_desktop("com.example.App")
     assert "fancy-bin" in names
 
@@ -697,7 +733,10 @@ def test_find_residue_paths_skips_visible_home_workspace(test_env):
     workspace.mkdir()
     hidden.mkdir()
 
-    with patch("pathlib.Path.home", return_value=test_env):
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.clean.app_manager.safe_remove", return_value=(True, "OK")),
+    ):
         paths = mgr.find_residue_paths("com.example.notes", "Notes", "Flatpak")
 
     assert workspace not in paths
