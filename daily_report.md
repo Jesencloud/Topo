@@ -15,12 +15,24 @@ Today's session fixed two terminal interaction regressions found after the CLI-f
 *   **Analyze Edge Case**: The initial wheel-selection fix used a 3-row step, which could wrap a 3-item Analyze list back to the same index. The final behavior uses a 1-row step so the arrow visibly moves even in small lists.
 *   **Scrollbar Drag Preserved**: Direct right-edge scrollbar dragging still controls manual frame scrolling. Wheel input is treated as list navigation for selector screens.
 
-### 3. Review and Verification
-*   **Local Diff Review**: Reviewed `src/main.py`, `src/ui/navigator.py`, `tests/test_main.py`, and `tests/test_navigator.py`. No unrelated or abnormal changes were found.
-*   **Regression Coverage**: Added tests for command-screen clearing, main-menu mouse wheel selection, Analyze mouse wheel selection including a 3-item view, Uninstall mouse wheel selection, and hidden-scrollbar wheel behavior.
+### 3. Rust Size Analysis "Preview" Mode
+*   **Responsive High-Fanout Guard**: Introduced a "Fast Explore" mode triggered when a directory contains more than 500 direct children. This ensures the Analyze view remains responsive even for extremely wide directories (e.g., large cache leaf nodes).
+*   **Truncated Listing and Metadata**: In Preview mode, only the first 500 direct entries are sampled and displayed. Sizes for subdirectories are intentionally not calculated in this mode to avoid blocking the UI.
+*   **UI Clarity and Sorting**: Added a specific "Preview mode" notice explaining the limitations. Preview rows are sorted by name with directories prioritized at the top, and unknown folder sizes are clearly marked as `--`.
+
+### 4. Uninstall Scan Path Optimization
+*   **Immediate Scan Feedback**: Added a `Scanning installed applications...` message that appears instantly when entering the Uninstall menu if no valid cache exists, preventing a blank screen while package managers are queried.
+*   **Short-Term Scan Cache**: Implemented a 30-second TTL cache for the full application scan. Re-entering the Uninstall menu from the Main Menu now feels instantaneous.
+*   **Smart Cache Validation**: The cache is validated against a composite key including OS ID, available package managers, and a directory signature (mtime/size) of system and user desktop file folders.
+*   **Cache Invalidation on Success**: Successfully removing an application now automatically clears the scan cache, ensuring the application list remains accurate for subsequent operations.
+*   **Safe Default**: `run_full_scan()` defaults to non-cached execution to ensure test isolation and CLI accuracy, with caching being an opt-in feature for the TUI.
+
+### 5. Review and Verification
+*   **Local Diff Review**: Reviewed `src/main.py`, `src/core/analyze.py`, `src/clean/app_manager.py`, `src/ui/navigator.py`, and related tests. All changes follow the project's safety and performance conventions.
+*   **Regression Coverage**: Added tests for Rust preview thresholds, name-based sorting with sort groups, Uninstall scan cache reuse, and cache invalidation after removal.
 *   **Verification Commands**:
-    *   `pytest -q` passed with **280 tests**.
-    *   `pytest -q tests/test_navigator.py tests/test_main.py` passed with **37 tests**.
+    *   `pytest -q` passed with **281 tests**.
+    *   `pytest -q tests/test_analyze.py tests/test_navigator.py tests/test_uninstall.py` passed with **119 tests**.
     *   `ruff check` passed.
     *   `ruff format --check` passed.
     *   `git diff --check` passed.

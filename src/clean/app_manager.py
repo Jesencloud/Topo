@@ -22,6 +22,11 @@ from ..ui.navigator import Navigator, UninstallSelector
 
 
 class UninstallManager:
+    _SCAN_CACHE_TTL_SECONDS = 30
+    _scan_cache_apps: list[dict[str, Any]] | None = None
+    _scan_cache_time = 0.0
+    _scan_cache_key: tuple[Any, ...] | None = None
+
     # Tokens too short or generic to safely substring-match against folder names.
     # Matching these loosely would flag unrelated directories for deletion
     # (e.g. "desktop" from "org.telegram.desktop", or "data"/"app").
@@ -137,6 +142,46 @@ class UninstallManager:
 
     def __init__(self):
         self.apps: list[dict[str, Any]] = []
+
+    @classmethod
+    def clear_scan_cache(cls) -> None:
+        cls._scan_cache_apps = None
+        cls._scan_cache_time = 0.0
+        cls._scan_cache_key = None
+
+    @staticmethod
+    def _desktop_dirs_signature() -> tuple[tuple[str, int, int], ...]:
+        signatures = []
+        for directory in (
+            Path("/usr/share/applications"),
+            Path.home() / ".local/share/applications",
+        ):
+            try:
+                stat = directory.stat()
+            except OSError:
+                continue
+            signatures.append((str(directory), int(stat.st_mtime), int(stat.st_size)))
+        return tuple(signatures)
+
+    @classmethod
+    def _current_scan_cache_key(cls) -> tuple[Any, ...]:
+        return (
+            system.get_os_id(),
+            bool(shutil.which("rpm")),
+            bool(shutil.which("dpkg-query")),
+            bool(shutil.which("pacman")),
+            bool(shutil.which("flatpak")),
+            bool(shutil.which("snap")),
+            cls._desktop_dirs_signature(),
+        )
+
+    @classmethod
+    def has_fresh_scan_cache(cls) -> bool:
+        if cls._scan_cache_apps is None:
+            return False
+        if cls._scan_cache_key != cls._current_scan_cache_key():
+            return False
+        return (time.monotonic() - cls._scan_cache_time) <= cls._SCAN_CACHE_TTL_SECONDS
 
     @staticmethod
     def _name_matches(entry_lower: str, token: str) -> bool:
@@ -278,10 +323,15 @@ class UninstallManager:
                 names.add(app_id.rsplit(".", 1)[-1].lower())
         return [n for n in names if n]
 
-    def run_full_scan(self) -> list[dict[str, Any]]:
+    def run_full_scan(self, *, use_cache: bool = False) -> list[dict[str, Any]]:
         """Scans for user-facing applications across Linux package managers."""
+        cache_key = self._current_scan_cache_key()
+        if use_cache and self.has_fresh_scan_cache():
+            self.apps = [app.copy() for app in self._scan_cache_apps or []]
+            return self.apps
+
         apps = []
-        os_id = system.get_os_id()
+        os_id = cache_key[0]
 
         # 1. Pre-scan: identify native packages that provide desktop files.
         user_app_packages = set()
@@ -555,6 +605,10 @@ class UninstallManager:
             key=lambda x: (x.get("install_time", 0), x.get("size_bytes", 0)),
             reverse=True,
         )
+        if use_cache:
+            self.__class__._scan_cache_apps = [app.copy() for app in self.apps]
+            self.__class__._scan_cache_time = time.monotonic()
+            self.__class__._scan_cache_key = cache_key
         return self.apps
 
     def find_residue_paths(self, app_id: str, app_name: str, app_type: str) -> list[Path]:
@@ -736,7 +790,14 @@ def run_uninstall():
     manager = UninstallManager()
 
     while True:
-        apps = manager.run_full_scan()
+        if not manager.has_fresh_scan_cache():
+            sys.stdout.write(
+                "\033[H\033[J"
+                f"\n {THEME_TITLE}Select Application to Remove{RESET}\n\n"
+                f" {GRAY}Scanning installed applications...{RESET}\n"
+            )
+            sys.stdout.flush()
+        apps = manager.run_full_scan(use_cache=True)
 
         if not apps:
             print("\n   \033[1;31mNo applications found to uninstall.\033[0m")
@@ -877,6 +938,7 @@ def run_uninstall():
             # Final Summary — only report what actually succeeded.
             if removed_names:
                 ScanCache.clear()
+                UninstallManager.clear_scan_cache()
             print("=" * 70)
             print("\033[1;34mUninstall complete\033[0m")
             names_str = ", ".join(removed_names) if removed_names else "none"

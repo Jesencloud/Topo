@@ -9,8 +9,10 @@ from src.core.history import parse_deletion_history
 @pytest.fixture(autouse=True)
 def mock_sleep():
     """Mock time.sleep globally for all uninstall tests to prevent slow test execution."""
+    UninstallManager.clear_scan_cache()
     with patch("time.sleep") as m:
         yield m
+    UninstallManager.clear_scan_cache()
 
 
 def test_run_uninstall_no_apps():
@@ -92,7 +94,7 @@ def test_run_uninstall_cancel(
     mock_raw.return_value.__enter__.return_value = 0
 
     # We need side_effect to stop the while True loop after one iteration
-    def mock_scan_side_effect():
+    def mock_scan_side_effect(*args, **kwargs):
         if not hasattr(mock_scan_side_effect, "called"):
             mock_scan_side_effect.called = True
             return mock_apps
@@ -201,6 +203,24 @@ def test_run_full_scan_rpm(mock_run, mock_which):
     assert heavy_app["size_bytes"] == 150000000
     assert heavy_app["install_time"] == 1700000000
     assert apps[0]["id"] == "heavy-app"
+
+
+@patch("shutil.which")
+@patch("subprocess.run")
+def test_run_full_scan_reuses_short_lived_cache(mock_run, mock_which):
+    mock_which.side_effect = lambda x: "/usr/bin/rpm" if x == "rpm" else None
+    mock_run.return_value = MagicMock(
+        returncode=0,
+        stdout="heavy-app\t150000000\t1700000000\n",
+    )
+
+    with patch("src.core.system.get_os_id", return_value="fedora"):
+        first = UninstallManager().run_full_scan(use_cache=True)
+        mock_run.reset_mock()
+        second = UninstallManager().run_full_scan(use_cache=True)
+
+    assert first == second
+    mock_run.assert_not_called()
 
 
 @patch("shutil.which")
