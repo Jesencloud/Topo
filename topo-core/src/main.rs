@@ -38,7 +38,9 @@ struct DirAgg {
 impl Ord for FileInfo {
     fn cmp(&self, other: &Self) -> Ordering {
         // Reverse order: smaller size has higher priority (will be popped first)
-        other.size_bytes.cmp(&self.size_bytes)
+        other
+            .size_bytes
+            .cmp(&self.size_bytes)
             .then_with(|| self.path.cmp(&other.path))
     }
 }
@@ -97,11 +99,12 @@ fn compute_single(root_path: &Path) -> ScanResult {
 
         // 1. Attribute size to top-level subdirectory
         if let Ok(rel_path) = path.strip_prefix(root_path)
-            && let Some(first_comp) = rel_path.components().next() {
-                let subdir_name = first_comp.as_os_str().to_string_lossy().into_owned();
-                let e = subdir_sizes.entry(subdir_name).or_insert(0);
-                *e = e.saturating_add(size);
-            }
+            && let Some(first_comp) = rel_path.components().next()
+        {
+            let subdir_name = first_comp.as_os_str().to_string_lossy().into_owned();
+            let e = subdir_sizes.entry(subdir_name).or_insert(0);
+            *e = e.saturating_add(size);
+        }
 
         // 2. Track top 100 files (> 1 MiB)
         if size > TOP_FILE_MIN_BYTES {
@@ -228,9 +231,10 @@ fn main() {
     let mut min_bytes = DEFAULT_TREE_MIN_BYTES;
     if let Some(pos) = args.iter().position(|a| a == "--min-bytes")
         && let Some(v) = args.get(pos + 1)
-            && let Ok(n) = v.parse::<u64>() {
-                min_bytes = n;
-            }
+        && let Ok(n) = v.parse::<u64>()
+    {
+        min_bytes = n;
+    }
 
     let root_path = PathBuf::from(raw_root)
         .canonicalize()
@@ -249,7 +253,11 @@ fn main() {
         run_single(&root_path);
     }
 
-    eprintln!("Scan of {:?} completed in {:?}", root_path, start_time.elapsed());
+    eprintln!(
+        "Scan of {:?} completed in {:?}",
+        root_path,
+        start_time.elapsed()
+    );
 }
 
 #[cfg(test)]
