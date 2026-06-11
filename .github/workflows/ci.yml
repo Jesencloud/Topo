@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  lint:
+    name: Lint & Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python Linter
+        run: pip install ruff mypy
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Install ShellCheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Run Ruff Check (Python)
+        run: ruff check src tests
+
+      - name: Run Ruff Format (Python)
+        run: ruff format --check src tests
+
+      - name: Run Mypy (Python)
+        run: mypy src/
+
+      - name: Run Cargo Clippy (Rust)
+        working-directory: topo-core
+        run: cargo clippy -- -D warnings
+
+      - name: Run Cargo Fmt (Rust)
+        working-directory: topo-core
+        run: cargo fmt --check
+
+      - name: Run ShellCheck
+        run: find . -type f -name '*.sh' -exec shellcheck {} +
+
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python Test Tools
+        run: pip install pytest
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run Pytest (Python)
+        run: pytest -q
+
+      - name: Run Cargo Test (Rust)
+        working-directory: topo-core
+        run: cargo test
