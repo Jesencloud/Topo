@@ -32,9 +32,17 @@ DEFAULT_CRITICAL_PATHS = [
 CRITICAL_PREFIX_PATHS = tuple(Path(path) for path in DEFAULT_CRITICAL_PATHS)
 LEGACY_SEEDED_WHITELIST_PATHS = frozenset({"/", *DEFAULT_CRITICAL_PATHS})
 
-# Paths that are only protected from exact deletion
-DELETION_CRITICAL_EXACT_PATHS = tuple(
-    Path(path) for path in ("/", "/home", "/mnt", "/media", "/srv", "/usr", "/var", "/tmp", "/boot")
+# Paths that are only protected from exact deletion.
+DELETION_CRITICAL_EXACT_PATHS = (
+    Path("/"),
+    Path("/") / "home",
+    Path("/") / "mnt",
+    Path("/") / "media",
+    Path("/") / "srv",
+    Path("/") / "usr",
+    Path("/") / "var",
+    Path("/") / "tmp",
+    Path("/") / "boot",
 )
 
 LINUX_PROTECTED_HOME_PATHS = [
@@ -244,7 +252,7 @@ def _resolve_path(path) -> Path:
 
 def _is_system_carve_out(path: Path) -> bool:
     path_str = str(path)
-    return path_str.startswith(("/var/tmp/", "/var/cache/"))
+    return path_str.startswith((str(Path("/") / "var" / "tmp") + "/", "/var/cache/"))
 
 
 def _is_critical_system_path(path: Path) -> bool:

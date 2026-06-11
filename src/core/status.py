@@ -142,7 +142,10 @@ def _get_public_ip_info():
     # ipinfo.io serves over HTTPS (ip-api.com's free tier is HTTP-only), so this
     # opt-in lookup is no longer sent in cleartext. Fields: {"ip", "country"}.
     try:
-        with urllib.request.urlopen("https://ipinfo.io/json", timeout=2.0) as response:
+        # Fixed HTTPS endpoint for opt-in public IP lookup.
+        with urllib.request.urlopen(  # nosec B310
+            "https://ipinfo.io/json", timeout=2.0
+        ) as response:
             data = json.loads(response.read().decode())
             ip = data.get("ip")
             if ip:

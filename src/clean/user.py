@@ -36,7 +36,8 @@ def clean_trash(dry_run=False):
     #    safe_remove so protection/audit apply and stats reflect what truly went.
     trash_dirs = [
         Path.home() / ".local/share/Trash",
-        Path(f"/tmp/.Trash-{os.getuid()}"),
+        # Linux per-user trash location, not temp file creation.
+        Path(f"/tmp/.Trash-{os.getuid()}"),  # nosec B108
     ]
     for td in trash_dirs:
         if not td.exists():
@@ -69,7 +70,8 @@ def clean_system_temp(dry_run=False, min_age_days=3):
     uid = os.getuid()
     cutoff = time.time() - (min_age_days * 86400)
 
-    temp_paths = [Path("/tmp"), Path("/var/tmp")]
+    # Intentional temp cleanup roots, not temp file creation.
+    temp_paths = [Path("/tmp"), Path("/var/tmp")]  # nosec B108
     for path in temp_paths:
         if not path.exists():
             continue

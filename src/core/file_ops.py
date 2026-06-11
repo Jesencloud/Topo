@@ -20,7 +20,11 @@ CACHEDIR_TAG_FILE = "CACHEDIR.TAG"
 CACHEDIR_TAG_SIGNATURE = "Signature: 8a477f597d28d172789f06886806bc55"
 
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
-_SYSTEM_CLEANABLE_CONTENT_DIRS = (Path("/var/tmp"), Path("/var/cache"))
+_SYSTEM_CLEANABLE_CONTENT_DIRS = (
+    # Intentional system temp cleanup root, not temp file creation.
+    Path("/var/tmp"),  # nosec B108
+    Path("/var/cache"),
+)
 
 
 def _is_system_cleanable_content(path: Path) -> bool:
