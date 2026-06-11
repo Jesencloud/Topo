@@ -22,7 +22,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install Python Linter
-        run: pip install ruff mypy packaging git
+        run: pip install ruff mypy packaging
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
