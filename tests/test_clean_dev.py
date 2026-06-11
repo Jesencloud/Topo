@@ -88,9 +88,11 @@ def test_clean_ai_models_uses_shared_cleanup_defs(mock_clean_age, test_env):
 
 @patch("shutil.which")
 @patch("src.clean.dev.clean_tool_cache")
-def test_clean_developer_tools(mock_clean_tool, mock_which):
+@patch("src.clean.dev.run_command")
+def test_clean_developer_tools(mock_run_cmd, mock_clean_tool, mock_which):
     mock_which.return_value = "/usr/bin/npm"  # Mock npm presence
     mock_clean_tool.return_value = (100, 1)
+    mock_run_cmd.return_value = MagicMock(returncode=0, ok=True)
 
     with (
         patch("src.clean.dev.get_size_fast", return_value=2048),
