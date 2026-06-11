@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [ "main" ]
 
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: Lint & Format
@@ -19,7 +22,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install Python Linter
-        run: pip install ruff mypy packaging
+        run: pip install ruff mypy packaging git
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
