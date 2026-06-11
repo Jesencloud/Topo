@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 from ..core.constants import BLUE, BOLD, GRAY, GREEN, MAGENTA, RED, RESET
-from ..core.file_ops import bytes_to_human, get_size
+from ..core.file_ops import bytes_to_human, get_size_fast
 from ..core.install_source import (
     PACKAGE_INSTALL,
     get_install_source,
