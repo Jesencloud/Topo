@@ -107,6 +107,7 @@ copy_runtime_tree() {
 
     cp -a "$REPO_ROOT/src/." "$app_dir/src/"
     find "$app_dir/src" -type d -name __pycache__ -prune -exec rm -rf '{}' +
+    # shellcheck disable=SC2016
     find "$app_dir/src" -type f \( -name '*.pyc' -o -name '*.pyo' -o -name '*$py.class' \) -delete
 
     rm -f "$app_dir/src/core/bin"/topo-core-* 2>/dev/null || true
