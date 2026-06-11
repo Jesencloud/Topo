@@ -19,7 +19,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install Python Linter
-        run: pip install ruff mypy
+        run: pip install ruff mypy packaging
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -61,7 +61,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install Python Test Tools
-        run: pip install pytest
+        run: pip install pytest packaging
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
