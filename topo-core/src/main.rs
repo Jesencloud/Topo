@@ -96,13 +96,12 @@ fn compute_single(root_path: &Path) -> ScanResult {
         file_count = file_count.saturating_add(1);
 
         // 1. Attribute size to top-level subdirectory
-        if let Ok(rel_path) = path.strip_prefix(root_path) {
-            if let Some(first_comp) = rel_path.components().next() {
+        if let Ok(rel_path) = path.strip_prefix(root_path)
+            && let Some(first_comp) = rel_path.components().next() {
                 let subdir_name = first_comp.as_os_str().to_string_lossy().into_owned();
                 let e = subdir_sizes.entry(subdir_name).or_insert(0);
                 *e = e.saturating_add(size);
             }
-        }
 
         // 2. Track top 100 files (> 1 MiB)
         if size > TOP_FILE_MIN_BYTES {
@@ -227,13 +226,11 @@ fn main() {
 
     // Optional `--min-bytes N` (tree mode); defaults to 1 MiB.
     let mut min_bytes = DEFAULT_TREE_MIN_BYTES;
-    if let Some(pos) = args.iter().position(|a| a == "--min-bytes") {
-        if let Some(v) = args.get(pos + 1) {
-            if let Ok(n) = v.parse::<u64>() {
+    if let Some(pos) = args.iter().position(|a| a == "--min-bytes")
+        && let Some(v) = args.get(pos + 1)
+            && let Ok(n) = v.parse::<u64>() {
                 min_bytes = n;
             }
-        }
-    }
 
     let root_path = PathBuf::from(raw_root)
         .canonicalize()
