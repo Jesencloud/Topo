@@ -174,8 +174,6 @@ def get_size(path: str | Path) -> int:
     return total
 
 
-from typing import Any
-
 def _coerce_non_negative_size(value: Any) -> int | None:
     try:
         return max(int(value), 0)

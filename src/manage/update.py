@@ -5,6 +5,7 @@ import subprocess
 from hashlib import sha256
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
 
 from packaging.version import InvalidVersion, Version
 
@@ -154,8 +155,6 @@ def _file_sha256(path: Path) -> str:
             digest.update(chunk)
     return digest.hexdigest()
 
-
-from typing import Any
 
 def _subprocess_stderr_tail(error: Any) -> str:
     stderr = getattr(error, "stderr", None)

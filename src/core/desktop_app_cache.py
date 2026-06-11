@@ -2,8 +2,6 @@
 
 from pathlib import Path
 
-from typing import Any
-
 DESKTOP_APP_DEFS: dict[str, dict[str, tuple[str, ...]]] = {
     "Discord": {
         "cache_paths": (
