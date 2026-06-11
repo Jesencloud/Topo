@@ -125,11 +125,12 @@ def is_app_running(process_name: str) -> bool:
 
 def bytes_to_human(n_bytes: int) -> str:
     """Converts bytes to human readable format using binary units."""
+    val = float(n_bytes)
     for unit in ["B", "KiB", "MiB", "GiB", "TiB"]:
-        if n_bytes < 1024:
-            return f"{n_bytes:.1f} {unit}" if unit != "B" else f"{int(n_bytes)} {unit}"
-        n_bytes /= 1024
-    return f"{n_bytes:.1f} PiB"
+        if val < 1024:
+            return f"{val:.1f} {unit}" if unit != "B" else f"{int(val)} {unit}"
+        val /= 1024
+    return f"{val:.1f} PiB"
 
 
 def has_valid_cachedir_tag(path: str | Path) -> bool:
@@ -173,7 +174,9 @@ def get_size(path: str | Path) -> int:
     return total
 
 
-def _coerce_non_negative_size(value: object) -> int | None:
+from typing import Any
+
+def _coerce_non_negative_size(value: Any) -> int | None:
     try:
         return max(int(value), 0)
     except (TypeError, ValueError):

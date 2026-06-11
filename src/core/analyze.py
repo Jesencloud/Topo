@@ -457,14 +457,14 @@ def _delete_analyze_paths(paths: list[Path]) -> bool:
     return changed
 
 
-def run_deep_analysis(target_path: Path = None):
+def run_deep_analysis(target_path: Path | None = None):
     # State Stack stores: {"target": Path, "results": [], "data": {}, "total_size": int}
-    state_stack = []
+    state_stack: list[dict[str, Any]] = []
 
     # Current active state
-    current_target = target_path
-    results = []
-    data = None
+    current_target: Path | None = target_path
+    results: list[dict[str, Any]] = []
+    data: dict[str, Any] | None = None
     total_scan_size = 0
     needs_scan = True
     scan_reason = "scan"
@@ -518,7 +518,7 @@ def run_deep_analysis(target_path: Path = None):
             if current_target is None:
                 # Root View: Standard Categories
                 total_used = shutil.disk_usage("/").used or 1
-                targets = [
+                targets: list[dict[str, Any]] = [
                     {"name": "Home", "path": Path.home(), "color": CYAN},
                     {
                         "name": "Applications",
@@ -530,7 +530,7 @@ def run_deep_analysis(target_path: Path = None):
 
                 # --- LINUX INSIGHTS: Detect hidden space killers ---
                 home = Path.home()
-                insights = build_linux_insights(home)
+                insights: list[dict[str, Any]] = build_linux_insights(home)
 
                 # Collect every path that needs a Rust scan and run them concurrently.
                 # Home is already scanned (total_scan_size); smart views use a Python

@@ -59,7 +59,7 @@ class Scanner:
 
     def scan_artifacts(self, project_path: Path) -> list[Path]:
         """Finds heavy artifacts within a discovered project root."""
-        artifacts = []
+        artifacts: list[Path] = []
         try:
             entries = list(os.scandir(project_path))
         except OSError:

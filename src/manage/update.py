@@ -155,7 +155,9 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _subprocess_stderr_tail(error: BaseException) -> str:
+from typing import Any
+
+def _subprocess_stderr_tail(error: Any) -> str:
     stderr = getattr(error, "stderr", None)
     if not isinstance(stderr, str):
         return ""

@@ -45,7 +45,7 @@ def is_standard_cache_dir(path: str | Path) -> bool:
 
 
 def is_known_app_cache_path(path: str | Path) -> bool:
-    return is_cleanable_linux_app_data(path) or is_desktop_app_cache_path(path)
+    return is_cleanable_linux_app_data(Path(path)) or is_desktop_app_cache_path(path)
 
 
 def get_xdg_cache_root() -> Path:

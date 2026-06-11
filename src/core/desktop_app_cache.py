@@ -2,7 +2,9 @@
 
 from pathlib import Path
 
-DESKTOP_APP_DEFS = {
+from typing import Any
+
+DESKTOP_APP_DEFS: dict[str, dict[str, tuple[str, ...]]] = {
     "Discord": {
         "cache_paths": (
             ".config/discord/Cache",
