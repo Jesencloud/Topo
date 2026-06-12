@@ -1,3 +1,37 @@
+# Daily Modification Report - 2026-06-12
+
+## Project: topo (Topo) - `topo doctor` Diagnostic Command
+
+Today's session added and reviewed the new `topo doctor` command. The feature is intended as a lightweight diagnostic report for installation, runtime dependencies, Rust engine availability, package-manager tools, trash utilities, sudo state, and Topo configuration paths.
+
+### 1. Doctor Command Entry
+*   **New CLI Command**: Added `topo doctor` to the main CLI command list.
+*   **Runtime Report**: The command prints OS ID, CPU architecture, Python version/path, invoking user, Topo version, install source, install root, Rust engine status, package-manager tools, file-system utilities, sudo state, and config directory status.
+*   **Use Case**: This gives users and maintainers a single command for troubleshooting installation or environment problems without manually checking each dependency.
+
+### 2. Safety and Responsiveness Review
+*   **Home Scan Removed**: The first implementation checked Rust size calculation by calling `get_size_fast(Path.home())`, which could recursively scan the entire home directory and cause high CPU usage or long stalls. This was replaced with a bounded temporary-directory probe.
+*   **No User Data Traversal**: The final Rust size probe creates a temporary `topo-doctor-*` directory, writes a small sample file, runs the Rust engine only against that directory, verifies JSON output, and removes the temporary directory automatically.
+*   **Short Command Timeout**: Doctor-specific command checks now use a shared 5-second timeout, including tool version checks, Rust engine response checks, Rust size probing, and sudo session probing.
+
+### 3. Broken-Install Tolerance
+*   **VERSION Fallback**: Missing, unreadable, or empty `VERSION` files no longer crash `topo doctor`. The report now prints an `Unavailable` message and continues.
+*   **Rust Engine Missing State**: If the architecture-specific Rust engine cannot be found, the command reports `Not found` and skips the size probe instead of failing the whole diagnostic.
+*   **Failure Detail Cleanup**: Rust engine failures now show a concise first-line failure reason, timeout reason, or exit code.
+
+### 4. Regression Coverage
+*   **Doctor Tests**: Added `tests/test_doctor.py` to verify that `topo doctor` continues when `VERSION` is missing and that the Rust size probe uses a temporary directory with the doctor timeout.
+*   **CLI Routing Test**: Added coverage in `tests/test_main.py` proving `topo doctor` routes to `run_doctor()`.
+*   **Verification Commands**:
+    *   `python -m src.main doctor` completed successfully and quickly.
+    *   `pytest -q` passed with **284 tests**.
+    *   `ruff check` passed.
+    *   `ruff format --check` passed.
+    *   `bandit -r src -ll` passed with **Medium: 0**.
+    *   `git diff --check` passed.
+
+---
+
 # Daily Modification Report - 2026-06-11
 
 ## Project: topo (Topo) - Main Menu Output Clearing and Mouse Wheel Selection

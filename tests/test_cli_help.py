@@ -22,6 +22,7 @@ def test_main_help_documents_whitelist_usage():
     output = run_topo_help("--help")
 
     assert "Quick Start:" in output
+    assert "topo doctor              Diagnose Topo installation and runtime tools" in output
     assert "Whitelist:" in output
     assert "An empty whitelist is normal before you add a path." in output
     assert "Run topo whitelist --help for whitelist details." in output

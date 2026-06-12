@@ -33,3 +33,14 @@ def test_run_terminal_tui_command_skips_wait_when_command_returns_false():
 
     clear_screen.assert_called_once_with()
     wait_for_return.assert_not_called()
+
+
+def test_doctor_command_routes_to_run_doctor():
+    with (
+        patch("sys.argv", ["topo", "doctor"]),
+        patch("src.main.system.get_os_id", return_value="test-os"),
+        patch("src.main.run_doctor") as run_doctor,
+    ):
+        topo_main.main()
+
+    run_doctor.assert_called_once_with()

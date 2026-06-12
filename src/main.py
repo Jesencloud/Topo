@@ -10,6 +10,7 @@ from .clean.runner import run_clean
 from .core import system
 from .core.analyze import run_deep_analysis
 from .core.constants import RESET, THEME_TITLE
+from .core.doctor import run_doctor
 from .core.history import show_history
 from .core.status import show_status
 from .core.whitelist import add_to_whitelist, remove_from_whitelist
@@ -31,6 +32,7 @@ Quick Start:
   topo clean --dry-run     Preview cleanup without deleting
   topo analyze             Explore disk usage
   topo status              Show system health
+  topo doctor              Diagnose Topo installation and runtime tools
   topo history --limit 5   Show the last 5 cleanup sessions
 
 Whitelist:
@@ -174,6 +176,9 @@ def main():
         epilog=PURGE_HELP,
     )
     subparsers.add_parser("status", help="Monitor system health and resource usage")
+    subparsers.add_parser(
+        "doctor", help="Run a comprehensive diagnostic check of the Topo environment"
+    )
     history_parser = subparsers.add_parser(
         "history",
         help="Show recent deletion history",
@@ -319,6 +324,9 @@ def main():
 
     if args.command == "status":
         show_status()
+
+    if args.command == "doctor":
+        run_doctor()
 
     if args.command == "history":
         show_history(limit=max(args.limit, 1))

@@ -94,6 +94,7 @@ Quick Start:
   topo clean --dry-run     Preview cleanup without deleting
   topo analyze             Explore disk usage
   topo status              Show system health
+  topo doctor              Diagnose Topo installation and runtime tools
   topo history --limit 5   Show the last 5 cleanup sessions
 
 Whitelist:
