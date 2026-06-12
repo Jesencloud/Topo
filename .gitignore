@@ -21,6 +21,7 @@ coverage.xml
 htmlcov/
 .tox/
 .nox/
+check.sh
 
 # --- Rust (topo-core engine) ---
 topo-core/target/

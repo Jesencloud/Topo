@@ -6,6 +6,7 @@ from .browser_cache import (
     BROWSER_PROFILE_PATHS,
     CLEANABLE_APP_CACHE_DIR_NAMES,
 )
+from .install_source import get_install_root
 from .paths import get_config_dir
 
 
@@ -308,6 +309,10 @@ def get_hard_protection_reason(path) -> str | None:
         topo_config = get_config_dir().resolve()
         if path == topo_config or topo_config in path.parents:
             return "Topo configuration"
+
+        topo_root = get_install_root().resolve()
+        if path == topo_root or topo_root in path.parents:
+            return "Topo installation"
     except Exception:
         pass
 
