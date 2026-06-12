@@ -12,7 +12,7 @@ import tty
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from ..core import system
+from ..core import system, terminal_state
 from ..core.constants import BOLD, GRAY, GREEN, PURPLE, RED, RESET, YELLOW
 from ..core.file_ops import bytes_to_human, get_size, parse_size_from_text, safe_remove
 from ..core.system import has_sudo, run_command
@@ -45,6 +45,7 @@ def _read_sudo_choice() -> str:
 
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
+    terminal_state.remember_raw_state(fd, old_settings)
     try:
         tty.setraw(fd)
         while True:
@@ -60,7 +61,7 @@ def _read_sudo_choice() -> str:
                     sys.stdin.read(1)
                     ready, _, _ = select.select([sys.stdin], [], [], 0)
     finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        terminal_state.restore_raw_state(fd, old_settings)
 
 
 def _is_any_process_running(process_names: list[str]) -> bool:
@@ -501,7 +502,7 @@ def optimize_system(dry_run=False):
             f"{PURPLE}➔{RESET} Password: "
         ):
             if system.SUDO_CANCELLED:
-                print(f" {YELLOW}⚠️  Optimization cancelled by user.{RESET}\n")
+                print(f" {YELLOW}⚠️  Optimization cancelled by user.{RESET}", end="")
             else:
                 print(f" {RED}✗{RESET} Authorization failed. Optimization skipped.\n")
             return

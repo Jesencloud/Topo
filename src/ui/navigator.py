@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..core import terminal_state
 from ..core.config import get_show_scrollbar
 from ..core.constants import BOLD, GRAY, GREEN, PURPLE, RED, RESET, THEME_TITLE, WHITE, YELLOW
 from ..core.file_ops import bytes_to_human
@@ -344,8 +345,8 @@ class Navigator:
     ESC = "\x1b"
     SPACE = " "
     DEL = "\x7f"
-    MOUSE_DISABLE = "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l"
-    MOUSE_ENABLE = "\x1b[?1000h\x1b[?1002h\x1b[?1006h"
+    MOUSE_DISABLE = terminal_state.MOUSE_DISABLE
+    MOUSE_ENABLE = terminal_state.MOUSE_ENABLE
     _last_size = None
     is_muted = False
 
@@ -355,18 +356,17 @@ class Navigator:
         """Context manager to put the terminal into cbreak mode and restore it later."""
         fd = sys.stdin.fileno()
         old_settings = termios.tcgetattr(fd)
+        terminal_state.remember_raw_state(fd, old_settings)
         try:
             tty.setcbreak(fd)
-            sys.stdout.write(Navigator.MOUSE_DISABLE)
+            terminal_state.disable_mouse_tracking()
             if enable_mouse:
-                sys.stdout.write(Navigator.MOUSE_ENABLE)
-            sys.stdout.flush()
+                terminal_state.enable_mouse_tracking()
             yield fd
         finally:
             if enable_mouse:
-                sys.stdout.write(Navigator.MOUSE_DISABLE)
-                sys.stdout.flush()
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                terminal_state.disable_mouse_tracking()
+            terminal_state.restore_raw_state(fd, old_settings)
 
     @staticmethod
     def get_key(fd=None):
@@ -567,13 +567,11 @@ class Navigator:
 
     @staticmethod
     def hide_cursor():
-        sys.stdout.write("\x1b[?25l")
-        sys.stdout.flush()
+        terminal_state.hide_cursor()
 
     @staticmethod
     def show_cursor():
-        sys.stdout.write("\x1b[?25h")
-        sys.stdout.flush()
+        terminal_state.show_cursor()
 
 
 @contextmanager

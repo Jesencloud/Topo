@@ -30,6 +30,40 @@ Today's session added and reviewed the new `topo doctor` command. The feature is
     *   `bandit -r src -ll` passed with **Medium: 0**.
     *   `git diff --check` passed.
 
+## Project: topo (Topo) - Terminal Interrupt Recovery and Sudo Cancellation UX
+
+This session hardened Topo's terminal behavior around `Ctrl+C`, raw terminal mode, sudo password prompts, and command-style screens launched from the main menu.
+
+### 1. Shared Terminal State Recovery
+*   **New Terminal State Module**: Added `src/core/terminal_state.py` as the single place for restoring raw terminal settings, mouse tracking, cursor visibility, ANSI reset state, and alternate-screen state.
+*   **Signal Handling**: `main()` now installs signal handlers for `SIGINT` and `SIGTERM`. On interruption, Topo resets terminal state before raising the normal interrupt/exit path.
+*   **Exit Safety**: Registered terminal cleanup through `atexit` so unexpected exits still restore cursor visibility, mouse tracking, graphics state, and the normal screen buffer.
+*   **Alternate Screen Integration**: `alternate_screen()` now delegates enter/exit behavior to `terminal_state`, allowing nested or interrupted TUI flows to recover consistently.
+
+### 2. Raw Mode and Main Entry Cleanup
+*   **Navigator Raw Mode**: `Navigator.raw_mode()` now records the original termios settings through `terminal_state` and restores them through the same path, instead of restoring locally only.
+*   **Cursor and Mouse Tracking**: `Navigator.hide_cursor()`, `Navigator.show_cursor()`, and mouse tracking now use shared terminal-state helpers so interrupted selector screens do not leave the terminal in a broken visual/input mode.
+*   **Command-Style Interrupts**: `_run_terminal_tui_command()` catches `KeyboardInterrupt`, resets the terminal, clears the screen, and prints a single `Process interrupted by user` message.
+*   **Launcher Recovery**: The top-level `topo` launcher now performs terminal recovery before printing its interrupt message if a `KeyboardInterrupt` escapes during startup or import-time execution.
+
+### 3. Sudo Password Prompt Cancellation
+*   **SIGINT Return Handling**: `ensure_sudo_session()` now treats both Python `KeyboardInterrupt` and sudo process SIGINT return codes as explicit user cancellation.
+*   **Prompt Cleanup**: Added terminal-line cleanup for interrupted sudo prompts, including multi-line prompts and extra safety rows. This prevents repeated `Ctrl+C` during password entry from growing the vertical gap before the cancellation message.
+*   **Raw Prompt Safety**: Clean, Optimize, and `topo remove` now register and restore raw terminal state when reading single-key confirmation prompts.
+*   **User-Facing Spacing**: Clean and Optimize cancellation messages no longer print an extra trailing blank line, so `Cleanup cancelled by user.` appears directly above `Press Enter to return to Main Menu, ESC to exit...`.
+
+### 4. Regression Coverage
+*   **Terminal State Tests**: Added `tests/test_terminal_state.py` to verify silent no-op reset behavior and signal-triggered terminal reset for interrupt and termination paths.
+*   **Main Flow Tests**: Extended `tests/test_main.py` to cover interrupted command-style screens, alternate-screen exit on exceptions, signal-handler installation, and direct-command interrupt cleanup.
+*   **Navigator Tests**: Added coverage proving raw mode registers/restores terminal state and toggles mouse tracking through the shared helper layer.
+*   **Sudo Cancellation Tests**: Added tests for sudo prompt cleanup on `KeyboardInterrupt`, sudo SIGINT return codes, and cancellation prompt formatting without trailing blank lines.
+*   **Verification Commands**:
+    *   `pytest -q` passed with **295 tests**.
+    *   `ruff check` passed.
+    *   `ruff format --check` passed.
+    *   `bandit -r src -ll` passed with **Medium: 0 / High: 0**.
+    *   `git diff --check` passed.
+
 ---
 
 # Daily Modification Report - 2026-06-11

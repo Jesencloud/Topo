@@ -9,8 +9,25 @@ REAL_DIR = os.path.dirname(REAL_PATH)
 # Add project root to Python search path so src is recognized as a package
 sys.path.insert(0, REAL_DIR)
 
+
+def restore_terminal_after_interrupt():
+    try:
+        from src.core import terminal_state
+
+        terminal_state.reset_terminal(force=True)
+    except Exception:
+        pass
+
+    try:
+        sys.stdout.write("\r\033[K")
+        sys.stdout.flush()
+    except Exception:
+        pass
+
+
 try:
     from src.main import main
+
     if __name__ == "__main__":
         main()
 except ImportError as e:
@@ -18,5 +35,6 @@ except ImportError as e:
     print(f"Debug info: {e}")
     sys.exit(1)
 except KeyboardInterrupt:
-    print("\n\n🚫 Process interrupted by user.")
+    restore_terminal_after_interrupt()
+    print("\n🚫 Process interrupted by user.")
     sys.exit(130)

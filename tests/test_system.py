@@ -1,7 +1,9 @@
+import signal
 import subprocess
 from unittest.mock import MagicMock, patch
 
-from src.core.system import run_command, setup_passwordless_sudo
+from src.core import system
+from src.core.system import CommandResult, run_command, setup_passwordless_sudo
 
 
 @patch("subprocess.run")
@@ -43,6 +45,54 @@ def test_run_command_timeout_result(mock_run):
     assert result.returncode == 124
     assert result.timed_out is True
     assert result.stdout == "partial"
+
+
+def test_ensure_sudo_session_clears_prompt_line_on_keyboard_interrupt():
+    system.SUDO_CANCELLED = False
+    with (
+        patch(
+            "src.core.system.run_command",
+            side_effect=[
+                CommandResult(["sudo", "-k"], 0),
+                CommandResult(["sudo", "-n", "true"], 1),
+                KeyboardInterrupt,
+            ],
+        ),
+        patch("sys.stdout.write") as write,
+        patch("sys.stdout.flush"),
+    ):
+        assert system.ensure_sudo_session("Password: ") is False
+
+    assert system.SUDO_CANCELLED is True
+    clear_sequence = write.call_args.args[0]
+    assert clear_sequence.startswith("\r\033[K")
+    assert clear_sequence.endswith("\033[J")
+    assert clear_sequence.count("\033[1A") == 1 + system.SUDO_INTERRUPT_EXTRA_CLEAR_LINES
+    system.SUDO_CANCELLED = False
+
+
+def test_ensure_sudo_session_treats_sigint_return_as_user_cancel():
+    system.SUDO_CANCELLED = False
+    with (
+        patch(
+            "src.core.system.run_command",
+            side_effect=[
+                CommandResult(["sudo", "-k"], 0),
+                CommandResult(["sudo", "-n", "true"], 1),
+                CommandResult(["sudo", "-v"], -signal.SIGINT),
+            ],
+        ),
+        patch("sys.stdout.write") as write,
+        patch("sys.stdout.flush"),
+    ):
+        assert system.ensure_sudo_session("Password: ") is False
+
+    assert system.SUDO_CANCELLED is True
+    clear_sequence = write.call_args.args[0]
+    assert clear_sequence.startswith("\r\033[K")
+    assert clear_sequence.endswith("\033[J")
+    assert clear_sequence.count("\033[1A") == 1 + system.SUDO_INTERRUPT_EXTRA_CLEAR_LINES
+    system.SUDO_CANCELLED = False
 
 
 def test_setup_passwordless_sudo_uses_invoking_user(monkeypatch, capsys):

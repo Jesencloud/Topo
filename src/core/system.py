@@ -1,4 +1,5 @@
 import os
+import signal
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -7,6 +8,7 @@ from typing import Any
 # Global flag to track if user explicitly cancelled sudo auth
 SUDO_CANCELLED = False
 DEFAULT_COMMAND_TIMEOUT = 300
+SUDO_INTERRUPT_EXTRA_CLEAR_LINES = 8
 
 
 @dataclass
@@ -106,13 +108,27 @@ def ensure_sudo_session(prompt: str | None = None):
         if prompt:
             validate_args.extend(["-p", prompt])
         res = run_command(validate_args, use_sudo=True, capture=False, timeout=None)
+        if res.returncode in (-signal.SIGINT, 128 + signal.SIGINT):
+            _clear_interrupted_sudo_prompt(prompt)
+            SUDO_CANCELLED = True
         return res.ok
     except KeyboardInterrupt:
-        print()  # Add a newline after ^C
+        _clear_interrupted_sudo_prompt(prompt)
         SUDO_CANCELLED = True
         return False
     except Exception:
         return False
+
+
+def _clear_interrupted_sudo_prompt(prompt: str | None = None) -> None:
+    prompt_lines = prompt.count("\n") + 1 if prompt else 1
+    lines_to_rewind = prompt_lines + SUDO_INTERRUPT_EXTRA_CLEAR_LINES
+    clear_sequence = "\r\033[K" + ("\033[1A\r\033[K" * lines_to_rewind) + "\033[J"
+    try:
+        sys.stdout.write(clear_sequence)
+        sys.stdout.flush()
+    except (OSError, ValueError):
+        return
 
 
 def setup_passwordless_sudo():

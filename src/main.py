@@ -7,7 +7,7 @@ from .clean.app_manager import run_uninstall
 from .clean.optimize import optimize_system
 from .clean.project import run_purge
 from .clean.runner import run_clean
-from .core import system
+from .core import system, terminal_state
 from .core.analyze import run_deep_analysis
 from .core.constants import RESET, THEME_TITLE
 from .core.doctor import run_doctor
@@ -25,6 +25,7 @@ VERSION_FILE = Path(__file__).parent.parent / "VERSION"
 TOPO_VERSION = VERSION_FILE.read_text().strip() if VERSION_FILE.exists() else "0.5.0"
 
 DRY_RUN_HELP = "Preview changes without deleting"
+INTERRUPTED_MESSAGE = "🚫 Process interrupted by user."
 
 MAIN_HELP = """
 Quick Start:
@@ -98,16 +99,11 @@ Examples:
 @contextmanager
 def alternate_screen():
     """Context manager to use the terminal's alternate screen buffer."""
-    # \033[?1049h: Switch to alternate screen
-    # \033[H: Move cursor to home position
-    sys.stdout.write("\033[?1049h\033[H")
-    sys.stdout.flush()
+    terminal_state.enter_alternate_screen()
     try:
         yield
     finally:
-        # \033[?1049l: Switch back to normal screen
-        sys.stdout.write("\033[?1049l")
-        sys.stdout.flush()
+        terminal_state.exit_alternate_screen()
 
 
 def _clear_screen():
@@ -115,12 +111,26 @@ def _clear_screen():
     sys.stdout.flush()
 
 
+def _print_interrupted(clear_screen=False):
+    terminal_state.reset_terminal(force=True)
+    if clear_screen:
+        _clear_screen()
+    else:
+        sys.stdout.write("\r\033[K")
+        sys.stdout.flush()
+    print(INTERRUPTED_MESSAGE)
+
+
 def _run_terminal_tui_command(command, *args):
-    _clear_screen()
-    result = command(*args)
-    if result is False:
-        return True
-    return Navigator.wait_for_return()
+    try:
+        _clear_screen()
+        result = command(*args)
+        if result is False:
+            return True
+        return Navigator.wait_for_return()
+    except KeyboardInterrupt:
+        _print_interrupted(clear_screen=True)
+        return False
 
 
 def _run_alternate_tui(command, *args):
@@ -130,6 +140,15 @@ def _run_alternate_tui(command, *args):
 
 
 def main():
+    terminal_state.install_signal_handlers()
+    try:
+        _main()
+    except KeyboardInterrupt:
+        _print_interrupted(clear_screen=True)
+        raise SystemExit(130) from None
+
+
+def _main():
     parser = argparse.ArgumentParser(
         prog="topo",
         description="topo - Linux cleanup, app removal, disk analysis, and status checks.",

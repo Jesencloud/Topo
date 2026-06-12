@@ -28,6 +28,29 @@ def _fake_raw_mode(*args, **kwargs):
     yield 0  # a dummy file descriptor
 
 
+def test_raw_mode_registers_and_restores_terminal_state():
+    calls = []
+
+    with (
+        patch("sys.stdin.fileno", return_value=42),
+        patch("src.ui.navigator.termios.tcgetattr", return_value="old-settings"),
+        patch("src.ui.navigator.tty.setcbreak") as setcbreak,
+        patch("src.ui.navigator.terminal_state.remember_raw_state") as remember_raw_state,
+        patch("src.ui.navigator.terminal_state.restore_raw_state") as restore_raw_state,
+        patch("src.ui.navigator.terminal_state.disable_mouse_tracking") as disable_mouse_tracking,
+        patch("src.ui.navigator.terminal_state.enable_mouse_tracking") as enable_mouse_tracking,
+        Navigator.raw_mode(enable_mouse=True) as fd,
+    ):
+        calls.append(fd)
+
+    assert calls == [42]
+    remember_raw_state.assert_called_once_with(42, "old-settings")
+    setcbreak.assert_called_once_with(42)
+    enable_mouse_tracking.assert_called_once_with()
+    assert disable_mouse_tracking.call_count == 2
+    restore_raw_state.assert_called_once_with(42, "old-settings")
+
+
 def drive(selector, keys):
     """Run selector.run() feeding it the given key sequence."""
     result, _ = drive_with_writes(selector, keys)

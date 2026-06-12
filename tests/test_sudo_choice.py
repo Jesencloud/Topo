@@ -84,3 +84,43 @@ def test_clean_space_skips_clean_without_sudo():
     mock_user.assert_not_called()
     mock_apps.assert_not_called()
     mock_dev.assert_not_called()
+
+
+def test_clean_sudo_cancel_prompt_has_no_trailing_blank_line():
+    with (
+        patch("builtins.print") as mock_print,
+        patch("src.clean.runner._read_sudo_choice", return_value="\r"),
+        patch("src.clean.runner.system.ensure_sudo_session", return_value=False),
+        patch("src.clean.runner.proactive_app_detection", return_value={}),
+        patch.object(runner.system, "SUDO_CANCELLED", True),
+    ):
+        runner.run_clean(dry_run=False)
+
+    cancel_calls = [
+        call
+        for call in mock_print.call_args_list
+        if call.args and "Cleanup cancelled by user" in call.args[0]
+    ]
+    assert cancel_calls
+    assert "\n" not in cancel_calls[-1].args[0]
+    assert cancel_calls[-1].kwargs["end"] == ""
+
+
+def test_optimize_sudo_cancel_prompt_has_no_trailing_blank_line():
+    with (
+        patch("builtins.print") as mock_print,
+        patch("src.clean.optimize.os.system"),
+        patch("src.clean.optimize._read_sudo_choice", return_value="\r"),
+        patch("src.clean.optimize.system.ensure_sudo_session", return_value=False),
+        patch.object(optimize.system, "SUDO_CANCELLED", True),
+    ):
+        optimize.optimize_system(dry_run=False)
+
+    cancel_calls = [
+        call
+        for call in mock_print.call_args_list
+        if call.args and "Optimization cancelled by user" in call.args[0]
+    ]
+    assert cancel_calls
+    assert "\n" not in cancel_calls[-1].args[0]
+    assert cancel_calls[-1].kwargs["end"] == ""

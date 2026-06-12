@@ -4,6 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from ..core import terminal_state
 from ..core.constants import BLUE, BOLD, GRAY, GREEN, MAGENTA, RED, RESET
 from ..core.file_ops import bytes_to_human, get_size_fast
 from ..core.install_source import (
@@ -231,11 +232,12 @@ def run_remove(dry_run=False):
 
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
+    terminal_state.remember_raw_state(fd, old_settings)
     try:
         tty.setraw(sys.stdin.fileno())
         ch = sys.stdin.read(1)
     finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        terminal_state.restore_raw_state(fd, old_settings)
 
     if ch not in ("\r", "\n", "y", "Y"):
         print(f"\n\n {GRAY}Uninstallation cancelled.{RESET}")
