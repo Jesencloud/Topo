@@ -7,7 +7,6 @@ from ..core.file_ops import (
     clean_path_by_age,
     get_size_fast,
     register_cleaned_path,
-    safe_remove,
 )
 from ..core.heavy_cache import get_ai_model_cleanup_defs, get_container_cache_def
 from ..core.system import run_command
@@ -143,20 +142,13 @@ def clean_developer_tools(dry_run=False):
     cargo_path = DEV_CACHES["cargo"]
     if cargo_path.exists():
         register_cleaned_path(cargo_path)
-        size = get_size_fast(cargo_path)
-        if size > 1024:
-            removed = dry_run
-            if dry_run:
-                safe_remove(cargo_path, use_trash=False, dry_run=True)
-                print(f"  \033[0;32m✓\033[0m Cargo cache ({bytes_to_human(size)}) would be cleaned")
-            else:
-                removed = safe_remove(cargo_path, use_trash=False)[0]
-                if removed:
-                    print(f"  \033[0;32m✓\033[0m Cargo cache ({bytes_to_human(size)}) cleaned")
-            if removed:
-                total_size += size
-                total_items += 1
-                total_categories += 1
+        s, i = clean_path_by_age(cargo_path, days=7, dry_run=dry_run)
+        if i > 0:
+            total_size += s
+            total_items += i
+            total_categories += 1
+            status = "would be cleaned" if dry_run else "cleaned"
+            print(f"  \033[0;32m✓\033[0m Cargo cache ({bytes_to_human(s)}) {status}")
 
     # 3. AI & Virtualization
     for func in [clean_ai_models, clean_docker, clean_podman, clean_multipass]:

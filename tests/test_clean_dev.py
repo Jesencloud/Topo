@@ -97,7 +97,7 @@ def test_clean_developer_tools(mock_run_cmd, mock_clean_tool, mock_which):
     with (
         patch("src.clean.dev.get_size_fast", return_value=2048),
         patch("pathlib.Path.exists", return_value=True),
-        patch("src.clean.dev.safe_remove", return_value=(True, "deleted")),
+        patch("src.clean.dev.clean_path_by_age", return_value=(2048, 1)),
     ):
         size, items, cats = clean_developer_tools(dry_run=False)
         assert cats > 0

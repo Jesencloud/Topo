@@ -17,14 +17,16 @@
 
 > The most elegant way to keep your Linux system lean and mean. Inspired by the minimalist philosophy of [Mole](https://github.com/tw93/mole) on macOS.
 
-## Features
+## Supported Platforms
 
-- **All-in-one toolkit**: Combines package managers (DNF/APT/Pacman), App Uninstaller, Disk Analyzer, and Monitor in a **single tool**.
-- **Intelligent cleanup**: Features a proactive detection engine that auto-discovers unknown apps, AppImage remnants, and orphaned data.
-- **AI Developer ready**: Reclaims gigabytes with age-aware purging for Hugging Face, Ollama, PyTorch, and CUDA caches.
-- **Cross-distro support**: Deep cleans Ubuntu Snaps, Multipass, Flatpaks, and Fedora Podman/Docker environments.
-- **Disk insights**: Ultra-fast disk explorer powered by a **Rust scanning engine** with parallel I/O.
-- **Live monitoring**: Real-time dashboard showing CPU, GPU, memory, and top resource-consuming processes.
+**Official Native Packages (.deb / .rpm):**
+- **Ubuntu/Debian-family**: `amd64`, `arm64`
+- **Fedora/RHEL-family**: `x86_64`, `aarch64`
+
+**Script/Source Install Only:**
+- **Arch Linux / Manjaro**: Native `PKGBUILD` packages are not yet provided. Please use the script installer.
+
+> **Note**: Topo distributes native packages via GitHub Releases. Official hosting on distribution-native repositories (e.g., via APT PPAs or Fedora Copr) is not currently promised.
 
 ## Quick Start
 
