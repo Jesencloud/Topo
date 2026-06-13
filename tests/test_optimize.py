@@ -3,6 +3,8 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from src.clean.optimize import (
+    run_autostart_cleanup,
+    run_coredump_cleanup,
     run_desktop_database_refresh,
     run_memory_opt,
     run_mime_database_refresh,
@@ -10,6 +12,7 @@ from src.clean.optimize import (
     run_vacuum_all,
     vacuum_single_db,
 )
+from src.core.system import CommandResult
 
 
 def test_run_systemd_user_service_cleanup_removes_broken_unit(test_env):
@@ -56,6 +59,143 @@ def test_run_systemd_user_service_cleanup_dry_run_keeps_file(test_env):
 
     assert result == "Found 1 broken user systemd service(s)"
     assert service_file.exists()
+
+
+def test_run_autostart_cleanup_removes_missing_absolute_exec(test_env):
+    autostart_dir = test_env / ".config/autostart"
+    autostart_dir.mkdir(parents=True)
+    desktop_file = autostart_dir / "dead.desktop"
+    desktop_file.write_text("[Desktop Entry]\nExec=/missing/dead-app --background\n")
+
+    with patch("pathlib.Path.home", return_value=test_env):
+        result = run_autostart_cleanup(dry_run=False)
+
+    assert result == "Removed 1 zombie autostart entries"
+    assert not desktop_file.exists()
+
+
+def test_run_autostart_cleanup_dry_run_keeps_missing_exec_file(test_env):
+    autostart_dir = test_env / ".config/autostart"
+    autostart_dir.mkdir(parents=True)
+    desktop_file = autostart_dir / "dead.desktop"
+    desktop_file.write_text("[Desktop Entry]\nExec=/missing/dead-app\n")
+
+    with patch("pathlib.Path.home", return_value=test_env):
+        result = run_autostart_cleanup(dry_run=True)
+
+    assert result == "Found 1 zombie autostart entries"
+    assert desktop_file.exists()
+
+
+def test_run_autostart_cleanup_keeps_quoted_existing_exec(test_env):
+    app_dir = test_env / "Apps"
+    app_dir.mkdir()
+    app_path = app_dir / "My App"
+    app_path.write_text("#!/bin/sh\n")
+    autostart_dir = test_env / ".config/autostart"
+    autostart_dir.mkdir(parents=True)
+    desktop_file = autostart_dir / "valid.desktop"
+    desktop_file.write_text(f'[Desktop Entry]\nExec="{app_path}" --background\n')
+
+    with patch("pathlib.Path.home", return_value=test_env):
+        result = run_autostart_cleanup(dry_run=False)
+
+    assert result is None
+    assert desktop_file.exists()
+
+
+def test_run_autostart_cleanup_keeps_malformed_exec(test_env):
+    autostart_dir = test_env / ".config/autostart"
+    autostart_dir.mkdir(parents=True)
+    desktop_file = autostart_dir / "malformed.desktop"
+    desktop_file.write_text('[Desktop Entry]\nExec="/missing/dead-app\n')
+
+    with patch("pathlib.Path.home", return_value=test_env):
+        result = run_autostart_cleanup(dry_run=False)
+
+    assert result is None
+    assert desktop_file.exists()
+
+
+def test_run_coredump_cleanup_skips_when_no_core_files(tmp_path):
+    coredump_dir = tmp_path / "coredump"
+    coredump_dir.mkdir()
+    (coredump_dir / "note.txt").write_text("not a coredump")
+
+    with (
+        patch("src.clean.optimize.COREDUMP_DIR", coredump_dir),
+        patch("src.clean.optimize.run_command") as mock_run,
+    ):
+        result = run_coredump_cleanup(dry_run=False)
+
+    assert result is None
+    mock_run.assert_not_called()
+
+
+def test_run_coredump_cleanup_dry_run_keeps_core_files(tmp_path):
+    coredump_dir = tmp_path / "coredump"
+    coredump_dir.mkdir()
+    core_file = coredump_dir / "core.app.1000"
+    core_file.write_text("core")
+
+    with (
+        patch("src.clean.optimize.COREDUMP_DIR", coredump_dir),
+        patch("src.clean.optimize.run_command") as mock_run,
+    ):
+        result = run_coredump_cleanup(dry_run=True)
+
+    assert result == "System coredumps would be cleared"
+    assert core_file.exists()
+    mock_run.assert_not_called()
+
+
+def test_run_coredump_cleanup_deletes_core_files_with_find(tmp_path):
+    coredump_dir = tmp_path / "coredump"
+    coredump_dir.mkdir()
+    (coredump_dir / "core.app.1000").write_text("core")
+
+    with (
+        patch("src.clean.optimize.COREDUMP_DIR", coredump_dir),
+        patch(
+            "src.clean.optimize.run_command",
+            return_value=CommandResult(["find"], 0),
+        ) as mock_run,
+    ):
+        result = run_coredump_cleanup(dry_run=False)
+
+    assert result == "System coredumps cleared"
+    mock_run.assert_called_once_with(
+        [
+            "find",
+            str(coredump_dir),
+            "-maxdepth",
+            "1",
+            "-type",
+            "f",
+            "-name",
+            "core.*",
+            "-delete",
+        ],
+        use_sudo=True,
+        capture=True,
+    )
+
+
+def test_run_coredump_cleanup_returns_none_when_find_fails(tmp_path):
+    coredump_dir = tmp_path / "coredump"
+    coredump_dir.mkdir()
+    (coredump_dir / "core.app.1000").write_text("core")
+
+    with (
+        patch("src.clean.optimize.COREDUMP_DIR", coredump_dir),
+        patch(
+            "src.clean.optimize.run_command",
+            return_value=CommandResult(["find"], 1),
+        ),
+    ):
+        result = run_coredump_cleanup(dry_run=False)
+
+    assert result is None
 
 
 def test_run_vacuum_all_skips_when_browser_is_running(test_env):
