@@ -1,3 +1,38 @@
+# Daily Modification Report - 2026-06-13
+
+## Project: topo (Topo) - System Optimization Hardening
+
+Today's session focused on making the System Optimization tasks more robust and effective, ensuring they handle edge cases and privileged directories correctly.
+
+### 1. Robust Coredump Cleanup
+*   **Physical Removal Fallback**: Improved `run_coredump_cleanup()` to perform a direct physical removal of files in `/var/lib/systemd/coredump/`. Previously, it relied on `journalctl`, which could leave large `.zst` files on disk.
+*   **Safe Primitives**: Switched to using `sudo find /var/lib/systemd/coredump -maxdepth 1 -type f -name 'core.*' -delete`. This avoids shell globbing issues and ensures only top-level core files are removed.
+*   **Low-Overhead Detection**: Added a pre-sudo check using `any(glob)` to avoid unnecessary password prompts if no coredumps are present.
+
+### 2. Precise Autostart Cleanup
+*   **shlex Command Parsing**: Updated `run_autostart_cleanup()` to use the `shlex` library for parsing `Exec=` lines in `.desktop` files. This correctly handles quoted paths and arguments with spaces, preventing false-positive deletions of complex valid entries.
+*   **Conservative Policy**: Malformed or ambiguous `Exec=` lines now cause the cleanup to skip the file, adhering to the "safety first" principle for the stable 1.0.0 release.
+*   **Dry-Run Clarity**: Corrected the dry-run output to show `Found` instead of `Removed` to avoid confusing users during a preview.
+
+### 3. GPU Shader Cache Aging
+*   **Multi-Path Coverage**: Added `run_gpu_shader_cache_cleanup()` to target NVIDIA and Mesa (AMD/Intel) shader cache locations.
+*   **Age-Based Pruning**: Implemented a 7-day inactivity threshold using `clean_path_by_age`. This reclaims significant space from stale graphics caches while preserving recent shaders for optimal application performance.
+*   **Safe Path Resolution**: Uses directory deduplication and ensures only child items are removed, keeping the cache root structures intact.
+
+### 4. Systemd Health Maintenance
+*   **Failed Unit Reset**: Added `run_user_systemd_reset_failed()` to clear "failed" states for user-level systemd units.
+*   **Conditional Execution**: The command first probes for actual failed units via `list-units --state=failed` and only executes `reset-failed` if needed, ensuring zero unnecessary system calls.
+
+### 5. Regression Coverage
+*   **Optimize Tests**: Expanded `tests/test_optimize.py` with 16 test cases covering absolute vs. relative paths, quoted paths with spaces, malformed entries, and the `find`-based coredump removal logic.
+*   **Verification Commands**:
+    *   `pytest -q` passed with **308 tests**.
+    *   `ruff check` passed.
+    *   `ruff format --check` passed.
+    *   `git diff --check` passed.
+
+---
+
 # Daily Modification Report - 2026-06-12
 
 ## Project: topo (Topo) - `topo doctor` Diagnostic Command
@@ -29,6 +64,8 @@ Today's session added and reviewed the new `topo doctor` command. The feature is
     *   `ruff format --check` passed.
     *   `bandit -r src -ll` passed with **Medium: 0**.
     *   `git diff --check` passed.
+
+---
 
 ## Project: topo (Topo) - Terminal Interrupt Recovery and Sudo Cancellation UX
 

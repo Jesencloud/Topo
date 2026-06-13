@@ -14,7 +14,13 @@ from pathlib import Path
 
 from ..core import system, terminal_state
 from ..core.constants import BOLD, GRAY, GREEN, PURPLE, RED, RESET, YELLOW
-from ..core.file_ops import bytes_to_human, get_size, parse_size_from_text, safe_remove
+from ..core.file_ops import (
+    bytes_to_human,
+    clean_path_by_age,
+    get_size,
+    parse_size_from_text,
+    safe_remove,
+)
 from ..core.system import has_sudo, run_command
 
 # Lock to ensure parallel tasks don't corrupt the terminal output
@@ -25,6 +31,15 @@ SQLITE_MIN_FREE_RATIO = 0.10
 SQLITE_VACUUM_TIMEOUT = 20
 MEMORY_PRESSURE_AVAILABLE_RATIO = 0.15
 COREDUMP_DIR = Path("/var/lib/systemd/coredump")
+GPU_SHADER_CACHE_AGE_DAYS = 7
+GPU_SHADER_CACHE_PATHS = (
+    Path("~/.nv/ComputeCache"),
+    Path("~/.nv/GLCache"),
+    Path("~/.cache/nvidia/ComputeCache"),
+    Path("~/.cache/nvidia/GLCache"),
+    Path("~/.cache/mesa_shader_cache"),
+    Path("~/.cache/mesa_shader_cache_db"),
+)
 
 
 def opt_log(message, success=True, skipped=False):
@@ -294,6 +309,77 @@ def run_systemd_user_service_cleanup(dry_run=False):
     return f"Found {len(broken_units)} broken user systemd service(s)"
 
 
+def run_user_systemd_reset_failed(dry_run=False):
+    """Reset failed user-level systemd unit states without touching D-Bus runtime files."""
+    if not shutil.which("systemctl"):
+        return None
+
+    list_result = run_command(
+        [
+            "systemctl",
+            "--user",
+            "list-units",
+            "--state=failed",
+            "--no-legend",
+            "--no-pager",
+            "--plain",
+        ],
+        capture=True,
+        timeout=10,
+    )
+    if not list_result.ok:
+        return None
+
+    failed_units = [line for line in list_result.stdout.splitlines() if line.strip()]
+    if not failed_units:
+        return None
+
+    if dry_run:
+        return f"Found {len(failed_units)} failed user systemd unit(s)"
+
+    reset_result = run_command(
+        ["systemctl", "--user", "reset-failed"],
+        capture=True,
+        timeout=10,
+    )
+    if reset_result.ok:
+        return f"Reset {len(failed_units)} failed user systemd unit state(s)"
+    return None
+
+
+def run_gpu_shader_cache_cleanup(dry_run=False):
+    """Clean stale GPU shader cache entries without removing active cache roots."""
+    total_size = 0
+    total_items = 0
+    handled_paths: set[Path] = set()
+
+    for raw_path in GPU_SHADER_CACHE_PATHS:
+        path = raw_path.expanduser()
+        try:
+            resolved = path.resolve(strict=False)
+        except OSError:
+            resolved = path
+        if resolved in handled_paths:
+            continue
+        handled_paths.add(resolved)
+
+        size, items = clean_path_by_age(
+            path,
+            days=GPU_SHADER_CACHE_AGE_DAYS,
+            dry_run=dry_run,
+        )
+        total_size += size
+        total_items += items
+
+    if total_items == 0:
+        return None
+
+    size_label = f" ({bytes_to_human(total_size)})" if total_size > 0 else ""
+    if dry_run:
+        return f"Found {total_items} stale GPU shader cache item(s){size_label}"
+    return f"Removed {total_items} stale GPU shader cache item(s){size_label}"
+
+
 def run_swap_management(dry_run=False):
     """Reset swap if RAM is plentiful to reduce micro-stutter."""
     if not shutil.which("swapoff") or not shutil.which("swapon"):
@@ -560,6 +646,7 @@ def optimize_system(dry_run=False):
             lambda: run_swap_management(dry_run),
             lambda: run_journal_optimization(dry_run),
             lambda: run_coredump_cleanup(dry_run),
+            lambda: run_gpu_shader_cache_cleanup(dry_run),
             lambda: run_broken_symlink_cleanup(dry_run),
             lambda: run_thumbnail_cleanup(dry_run),
             lambda: run_desktop_database_refresh(dry_run),
@@ -567,6 +654,7 @@ def optimize_system(dry_run=False):
             lambda: run_vacuum_all(dry_run),
             lambda: run_autostart_cleanup(dry_run),
             lambda: run_systemd_user_service_cleanup(dry_run),
+            lambda: run_user_systemd_reset_failed(dry_run),
         ]
     else:
         tasks = [
@@ -577,6 +665,7 @@ def optimize_system(dry_run=False):
             lambda: run_swap_management(True),
             lambda: run_journal_optimization(True),
             lambda: run_coredump_cleanup(True),
+            lambda: run_gpu_shader_cache_cleanup(True),
             lambda: run_broken_symlink_cleanup(True),
             lambda: run_thumbnail_cleanup(True),
             lambda: run_vacuum_all(True),
@@ -584,6 +673,7 @@ def optimize_system(dry_run=False):
             lambda: run_mime_database_refresh(True),
             lambda: run_autostart_cleanup(True),
             lambda: run_systemd_user_service_cleanup(True),
+            lambda: run_user_systemd_reset_failed(True),
         ]
 
     with ThreadPoolExecutor(max_workers=len(tasks)) as executor:

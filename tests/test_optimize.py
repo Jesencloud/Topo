@@ -1,14 +1,19 @@
+import os
 import sqlite3
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from src.clean.optimize import (
+    GPU_SHADER_CACHE_AGE_DAYS,
     run_autostart_cleanup,
     run_coredump_cleanup,
     run_desktop_database_refresh,
+    run_gpu_shader_cache_cleanup,
     run_memory_opt,
     run_mime_database_refresh,
     run_systemd_user_service_cleanup,
+    run_user_systemd_reset_failed,
     run_vacuum_all,
     vacuum_single_db,
 )
@@ -196,6 +201,106 @@ def test_run_coredump_cleanup_returns_none_when_find_fails(tmp_path):
         result = run_coredump_cleanup(dry_run=False)
 
     assert result is None
+
+
+def test_run_gpu_shader_cache_cleanup_removes_only_stale_entries(test_env):
+    cache_dir = test_env / ".cache/mesa_shader_cache"
+    cache_dir.mkdir(parents=True)
+    stale_file = cache_dir / "old-shader"
+    active_file = cache_dir / "active-shader"
+    stale_file.write_text("stale")
+    active_file.write_text("active")
+    stale_time = time.time() - ((GPU_SHADER_CACHE_AGE_DAYS + 1) * 86400)
+    os.utime(stale_file, (stale_time, stale_time))
+
+    with patch("pathlib.Path.home", return_value=test_env):
+        result = run_gpu_shader_cache_cleanup(dry_run=False)
+
+    assert result.startswith("Removed 1 stale GPU shader cache item(s)")
+    assert not stale_file.exists()
+    assert active_file.exists()
+
+
+def test_run_gpu_shader_cache_cleanup_dry_run_keeps_stale_entries(test_env):
+    cache_dir = test_env / ".nv/ComputeCache"
+    cache_dir.mkdir(parents=True)
+    stale_file = cache_dir / "old-kernel"
+    stale_file.write_text("stale")
+    stale_time = time.time() - ((GPU_SHADER_CACHE_AGE_DAYS + 1) * 86400)
+    os.utime(stale_file, (stale_time, stale_time))
+
+    with patch("pathlib.Path.home", return_value=test_env):
+        result = run_gpu_shader_cache_cleanup(dry_run=True)
+
+    assert result.startswith("Found 1 stale GPU shader cache item(s)")
+    assert stale_file.exists()
+
+
+def test_run_user_systemd_reset_failed_resets_failed_units():
+    list_result = CommandResult(
+        ["systemctl"],
+        0,
+        stdout=(
+            "app.service loaded failed failed App Service\n"
+            "sync.timer loaded failed failed Sync Timer\n"
+        ),
+    )
+
+    with (
+        patch("src.clean.optimize.shutil.which", return_value="/usr/bin/systemctl"),
+        patch(
+            "src.clean.optimize.run_command",
+            side_effect=[
+                list_result,
+                CommandResult(["systemctl"], 0),
+            ],
+        ) as mock_run,
+    ):
+        result = run_user_systemd_reset_failed(dry_run=False)
+
+    assert result == "Reset 2 failed user systemd unit state(s)"
+    assert mock_run.call_args_list[0].args[0] == [
+        "systemctl",
+        "--user",
+        "list-units",
+        "--state=failed",
+        "--no-legend",
+        "--no-pager",
+        "--plain",
+    ]
+    assert mock_run.call_args_list[1].args[0] == ["systemctl", "--user", "reset-failed"]
+
+
+def test_run_user_systemd_reset_failed_dry_run_does_not_reset():
+    with (
+        patch("src.clean.optimize.shutil.which", return_value="/usr/bin/systemctl"),
+        patch(
+            "src.clean.optimize.run_command",
+            return_value=CommandResult(
+                ["systemctl"],
+                0,
+                stdout="app.service loaded failed failed App Service\n",
+            ),
+        ) as mock_run,
+    ):
+        result = run_user_systemd_reset_failed(dry_run=True)
+
+    assert result == "Found 1 failed user systemd unit(s)"
+    assert mock_run.call_count == 1
+
+
+def test_run_user_systemd_reset_failed_skips_when_no_failed_units():
+    with (
+        patch("src.clean.optimize.shutil.which", return_value="/usr/bin/systemctl"),
+        patch(
+            "src.clean.optimize.run_command",
+            return_value=CommandResult(["systemctl"], 0, stdout=""),
+        ) as mock_run,
+    ):
+        result = run_user_systemd_reset_failed(dry_run=False)
+
+    assert result is None
+    assert mock_run.call_count == 1
 
 
 def test_run_vacuum_all_skips_when_browser_is_running(test_env):
