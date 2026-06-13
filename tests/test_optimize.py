@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 from src.clean.optimize import (
     GPU_SHADER_CACHE_AGE_DAYS,
     run_autostart_cleanup,
+    run_broken_symlink_cleanup,
     run_coredump_cleanup,
     run_desktop_database_refresh,
     run_gpu_shader_cache_cleanup,
@@ -201,6 +202,42 @@ def test_run_coredump_cleanup_returns_none_when_find_fails(tmp_path):
         result = run_coredump_cleanup(dry_run=False)
 
     assert result is None
+
+
+def test_run_broken_symlink_cleanup_removes_only_broken_links(test_env):
+    bin_dir = test_env / ".local/bin"
+    bin_dir.mkdir(parents=True)
+    target = test_env / "real-tool"
+    target.write_text("#!/bin/sh\n")
+    valid_link = bin_dir / "valid-tool"
+    valid_link.symlink_to(target)
+    broken_link = bin_dir / "missing-tool"
+    broken_link.symlink_to(test_env / "missing-tool-target")
+    regular_file = bin_dir / "regular-file"
+    regular_file.write_text("keep")
+
+    with patch("pathlib.Path.home", return_value=test_env):
+        result = run_broken_symlink_cleanup(dry_run=False)
+
+    assert result == "Removed 1 broken user symlink(s)"
+    assert not broken_link.exists()
+    assert not broken_link.is_symlink()
+    assert valid_link.exists()
+    assert valid_link.is_symlink()
+    assert regular_file.exists()
+
+
+def test_run_broken_symlink_cleanup_dry_run_keeps_broken_link(test_env):
+    desktop_dir = test_env / "Desktop"
+    desktop_dir.mkdir(parents=True)
+    broken_link = desktop_dir / "missing-app"
+    broken_link.symlink_to(test_env / "missing-app-target")
+
+    with patch("pathlib.Path.home", return_value=test_env):
+        result = run_broken_symlink_cleanup(dry_run=True)
+
+    assert result == "Found 1 broken user symlinks"
+    assert broken_link.is_symlink()
 
 
 def test_run_gpu_shader_cache_cleanup_removes_only_stale_entries(test_env):

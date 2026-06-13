@@ -502,8 +502,9 @@ def run_broken_symlink_cleanup(dry_run=False):
     removed = 0
     for link in broken:
         try:
-            link.unlink()
-            removed += 1
+            removed_ok, _ = safe_remove(link, use_trash=False)
+            if removed_ok:
+                removed += 1
         except OSError:
             continue
 
