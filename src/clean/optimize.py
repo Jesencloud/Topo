@@ -24,6 +24,7 @@ SQLITE_MIN_FREE_BYTES = 5 * 1024 * 1024
 SQLITE_MIN_FREE_RATIO = 0.10
 SQLITE_VACUUM_TIMEOUT = 20
 MEMORY_PRESSURE_AVAILABLE_RATIO = 0.15
+COREDUMP_DIR = Path("/var/lib/systemd/coredump")
 
 
 def opt_log(message, success=True, skipped=False):
@@ -215,7 +216,8 @@ def run_dns_flush(dry_run=False):
     return None
 
 
-def run_zombie_cleanup(dry_run=False):
+def run_autostart_cleanup(dry_run=False):
+    """Remove zombie autostart entries whose executable no longer exists."""
     autostart_dir = Path.home() / ".config" / "autostart"
     if not autostart_dir.exists():
         return None
@@ -229,7 +231,16 @@ def run_zombie_cleanup(dry_run=False):
                         line_content = line.split("=", 1)[1].strip()
                         if not line_content:
                             continue
-                        cmd = line_content.split()[0]
+                        try:
+                            # Use shlex to handle quoted paths with spaces
+                            parts = shlex.split(line_content)
+                            if not parts:
+                                continue
+                            cmd = parts[0]
+                        except ValueError:
+                            # Malformed Exec lines are ambiguous; keep the file.
+                            break
+
                         if (
                             cmd.startswith("/")
                             and not os.path.exists(cmd)
@@ -245,6 +256,8 @@ def run_zombie_cleanup(dry_run=False):
         except Exception:
             continue
     if zombies > 0:
+        if dry_run:
+            return f"Found {zombies} zombie autostart entries"
         return f"Removed {zombies} zombie autostart entries"
     return None
 
@@ -334,18 +347,45 @@ def run_journal_optimization(dry_run=False):
 
 
 def run_coredump_cleanup(dry_run=False):
-    """Clean system coredump files."""
-    coredump_dir = Path("/var/lib/systemd/coredump")
-    if not coredump_dir.exists() and not shutil.which("journalctl"):
+    """Clean system coredump files from /var/lib/systemd/coredump."""
+    coredump_dir = COREDUMP_DIR
+    if not coredump_dir.exists():
+        return None
+
+    # Detect if there are actually core files to clean
+    has_files = False
+    try:
+        # We use a limited glob to avoid overhead on huge directories
+        has_files = any(coredump_dir.glob("core.*"))
+    except OSError:
+        # Likely permission error during glob, proceed to try sudo-based cleanup
+        has_files = True
+
+    if not has_files:
         return None
 
     if dry_run:
         return "System coredumps would be cleared"
 
-    res = run_command(["journalctl", "--vacuum-coredump=0"], use_sudo=True, capture=True)
-    if res.ok:
-        return "System coredumps cleared"
-    return None
+    res = run_command(
+        [
+            "find",
+            str(coredump_dir),
+            "-maxdepth",
+            "1",
+            "-type",
+            "f",
+            "-name",
+            "core.*",
+            "-delete",
+        ],
+        use_sudo=True,
+        capture=True,
+    )
+    if not res.ok:
+        return None
+
+    return "System coredumps cleared"
 
 
 def run_broken_symlink_cleanup(dry_run=False):
@@ -525,7 +565,7 @@ def optimize_system(dry_run=False):
             lambda: run_desktop_database_refresh(dry_run),
             lambda: run_mime_database_refresh(dry_run),
             lambda: run_vacuum_all(dry_run),
-            lambda: run_zombie_cleanup(dry_run),
+            lambda: run_autostart_cleanup(dry_run),
             lambda: run_systemd_user_service_cleanup(dry_run),
         ]
     else:
@@ -542,7 +582,7 @@ def optimize_system(dry_run=False):
             lambda: run_vacuum_all(True),
             lambda: run_desktop_database_refresh(True),
             lambda: run_mime_database_refresh(True),
-            lambda: run_zombie_cleanup(True),
+            lambda: run_autostart_cleanup(True),
             lambda: run_systemd_user_service_cleanup(True),
         ]
 
