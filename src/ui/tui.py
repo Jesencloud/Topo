@@ -1,7 +1,7 @@
 import os
 import sys
 
-from ..core.constants import BOLD, CYAN, EARTH, GRAY, RESET
+from ..core.constants import CYAN, EARTH, GRAY, RESET, TOPO_VERSION
 from .navigator import InteractiveMenu
 
 
@@ -11,15 +11,10 @@ def show_banner():
     if cmd_name in ("python3", "main.py", "topo"):
         cmd_name = "Topo"
 
-    banner = f"""
-{EARTH}  ████████  ██████  ██████   ██████
-     ██    ██    ██ ██   ██ ██    ██
-     ██    ██    ██ ██████  ██    ██
-     ██    ██    ██ ██      ██    ██
-     ██     ██████  ██       ██████ {RESET}
-
-  {CYAN}●{RESET} {BOLD}{cmd_name}{RESET} {GRAY}is digging deeper 🦡 🦡 🦡{RESET}"""
-
+    # 2-line Braille vector typography for "TOPO" with version
+    banner = f"""{EARTH}
+ ⠶⣶⠶  ⢰⠶⡆ ⢰⠶⡆ ⢰⠶⡆
+  ⠿   ⠸⠤⠇ ⢸⠉⠁ ⠸⠤⠇  {CYAN}●{RESET}{GRAY} 🦡 ({GRAY}v{TOPO_VERSION}) is digging deeper{RESET}"""
     print(banner)
 
 

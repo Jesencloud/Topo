@@ -1,3 +1,25 @@
+# Daily Modification Report - 2026-06-14
+
+## Project: topo (Topo) - System Status Hardening
+
+### 1. Privacy Hardening: Removed Public IP Lookup
+*   **Feature Removal**: Completely removed the public IP lookup functionality (previously contacting `ipinfo.io`) to enhance user privacy and reduce external network dependencies during status checks.
+*   **Config Cleanup**: Removed the `status_public_ip` toggle from `DEFAULT_CONFIG` and the configuration normalization logic.
+*   **Simplified Status**: The Network section in `topo status` now only displays the local IP address and interface traffic.
+
+### 2. Offline Local IP Detection
+*   **Zero Network Dependency**: Reworked `get_ip_info()` to determine the local IPv4 address without connecting to external hosts (previously using a UDP probe to 8.8.8.8). This ensures status checks remain fast and private even in isolated or firewalled environments.
+*   **Kernel Routing Analysis**: The detection logic now parses `/proc/net/route` to identify the active default gateway interface. It correctly handles multiple interfaces by selecting the one with the lowest routing metric.
+*   **Direct ioctl Query**: Uses the `SIOCGIFADDR` ioctl call to retrieve the interface's IPv4 address directly from kernel metadata, providing a high-performance, native Linux implementation.
+
+### 3. Remove big banner with small icon
+*   **Compact Main Menu Banner**: Replaced the large multi-line block `TOPO` banner with a much smaller 2-line Braille-style icon. This keeps the main menu closer to the top of the terminal and leaves more vertical space for actual navigation content.
+*   **Mascot-First Branding**: Kept the badger identity in the banner while removing repeated mascot glyphs. The new line reads as a concise product signal: small icon, status dot, badger mascot, version number, and `is digging deeper`.
+*   **Version-Aware Display**: Added `TOPO_VERSION` to `src/core/constants.py` so the TUI banner can show the current version from the root `VERSION` file without hardcoding it in `src/ui/tui.py`.
+*   **README Alignment**: Updated the README terminal mock to match the new compact banner, so installation and first-run documentation reflect the actual UI.
+
+---
+
 # Daily Modification Report - 2026-06-13
 
 ## Project: topo (Topo) - System Optimization Hardening
@@ -23,10 +45,9 @@ Today's session focused on making the System Optimization tasks more robust and 
 *   **Failed Unit Reset**: Added `run_user_systemd_reset_failed()` to clear "failed" states for user-level systemd units.
 *   **Conditional Execution**: The command first probes for actual failed units via `list-units --state=failed` and only executes `reset-failed` if needed, ensuring zero unnecessary system calls.
 
-### 5. Privacy Hardening: Removed Public IP Lookup
-*   **Feature Removal**: Completely removed the public IP lookup functionality (previously contacting `ipinfo.io`) to enhance user privacy and reduce external network dependencies during status checks.
-*   **Config Cleanup**: Removed the `status_public_ip` toggle from `DEFAULT_CONFIG` and the configuration normalization logic.
-*   **Simplified Status**: The Network section in `topo status` now only displays the local IP address and interface traffic.
+### 5. Broken Symlink Audit Integration
+*   **Unified Deletion Entry**: Reworked `run_broken_symlink_cleanup()` to use `safe_remove(..., use_trash=False)` instead of direct `unlink()`.
+*   **Full Observability**: Broken symlink removal is now tracked by the central deletion validation layer and recorded in the audit log (`deletions.log`), ensuring all destructive actions in Optimize mode are traceable.
 
 ### 6. Regression Coverage
 *   **Optimize Tests**: Expanded `tests/test_optimize.py` with 16 test cases covering absolute vs. relative paths, quoted paths with spaces, malformed entries, and the `find`-based coredump removal logic.

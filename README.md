@@ -50,13 +50,8 @@ sudo dnf install ./topo-xxx-1.x86_64.rpm
 Replace `xxx` with the version from the release you downloaded. Use `topo_xxx_arm64.deb` on Debian/Ubuntu ARM64 systems and `topo-xxx-1.aarch64.rpm` on Fedora/RHEL ARM64 systems. Package installs place Topo under `/usr/lib/topo` and expose `/usr/bin/topo`; after installation, use `topo update` and `topo remove` for lifecycle management. During package updates, Topo verifies `SHA256SUMS.asc` when `gpg` is installed; without `gpg`, it falls back to SHA256 integrity checks only, which detect corrupted downloads but do not authenticate the release publisher.
 
 ```bash
-  ████████  ██████  ██████   ██████
-     ██    ██    ██ ██   ██ ██    ██
-     ██    ██    ██ ██████  ██    ██
-     ██    ██    ██ ██      ██    ██
-     ██     ██████  ██       ██████
-
-  ● Topo is digging deeper 🦡 🦡 🦡
+ ⠶⣶⠶  ⢰⠶⡆ ⢰⠶⡆ ⢰⠶⡆
+  ⠿   ⠸⠤⠇ ⢸⠉⠁ ⠸⠤⠇  ● 🦡 (v0.9.6) is digging deeper
 
  Main Menu
 

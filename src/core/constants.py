@@ -1,5 +1,9 @@
 from pathlib import Path
 
+# Get version from root VERSION file
+VERSION_FILE = Path(__file__).parent.parent.parent / "VERSION"
+TOPO_VERSION = VERSION_FILE.read_text().strip() if VERSION_FILE.exists() else "1.0.0"
+
 # Canonical purge targets (heavy project build artifacts)
 PURGE_TARGETS = {
     "node_modules",
