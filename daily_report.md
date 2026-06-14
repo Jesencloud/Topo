@@ -18,6 +18,12 @@
 *   **Version-Aware Display**: Added `TOPO_VERSION` to `src/core/constants.py` so the TUI banner can show the current version from the root `VERSION` file without hardcoding it in `src/ui/tui.py`.
 *   **README Alignment**: Updated the README terminal mock to match the new compact banner, so installation and first-run documentation reflect the actual UI.
 
+### 4. TUI Routing and Banner Rendering Cleanup
+*   **Single Version Source**: Removed the duplicate `VERSION` file read from `src/main.py`; the CLI and TUI now both use `TOPO_VERSION` from `src/core/constants.py`.
+*   **Action-Based Main Menu Routing**: Replaced fragile numeric-string routing (`"1"`, `"2"`, etc.) with explicit menu action IDs such as `clean`, `analyze`, and `status`. This makes `src/main.py` routing easier to extend and less dependent on visible menu labels.
+*   **Pure Banner Rendering**: Changed banner rendering to return text instead of printing to stdout. `InteractiveMenu` and `AnalyzeSelector` now append the returned banner string directly, removing stdout redirection and reducing UI rendering overhead.
+*   **Regression Coverage**: Added tests for main-menu action routing and returned-banner rendering. Full local verification passed with `315` tests, `ruff check`, `ruff format --check`, and `git diff --check`.
+
 ---
 
 # Daily Modification Report - 2026-06-13

@@ -1,7 +1,6 @@
 import argparse
 import sys
 from contextlib import contextmanager
-from pathlib import Path
 
 from .clean.app_manager import run_uninstall
 from .clean.optimize import optimize_system
@@ -9,7 +8,7 @@ from .clean.project import run_purge
 from .clean.runner import run_clean
 from .core import system, terminal_state
 from .core.analyze import run_deep_analysis
-from .core.constants import RESET, THEME_TITLE
+from .core.constants import RESET, THEME_TITLE, TOPO_VERSION
 from .core.doctor import run_doctor
 from .core.history import show_history
 from .core.status import show_status
@@ -18,11 +17,15 @@ from .manage.install import run_install_link
 from .manage.remove import run_remove
 from .manage.update import run_update
 from .ui.navigator import Navigator
-from .ui.tui import main_menu
-
-# Get version from root VERSION file
-VERSION_FILE = Path(__file__).parent.parent / "VERSION"
-TOPO_VERSION = VERSION_FILE.read_text().strip() if VERSION_FILE.exists() else "0.5.0"
+from .ui.tui import (
+    ANALYZE_ACTION,
+    CLEAN_ACTION,
+    OPTIMIZE_ACTION,
+    QUIT_ACTION,
+    STATUS_ACTION,
+    UNINSTALL_ACTION,
+    main_menu,
+)
 
 DRY_RUN_HELP = "Preview changes without deleting"
 INTERRUPTED_MESSAGE = "🚫 Process interrupted by user."
@@ -296,24 +299,21 @@ def _main():
 
     # If no command is provided, enter TUI
     if args.command is None:
+        menu_routes = {
+            CLEAN_ACTION: lambda: _run_terminal_tui_command(run_clean, dry_run),
+            UNINSTALL_ACTION: lambda: _run_alternate_tui(run_uninstall) or True,
+            OPTIMIZE_ACTION: lambda: _run_terminal_tui_command(optimize_system, dry_run),
+            ANALYZE_ACTION: lambda: _run_alternate_tui(run_deep_analysis) or True,
+            STATUS_ACTION: lambda: _run_terminal_tui_command(show_status),
+        }
         while True:
             with alternate_screen():
                 choice = main_menu()
 
-            if choice == "1":
-                if not _run_terminal_tui_command(run_clean, dry_run):
-                    break
-            elif choice == "2":
-                _run_alternate_tui(run_uninstall)
-            elif choice == "3":
-                if not _run_terminal_tui_command(optimize_system, dry_run):
-                    break
-            elif choice == "4":
-                _run_alternate_tui(run_deep_analysis)
-            elif choice == "5":
-                if not _run_terminal_tui_command(show_status):
-                    break
-            elif choice == "0" or choice.lower() == "q":
+            if choice == QUIT_ACTION:
+                break
+            action = menu_routes.get(choice)
+            if action and not action():
                 break
         return
 

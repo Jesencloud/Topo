@@ -160,6 +160,20 @@ def test_interactive_menu_mouse_wheel_moves_cursor():
     assert "Option 2" in output
 
 
+def test_interactive_menu_uses_returned_banner_text():
+    menu = InteractiveMenu(
+        "Main Menu",
+        [("Clean", "Free up disk space")],
+        show_banner=lambda: "BANNER\n",
+    )
+
+    result, writes = drive_with_writes(menu, [Navigator.ESC])
+
+    output = "".join(call.args[0] for call in writes)
+    assert result is None
+    assert "BANNER" in output
+
+
 # --- AnalyzeSelector ---
 def test_analyze_space_then_enter_deletes_selected_batch():
     sel = AnalyzeSelector("t", _analyze_items(), can_select=True)

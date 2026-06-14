@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from unittest.mock import patch
 
 import pytest
@@ -98,3 +99,16 @@ def test_main_cleans_direct_command_output_on_interrupt():
     reset_terminal.assert_called_once_with(force=True)
     clear_screen.assert_called_once_with()
     assert print_mock.call_args_list[-1].args == (topo_main.INTERRUPTED_MESSAGE,)
+
+
+def test_main_menu_clean_action_routes_to_clean():
+    with (
+        patch("sys.argv", ["topo"]),
+        patch("src.main.terminal_state.install_signal_handlers"),
+        patch("src.main.alternate_screen", return_value=nullcontext()),
+        patch("src.main.main_menu", return_value="clean"),
+        patch("src.main._run_terminal_tui_command", return_value=False) as run_terminal,
+    ):
+        topo_main.main()
+
+    run_terminal.assert_called_once_with(topo_main.run_clean, False)

@@ -640,13 +640,9 @@ class InteractiveMenu:
     def render(self):
         buf = ["\033[H"]
         if self.show_banner:
-            import io
-
-            old_stdout = sys.stdout
-            sys.stdout = io.StringIO()
-            self.show_banner()
-            buf.append(sys.stdout.getvalue())
-            sys.stdout = old_stdout
+            buf.append(self.show_banner())
+            if not buf[-1].endswith("\n"):
+                buf.append("\n")
 
         buf.append(f"\n {THEME_TITLE}{self.title}{RESET}\033[K\n")
         buf.append("\033[K\n")
@@ -723,13 +719,9 @@ class AnalyzeSelector(_PagedSelector):
     def render(self):
         buf = ["\033[H"]
         if self.show_banner:
-            import io
-
-            old_stdout = sys.stdout
-            sys.stdout = io.StringIO()
-            self.show_banner()
-            buf.append(sys.stdout.getvalue())
-            sys.stdout = old_stdout
+            buf.append(self.show_banner())
+            if not buf[-1].endswith("\n"):
+                buf.append("\n")
 
         buf.append(f"\n {THEME_TITLE}{self.title}{RESET}\033[K\n\n")
 
