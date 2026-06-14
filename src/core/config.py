@@ -15,7 +15,6 @@ DEFAULT_CONFIG = {
     "purge_search_paths": DEFAULT_PURGE_SEARCH_PATHS,
     "use_trash": True,
     "min_age_days": 7,
-    "status_public_ip": False,
     "show_scrollbar": True,
     "theme_color": "cyan",
 }
@@ -56,7 +55,7 @@ def normalize_config(user_config: Any) -> dict[str, Any]:
     if isinstance(min_age_days, int) and min_age_days >= 0:
         config["min_age_days"] = min_age_days
 
-    for key in ("use_trash", "status_public_ip", "show_scrollbar"):
+    for key in ("use_trash", "show_scrollbar"):
         value = user_config.get(key)
         if isinstance(value, bool):
             config[key] = value

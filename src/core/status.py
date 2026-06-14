@@ -1,15 +1,11 @@
-import json
 import os
 import shutil
 import socket
-import urllib.error
-import urllib.request
 from datetime import datetime
 from pathlib import Path
 
 from ..ui.navigator import draw_bar, get_color_for_percent
-from .config import load_config
-from .constants import GRAY, GREEN, PURPLE, RED, RESET, YELLOW
+from .constants import CYAN, GRAY, GREEN, PURPLE, RED, RESET, YELLOW
 from .file_ops import bytes_to_human
 from .system import run_command
 
@@ -120,8 +116,8 @@ def get_network_traffic():
         return "N/A", "N/A"
 
 
-def get_ip_info(include_public: bool | None = None):
-    """Get local IP, and public IP only when explicitly enabled."""
+def get_ip_info():
+    """Get local IP address."""
     local_ip = "N/A"
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -131,29 +127,7 @@ def get_ip_info(include_public: bool | None = None):
     except OSError:
         pass
 
-    if include_public is None:
-        include_public = bool(load_config().get("status_public_ip", False))
-    public_info = _get_public_ip_info() if include_public else ""
-
-    return local_ip, public_info
-
-
-def _get_public_ip_info():
-    # ipinfo.io serves over HTTPS (ip-api.com's free tier is HTTP-only), so this
-    # opt-in lookup is no longer sent in cleartext. Fields: {"ip", "country"}.
-    try:
-        # Fixed HTTPS endpoint for opt-in public IP lookup.
-        with urllib.request.urlopen(  # nosec B310
-            "https://ipinfo.io/json", timeout=2.0
-        ) as response:
-            data = json.loads(response.read().decode())
-            ip = data.get("ip")
-            if ip:
-                cc = data.get("country", "")
-                return f"[{cc}] {ip}" if cc else ip
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, urllib.error.URLError):
-        pass
-    return ""
+    return local_ip
 
 
 def get_ssd_info():
@@ -337,7 +311,7 @@ def show_status():
     used_mem_str, total_mem_str, mem_percent = get_mem_info()
     battery_data = get_battery_info()
     rx, tx = get_network_traffic()
-    local_ip, public_ip = get_ip_info()
+    local_ip = get_ip_info()
     gpu = get_gpu_info()
     top_procs = get_top_processes()
 
@@ -383,10 +357,7 @@ def show_status():
             bat_color = YELLOW
         print(f"🔋 Battery:      {bat_color}{bat_pct_str}{RESET}{bat_details}")
 
-    ip_str = f" | {local_ip}"
-    if public_ip:
-        ip_str += f" | {public_ip}"
-    print(f"🌐 Network:      ↓ {rx} / ↑ {tx}{ip_str}")
+    print(f"🌐 Network:      ↓ {rx} / ↑ {tx} | {CYAN}{local_ip}{RESET}")
 
     if top_procs:
         print(f"🔝 Top Processes: {', '.join(top_procs)}")
