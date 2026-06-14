@@ -1,6 +1,8 @@
+import socket
 from unittest.mock import MagicMock, mock_open, patch
 
 from src.core.status import (
+    _get_default_route_interface,
     get_battery_info,
     get_cpu_load_summary,
     get_cpu_temp,
@@ -69,12 +71,31 @@ def test_get_cpu_temp_missing():
         assert text == "N/A"
 
 
-def test_get_ip_info_returns_local_ip():
-    with patch("socket.socket") as mock_socket:
-        mock_socket.return_value.getsockname.return_value = ("192.168.1.10", 12345)
+def test_get_default_route_interface_uses_lowest_metric(tmp_path):
+    route_file = tmp_path / "route"
+    route_file.write_text(
+        "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\n"
+        "wlan0\t00000000\t0101A8C0\t0003\t0\t0\t600\t00000000\t0\t0\t0\n"
+        "eth0\t00000000\t0101A8C0\t0003\t0\t0\t100\t00000000\t0\t0\t0\n"
+    )
+
+    assert _get_default_route_interface(route_file) == "eth0"
+
+
+def test_get_ip_info_reads_local_interface_without_external_connect():
+    ioctl_response = b"\x00" * 20 + b"\xc0\xa8\x01\x0a" + b"\x00" * 232
+    with (
+        patch("src.core.status._get_default_route_interface", return_value="wlan0"),
+        patch("src.core.status.fcntl.ioctl", return_value=ioctl_response),
+        patch("src.core.status.socket.socket") as mock_socket,
+    ):
+        sock = mock_socket.return_value.__enter__.return_value
+        sock.fileno.return_value = 3
         local_ip = get_ip_info()
 
     assert local_ip == "192.168.1.10"
+    mock_socket.assert_called_once_with(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.connect.assert_not_called()
 
 
 def test_get_battery_info():

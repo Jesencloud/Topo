@@ -1,13 +1,18 @@
+import fcntl
 import os
 import shutil
 import socket
+import struct
 from datetime import datetime
 from pathlib import Path
 
 from ..ui.navigator import draw_bar, get_color_for_percent
-from .constants import CYAN, GRAY, GREEN, PURPLE, RED, RESET, YELLOW
+from .constants import GRAY, GREEN, PURPLE, RED, RESET, YELLOW
 from .file_ops import bytes_to_human
 from .system import run_command
+
+DEFAULT_ROUTE_PATH = Path("/proc/net/route")
+SIOCGIFADDR = 0x8915
 
 
 def get_mem_info():
@@ -116,18 +121,52 @@ def get_network_traffic():
         return "N/A", "N/A"
 
 
-def get_ip_info():
-    """Get local IP address."""
-    local_ip = "N/A"
+def _get_default_route_interface(route_path: Path = DEFAULT_ROUTE_PATH) -> str | None:
+    """Return the interface used by the default IPv4 route without network I/O."""
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        local_ip = s.getsockname()[0]
-        s.close()
+        with route_path.open() as f:
+            routes = f.readlines()[1:]
     except OSError:
-        pass
+        return None
 
-    return local_ip
+    best_iface = None
+    best_metric = None
+    for route in routes:
+        parts = route.split()
+        if len(parts) < 4 or parts[1] != "00000000":
+            continue
+        try:
+            flags = int(parts[3], 16)
+            metric = int(parts[6]) if len(parts) > 6 else 0
+        except ValueError:
+            continue
+        if not flags & 0x1:
+            continue
+        if best_metric is None or metric < best_metric:
+            best_iface = parts[0]
+            best_metric = metric
+    return best_iface
+
+
+def _get_interface_ipv4(interface: str) -> str | None:
+    """Return an interface IPv4 address using local kernel interface metadata."""
+    if not interface:
+        return None
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            request = struct.pack("256s", interface[:15].encode("utf-8"))
+            response = fcntl.ioctl(sock.fileno(), SIOCGIFADDR, request)
+            return socket.inet_ntoa(response[20:24])
+    except OSError:
+        return None
+
+
+def get_ip_info():
+    """Get local IP address without connecting to an external host."""
+    iface = _get_default_route_interface()
+    local_ip = _get_interface_ipv4(iface) if iface else None
+
+    return local_ip or "N/A"
 
 
 def get_ssd_info():
@@ -357,7 +396,7 @@ def show_status():
             bat_color = YELLOW
         print(f"🔋 Battery:      {bat_color}{bat_pct_str}{RESET}{bat_details}")
 
-    print(f"🌐 Network:      ↓ {rx} / ↑ {tx} | {CYAN}{local_ip}{RESET}")
+    print(f"🌐 Network:      ↓ {rx} / ↑ {tx} | {local_ip}{RESET}")
 
     if top_procs:
         print(f"🔝 Top Processes: {', '.join(top_procs)}")
