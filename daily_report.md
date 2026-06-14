@@ -23,10 +23,15 @@ Today's session focused on making the System Optimization tasks more robust and 
 *   **Failed Unit Reset**: Added `run_user_systemd_reset_failed()` to clear "failed" states for user-level systemd units.
 *   **Conditional Execution**: The command first probes for actual failed units via `list-units --state=failed` and only executes `reset-failed` if needed, ensuring zero unnecessary system calls.
 
-### 5. Regression Coverage
+### 5. Privacy Hardening: Removed Public IP Lookup
+*   **Feature Removal**: Completely removed the public IP lookup functionality (previously contacting `ipinfo.io`) to enhance user privacy and reduce external network dependencies during status checks.
+*   **Config Cleanup**: Removed the `status_public_ip` toggle from `DEFAULT_CONFIG` and the configuration normalization logic.
+*   **Simplified Status**: The Network section in `topo status` now only displays the local IP address and interface traffic.
+
+### 6. Regression Coverage
 *   **Optimize Tests**: Expanded `tests/test_optimize.py` with 16 test cases covering absolute vs. relative paths, quoted paths with spaces, malformed entries, and the `find`-based coredump removal logic.
 *   **Verification Commands**:
-    *   `pytest -q` passed with **308 tests**.
+    *   `pytest -q` passed with **309 tests**.
     *   `ruff check` passed.
     *   `ruff format --check` passed.
     *   `git diff --check` passed.
