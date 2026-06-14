@@ -14,9 +14,8 @@ def show_banner():
     # 2-line Braille vector typography for "TOPO" with version
     banner = f"""{EARTH}
  ⠶⣶⠶  ⢰⠶⡆ ⢰⠶⡆ ⢰⠶⡆
-  ⠿   ⠸⠤⠇ ⢸⠉⠁ ⠸⠤⠇  {CYAN}●{RESET}{GRAY} 🦡 ({GRAY}v{TOPO_VERSION}) is digging deeper{RESET}"""
+  ⠿   ⠸⠤⠇ ⢸⠉⠁ ⠸⠤⠇   {CYAN}{RESET}{GRAY}● v{TOPO_VERSION} is digging deeper 🦡{RESET}"""
     print(banner)
-
 
 def main_menu():
     options = [

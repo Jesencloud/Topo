@@ -254,13 +254,10 @@ if [ "$MINIMAL" = false ]; then
     fi
 
     echo -e "${CYAN}"
-    echo "  ████████  ██████  ██████   ██████ "
-    echo "     ██    ██    ██ ██   ██ ██    ██"
-    echo "     ██    ██    ██ ██████  ██    ██"
-    echo "     ██    ██    ██ ██      ██    ██"
-    echo "     ██     ██████  ██       ██████ "
+    echo "  ⠶⣶⠶  ⢰⠶⡆ ⢰⠶⡆ ⢰⠶⡆ "
+    echo "   ⠿   ⠸⠤⠇ ⢸⠉⠁ ⠸⠤⠇ "
     echo -e "${NC}"
-    echo -e " ${CYAN}●${NC} ${BOLD}Topo v${TOPO_VER}${NC} ${GRAY}is digging deeper 🦡 🦡 🦡${NC}\n"
+    echo -e " ${CYAN}●${NC} ${BOLD}Topo v${TOPO_VER}${NC} ${GRAY}is digging deeper 🦡${NC}\n"
     
     echo -e "${GRAY}Type '${NC}topo${GRAY}' to start the interactive TUI, or '${NC}topo --help${GRAY}' to explore all commands.${NC}"
     echo -e "${GRAY}If your shell still tries an old '${NC}/usr/bin/topo${GRAY}' path, run '${NC}hash -r${GRAY}' or reopen the terminal.${NC}"

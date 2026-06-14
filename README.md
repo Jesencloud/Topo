@@ -51,8 +51,8 @@ Replace `xxx` with the version from the release you downloaded. Use `topo_xxx_ar
 
 ```bash
  ⠶⣶⠶  ⢰⠶⡆ ⢰⠶⡆ ⢰⠶⡆
-  ⠿   ⠸⠤⠇ ⢸⠉⠁ ⠸⠤⠇  ● 🦡 (v0.9.6) is digging deeper
-
+  ⠿   ⠸⠤⠇ ⢸⠉⠁ ⠸⠤⠇   ● v0.9.6 is digging deeper 🦡
+  
  Main Menu
 
  > 1. Clean        Free up disk space
