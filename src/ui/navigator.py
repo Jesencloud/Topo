@@ -1218,7 +1218,9 @@ class UninstallPreviewSelector:
         focus_line = _frame_line_count(buf)
         buf.append(prompt + "\033[K")
         buf.append("\033[J")
-        _render_scrollable_frame(self, buf, focus_line)
+        state = _render_scrollable_frame(self, buf, focus_line)
+        # Record the visual row of the prompt (1-indexed)
+        self._prompt_row = (focus_line - state.top) + 1
 
     def run(self):
         with _selector_session(enable_mouse=True) as fd:
@@ -1230,6 +1232,9 @@ class UninstallPreviewSelector:
                 _clear_manual_scroll(self)
 
                 if key in Navigator.ENTER:
+                    # Move cursor to the row immediately below the prompt
+                    sys.stdout.write(f"\033[{self._prompt_row + 1};1H")
+                    sys.stdout.flush()
                     return True
                 if key == Navigator.SPACE:
                     return False

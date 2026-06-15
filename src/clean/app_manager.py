@@ -802,7 +802,6 @@ def run_uninstall():
         confirmed = UninstallPreviewSelector(all_targets).run()
 
         if confirmed:
-            print()
             # Ensure sudo session (require password) outside raw mode so sudo can own input.
             if not system.ensure_sudo_session(
                 f"{MAGENTA}➔{RESET} App removal requires admin access\n{MAGENTA}➔{RESET} Password: "
