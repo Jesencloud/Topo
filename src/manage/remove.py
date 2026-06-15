@@ -253,7 +253,7 @@ def run_remove(dry_run=False):
             else:
                 p.unlink()
             print(f"  {GREEN}✓{RESET} Removed {item['desc']}")
-        except Exception as e:
+        except OSError as e:
             print(f"  {RED}✗{RESET} Failed to remove {p}: {e}")
 
     if _strip_topo_path_lines():

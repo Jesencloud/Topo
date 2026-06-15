@@ -4,7 +4,6 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from src.core.analyze import (
-    ScanCache,
     _delete_analyze_paths,
     _direct_child_count_exceeds,
     _explore_notice,
@@ -21,6 +20,7 @@ from src.core.analyze import (
     run_deep_analysis,
 )
 from src.core.file_ops import CACHEDIR_TAG_SIGNATURE, has_valid_cachedir_tag
+from src.core.scan_cache import ScanCache
 
 
 def test_scan_cache():

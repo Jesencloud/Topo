@@ -35,15 +35,7 @@ def test_run_uninstall_escape_selector():
         run_uninstall()
 
 
-@patch("sys.stdin.fileno", return_value=0)
-@patch("sys.stdin.read", return_value="\n")
-@patch("termios.tcgetattr", return_value=[])
-@patch("termios.tcsetattr")
-@patch("tty.setcbreak")
-@patch("src.ui.navigator.Navigator.raw_mode")
-def test_run_uninstall_execute_and_exit(
-    mock_raw, mock_setcbreak, mock_setattr, mock_getattr, mock_read, mock_fileno
-):
+def test_run_uninstall_execute_and_exit():
     mock_apps = [
         {
             "id": "test",
@@ -54,15 +46,12 @@ def test_run_uninstall_execute_and_exit(
             "install_time": 0,
         }
     ]
-    # Mock raw_mode to act as a proper context manager
-    mock_raw.return_value.__enter__.return_value = 0
-
     with (
         patch("src.clean.app_manager.UninstallManager.run_full_scan", return_value=mock_apps),
         patch("src.clean.app_manager.UninstallSelector.run", return_value=[0]),
+        patch("src.clean.app_manager.UninstallPreviewSelector.run", return_value=True),
         patch("src.clean.app_manager.UninstallManager.execute_uninstall") as mock_exec,
         patch("src.ui.navigator.Navigator.wait_for_return", return_value=False),
-        patch("src.ui.navigator.Navigator.get_key", return_value="\n"),
         patch("src.core.system.ensure_sudo_session", return_value=True),
         patch("subprocess.run") as mock_run,
     ):
@@ -72,15 +61,7 @@ def test_run_uninstall_execute_and_exit(
         mock_exec.assert_called_once()
 
 
-@patch("sys.stdin.fileno", return_value=0)
-@patch("sys.stdin.read", return_value="x")
-@patch("termios.tcgetattr", return_value=[])
-@patch("termios.tcsetattr")
-@patch("tty.setcbreak")
-@patch("src.ui.navigator.Navigator.raw_mode")
-def test_run_uninstall_cancel(
-    mock_raw, mock_setcbreak, mock_setattr, mock_getattr, mock_read, mock_fileno
-):
+def test_run_uninstall_cancel():
     mock_apps = [
         {
             "id": "test",
@@ -91,7 +72,6 @@ def test_run_uninstall_cancel(
             "install_time": 0,
         }
     ]
-    mock_raw.return_value.__enter__.return_value = 0
 
     # We need side_effect to stop the while True loop after one iteration
     def mock_scan_side_effect(*args, **kwargs):
@@ -106,9 +86,9 @@ def test_run_uninstall_cancel(
             side_effect=mock_scan_side_effect,
         ),
         patch("src.clean.app_manager.UninstallSelector.run", return_value=[0]),
+        patch("src.clean.app_manager.UninstallPreviewSelector.run", return_value=False),
         patch("src.clean.app_manager.UninstallManager.execute_uninstall") as mock_exec,
         patch("src.ui.navigator.Navigator.wait_for_return", return_value=False),
-        patch("src.ui.navigator.Navigator.get_key", return_value="\x1b"),
         patch("subprocess.run") as mock_run,
     ):
         mock_run.return_value = MagicMock(returncode=1)
@@ -679,15 +659,7 @@ def test_executable_names_from_desktop(test_env):
     assert "fancy-bin" in names
 
 
-@patch("sys.stdin.fileno", return_value=0)
-@patch("sys.stdin.read", return_value="\n")
-@patch("termios.tcgetattr", return_value=[])
-@patch("termios.tcsetattr")
-@patch("tty.setcbreak")
-@patch("src.ui.navigator.Navigator.raw_mode")
-def test_run_uninstall_failed_package_not_counted(
-    mock_raw, mock_setcbreak, mock_setattr, mock_getattr, mock_read, mock_fileno, capsys
-):
+def test_run_uninstall_failed_package_not_counted(capsys):
     """A failed package removal must not be reported as freed; it goes to Failed."""
     mock_apps = [
         {
@@ -699,18 +671,16 @@ def test_run_uninstall_failed_package_not_counted(
             "install_time": 0,
         }
     ]
-    mock_raw.return_value.__enter__.return_value = 0
-
     with (
         patch("src.clean.app_manager.UninstallManager.run_full_scan", return_value=mock_apps),
         patch("src.clean.app_manager.UninstallSelector.run", return_value=[0]),
+        patch("src.clean.app_manager.UninstallPreviewSelector.run", return_value=True),
         patch("src.clean.app_manager.UninstallManager.find_residue_paths", return_value=[]),
         patch(
             "src.clean.app_manager.UninstallManager.execute_uninstall",
             return_value={"package_removed": False, "removed_paths": []},
         ),
         patch("src.core.system.ensure_sudo_session", return_value=True),
-        patch("src.ui.navigator.Navigator.get_key", return_value="\n"),
         patch("src.ui.navigator.Navigator.wait_for_return", return_value=False),
         patch("subprocess.run") as mock_sub,
     ):

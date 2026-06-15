@@ -32,7 +32,7 @@ def get_os_id():
                 for line in f:
                     if line.startswith("ID="):
                         return line.strip().split("=")[1].strip('"')
-    except Exception:
+    except (OSError, IndexError):
         pass
     return "unknown"
 
@@ -116,7 +116,7 @@ def ensure_sudo_session(prompt: str | None = None):
         _clear_interrupted_sudo_prompt(prompt)
         SUDO_CANCELLED = True
         return False
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return False
 
 

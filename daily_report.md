@@ -1,3 +1,40 @@
+# Daily Modification Report - 2026-06-15
+
+## Project: topo (Topo) - Code Structure Cleanup and Exception Hardening
+
+Today's session focused on reducing duplicated UI/core logic, centralizing shared parsers, and tightening broad exception handling without changing user-facing workflows.
+
+### 1. Shared Scan Cache Extraction
+*   **Core Cache Module**: Moved `ScanCache` out of `src/core/analyze.py` into the dedicated `src/core/scan_cache.py` module.
+*   **Shared Usage**: Updated Analyze, Project cleanup, runner code, app uninstall logic, and tests to import the shared cache from one location.
+*   **Safer Cache API**: Added `ScanCache.discard(path)` and replaced direct `_data.pop(...)` access so callers no longer reach into internal cache storage.
+
+### 2. Uninstall Preview UI Simplification
+*   **Selector Extraction**: Moved the uninstall confirmation preview loop from `src/clean/app_manager.py` into `UninstallPreviewSelector` in `src/ui/navigator.py`.
+*   **Clearer Ownership**: `app_manager.py` now focuses on app discovery, residue detection, process checks, and removal; preview rendering and key handling live in the UI layer.
+*   **One-Time Size Calculation**: The preview selector computes total selected size once during initialization instead of recalculating it on every render.
+*   **Regression Tests**: Updated uninstall and navigator tests to cover the extracted preview selector behavior.
+
+### 3. Desktop Entry Parser Reuse
+*   **New Utility Module**: Added `src/core/desktop_entry.py` with helpers for parsing `.desktop` files and reading `Name`, localized names, `Icon`, and `Exec` commands.
+*   **Reduced Duplication**: Reused the new parser in app uninstall detection and autostart cleanup instead of parsing desktop entries independently in multiple modules.
+*   **Safer Exec Handling**: Uses `shlex.split()` for quoted commands and arguments with spaces, skips desktop field codes such as `%U`, and treats malformed `Exec=` lines as ambiguous rather than deleting entries.
+*   **Parser Tests**: Added `tests/test_desktop_entry.py` for localized names, quoted executable paths, field codes, icons, and malformed command handling.
+
+### 4. Broad Exception Cleanup
+*   **Narrowed Catches**: Replaced broad `except Exception` handlers with specific exceptions in system detection, update checks, install/remove paths, purge input parsing, whitelist path resolution, sound playback, and selector number parsing.
+*   **Path Error Consistency**: Added a shared `PATH_RESOLVE_ERRORS = (OSError, RuntimeError)` tuple in `src/core/whitelist.py` so path-protection fallbacks use consistent exception handling.
+*   **Intentional Fallbacks Documented**: Only two broad catches remain: terminal escape/mouse input resilience in `navigator.py`, and independent concurrent maintenance task isolation in `optimize.py`. Both now include comments explaining why the broad fallback is intentional.
+
+### 5. Verification
+*   **Test Suite**: `pytest -q` passed with **321 tests**.
+*   **Lint and Format**: `ruff check` and `ruff format --check` passed.
+*   **Typing**: `mypy src/` passed.
+*   **Security Scan**: `bandit -r src -ll` passed with **0 Medium** and **0 High** issues.
+*   **Whitespace Check**: `git diff --check` passed.
+
+---
+
 # Daily Modification Report - 2026-06-14
 
 ## Project: topo (Topo) - System Status Hardening

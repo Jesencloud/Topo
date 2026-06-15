@@ -14,6 +14,7 @@ from pathlib import Path
 
 from ..core import system, terminal_state
 from ..core.constants import BOLD, GRAY, GREEN, PURPLE, RED, RESET, YELLOW
+from ..core.desktop_entry import get_desktop_exec_command
 from ..core.file_ops import (
     bytes_to_human,
     clean_path_by_age,
@@ -239,36 +240,21 @@ def run_autostart_cleanup(dry_run=False):
     zombies = 0
     for desktop_file in autostart_dir.glob("*.desktop"):
         try:
-            is_zombie = False
-            with open(desktop_file) as f:
-                for line in f:
-                    if line.startswith("Exec="):
-                        line_content = line.split("=", 1)[1].strip()
-                        if not line_content:
-                            continue
-                        try:
-                            # Use shlex to handle quoted paths with spaces
-                            parts = shlex.split(line_content)
-                            if not parts:
-                                continue
-                            cmd = parts[0]
-                        except ValueError:
-                            # Malformed Exec lines are ambiguous; keep the file.
-                            break
-
-                        if (
-                            cmd.startswith("/")
-                            and not os.path.exists(cmd)
-                            or not cmd.startswith("/")
-                            and not shutil.which(cmd)
-                        ):
-                            is_zombie = True
-                        break
+            cmd = get_desktop_exec_command(desktop_file)
+            is_zombie = bool(
+                cmd
+                and (
+                    cmd.startswith("/")
+                    and not os.path.exists(cmd)
+                    or not cmd.startswith("/")
+                    and not shutil.which(cmd)
+                )
+            )
             if is_zombie:
                 if not dry_run:
                     desktop_file.unlink()
                 zombies += 1
-        except Exception:
+        except OSError:
             continue
     if zombies > 0:
         if dry_run:
@@ -686,7 +672,8 @@ def optimize_system(dry_run=False):
                 if result:
                     opt_log(result, skipped=dry_run)
             except Exception:
-                # Silently skip failed maintenance tasks
+                # Optimization runs independent maintenance tasks concurrently; one
+                # task failure should not abort the rest of the batch.
                 pass
 
     duration = time.time() - start_time

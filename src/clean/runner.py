@@ -7,7 +7,6 @@ import tty
 from functools import partial
 
 from ..core import system, terminal_state
-from ..core.analyze import ScanCache
 from ..core.constants import (
     GRAY,
     GREEN,
@@ -19,6 +18,7 @@ from ..core.constants import (
 )
 from ..core.file_ops import bytes_to_human
 from ..core.history import record_history_session
+from ..core.scan_cache import ScanCache
 from .apps import clean_apps_deep, proactive_app_detection
 from .dev import clean_developer_tools
 from .system import (

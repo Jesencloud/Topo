@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from ..core import system
-from ..core.analyze import ScanCache
 from ..core.constants import BOLD, GRAY, GREEN, MAGENTA, PURPLE, RED, RESET, THEME_TITLE, YELLOW
+from ..core.desktop_entry import get_desktop_exec_names, get_desktop_icon, get_desktop_name
 from ..core.file_ops import (
     bytes_to_human,
     parse_size_to_bytes,
@@ -17,8 +17,9 @@ from ..core.file_ops import (
     safe_remove,
 )
 from ..core.history import record_history_session
+from ..core.scan_cache import ScanCache
 from ..core.whitelist import LINUX_USER_DATA_DIRS
-from ..ui.navigator import Navigator, UninstallSelector
+from ..ui.navigator import Navigator, UninstallPreviewSelector, UninstallSelector
 
 
 class UninstallManager:
@@ -248,33 +249,14 @@ class UninstallManager:
 
     def _get_app_localized_name(self, desktop_file: Path, name: str) -> str:
         """Tries to find Name[zh_CN] or Name in .desktop file."""
-        english_name = ""
-        try:
-            with open(desktop_file, errors="ignore") as f:
-                for line in f:
-                    if line.startswith("Name[zh_CN]="):
-                        return line.split("=")[1].strip()
-                    if line.startswith("Name=") and not english_name:
-                        english_name = line.split("=")[1].strip()
-        except OSError:
-            pass
-        return english_name or name
+        return get_desktop_name(desktop_file) or name
 
     def _get_app_keywords(self, desktop_file: Path) -> list[str]:
         """Extracts potential folder name keywords from Exec and Icon fields."""
-        keywords = set()
-        try:
-            with open(desktop_file, errors="ignore") as f:
-                for line in f:
-                    if line.startswith("Exec="):
-                        cmd = line.split("=")[1].split()[0].split("/")[-1].strip("'\"")
-                        keywords.add(cmd.lower())
-                    if line.startswith("Icon="):
-                        icon_name = line.split("=")[1].strip().lower()
-                        if icon_name:
-                            keywords.add(icon_name)
-        except OSError:
-            pass
+        keywords = {name.lower() for name in get_desktop_exec_names(desktop_file)}
+        icon_name = get_desktop_icon(desktop_file).lower()
+        if icon_name:
+            keywords.add(icon_name)
         return list(keywords)
 
     def _executable_names_from_desktop(self, app_id: str) -> set[str]:
@@ -293,18 +275,7 @@ class UninstallManager:
         for dp in desktop_paths:
             if not dp.exists():
                 continue
-            try:
-                with open(dp, errors="ignore") as f:
-                    for line in f:
-                        if line.startswith("Exec="):
-                            field = line.split("=", 1)[1].strip()
-                            if field:
-                                exe = field.split()[0].split("/")[-1].strip("'\"")
-                                if exe and not exe.startswith("%"):
-                                    names.add(exe)
-                            break
-            except OSError:
-                pass
+            names.update(get_desktop_exec_names(dp))
         return names
 
     @staticmethod
@@ -810,12 +781,10 @@ def run_uninstall():
         if not selected_indices:
             return
 
-        # --- PREVIEW LOOP ---
         # Residue discovery and process checks touch the filesystem / spawn pgrep,
-        # so compute them once up front; the redraw loop below only formats them.
+        # so compute them once before handing the preview data to the UI layer.
         selected_apps = [apps[i] for i in selected_indices]
         all_targets = []
-        total_estimated_size = 0
         for app in selected_apps:
             is_running = False
             for proc in manager._candidate_process_names(
@@ -829,66 +798,8 @@ def run_uninstall():
                     pass
             app_paths = manager.find_residue_paths(app["id"], app["name"], app["type"])
             all_targets.append((app, app_paths, is_running))
-            total_estimated_size += app["size_bytes"]
 
-        confirmed = False
-        with Navigator.raw_mode() as fd:
-            preview_done = False
-            while not preview_done:
-                buf = ["\033[H"]  # Go home
-                # Use \033[K on every line, including the very first line and spacers
-                buf.append(
-                    f"{THEME_TITLE}➔{RESET} {THEME_TITLE}Uninstallation Preview{RESET}\033[K\n"
-                )
-                buf.append("\033[K\n")
-
-                for app, app_paths, is_running in all_targets:
-                    running_tag = " \033[1;33m[Running]\033[0m" if is_running else ""
-                    buf.append(
-                        f"  \033[1;32m✓\033[0m {BOLD}{app['name']}{RESET}{running_tag}\033[K\n"
-                    )
-                    for p in app_paths:
-                        # Home-root entries (e.g. ~/.someapp) sit outside the
-                        # standard cache/config containers and are the likeliest
-                        # heuristic mis-matches — flag them in yellow so the user
-                        # reviews them before confirming a destructive action.
-                        is_risky = p.parent == Path.home()
-                        mark = "\033[1;33m⚠\033[0m" if is_risky else "\033[1;34m✓\033[0m"
-                        color = YELLOW if is_risky else GRAY
-                        try:
-                            rel_p = f"~/{p.relative_to(Path.home())}"
-                            buf.append(f"    {mark} {color}{rel_p}{RESET}\033[K\n")
-                        except ValueError:
-                            buf.append(f"    {mark} {color}{p}{RESET}\033[K\n")
-
-                buf.append("\033[K\n")
-                buf.append("\033[K\n")  # Explicit cleared spacer line
-                app_text = "application" if len(selected_apps) == 1 else "applications"
-                size_display = bytes_to_human(total_estimated_size)
-                prompt = (
-                    f" Remove {len(selected_apps)} {app_text}, {size_display} "
-                    f" {GREEN}Enter{RESET} confirm, {GRAY}Space{RESET} cancel: "
-                )
-                buf.append(prompt + "\033[K")
-                buf.append("\033[J")  # Clear remaining old lines below
-
-                sys.stdout.write("".join(buf))
-                sys.stdout.flush()
-
-                # Capture key using standardized navigator with persistent raw mode
-                ch = Navigator.get_key(fd)
-
-                if ch in Navigator.ENTER:
-                    confirmed = True
-                    preview_done = True
-                elif ch == Navigator.SPACE:
-                    preview_done = True
-                elif ch == Navigator.ESC and len(ch) == 1:
-                    # Explicit ESC: Cancel and go back to list
-                    preview_done = True
-                else:
-                    # MOUSE_EVENT, Arrows, or other keys: Stay on preview screen
-                    continue
+        confirmed = UninstallPreviewSelector(all_targets).run()
 
         if confirmed:
             print()

@@ -351,7 +351,7 @@ def run_update():
     # 2. Fetch latest stable release tag
     try:
         remote_tag = _fetch_latest_release_tag()
-    except Exception as e:
+    except (OSError, subprocess.SubprocessError) as e:
         print(f" {RED}❌ Failed to check latest release: {e}{RESET}")
         return
 

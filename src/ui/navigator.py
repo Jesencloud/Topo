@@ -433,6 +433,8 @@ class Navigator:
             if ("M" in ch or "m" in ch) and (ch.startswith("\x1b[M") or ch.startswith("\x1b[<")):
                 return "MOUSE_EVENT"
         except Exception:
+            # Terminal escape/mouse sequences can arrive fragmented; ignore bad reads
+            # so the TUI keeps control of cursor/raw-mode cleanup.
             return ""
         return ch
 
@@ -544,7 +546,7 @@ class Navigator:
         else:
             try:
                 subprocess.Popen(player, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            except Exception:
+            except (OSError, subprocess.SubprocessError):
                 sys.stdout.write("\a")
                 sys.stdout.flush()
 
@@ -561,7 +563,7 @@ class Navigator:
         else:
             try:
                 subprocess.Popen(player, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            except Exception:
+            except (OSError, subprocess.SubprocessError):
                 sys.stdout.write("\a\a")
                 sys.stdout.flush()
 
@@ -876,7 +878,7 @@ class AnalyzeSelector(_PagedSelector):
                         idx = self.current_page * self.page_size + page_offset
                         if idx < total_len:
                             self._toggle_index_selection(idx)
-                    except Exception:
+                    except ValueError:
                         pass
                 elif key in Navigator.ENTER:
                     if total_len == 0:
@@ -1141,7 +1143,7 @@ class UninstallSelector(_PagedSelector):
                         idx = self.current_page * self.page_size + page_offset
                         if idx < total_len:
                             self._toggle_selected_id(idx)
-                    except Exception:
+                    except ValueError:
                         pass
                 elif len(key) == 1 and key.lower() in ("s", "n", "t"):
                     self.sort_key = (
@@ -1177,6 +1179,64 @@ class UninstallSelector(_PagedSelector):
             self.selected_ids.remove(item_id)
         else:
             self.selected_ids.add(item_id)
+
+
+class UninstallPreviewSelector:
+    def __init__(self, targets):
+        self.targets = targets
+        self.app_count = len(targets)
+        self.total_size = sum(int(app.get("size_bytes") or 0) for app, _paths, _running in targets)
+
+    @staticmethod
+    def _path_label(path):
+        try:
+            return f"~/{path.relative_to(Path.home())}"
+        except ValueError:
+            return str(path)
+
+    def render(self):
+        buf = ["\033[H"]
+        buf.append(f"{THEME_TITLE}➔{RESET} {THEME_TITLE}Uninstallation Preview{RESET}\033[K\n")
+        buf.append("\033[K\n")
+
+        for app, app_paths, is_running in self.targets:
+            running_tag = " \033[1;33m[Running]\033[0m" if is_running else ""
+            buf.append(f"  \033[1;32m✓\033[0m {BOLD}{app['name']}{RESET}{running_tag}\033[K\n")
+            for path in app_paths:
+                is_risky = path.parent == Path.home()
+                mark = "\033[1;33m⚠\033[0m" if is_risky else "\033[1;34m✓\033[0m"
+                color = YELLOW if is_risky else GRAY
+                buf.append(f"    {mark} {color}{self._path_label(path)}{RESET}\033[K\n")
+
+        buf.append("\033[K\n")
+        buf.append("\033[K\n")
+        app_text = "application" if self.app_count == 1 else "applications"
+        prompt = (
+            f" Remove {self.app_count} {app_text}, {bytes_to_human(self.total_size)} "
+            f" {GREEN}Enter{RESET} confirm, {GRAY}Space{RESET} cancel: "
+        )
+        focus_line = _frame_line_count(buf)
+        buf.append(prompt + "\033[K")
+        buf.append("\033[J")
+        _render_scrollable_frame(self, buf, focus_line)
+
+    def run(self):
+        with _selector_session(enable_mouse=True) as fd:
+            while True:
+                self.render()
+                key = Navigator.get_key(fd)
+                if _consume_mouse(self, key):
+                    continue
+                _clear_manual_scroll(self)
+
+                if key in Navigator.ENTER:
+                    return True
+                if key == Navigator.SPACE:
+                    return False
+                if key == Navigator.ESC and len(key) == 1:
+                    return False
+                if key == "MOUSE_EVENT":
+                    continue
 
 
 class TopFilesSelector:

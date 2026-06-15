@@ -4,7 +4,6 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from ..core.analyze import ScanCache
 from ..core.config import get_purge_paths
 from ..core.constants import (
     MONOREPO_INDICATORS,
@@ -14,6 +13,7 @@ from ..core.constants import (
     THEME_TITLE,
 )
 from ..core.file_ops import bytes_to_human, get_size_fast, safe_remove
+from ..core.scan_cache import ScanCache
 from ..ui.navigator import Navigator, PaginatedSelector
 
 
@@ -177,7 +177,7 @@ def run_purge(dry_run=False):
                             print("✅ Removed path.")
                         else:
                             print("❌ Invalid index.")
-                    except Exception:
+                    except ValueError:
                         print("❌ Invalid input.")
                     input("\nPress Enter...")
                 elif c == "b":

@@ -9,6 +9,8 @@ from .browser_cache import (
 from .install_source import get_install_root
 from .paths import get_config_dir
 
+PATH_RESOLVE_ERRORS = (OSError, RuntimeError)
+
 
 def get_whitelist_file() -> Path:
     return get_config_dir() / "whitelist.json"
@@ -210,7 +212,7 @@ def get_whitelist():
     try:
         with open(get_whitelist_file()) as f:
             data = json.load(f)
-    except Exception:
+    except (OSError, json.JSONDecodeError):
         return []
     if not isinstance(data, list):
         return []
@@ -247,7 +249,7 @@ def _resolve_path(path) -> Path:
 
     try:
         return path.expanduser().resolve()
-    except Exception:
+    except PATH_RESOLVE_ERRORS:
         return path.absolute()
 
 
@@ -263,7 +265,7 @@ def _is_critical_system_path(path: Path) -> bool:
     for prefix in CRITICAL_PREFIX_PATHS:
         try:
             prefix_res = prefix.resolve()
-        except Exception:
+        except PATH_RESOLVE_ERRORS:
             prefix_res = prefix.absolute()
 
         if (path == prefix_res or prefix_res in path.parents) and not _is_system_carve_out(path):
@@ -282,7 +284,7 @@ def get_hard_protection_reason(path) -> str | None:
         home = Path.home().resolve()
         if path == home:
             return "home directory"
-    except Exception:
+    except PATH_RESOLVE_ERRORS:
         home = Path.home()
 
     # Protect standard XDG user-data directories themselves (exact match) from
@@ -291,7 +293,7 @@ def get_hard_protection_reason(path) -> str | None:
     for rel in LINUX_USER_DATA_DIRS:
         try:
             user_dir = (home / rel).resolve()
-        except OSError:
+        except PATH_RESOLVE_ERRORS:
             user_dir = (home / rel).absolute()
         if path == user_dir:
             return "user data directory"
@@ -300,7 +302,7 @@ def get_hard_protection_reason(path) -> str | None:
     for protected in protected_home_paths:
         try:
             prot_path = protected.expanduser().resolve()
-        except OSError:
+        except PATH_RESOLVE_ERRORS:
             prot_path = protected.expanduser().absolute()
         if path == prot_path or prot_path in path.parents:
             return "credential or identity data"
@@ -313,7 +315,7 @@ def get_hard_protection_reason(path) -> str | None:
         topo_root = get_install_root().resolve()
         if path == topo_root or topo_root in path.parents:
             return "Topo installation"
-    except Exception:
+    except PATH_RESOLVE_ERRORS:
         pass
 
     for prot_str in get_whitelist():
@@ -321,7 +323,7 @@ def get_hard_protection_reason(path) -> str | None:
             prot_path = Path(prot_str).expanduser().resolve()
             if path == prot_path or prot_path in path.parents:
                 return "user whitelist"
-        except Exception:
+        except PATH_RESOLVE_ERRORS:
             continue
 
     return None
@@ -367,7 +369,7 @@ def is_sensitive_linux_app_data(path: Path) -> bool:
     """Protect Linux user data that should not be removed as app cache/residue."""
     try:
         home = Path.home().resolve()
-    except Exception:
+    except PATH_RESOLVE_ERRORS:
         home = Path.home()
 
     # Only protect paths within the home directory
@@ -380,7 +382,7 @@ def is_sensitive_linux_app_data(path: Path) -> bool:
     for protected in protected_paths:
         try:
             prot_path = protected.expanduser().resolve()
-        except OSError:
+        except PATH_RESOLVE_ERRORS:
             prot_path = protected.expanduser().absolute()
         if path == prot_path or prot_path in path.parents:
             return True

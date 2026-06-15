@@ -18,6 +18,7 @@ from .file_ops import (
     validate_path_for_deletion,
 )
 from .heavy_cache import get_analyze_cache_defs
+from .scan_cache import ScanCache
 from .system import run_command
 
 SCAN_SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
@@ -28,25 +29,6 @@ SCAN_SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "
 SCAN_SPINNER_DELAY = 0.15
 ANALYZE_RESULT_LIMIT = 50
 FAST_EXPLORE_ENTRY_LIMIT = 500
-
-
-# --- Internal Cache System ---
-class ScanCache:
-    """Memory-only cache for rust-engine scan results to make back navigation instant."""
-
-    _data: dict[str, Any] = {}
-
-    @classmethod
-    def get(cls, path: Path) -> dict[str, Any] | None:
-        return cls._data.get(str(path))
-
-    @classmethod
-    def set(cls, path: Path, data: dict[str, Any]):
-        cls._data[str(path)] = data
-
-    @classmethod
-    def clear(cls):
-        cls._data = {}
 
 
 def _get_core_binary() -> Path | None:
@@ -658,7 +640,7 @@ def run_deep_analysis(target_path: Path | None = None):
             else:
                 break
         elif action == "REFRESH":
-            ScanCache._data.pop(str(target_to_scan), None)
+            ScanCache.discard(target_to_scan)
             needs_scan = True
             scan_reason = "refresh"
         elif action == "OPEN":

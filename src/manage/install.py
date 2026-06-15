@@ -84,7 +84,7 @@ def run_install_link(silent=False):
                             f.write(f"\n# Added by topo\n{export_line}\n")
                         print(f"  {GREEN}✓{RESET} Added to {GRAY}{config.name}{RESET}")
                         added = True
-                except Exception:
+                except OSError:
                     pass
 
         if added:

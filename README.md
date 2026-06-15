@@ -51,7 +51,7 @@ Replace `xxx` with the version from the release you downloaded. Use `topo_xxx_ar
 
 ```bash
  ⠶⣶⠶  ⢰⠶⡆ ⢰⠶⡆ ⢰⠶⡆
-  ⠿   ⠸⠤⠇ ⢸⠉⠁ ⠸⠤⠇   ● v0.9.6 is digging deeper 🦡
+  ⠿   ⠸⠤⠇ ⢸⠉⠁ ⠸⠤⠇   ● vx.x.x is digging deeper 🦡
   
  Main Menu
 
@@ -78,6 +78,7 @@ commands:
     optimize   Run system maintenance (fstrim, databases, etc.)
     purge      Interactive project artifact purging
     status     Monitor system health and resource usage
+    doctor     Run a comprehensive diagnostic check of the Topo environment
     history    Show recent deletion history
     all        Run all cleanup and purge tasks sequentially
     authorize  Setup passwordless sudo for faster cleanup

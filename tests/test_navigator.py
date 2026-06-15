@@ -19,6 +19,7 @@ from src.ui.navigator import (
     MouseEvent,
     Navigator,
     PaginatedSelector,
+    UninstallPreviewSelector,
     UninstallSelector,
 )
 
@@ -427,6 +428,45 @@ def test_uninstall_delete_key_does_not_confirm_selected_app():
 
 def test_uninstall_esc_returns_empty():
     assert drive(UninstallSelector("t", _uninstall_items()), [Navigator.ESC]) == []
+
+
+def test_uninstall_preview_enter_confirms_and_renders_targets(test_env):
+    app = {
+        "id": "test",
+        "name": "Test App",
+        "size_bytes": 2048,
+        "size_str": "2.0 KiB",
+        "install_time": 0,
+    }
+    targets = [(app, [test_env / ".test-app", Path("/opt/test-app")], True)]
+    selector = UninstallPreviewSelector(targets)
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch(
+            "src.ui.navigator.shutil.get_terminal_size",
+            return_value=os.terminal_size((100, 30)),
+        ),
+    ):
+        result, writes = drive_with_writes(selector, ["\r"])
+
+    output = "".join(call.args[0] for call in writes)
+    visible_output = ANSI_CSI_RE.sub("", output)
+    assert result is True
+    assert "Uninstallation Preview" in visible_output
+    assert "Test App" in visible_output
+    assert "[Running]" in visible_output
+    assert "~/.test-app" in visible_output
+    assert "/opt/test-app" in visible_output
+    assert "Remove 1 application, 2.0 KiB" in visible_output
+
+
+def test_uninstall_preview_space_cancels(test_env):
+    app = {"name": "Test App", "size_bytes": 2048}
+    selector = UninstallPreviewSelector([(app, [], False)])
+
+    with patch("pathlib.Path.home", return_value=test_env):
+        assert drive(selector, [Navigator.SPACE]) is False
 
 
 # --- PaginatedSelector ---
