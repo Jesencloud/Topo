@@ -239,10 +239,26 @@ else
     ./topo link
 fi
 
+# OOTB PATH Fix: Offer immediate access via /usr/local/bin if not in PATH
+if [ "$MINIMAL" = false ] && ! command -v topo >/dev/null 2>&1; then
+    # Use /dev/tty to allow reading input even when piped from curl
+    if [ -c /dev/tty ]; then
+        echo -e "\n  ${YELLOW}⚠ 'topo' is not yet in your PATH.${NC}"
+        echo -e "  ${CYAN}Would you like to link it to ${BOLD}/usr/local/bin${NC}${CYAN} for immediate access? (requires sudo)${NC}"
+        printf "  %b[y/N]%b " "${BOLD}" "${NC}"
+        read -r choice < /dev/tty || choice="n"
+        if [[ "$choice" =~ ^[Yy]$ ]]; then
+            if sudo ln -sf "${INSTALL_DIR}/topo" /usr/local/bin/topo; then
+                echo -e "  ${GREEN}✓ Linked system-wide. You can now run 'topo' immediately!${NC}"
+            fi
+        fi
+    fi
+fi
+
 if ! command -v topo >/dev/null 2>&1; then
-    echo -e "  ${YELLOW}⚠ Warning: 'topo' is not available in PATH yet.${NC}"
+    echo -e "  ${YELLOW}⚠ Warning: 'topo' is still not available in PATH.${NC}"
     echo -e "  ${GRAY}You can run it directly with:${NC} ${BOLD}${INSTALL_DIR}/topo${NC}"
-    echo -e "  ${GRAY}Or create a link manually, for example:${NC} ${BOLD}sudo ln -sf ${INSTALL_DIR}/topo /usr/local/bin/topo${NC}"
+    echo -e "  ${GRAY}Or manually link it: ${NC}${BOLD}sudo ln -sf ${INSTALL_DIR}/topo /usr/local/bin/topo${NC}"
 fi
 
 # 6. Display final banner and version
