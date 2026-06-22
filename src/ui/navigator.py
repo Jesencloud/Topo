@@ -796,7 +796,7 @@ class AnalyzeSelector(_PagedSelector):
 
         if self.can_select:
             prompts = [
-                f" {page_info} ↑↓←→ | PgUp/PgDn:Page | A:All | F:Open Folder | R:Reload | S:Sort {order_icon} | Space:Select"
+                f" {page_info} ↑↓←→ | PgUp/PgDn: Page | A:All | F:Open Folder | R:Reload | S:Sort {order_icon} | Space:Select"
             ]
         else:
             prompts = [f" {page_info} ↑↓→ | F:Open Folder | R:Reload | S:Sort {order_icon}"]
@@ -1060,18 +1060,22 @@ class UninstallSelector(_PagedSelector):
                 is_selected = item["id"] in self.selected_ids
                 num = (i - start) + 1
                 num_key = f" {num}" if num < 10 else str(num)
-                cursor = "\033[1;36m▶\033[0m" if is_hover else " "
+                cursor = f"{PURPLE}▶{RESET}" if is_hover else " "
                 checkbox = (
                     f"\033[1;32m✓ {num_key}.\033[0m"
                     if is_selected
                     else f"{GRAY}○{RESET} {num_key}."
                 )
-                name_style = "\033[1;35m" if is_selected else "\033[1;36m" if is_hover else ""
+                name_style = PURPLE if is_hover else "\033[1;35m" if is_selected else ""
+                time_style = PURPLE if is_hover else ""
                 name_padded = pad_and_truncate(item["name"], 35)
+                install_time = self._format_time_ago(item["install_time"])
                 if is_hover:
                     focus_line = _frame_line_count(buf)
                 buf.append(
-                    f"{cursor} {checkbox} {name_style}{name_padded}{RESET}  {name_style}{item['size_str']:>12}{RESET} | {self._format_time_ago(item['install_time'])}\033[K\n"
+                    f"{cursor} {checkbox} {name_style}{name_padded}{RESET}  "
+                    f"{name_style}{item['size_str']:>12}{RESET} | "
+                    f"{time_style}{install_time}{RESET}\033[K\n"
                 )
             sort_dir = "↓" if self.sort_reverse else "↑"
             sort_labels = {
@@ -1085,7 +1089,7 @@ class UninstallSelector(_PagedSelector):
             )
             buf.append(
                 f"\n Page {self.current_page + 1}/{total_pages} | "
-                f"{GRAY}↑↓←→ | PgUp/PgDn:Page | A: All | {sort_hint} | Space: Select{RESET}\033[K\n"
+                f"{GRAY}↑↓←→ | PgUp/PgDn: Page | A: All | {sort_hint} | Space: Select{RESET}\033[K\n"
             )
 
         if self.selected_ids:

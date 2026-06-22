@@ -161,7 +161,7 @@ Select apps to remove and Topo will find all associated residues.
   ○  7. clash-verge                             235.8 MiB | 6d ago
   ○  8. glibc-all-langpacks                     227.2 MiB | 20d ago
 
- Page 1/4 | ↑↓←→ | PgUp/PgDn:Page | A: All | N: Name | S: Size ↓ | T: Time | Space: Select
+ Page 1/4 | ↑↓←→ | PgUp/PgDn: Page | A: All | N: Name | S: Size ↓ | T: Time | Space: Select
 
  ☉ Selected Apps to Remove: Press Enter to Uninstall, ESC to Exit
    • brave-browser                         • Thunderbird           
@@ -203,7 +203,7 @@ Select a location to explore (Type numbers or Space to select):
   ○  8. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    1.1%  🗂️ clp                            |    2.0 MiB
 
 
-  Page 1/3 | ↑↓←→ | PgUp/PgDn:Page | A:All | F:Open Folder | R:Reload | S:Sort ↓ | Space:Select
+  Page 1/3 | ↑↓←→ | PgUp/PgDn: Page | A:All | F:Open Folder | R:Reload | S:Sort ↓ | Space:Select
 
  ☉ Selected Items to Remove: Enter:Delete
    • 🗂️ Cache                                 • 🗂️ logs
