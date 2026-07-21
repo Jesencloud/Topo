@@ -309,7 +309,7 @@ def get_top_processes():
         res = run_command(cmd, capture=True, timeout=10)
         if res.ok:
             lines = res.stdout.strip().split("\n")
-            agg_mem = {}
+            agg_mem: dict[str, int] = {}
             for line in lines:
                 parts = line.split()
                 if len(parts) >= 2:

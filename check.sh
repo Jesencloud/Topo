@@ -7,6 +7,7 @@ GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
+GRAY='\033[0;90m'
 NC='\033[0m' # No Color
 
 AUTO_FIX=0
@@ -30,7 +31,7 @@ if [ $AUTO_FIX -eq 1 ]; then
 else
     ruff check src tests
 fi
-mypy src/
+mypy --check-untyped-defs src/
 echo -e "${GREEN}✓ Python linting complete.${NC}\n"
 
 echo -e "${YELLOW}🦀 3. Running Rust Clippy...${NC}"

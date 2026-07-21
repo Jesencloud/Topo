@@ -1,14 +1,10 @@
 import contextlib
 import os
-import select
 import shlex
 import shutil
 import sqlite3
-import sys
-import termios
 import threading
 import time
-import tty
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -56,29 +52,7 @@ def opt_log(message, success=True, skipped=False):
         print(f"  {icon} {msg}")
 
 
-def _read_sudo_choice() -> str:
-    if not sys.stdin.isatty():
-        return "\n"
-
-    fd = sys.stdin.fileno()
-    old_settings = termios.tcgetattr(fd)
-    terminal_state.remember_raw_state(fd, old_settings)
-    try:
-        tty.setraw(fd)
-        while True:
-            choice = sys.stdin.read(1)
-            if choice in ("\r", "\n", " "):
-                return choice
-            if choice == "\x1b":
-                # Arrow/function keys start with ESC. Treat only a lone ESC as cancel.
-                ready, _, _ = select.select([sys.stdin], [], [], 0.05)
-                if not ready:
-                    return choice
-                while ready:
-                    sys.stdin.read(1)
-                    ready, _, _ = select.select([sys.stdin], [], [], 0)
-    finally:
-        terminal_state.restore_raw_state(fd, old_settings)
+_read_sudo_choice = terminal_state.read_sudo_choice
 
 
 def _is_any_process_running(process_names: list[str]) -> bool:

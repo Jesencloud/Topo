@@ -61,7 +61,8 @@ class Scanner:
         """Finds heavy artifacts within a discovered project root."""
         artifacts: list[Path] = []
         try:
-            entries = list(os.scandir(project_path))
+            with os.scandir(project_path) as it:
+                entries = list(it)
         except OSError:
             return artifacts
         # "bin" is a build-output directory only for .NET projects; without this

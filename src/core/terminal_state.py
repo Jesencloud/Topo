@@ -1,7 +1,9 @@
 import atexit
+import select
 import signal
 import sys
 import termios
+import tty
 from types import FrameType
 from typing import Any
 
@@ -117,6 +119,36 @@ def install_signal_handlers() -> None:
         _previous_handlers[signum] = signal.getsignal(signum)
         signal.signal(signum, _handle_signal)
     _installed = True
+
+
+def read_sudo_choice() -> str:
+    """Read a single-key sudo confirmation from the terminal.
+
+    Returns the key character: Enter/Space for accept, ESC for cancel.
+    Shared helper extracted from runner.py and optimize.py.
+    """
+    if not sys.stdin.isatty():
+        return "\n"
+
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    remember_raw_state(fd, old_settings)
+    try:
+        tty.setraw(fd)
+        while True:
+            choice = sys.stdin.read(1)
+            if choice in ("\r", "\n", " "):
+                return choice
+            if choice == "\x1b":
+                # Arrow/function keys start with ESC. Treat only a lone ESC as cancel.
+                ready, _, _ = select.select([sys.stdin], [], [], 0.05)
+                if not ready:
+                    return choice
+                while ready:
+                    sys.stdin.read(1)
+                    ready, _, _ = select.select([sys.stdin], [], [], 0)
+    finally:
+        restore_raw_state(fd, old_settings)
 
 
 def _handle_signal(signum: int, frame: FrameType | None) -> None:

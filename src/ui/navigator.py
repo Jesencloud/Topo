@@ -349,6 +349,7 @@ class Navigator:
     MOUSE_ENABLE = terminal_state.MOUSE_ENABLE
     _last_size = None
     is_muted = False
+    _sound_configs: dict[str, str | list[str]] = {}
 
     @staticmethod
     @contextmanager
@@ -387,7 +388,7 @@ class Navigator:
                 try:
                     r, _, _ = select.select([fd], [], [], 0.05)
                 except (InterruptedError, OSError):
-                    r = False
+                    r = []
 
                 # Detect terminal resize
                 new_size = shutil.get_terminal_size()
@@ -499,9 +500,6 @@ class Navigator:
     @staticmethod
     def _get_sound_player(sound_name):
         """Resolves the player and path for a named sound (e.g. 'click', 'delete')."""
-        if not hasattr(Navigator, "_sound_configs"):
-            Navigator._sound_configs = {}
-
         if sound_name not in Navigator._sound_configs:
             from ..core.paths import get_config_dir
 
@@ -518,7 +516,7 @@ class Navigator:
             elif bundled_sound.exists():
                 target_sound = bundled_sound
 
-            player = None
+            player: str | list[str] | None = None
             if target_sound:
                 if shutil.which("pw-play"):
                     player = ["pw-play", str(target_sound)]
@@ -597,6 +595,12 @@ class _PagedSelector:
     """
 
     page_size = 15
+
+    # Attribute declarations for mypy: concrete subclasses must define these.
+    items: list
+    selected_index: int
+    current_page: int
+    selected_items: set[int]
 
     def _total_pages(self):
         return max(1, (len(self.items) + self.page_size - 1) // self.page_size)

@@ -1,5 +1,6 @@
 import json
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 
 from ..core.app_cache import (
@@ -392,13 +393,14 @@ def clean_apps_deep(dry_run=False, detected_apps=None):
             total_items += i
             total_categories += 1
 
-    for func in [
+    cleanup_funcs: list[Callable[..., tuple[int, int]]] = [
         clean_flatpak_unused,
         clean_snap_cache,
         clean_generic_xdg_caches,
         clean_orphaned_remnants,
-    ]:
-        s, i = func(dry_run=dry_run)[:2]
+    ]
+    for func in cleanup_funcs:
+        s, i = func(dry_run=dry_run)
         if i > 0:
             total_size += s
             total_items += i

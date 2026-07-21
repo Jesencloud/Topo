@@ -3,6 +3,7 @@ from unittest.mock import patch
 import pytest
 
 from src.clean import optimize, runner
+from src.core import terminal_state
 
 
 class FakeStdin:
@@ -25,10 +26,10 @@ def test_sudo_choice_ignores_unrecognized_keys(module):
     stdin = FakeStdin(["x", "1", "\r"])
 
     with (
-        patch.object(module.sys, "stdin", stdin),
-        patch.object(module.termios, "tcgetattr", return_value=[]),
-        patch.object(module.termios, "tcsetattr"),
-        patch.object(module.tty, "setraw"),
+        patch.object(terminal_state.sys, "stdin", stdin),
+        patch.object(terminal_state.termios, "tcgetattr", return_value=[]),
+        patch.object(terminal_state.termios, "tcsetattr"),
+        patch.object(terminal_state.tty, "setraw"),
     ):
         assert module._read_sudo_choice() == "\r"
 
@@ -38,12 +39,12 @@ def test_sudo_choice_ignores_escape_sequences(module):
     stdin = FakeStdin(["\x1b", "[", "A", " "])
 
     with (
-        patch.object(module.sys, "stdin", stdin),
-        patch.object(module.termios, "tcgetattr", return_value=[]),
-        patch.object(module.termios, "tcsetattr"),
-        patch.object(module.tty, "setraw"),
+        patch.object(terminal_state.sys, "stdin", stdin),
+        patch.object(terminal_state.termios, "tcgetattr", return_value=[]),
+        patch.object(terminal_state.termios, "tcsetattr"),
+        patch.object(terminal_state.tty, "setraw"),
         patch.object(
-            module.select,
+            terminal_state.select,
             "select",
             side_effect=[
                 ([stdin], [], []),

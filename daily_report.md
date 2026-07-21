@@ -1,3 +1,45 @@
+# Daily Modification Report - 2026-07-21
+
+## Project: topo (Topo) - 代码审查与类型安全修复
+
+本次工作对整个项目进行了全面的代码审查（涵盖 Python、Shell、Rust），修复了代码重复、mypy 类型错误、资源泄漏风险和误导性 UI 等问题。修复后 `mypy --check-untyped-defs` 从 25 处错误降为 0，所有 321 项测试保持通过。
+
+### 1. 消除重复代码：`_read_sudo_choice()` 抽离
+*   **提取共享函数**: 将 `runner.py` 和 `optimize.py` 中完全相同的 `_read_sudo_choice()` 函数（终端单键读取逻辑）提取到 `src/core/terminal_state.py` 中，命名为 `read_sudo_choice()`。
+*   **清理冗余导入**: 两个模块中不再需要的 `sys`、`select`、`termios`、`tty` 导入已移除。
+*   **测试同步更新**: `tests/test_sudo_choice.py` 的 mock patch 目标从各模块改为 `terminal_state` 模块，确保测试覆盖正确的代码路径。
+
+### 2. 修复 mypy 类型错误（25 → 0）
+*   **`navigator.py`**: 声明类变量 `_sound_configs: dict[str, str | list[str]] = {}`，修复动态属性绑定导致的 `attr-defined` 错误；将 `r = False` 改为 `r = []` 修复 `bool`/`list` 混合赋值；为 `player` 变量添加 `str | list[str] | None` 联合类型注解；删除冗余的 `hasattr` 检查。
+*   **`navigator.py (_PagedSelector)`**: 为 mixin 基类添加 `items`、`selected_index`、`current_page`、`selected_items` 属性声明，修复子类引用未声明属性的 `attr-defined` 错误。
+*   **`remove.py`**: 引入 `TypedDict` `_RemoveItem` 为 `to_remove` 列表提供精确类型信息，修复 `item["path"]` 推导为 `object` 引发的 5 处类型错误；同时修复了 `tty.setraw(sys.stdin.fileno())` 重复获取 fd 的问题。
+*   **`status.py`**: 为 `agg_mem` 添加 `dict[str, int]` 类型注解，修复空字典推导错误。
+*   **`apps.py`**: 移除对 2 元组返回值的冗余 `[:2]` 切片；添加 `Callable[..., tuple[int, int]]` 显式注解修复异构函数列表的类型推断错误。
+
+### 3. 资源泄漏修复
+*   **`project.py`**: 将 `os.scandir()` 改为 `with os.scandir() as it:` 上下文管理器方式，防止大规模项目扫描时目录迭代器文件描述符泄漏。
+
+### 4. 误导性 UI 修复
+*   **`remove.py`**: 添加 `had_errors` 标记追踪删除操作是否有失败，结尾 Banner 从固定显示 "topo has been removed" 改为根据实际结果显示成功或带错误提示的消息。
+
+### 5. CI 检查增强
+*   **`check.sh`**: 补充遗漏的 `GRAY` 颜色变量定义（之前使用了未定义的 `$GRAY`）；将 `mypy src/` 升级为 `mypy --check-untyped-defs src/`，在提交前即可拦截无类型注解函数体内的类型错误。
+
+### 修改文件列表
+| 文件 | 变更类型 |
+|------|----------|
+| `src/core/terminal_state.py` | 新增 `read_sudo_choice()` 共享函数 |
+| `src/clean/runner.py` | 删除重复函数，改为引用 terminal_state |
+| `src/clean/optimize.py` | 删除重复函数，改为引用 terminal_state |
+| `src/ui/navigator.py` | 修复 5 处 mypy 类型错误 |
+| `src/manage/remove.py` | TypedDict 类型修复 + 误导 Banner 修复 |
+| `src/core/status.py` | 添加 dict 类型注解 |
+| `src/clean/apps.py` | Callable 注解 + 移除冗余切片 |
+| `src/clean/project.py` | os.scandir 上下文管理器修复 |
+| `check.sh` | GRAY 变量定义 + mypy 严格模式 |
+| `tests/test_sudo_choice.py` | 更新 patch 目标适配重构 |
+
+
 # Daily Modification Report - 2026-06-15
 
 ## Project: topo (Topo) - Code Structure Cleanup and Exception Hardening

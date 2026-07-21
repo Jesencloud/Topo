@@ -1,9 +1,5 @@
 import os
-import select
 import shutil
-import sys
-import termios
-import tty
 from functools import partial
 
 from ..core import system, terminal_state
@@ -29,30 +25,7 @@ from .system import (
 )
 from .user import clean_user_data
 
-
-def _read_sudo_choice() -> str:
-    if not sys.stdin.isatty():
-        return "\n"
-
-    fd = sys.stdin.fileno()
-    old_settings = termios.tcgetattr(fd)
-    terminal_state.remember_raw_state(fd, old_settings)
-    try:
-        tty.setraw(fd)
-        while True:
-            choice = sys.stdin.read(1)
-            if choice in ("\r", "\n", " "):
-                return choice
-            if choice == "\x1b":
-                # Arrow/function keys start with ESC. Treat only a lone ESC as cancel.
-                ready, _, _ = select.select([sys.stdin], [], [], 0.05)
-                if not ready:
-                    return choice
-                while ready:
-                    sys.stdin.read(1)
-                    ready, _, _ = select.select([sys.stdin], [], [], 0)
-    finally:
-        terminal_state.restore_raw_state(fd, old_settings)
+_read_sudo_choice = terminal_state.read_sudo_choice
 
 
 def run_clean(dry_run=False):

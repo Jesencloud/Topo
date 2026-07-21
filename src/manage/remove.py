@@ -3,6 +3,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import TypedDict
 
 from ..core import terminal_state
 from ..core.constants import BLUE, BOLD, GRAY, GREEN, MAGENTA, RED, RESET
@@ -162,8 +163,14 @@ def run_remove(dry_run=False):
 
     print(f"\n {MAGENTA}☉ Removing topo from your system...{RESET}\n")
 
+    class _RemoveItem(TypedDict, total=False):
+        path: Path
+        desc: str
+        type: str
+        size: int
+
     # 1. Identify files to remove
-    to_remove = []
+    to_remove: list[_RemoveItem] = []
 
     # The launcher link
     internal_dir = Path.home() / ".topo"
@@ -204,12 +211,12 @@ def run_remove(dry_run=False):
     # Calculate total size and prepare detailed list
     for item in to_remove:
         item["size"] = get_size_fast(item["path"])
-    total_size = sum(item["size"] for item in to_remove)
+    total_size: int = sum(item["size"] for item in to_remove)
 
     # 2. Preview
     print(f" {BOLD}The following items will be removed:{RESET}")
     for item in to_remove:
-        size_str = bytes_to_human(item["size"])
+        size_str = bytes_to_human(int(item["size"]))
         print(
             f"  {GREEN}✓{RESET} {str(item['path']).replace(str(Path.home()), '~'):<40} {GRAY}({item['desc']}, {size_str}){RESET}"
         )
@@ -234,7 +241,7 @@ def run_remove(dry_run=False):
     old_settings = termios.tcgetattr(fd)
     terminal_state.remember_raw_state(fd, old_settings)
     try:
-        tty.setraw(sys.stdin.fileno())
+        tty.setraw(fd)
         ch = sys.stdin.read(1)
     finally:
         terminal_state.restore_raw_state(fd, old_settings)
@@ -245,8 +252,9 @@ def run_remove(dry_run=False):
 
     # 4. Execution
     print("\n")
+    had_errors = False
     for item in to_remove:
-        p = item["path"]
+        p: Path = item["path"]
         try:
             if item["type"] == "dir":
                 shutil.rmtree(p)
@@ -254,11 +262,15 @@ def run_remove(dry_run=False):
                 p.unlink()
             print(f"  {GREEN}✓{RESET} Removed {item['desc']}")
         except OSError as e:
+            had_errors = True
             print(f"  {RED}✗{RESET} Failed to remove {p}: {e}")
 
     if _strip_topo_path_lines():
         print(f"  {GREEN}✓{RESET} Removed PATH entry from shell config")
 
     print("\n" + "=" * 70)
-    print(f" {BLUE}topo has been removed from your system.{RESET}")
+    if had_errors:
+        print(f" {BLUE}topo removal completed with errors (see above).{RESET}")
+    else:
+        print(f" {BLUE}topo has been removed from your system.{RESET}")
     print("=" * 70 + "\n")
