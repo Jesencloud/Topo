@@ -1,7 +1,7 @@
 import shutil
 from pathlib import Path
 
-from ..core.constants import DEV_CACHES
+from ..core.constants import DEV_CACHES, OK
 from ..core.file_ops import (
     bytes_to_human,
     clean_path_by_age,
@@ -24,7 +24,7 @@ def clean_tool_cache(description, command_args, cache_path=None, dry_run=False):
     if dry_run:
         if total_size > 0 or not cache_path:
             print(
-                f"  \033[0;32m✓\033[0m {description} ({bytes_to_human(total_size)}) would be cleaned"
+                f"  {OK} {description} ({bytes_to_human(total_size)}) would be cleaned"
             )
             return total_size, 1
         return 0, 0
@@ -39,7 +39,7 @@ def clean_tool_cache(description, command_args, cache_path=None, dry_run=False):
             if cache_path and not cache_gone:
                 after = get_size_fast(Path(cache_path).expanduser())
                 freed = max(0, total_size - after)
-            print(f"  \033[0;32m✓\033[0m {description} ({bytes_to_human(freed)}) cleaned")
+            print(f"  {OK} {description} ({bytes_to_human(freed)}) cleaned")
             return freed, 1
     return 0, 0
 
@@ -48,7 +48,7 @@ def clean_docker(dry_run=False):
     """Clean unused Docker data."""
     if shutil.which("docker"):
         if dry_run:
-            print("  \033[0;32m✓\033[0m Docker (unused images/volumes) would be pruned")
+            print(f"  {OK} Docker (unused images/volumes) would be pruned")
             return 0, 1
         use_sudo = True
         if run_command(["docker", "info"], capture=True, timeout=10).ok:
@@ -57,7 +57,7 @@ def clean_docker(dry_run=False):
             ["docker", "system", "prune", "-f", "--volumes"], use_sudo=use_sudo, capture=True
         )
         if res and res.returncode == 0:
-            print("  \033[0;32m✓\033[0m Docker system pruned")
+            print(f"  {OK} Docker system pruned")
             return 0, 1
     return 0, 0
 
@@ -68,12 +68,12 @@ def clean_podman(dry_run=False):
     items = 0
     if shutil.which("podman"):
         if dry_run:
-            print("  \033[0;32m✓\033[0m Podman (unused images/volumes) would be pruned")
+            print(f"  {OK} Podman (unused images/volumes) would be pruned")
             items += 1
         else:
             res = run_command(["podman", "system", "prune", "-f"], capture=True)
             if res and res.returncode == 0:
-                print("  \033[0;32m✓\033[0m Podman system pruned")
+                print(f"  {OK} Podman system pruned")
                 items += 1
 
         # Clean storage cache
@@ -84,7 +84,7 @@ def clean_podman(dry_run=False):
             total_size += s
             items += i
             if i > 0 and not dry_run:
-                print(f"  \033[0;32m✓\033[0m Podman transfer cache ({bytes_to_human(s)}) cleaned")
+                print(f"  {OK} Podman transfer cache ({bytes_to_human(s)}) cleaned")
     return total_size, items
 
 
@@ -92,11 +92,11 @@ def clean_multipass(dry_run=False):
     """Purges deleted Multipass instances."""
     if shutil.which("multipass"):
         if dry_run:
-            print("  \033[0;32m✓\033[0m Multipass deleted instances would be purged")
+            print(f"  {OK} Multipass deleted instances would be purged")
             return 0, 1
         res = run_command(["multipass", "purge"], capture=True)
         if res and res.returncode == 0:
-            print("  \033[0;32m✓\033[0m Multipass purged")
+            print(f"  {OK} Multipass purged")
             return 0, 1
     return 0, 0
 
@@ -114,7 +114,7 @@ def clean_ai_models(dry_run=False):
             total_size += s
             total_items += i
             status = "would be cleaned" if dry_run else "cleaned"
-            print(f"  \033[0;32m✓\033[0m {target.label} ({bytes_to_human(s)}) {status}")
+            print(f"  {OK} {target.label} ({bytes_to_human(s)}) {status}")
     return total_size, total_items
 
 
@@ -148,7 +148,7 @@ def clean_developer_tools(dry_run=False):
             total_items += i
             total_categories += 1
             status = "would be cleaned" if dry_run else "cleaned"
-            print(f"  \033[0;32m✓\033[0m Cargo cache ({bytes_to_human(s)}) {status}")
+            print(f"  {OK} Cargo cache ({bytes_to_human(s)}) {status}")
 
     # 3. AI & Virtualization
     for func in [clean_ai_models, clean_docker, clean_podman, clean_multipass]:

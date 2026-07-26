@@ -1,3 +1,49 @@
+# Daily Modification Report - 2026-07-27
+
+## Project: topo (Topo) - 可维护性与性能优化
+
+本次工作基于代码审查报告，对项目进行了可维护性和性能两个维度的系统性优化，涉及 15 个文件、154 行新增 / 94 行删除。修复后 ruff / mypy / pytest 全部通过（321 项测试）。
+
+### 1. 消除硬编码 ANSI 转义码（M1）
+*   **新增常量**: 在 `src/core/constants.py` 中添加复合状态标记 `OK`、`SKIP`、`FAIL`，非加粗颜色 `GREEN_NB`、`GRAY_NB`，以及终端控制序列 `CLEAR_SCREEN`、`CLEAR_LINE`、`ERASE_BELOW`。
+*   **批量替换**: 将 `apps.py`、`system.py`(clean)、`dev.py`、`user.py`、`runner.py`、`project.py`、`app_manager.py`、`main.py`、`analyze.py` 中共 40+ 处 `\033[0;32m✓\033[0m` 等硬编码转义码替换为命名常量。
+*   **消除局部重定义**: 移除 `src/core/system.py` 中对 `BOLD` / `RESET` 的局部重定义，改为从 `constants` 导入。
+
+### 2. 缓存 `shutil.which()` 调用（P1）
+*   **`file_ops.py`**: 新增 `@functools.cache` 装饰的 `_which_cached()` 函数，`safe_remove` 中对 `gio` 和 `trash-put` 的查找从每次调用遍历 `$PATH` 改为单次缓存。
+*   **`analyze.py`**: 为 `_get_core_binary()` 添加 `@functools.cache`，避免每次目录分析重复 glob 搜索引擎二进制文件。
+
+### 3. 消除重复文件系统操作（P2）
+*   **`project.py`**: 将 `is_project_root()` 和 `_recursive_scan()` 中对同一目录的两次 `os.scandir` 合并为单次扫描，在一次遍历中同时检测项目指示文件和子目录。
+*   **`apps.py`**: 将 `clean_orphaned_remnants` 中对 `item.resolve()` 的两次调用合并为一次，存储在 `resolved_item` 变量中复用。
+
+### 4. 消除 O(N²) 算法（P4）
+*   **`app_cache.py`**: 将 `find_cleanable_cache_dirs` 中在 `for` 循环内调用 `dirnames.remove()` 的 O(N²) 模式重构为 O(N) 的 `keep` 列表构建 + `dirnames[:] = keep` 切片赋值。
+*   **`file_ops.py`**: `clean_path_by_age` 从 `Path.iterdir()` + `item.lstat()` 改为 `os.scandir()` + `entry.stat(follow_symlinks=False)`，利用 DirEntry 的缓存 stat 避免额外系统调用。
+
+### 5. 测试同步更新
+*   **`test_analyze.py`**: 更新 `_render_scan_header` 测试断言以匹配新的 `CLEAR_SCREEN`（`\033[2J\033[H`）序列。
+*   **`test_file_ops.py`**: 更新 `clean_path_by_age` 测试的 mock 目标从 `pathlib.Path.lstat` 改为 `os.DirEntry.stat`，从 `Path.iterdir` 改为 `os.scandir`。
+
+### 修改文件列表
+| 文件 | 变更类型 |
+|------|----------|
+| `src/core/constants.py` | 新增 OK/SKIP/FAIL/CLEAR 等常量 |
+| `src/clean/apps.py` | ANSI 替换 + resolve 缓存 |
+| `src/clean/system.py` | ANSI 替换 |
+| `src/clean/dev.py` | ANSI 替换 |
+| `src/clean/user.py` | ANSI 替换 |
+| `src/clean/runner.py` | ANSI 替换 |
+| `src/clean/project.py` | ANSI 替换 + 双 scandir 合并 |
+| `src/clean/app_manager.py` | ANSI 替换 |
+| `src/main.py` | ANSI 替换 |
+| `src/core/analyze.py` | ANSI 替换 + _get_core_binary 缓存 |
+| `src/core/system.py` | 移除局部 BOLD/RESET 重定义 |
+| `src/core/file_ops.py` | which 缓存 + iterdir→scandir |
+| `src/core/app_cache.py` | O(N²)→O(N) 重构 |
+| `tests/test_analyze.py` | 适配 CLEAR_SCREEN 常量 |
+| `tests/test_file_ops.py` | 适配 os.scandir mock |
+
 # Daily Modification Report - 2026-07-21
 
 ## Project: topo (Topo) - 代码审查与类型安全修复

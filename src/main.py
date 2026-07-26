@@ -8,7 +8,7 @@ from .clean.project import run_purge
 from .clean.runner import run_clean
 from .core import system, terminal_state
 from .core.analyze import run_deep_analysis
-from .core.constants import RESET, THEME_TITLE, TOPO_VERSION
+from .core.constants import BLUE, CLEAR_LINE, CLEAR_SCREEN, RESET, THEME_TITLE, TOPO_VERSION
 from .core.doctor import run_doctor
 from .core.history import show_history
 from .core.status import show_status
@@ -110,7 +110,7 @@ def alternate_screen():
 
 
 def _clear_screen():
-    sys.stdout.write("\033[2J\033[H")
+    sys.stdout.write(CLEAR_SCREEN)
     sys.stdout.flush()
 
 
@@ -119,7 +119,7 @@ def _print_interrupted(clear_screen=False):
     if clear_screen:
         _clear_screen()
     else:
-        sys.stdout.write("\r\033[K")
+        sys.stdout.write(CLEAR_LINE)
         sys.stdout.flush()
     print(INTERRUPTED_MESSAGE)
 
@@ -322,7 +322,7 @@ def _main():
     if args.command not in ("analyze", "uninstall", "purge") and not (
         args.command == "link" and args.silent
     ):
-        print(f"\033[1;34mtopo {TOPO_VERSION} (Python Edition)\033[0m")
+        print(f"{BLUE}topo {TOPO_VERSION} (Python Edition){RESET}")
         os_id = system.get_os_id()
         print(f"System: {os_id}")
 

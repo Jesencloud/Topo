@@ -386,8 +386,8 @@ def test_clean_path_by_age(test_env):
 
     mock_st = os.stat_result((0, 0, 0, 0, 0, 0, 10, old_time, old_time, old_time))
 
-    # We mock the lstat object used to judge entry age
-    with patch("pathlib.Path.lstat", return_value=mock_st):
+    # We mock the DirEntry.stat used to judge entry age
+    with patch("os.DirEntry.stat", return_value=mock_st):
         # Both files look old by atime AND mtime
 
         # Dry run
@@ -401,7 +401,7 @@ def test_clean_path_by_age(test_env):
             assert mock_unlink.call_count == 2
 
     # Test OSError handling
-    with patch("pathlib.Path.iterdir", side_effect=OSError):
+    with patch("os.scandir", side_effect=OSError):
         size, items = clean_path_by_age(cache_dir, days=10)
         assert size == 0
         assert items == 0

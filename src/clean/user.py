@@ -3,6 +3,7 @@ import shutil
 import time
 from pathlib import Path
 
+from ..core.constants import OK
 from ..core.file_ops import bytes_to_human, get_size_fast, safe_remove
 from ..core.system import run_command
 
@@ -21,14 +22,14 @@ def clean_trash(dry_run=False):
                 size = get_size_fast(trash_path)
                 if size > 0:
                     print(
-                        f"  \033[0;32m✓\033[0m User Trash ({bytes_to_human(size)}) would be emptied"
+                        f"  {OK} User Trash ({bytes_to_human(size)}) would be emptied"
                     )
                     return size, 1, 1
             return 0, 0, 0
 
         res = run_command(["gio", "trash", "--empty"], capture=True, timeout=30)
         if res.ok:
-            print("  \033[0;32m✓\033[0m User Trash emptied")
+            print(f"  {OK} User Trash emptied")
             return 0, 1, 1
 
     # 2. Fallback: empty the standard home Trash and this user's /tmp trash.
@@ -45,7 +46,7 @@ def clean_trash(dry_run=False):
         size = get_size_fast(td)
         if dry_run:
             if size > 0:
-                print(f"  \033[0;32m✓\033[0m {td} ({bytes_to_human(size)}) would be cleaned")
+                print(f"  {OK} {td} ({bytes_to_human(size)}) would be cleaned")
                 total_size += size
                 total_items += 1
             continue
@@ -53,7 +54,7 @@ def clean_trash(dry_run=False):
             td.mkdir(parents=True, exist_ok=True)
             total_size += size
             total_items += 1
-            print(f"  \033[0;32m✓\033[0m {td} ({bytes_to_human(size)}) cleaned")
+            print(f"  {OK} {td} ({bytes_to_human(size)}) cleaned")
 
     return total_size, total_items, (1 if total_items > 0 else 0)
 
@@ -97,7 +98,7 @@ def clean_system_temp(dry_run=False, min_age_days=3):
             continue
     if total_items > 0:
         status = "would be cleaned" if dry_run else "cleaned"
-        print(f"  \033[0;32m✓\033[0m Stale temp files ({bytes_to_human(total_size)}) {status}")
+        print(f"  {OK} Stale temp files ({bytes_to_human(total_size)}) {status}")
         return total_size, total_items, 1
     return 0, 0, 0
 

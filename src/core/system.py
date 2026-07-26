@@ -5,6 +5,8 @@ import sys
 from dataclasses import dataclass
 from typing import Any
 
+from .constants import BOLD, CLEAR_LINE, ERASE_BELOW, RESET, YELLOW
+
 # Global flag to track if user explicitly cancelled sudo auth
 SUDO_CANCELLED = False
 DEFAULT_COMMAND_TIMEOUT = 300
@@ -79,9 +81,6 @@ def _decode_output(value: Any) -> str:
     return str(value)
 
 
-# ANSI Colors for Setup Output
-BOLD = "\033[1m"
-RESET = "\033[0m"
 
 
 def has_sudo():
@@ -123,7 +122,7 @@ def ensure_sudo_session(prompt: str | None = None):
 def _clear_interrupted_sudo_prompt(prompt: str | None = None) -> None:
     prompt_lines = prompt.count("\n") + 1 if prompt else 1
     lines_to_rewind = prompt_lines + SUDO_INTERRUPT_EXTRA_CLEAR_LINES
-    clear_sequence = "\r\033[K" + ("\033[1A\r\033[K" * lines_to_rewind) + "\033[J"
+    clear_sequence = CLEAR_LINE + (f"\033[1A{CLEAR_LINE}" * lines_to_rewind) + ERASE_BELOW
     try:
         sys.stdout.write(clear_sequence)
         sys.stdout.flush()
@@ -149,5 +148,5 @@ def setup_passwordless_sudo():
 
     rule = f"{user} ALL=(ALL) NOPASSWD: {script_path}"
     print("To allow topo to run without ever asking for a password, run this command once:")
-    print(f"\n\033[1;33mecho '{rule}' | sudo tee /etc/sudoers.d/topo\033[0m\n")
+    print(f"\n{YELLOW}echo '{rule}' | sudo tee /etc/sudoers.d/topo{RESET}\n")
     print("This will create a safe rule specifically for the topo script.")

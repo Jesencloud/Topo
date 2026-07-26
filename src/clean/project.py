@@ -6,6 +6,7 @@ from typing import Any
 
 from ..core.config import get_purge_paths
 from ..core.constants import (
+    CYAN,
     MONOREPO_INDICATORS,
     PROJECT_INDICATORS,
     PURGE_TARGETS,
@@ -26,9 +27,10 @@ class Scanner:
     def is_project_root(self, path: Path) -> bool:
         """Checks if a directory is a project root based on indicators."""
         try:
-            for entry in os.scandir(path):
-                if entry.name in MONOREPO_INDICATORS or entry.name in PROJECT_INDICATORS:
-                    return True
+            with os.scandir(path) as it:
+                for entry in it:
+                    if entry.name in MONOREPO_INDICATORS or entry.name in PROJECT_INDICATORS:
+                        return True
         except OSError:
             pass
         return False
@@ -46,16 +48,23 @@ class Scanner:
         if depth > max_depth:
             return
 
-        if self.is_project_root(path):
-            yield path
-
         try:
             with os.scandir(path) as it:
-                for entry in it:
-                    if entry.is_dir() and not entry.name.startswith("."):
-                        yield from self._recursive_scan(Path(entry.path), depth + 1, max_depth)
+                entries = list(it)
         except OSError:
-            pass
+            return
+
+        # Check for project indicators in a single pass
+        is_root = any(
+            entry.name in MONOREPO_INDICATORS or entry.name in PROJECT_INDICATORS
+            for entry in entries
+        )
+        if is_root:
+            yield path
+
+        for entry in entries:
+            if entry.is_dir() and not entry.name.startswith("."):
+                yield from self._recursive_scan(Path(entry.path), depth + 1, max_depth)
 
     def scan_artifacts(self, project_path: Path) -> list[Path]:
         """Finds heavy artifacts within a discovered project root."""
@@ -156,7 +165,7 @@ def run_purge(dry_run=False):
 
             while True:
                 os.system("clear")
-                print("\n\033[1;36m⚙️  topo Purge Settings\033[0m")
+                print(f"\n{CYAN}⚙️  topo Purge Settings{RESET}")
                 print()
                 paths = get_purge_paths()
                 print("Current Purge Search Paths:")

@@ -10,7 +10,7 @@ from ..core.app_cache import (
     resolve_cache_path,
 )
 from ..core.browser_cache import BROWSER_CACHE_DEFS, BROWSER_CACHE_ROOT_NAMES
-from ..core.constants import DETECTED_APPS_FILE
+from ..core.constants import DETECTED_APPS_FILE, GRAY, OK, RESET, SKIP
 from ..core.desktop_app_cache import (
     DESKTOP_APP_DETECTION_NAMES,
     get_desktop_app_cleanup_defs,
@@ -94,7 +94,7 @@ def proactive_app_detection():
                 json.dump(detected, f, indent=2)
             if new_found:
                 msg = (
-                    f"  \033[1;90mℹ️  Updated local app registry ({len(detected)} apps known)\033[0m"
+                    f"  {GRAY}ℹ️  Updated local app registry ({len(detected)} apps known){RESET}"
                 )
                 print(msg)
         except OSError:
@@ -105,7 +105,7 @@ def proactive_app_detection():
 def clean_app_generic(name, paths, process_names=None, dry_run=False):
     """Unified cleaner for any app with process safety."""
     if process_names and any(is_app_running(p) for p in process_names):
-        print(f"  \033[0;90m◎\033[0m {name} is running · cleanup skipped")
+        print(f"  {SKIP} {name} is running · cleanup skipped")
         return 0, 0
 
     total_freed = 0
@@ -147,7 +147,7 @@ def clean_app_generic(name, paths, process_names=None, dry_run=False):
 
     if found and (total_freed > 0 or dry_run):
         status = "would be cleaned" if dry_run else "cache cleaned"
-        print(f"  \033[0;32m✓\033[0m {name} ({bytes_to_human(total_freed)}) {status}")
+        print(f"  {OK} {name} ({bytes_to_human(total_freed)}) {status}")
         return total_freed, items_cleaned
     return 0, 0
 
@@ -180,12 +180,12 @@ def clean_flatpak_unused(dry_run=False):
     """Removes unused Flatpak runtimes."""
     if shutil.which("flatpak"):
         if dry_run:
-            print("  \033[0;32m✓\033[0m Flatpak runtimes would be checked")
+            print(f"  {OK} Flatpak runtimes would be checked")
             return 0, 0
         res = run_command(["flatpak", "uninstall", "--unused", "-y"], use_sudo=False, capture=True)
         if res.ok and res.stdout and "Uninstalling" in res.stdout:
             freed = parse_size_from_text(res.stdout)
-            msg = f"  \033[0;32m✓\033[0m Cleaned unused Flatpak runtimes ({bytes_to_human(freed)})"
+            msg = f"  {OK} Cleaned unused Flatpak runtimes ({bytes_to_human(freed)})"
             print(msg)
             return freed, 1
     return 0, 0
@@ -215,7 +215,7 @@ def clean_generic_xdg_caches(days=30, dry_run=False):
                 total_size += s
                 total_items += 1
                 if not dry_run:
-                    print(f"  \033[0;32m✓\033[0m Tagged Cache: {item.name} ({bytes_to_human(s)})")
+                    print(f"  {OK} Tagged Cache: {item.name} ({bytes_to_human(s)})")
 
         for candidate in find_xdg_cache_candidates(cache_root, days=days):
             item = candidate.path
@@ -228,13 +228,13 @@ def clean_generic_xdg_caches(days=30, dry_run=False):
                 total_items += i
                 if not dry_run:
                     print(
-                        f"  \033[0;32m✓\033[0m {candidate.label}: {item.name} ({bytes_to_human(s)})"
+                        f"  {OK} {candidate.label}: {item.name} ({bytes_to_human(s)})"
                     )
     except OSError:
         pass
     if dry_run and total_size > 0:
         msg = (
-            f"  \033[0;32m✓\033[0m Other app caches ({bytes_to_human(total_size)}) would be checked"
+            f"  {OK} Other app caches ({bytes_to_human(total_size)}) would be checked"
         )
         print(msg)
     return total_size, total_items
@@ -290,9 +290,10 @@ def clean_orphaned_remnants(dry_run=False):
             for item in root.iterdir():
                 if not item.is_dir() or item.name.startswith(".") or item.name in system_folders:
                     continue
+                resolved_item = item.resolve()
                 if (
-                    str(item.resolve()) in CLEANED_PATHS
-                    or item.resolve() == DETECTED_APPS_FILE.parent.resolve()
+                    str(resolved_item) in CLEANED_PATHS
+                    or resolved_item == DETECTED_APPS_FILE.parent.resolve()
                 ):
                     continue
 
@@ -318,12 +319,12 @@ def clean_orphaned_remnants(dry_run=False):
                         total_size += s
                         total_items += i
                         if not dry_run:
-                            msg = f"  \033[0;32m✓\033[0m Orphaned Remnant: {item.name} ({bytes_to_human(s)})"
+                            msg = f"  {OK} Orphaned Remnant: {item.name} ({bytes_to_human(s)})"
                             print(msg)
         except OSError:
             pass
     if dry_run and total_size > 0:
-        msg = f"  \033[0;32m✓\033[0m Orphaned app remnants ({bytes_to_human(total_size)}) would be checked"
+        msg = f"  {OK} Orphaned app remnants ({bytes_to_human(total_size)}) would be checked"
         print(msg)
     return total_size, total_items
 
@@ -355,14 +356,14 @@ def clean_snap_cache(dry_run=False):
                     total_items += i
                     if not dry_run and s > 0:
                         print(
-                            f"  \033[0;32m✓\033[0m Snap Cache: {app_dir.name} ({bytes_to_human(s)})"
+                            f"  {OK} Snap Cache: {app_dir.name} ({bytes_to_human(s)})"
                         )
     except OSError:
         pass
 
     if dry_run and total_size > 0:
         print(
-            f"  \033[0;32m✓\033[0m Snap application caches ({bytes_to_human(total_size)}) would be checked"
+            f"  {OK} Snap application caches ({bytes_to_human(total_size)}) would be checked"
         )
     return total_size, total_items
 

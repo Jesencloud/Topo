@@ -8,7 +8,19 @@ from pathlib import Path
 from typing import Any
 
 from ..core import system
-from ..core.constants import BOLD, GRAY, GREEN, MAGENTA, PURPLE, RED, RESET, THEME_TITLE, YELLOW
+from ..core.constants import (
+    BLUE,
+    BOLD,
+    CLEAR_SCREEN,
+    GRAY,
+    GREEN,
+    MAGENTA,
+    PURPLE,
+    RED,
+    RESET,
+    THEME_TITLE,
+    YELLOW,
+)
 from ..core.desktop_entry import get_desktop_exec_names, get_desktop_icon, get_desktop_name
 from ..core.file_ops import (
     bytes_to_human,
@@ -763,15 +775,15 @@ def run_uninstall():
     while True:
         if not manager.has_fresh_scan_cache():
             sys.stdout.write(
-                "\033[H\033[J"
-                f"\n {THEME_TITLE}Select Application to Remove{RESET}\n\n"
+                CLEAR_SCREEN
+                + f"\n {THEME_TITLE}Select Application to Remove{RESET}\n\n"
                 f" {GRAY}Scanning installed applications...{RESET}\n"
             )
             sys.stdout.flush()
         apps = manager.run_full_scan(use_cache=True)
 
         if not apps:
-            print("\n   \033[1;31mNo applications found to uninstall.\033[0m")
+            print(f"\n   {RED}No applications found to uninstall.{RESET}")
             Navigator.wait_for_return()
             return
 
@@ -850,10 +862,10 @@ def run_uninstall():
                 ScanCache.clear()
                 UninstallManager.clear_scan_cache()
             print("=" * 70)
-            print("\033[1;34mUninstall complete\033[0m")
+            print(f"{BLUE}Uninstall complete{RESET}")
             names_str = ", ".join(removed_names) if removed_names else "none"
-            msg = f"Removed {len(removed_names)} app(s), freed \033[1;32m"
-            msg += f"{bytes_to_human(total_freed_all)}\033[0m: {names_str}"
+            msg = f"Removed {len(removed_names)} app(s), freed {GREEN}"
+            msg += f"{bytes_to_human(total_freed_all)}{RESET}: {names_str}"
             print(msg)
             if failed_names:
                 print(f" {RED}✗ Failed:{RESET} {', '.join(failed_names)}")

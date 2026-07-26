@@ -104,3 +104,17 @@ BOLD = "\033[1m"
 PURPLE = "\033[1;95m"
 EARTH = "\033[38;5;100m"  # Yellow4 / Olive (Matches logo #8B8B00)
 THEME_TITLE = PURPLE
+
+# Non-bold variants for inline status icons
+GREEN_NB = "\033[0;32m"
+GRAY_NB = "\033[0;90m"
+
+# Composite status markers
+OK = f"{GREEN_NB}✓{RESET}"
+SKIP = f"{GRAY_NB}◎{RESET}"
+FAIL = f"{RED}✗{RESET}"
+
+# Terminal control sequences
+CLEAR_SCREEN = "\033[2J\033[H"
+CLEAR_LINE = "\r\033[K"
+ERASE_BELOW = "\033[J"

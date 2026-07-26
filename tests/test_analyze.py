@@ -78,8 +78,8 @@ def test_render_scan_header_clears_screen_and_prints_title(capsys):
     _render_scan_header("Analyze Disk")
 
     output = capsys.readouterr().out
-    # Homes the cursor and clears the screen.
-    assert output.startswith("\033[H\033[J")
+    # Clears the screen and homes the cursor (CLEAR_SCREEN = \033[2J\033[H).
+    assert output.startswith("\033[2J\033[H")
     assert "Analyze Disk" in output
     # The title must sit on row 2 (one blank line above it), matching
     # AnalyzeSelector.render(), so the screen does not shift vertically when

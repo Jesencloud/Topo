@@ -1,3 +1,4 @@
+import functools
 import os
 import re
 import shutil
@@ -25,6 +26,10 @@ _SYSTEM_CLEANABLE_CONTENT_DIRS = (
     Path("/var/tmp"),  # nosec B108
     Path("/var/cache"),
 )
+
+@functools.cache
+def _which_cached(name: str) -> str | None:
+    return shutil.which(name)
 
 
 def _is_system_cleanable_content(path: Path) -> bool:
@@ -269,13 +274,13 @@ def safe_remove(
     try:
         if use_trash:
             if (
-                shutil.which("gio")
+                _which_cached("gio")
                 and run_command(["gio", "trash", str(raw_path)], capture=True, timeout=30).ok
             ):
                 record_deletion_audit(raw_path, "trash", "trashed-gio", size_bytes)
                 return True, "Moved to trash (gio)"
             if (
-                shutil.which("trash-put")
+                _which_cached("trash-put")
                 and run_command(["trash-put", str(raw_path)], capture=True, timeout=30).ok
             ):
                 record_deletion_audit(raw_path, "trash", "trashed-trash-cli", size_bytes)
@@ -307,21 +312,23 @@ def clean_path_by_age(path: str | Path, days: int, dry_run: bool = False) -> tup
     cutoff = time.time() - (days * 86400)
 
     try:
-        entries = list(path.iterdir())
+        with os.scandir(path) as it:
+            entries = list(it)
     except OSError:
         return total_size, items_count
 
-    for item in entries:
+    for entry in entries:
         try:
             # lstat() judges the entry itself and never follows a symlink to its
             # target. Consider both atime and mtime so that 'noatime'/'relatime'
             # mounts (where atime barely updates) don't make active data look stale.
-            st = item.lstat()
+            st = entry.stat(follow_symlinks=False)
         except OSError:
             # A single vanished/broken entry must not abort the whole sweep.
             continue
         if st.st_atime >= cutoff or st.st_mtime >= cutoff:
             continue
+        item = Path(entry.path)
         size = get_size_fast(item)
         if dry_run:
             safe_remove(item, use_trash=False, dry_run=True, known_size_bytes=size)

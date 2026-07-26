@@ -4,6 +4,7 @@ from functools import partial
 
 from ..core import system, terminal_state
 from ..core.constants import (
+    BLUE,
     GRAY,
     GREEN,
     PURPLE,
@@ -121,15 +122,15 @@ def run_clean(dry_run=False):
     free_now = shutil.disk_usage(os.path.expanduser("~")).free
     print("\n" + "=" * 60)
     status_text = "Scan complete (Preview)" if dry_run else "Cleanup complete"
-    print(f"\033[1;34m{status_text}\033[0m")
+    print(f"{BLUE}{status_text}{RESET}")
 
     if category_results:
         print(f"\n{GRAY}Breakdown:{RESET}")
         for name, size, items in category_results:
-            print(f"  • {name:<25} \033[1;32m{bytes_to_human(size):>10}\033[0m ({items} items)")
+            print(f"  • {name:<25} {GREEN}{bytes_to_human(size):>10}{RESET} ({items} items)")
 
     size_label = "\nTotal space freed" if not dry_run else "\nTotal space that can be freed"
-    print(f"{size_label}: \033[1;32m{bytes_to_human(total_size)}\033[0m | Items: {total_items}")
+    print(f"{size_label}: {GREEN}{bytes_to_human(total_size)}{RESET} | Items: {total_items}")
 
     if not dry_run:
         movies = total_size / (8 * 1024 * 1024 * 1024)

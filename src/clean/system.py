@@ -1,5 +1,6 @@
 import shutil
 
+from ..core.constants import OK
 from ..core.file_ops import bytes_to_human, parse_size_from_text
 from ..core.heavy_cache import get_package_manager_cleaner
 from ..core.system import get_os_id, run_command
@@ -9,7 +10,7 @@ def clean_snaps(dry_run=False):
     """Removes old revisions of snaps to save massive space on Ubuntu."""
     if shutil.which("snap"):
         if dry_run:
-            print("  \033[0;32m✓\033[0m Old Snap revisions would be removed")
+            print(f"  {OK} Old Snap revisions would be removed")
             return 0, 0, 1
 
         res = run_command(["snap", "list", "--all"], capture=True)
@@ -30,7 +31,7 @@ def clean_snaps(dry_run=False):
                         count += 1
 
         if count > 0:
-            print(f"  \033[0;32m✓\033[0m Removed {count} old Snap revisions")
+            print(f"  {OK} Removed {count} old Snap revisions")
             return 0, count, 1
     return 0, 0, 0
 
@@ -52,17 +53,17 @@ def clean_package_manager(dry_run=False):
         return freed, snap_items, snap_cats
 
     if dry_run:
-        print(f"  \033[0;32m✓\033[0m {cleaner.label} would be cleaned")
+        print(f"  {OK} {cleaner.label} would be cleaned")
         return freed, snap_items, snap_cats + 1
 
     res = run_command(list(cleaner.command), use_sudo=True, capture=True)
     if res.ok and res.stdout:
         freed += parse_size_from_text(res.stdout)
-        print(f"  \033[0;32m✓\033[0m Cleaned {cleaner.label} ({bytes_to_human(freed)})")
+        print(f"  {OK} Cleaned {cleaner.label} ({bytes_to_human(freed)})")
         return freed, snap_items + 1, snap_cats + 1
 
     if res.ok and cleaner.key == "apt":  # apt-get clean is silent
-        print(f"  \033[0;32m✓\033[0m Cleaned {cleaner.label}")
+        print(f"  {OK} Cleaned {cleaner.label}")
         return freed, snap_items + 1, snap_cats + 1
 
     return freed, snap_items, snap_cats
@@ -72,14 +73,14 @@ def clean_journal(dry_run=False):
     """Vacuum systemd journal logs."""
     if shutil.which("journalctl"):
         if dry_run:
-            print("  \033[0;32m✓\033[0m journal logs would be vacuumed")
+            print(f"  {OK} journal logs would be vacuumed")
             return 0, 0, 1
 
         res = run_command(["journalctl", "--vacuum-size=1M"], use_sudo=True, capture=True)
         if res.ok and res.stdout:
             freed = parse_size_from_text(res.stdout)
             if freed > 0:
-                print(f"  \033[0;32m✓\033[0m Vacuumed journal logs ({bytes_to_human(freed)})")
+                print(f"  {OK} Vacuumed journal logs ({bytes_to_human(freed)})")
                 return freed, 1, 1
     return 0, 0, 0
 
@@ -92,24 +93,24 @@ def clean_orphaned_packages(dry_run=False):
 
     if os_id in ("fedora", "rhel", "centos") and shutil.which("dnf"):
         if dry_run:
-            print("  \033[0;32m✓\033[0m Orphaned DNF packages would be autoremoved")
+            print(f"  {OK} Orphaned DNF packages would be autoremoved")
             return 0, 0, 1
         res = run_command(["dnf", "autoremove", "-y"], use_sudo=True, capture=True)
         if res.ok:
             freed = parse_size_from_text(res.stdout)
             # DNF autoremove output usually lists packages. We can estimate count.
             items = res.stdout.count("\n") // 2  # Rough estimate
-            print(f"  \033[0;32m✓\033[0m Removed orphaned DNF packages ({bytes_to_human(freed)})")
+            print(f"  {OK} Removed orphaned DNF packages ({bytes_to_human(freed)})")
             return freed, items, 1
 
     elif os_id in ("ubuntu", "debian") and shutil.which("apt-get"):
         if dry_run:
-            print("  \033[0;32m✓\033[0m Orphaned APT packages would be autoremoved")
+            print(f"  {OK} Orphaned APT packages would be autoremoved")
             return 0, 0, 1
         res = run_command(["apt-get", "autoremove", "-y"], use_sudo=True, capture=True)
         if res.ok:
             freed = parse_size_from_text(res.stdout)
-            print("  \033[0;32m✓\033[0m Removed orphaned APT packages")
+            print(f"  {OK} Removed orphaned APT packages")
             return freed, 1, 1
 
     elif os_id == "arch" and shutil.which("pacman"):
@@ -119,7 +120,7 @@ def clean_orphaned_packages(dry_run=False):
             orphans = list_res.stdout.split()
             if dry_run:
                 print(
-                    f"  \033[0;32m✓\033[0m {len(orphans)} orphaned Pacman packages would be removed"
+                    f"  {OK} {len(orphans)} orphaned Pacman packages would be removed"
                 )
                 return 0, 0, 1
             # Remove them
@@ -128,7 +129,7 @@ def clean_orphaned_packages(dry_run=False):
             )
             if remove_res.ok:
                 freed = parse_size_from_text(remove_res.stdout)
-                print(f"  \033[0;32m✓\033[0m Removed {len(orphans)} orphaned Pacman packages")
+                print(f"  {OK} Removed {len(orphans)} orphaned Pacman packages")
                 return freed, len(orphans), 1
 
     return 0, 0, 0
@@ -153,7 +154,7 @@ def clean_zombies(dry_run=False):
 
     count = len(zombies)
     if dry_run:
-        print(f"  \033[0;32m✓\033[0m {count} zombie processes detected")
+        print(f"  {OK} {count} zombie processes detected")
         return 0, 0, 1
 
     # Attempt to signal parents to reap zombies
@@ -166,5 +167,5 @@ def clean_zombies(dry_run=False):
         run_command(["kill", "-SIGCHLD", ppid], use_sudo=True, capture=True)
         reaped += 1
 
-    print(f"  \033[0;32m✓\033[0m Signaled parents of {count} zombie processes")
+    print(f"  {OK} Signaled parents of {count} zombie processes")
     return 0, count, 1

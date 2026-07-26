@@ -1,3 +1,4 @@
+import functools
 import json
 import os
 import platform
@@ -10,7 +11,19 @@ from typing import Any
 from ..ui.navigator import AnalyzeSelector, Navigator, TopFilesSelector
 from . import system
 from .app_cache import find_cleanable_cache_dirs, get_cache_cleanable_reason
-from .constants import BLUE, CYAN, GREEN, MAGENTA, PURPLE, RED, RESET, YELLOW
+from .constants import (
+    BLUE,
+    CLEAR_LINE,
+    CLEAR_SCREEN,
+    CYAN,
+    ERASE_BELOW,
+    GREEN,
+    MAGENTA,
+    PURPLE,
+    RED,
+    RESET,
+    YELLOW,
+)
 from .file_ops import (
     get_size_fast,
     record_deletion_audit,
@@ -31,6 +44,7 @@ ANALYZE_RESULT_LIMIT = 50
 FAST_EXPLORE_ENTRY_LIMIT = 500
 
 
+@functools.cache
 def _get_core_binary() -> Path | None:
     """Resolves the architecture-specific topo-core binary path.
 
@@ -193,7 +207,7 @@ def _render_scan_header(view_title: str) -> None:
     # Place the title exactly where AnalyzeSelector.render() puts it (home,
     # one blank line, then the title on row 2) so the screen does not shift
     # vertically when the scan screen hands off to the result list.
-    print(f"\033[H\033[J\n{PURPLE}{view_title}{RESET}\033[K", flush=True)
+    print(f"{CLEAR_SCREEN}\n{PURPLE}{view_title}{RESET}{ERASE_BELOW}", flush=True)
 
 
 def _scan_with_spinner(
@@ -518,7 +532,7 @@ def run_deep_analysis(target_path: Path | None = None):
                 # Home is already scanned (total_scan_size); smart views use a Python
                 # age-filter instead of a full scan.
                 print(
-                    "\r   • Rust Engine: Analyzing Linux insights, please wait . . .\033[K",
+                    f"{CLEAR_LINE}   • Rust Engine: Analyzing Linux insights, please wait . . .",
                     end="",
                     flush=True,
                 )
