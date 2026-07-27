@@ -39,6 +39,8 @@ topo-core/target/
 *.tmp
 *.log
 .claude/
+.codex
+.agents
 .claude/settings.local.json
 scheduled_tasks.lock
 settings.local.json

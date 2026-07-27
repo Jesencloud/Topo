@@ -81,8 +81,6 @@ def _decode_output(value: Any) -> str:
     return str(value)
 
 
-
-
 def has_sudo():
     """Check if current user has active sudo session"""
     res = run_command(["-n", "true"], use_sudo=True)

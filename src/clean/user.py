@@ -21,9 +21,7 @@ def clean_trash(dry_run=False):
             if trash_path.exists():
                 size = get_size_fast(trash_path)
                 if size > 0:
-                    print(
-                        f"  {OK} User Trash ({bytes_to_human(size)}) would be emptied"
-                    )
+                    print(f"  {OK} User Trash ({bytes_to_human(size)}) would be emptied")
                     return size, 1, 1
             return 0, 0, 0
 

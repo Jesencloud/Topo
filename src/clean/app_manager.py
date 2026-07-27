@@ -775,8 +775,7 @@ def run_uninstall():
     while True:
         if not manager.has_fresh_scan_cache():
             sys.stdout.write(
-                CLEAR_SCREEN
-                + f"\n {THEME_TITLE}Select Application to Remove{RESET}\n\n"
+                CLEAR_SCREEN + f"\n {THEME_TITLE}Select Application to Remove{RESET}\n\n"
                 f" {GRAY}Scanning installed applications...{RESET}\n"
             )
             sys.stdout.flush()

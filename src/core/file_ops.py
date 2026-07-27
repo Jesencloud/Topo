@@ -27,6 +27,7 @@ _SYSTEM_CLEANABLE_CONTENT_DIRS = (
     Path("/var/cache"),
 )
 
+
 @functools.cache
 def _which_cached(name: str) -> str | None:
     return shutil.which(name)

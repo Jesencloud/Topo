@@ -1,4 +1,4 @@
-from ..core.constants import CYAN, EARTH, GRAY, RESET, TOPO_VERSION
+from ..core.constants import CYAN, GRAY, GREEN, RESET, TOPO_VERSION
 from .navigator import InteractiveMenu
 
 CLEAN_ACTION = "clean"
@@ -11,7 +11,7 @@ QUIT_ACTION = "quit"
 
 def render_banner():
     # 2-line Braille vector typography for "TOPO" with version
-    return f"""{EARTH}
+    return f"""{GREEN}
  ⠶⣶⠶  ⢰⠶⡆ ⢰⠶⡆ ⢰⠶⡆
   ⠿   ⠸⠤⠇ ⢸⠉⠁ ⠸⠤⠇   {CYAN}●{RESET}{GRAY} v{TOPO_VERSION} is digging deeper 🦡{RESET}"""
 

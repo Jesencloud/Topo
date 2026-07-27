@@ -119,9 +119,7 @@ def clean_orphaned_packages(dry_run=False):
         if list_res.ok and list_res.stdout.strip():
             orphans = list_res.stdout.split()
             if dry_run:
-                print(
-                    f"  {OK} {len(orphans)} orphaned Pacman packages would be removed"
-                )
+                print(f"  {OK} {len(orphans)} orphaned Pacman packages would be removed")
                 return 0, 0, 1
             # Remove them
             remove_res = run_command(

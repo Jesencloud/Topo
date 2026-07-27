@@ -93,9 +93,7 @@ def proactive_app_detection():
             with open(DETECTED_APPS_FILE, "w") as f:
                 json.dump(detected, f, indent=2)
             if new_found:
-                msg = (
-                    f"  {GRAY}ℹ️  Updated local app registry ({len(detected)} apps known){RESET}"
-                )
+                msg = f"  {GRAY}ℹ️  Updated local app registry ({len(detected)} apps known){RESET}"
                 print(msg)
         except OSError:
             pass
@@ -227,15 +225,11 @@ def clean_generic_xdg_caches(days=30, dry_run=False):
                 total_size += s
                 total_items += i
                 if not dry_run:
-                    print(
-                        f"  {OK} {candidate.label}: {item.name} ({bytes_to_human(s)})"
-                    )
+                    print(f"  {OK} {candidate.label}: {item.name} ({bytes_to_human(s)})")
     except OSError:
         pass
     if dry_run and total_size > 0:
-        msg = (
-            f"  {OK} Other app caches ({bytes_to_human(total_size)}) would be checked"
-        )
+        msg = f"  {OK} Other app caches ({bytes_to_human(total_size)}) would be checked"
         print(msg)
     return total_size, total_items
 
@@ -355,16 +349,12 @@ def clean_snap_cache(dry_run=False):
                     total_size += s
                     total_items += i
                     if not dry_run and s > 0:
-                        print(
-                            f"  {OK} Snap Cache: {app_dir.name} ({bytes_to_human(s)})"
-                        )
+                        print(f"  {OK} Snap Cache: {app_dir.name} ({bytes_to_human(s)})")
     except OSError:
         pass
 
     if dry_run and total_size > 0:
-        print(
-            f"  {OK} Snap application caches ({bytes_to_human(total_size)}) would be checked"
-        )
+        print(f"  {OK} Snap application caches ({bytes_to_human(total_size)}) would be checked")
     return total_size, total_items
 
 

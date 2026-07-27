@@ -23,9 +23,7 @@ def clean_tool_cache(description, command_args, cache_path=None, dry_run=False):
 
     if dry_run:
         if total_size > 0 or not cache_path:
-            print(
-                f"  {OK} {description} ({bytes_to_human(total_size)}) would be cleaned"
-            )
+            print(f"  {OK} {description} ({bytes_to_human(total_size)}) would be cleaned")
             return total_size, 1
         return 0, 0
 
