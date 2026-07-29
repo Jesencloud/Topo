@@ -1,10 +1,11 @@
+import contextlib
 import os
 import shutil
 import time
 from pathlib import Path
 
 from ..core.constants import OK
-from ..core.file_ops import bytes_to_human, get_size_fast, safe_remove
+from ..core.file_ops import bytes_to_human, clean_path_by_age, get_size_fast, safe_remove
 from ..core.system import run_command
 
 
@@ -88,10 +89,21 @@ def clean_system_temp(dry_run=False, min_age_days=3):
                     continue
                 if st.st_mtime > cutoff or st.st_atime > cutoff:
                     continue
-                size = get_size_fast(item)
-                if safe_remove(item, use_trash=False, dry_run=dry_run)[0]:
-                    total_size += size
-                    total_items += 1
+                if item.is_dir() and not item.is_symlink():
+                    # For directories, clean stale contents individually
+                    # instead of deleting the entire tree.
+                    s, i = clean_path_by_age(item, days=min_age_days, dry_run=dry_run)
+                    total_size += s
+                    total_items += i
+                    # Remove the directory itself only if now empty
+                    if not dry_run:
+                        with contextlib.suppress(OSError):
+                            item.rmdir()  # Only succeeds if empty
+                else:
+                    size = get_size_fast(item)
+                    if safe_remove(item, use_trash=False, dry_run=dry_run)[0]:
+                        total_size += size
+                        total_items += 1
         except OSError:
             continue
     if total_items > 0:

@@ -25,6 +25,7 @@ from .constants import (
     YELLOW,
 )
 from .file_ops import (
+    TRASH_UNAVAILABLE_REASON,
     get_size_fast,
     record_deletion_audit,
     safe_remove,
@@ -401,10 +402,20 @@ def _safe_remove_analyze_path(path: Path) -> bool:
     if removed:
         return True
 
+    # Trash unavailable: this is an explicit user-initiated delete, so fall
+    # back to permanent removal rather than silently skipping.
+    if reason == TRASH_UNAVAILABLE_REASON:
+        removed, reason = safe_remove(path, use_trash=False)
+        if removed:
+            return True
+
     cleaned_child = False
     if reason == "Path is whitelisted":
         for child in find_cleanable_cache_dirs(path, require_sensitive_app_data_root=True):
             child_removed, child_reason = safe_remove(child, use_trash=True)
+            # Fallback for children too
+            if not child_removed and child_reason == TRASH_UNAVAILABLE_REASON:
+                child_removed, child_reason = safe_remove(child, use_trash=False)
             if child_removed:
                 cleaned_child = True
             else:

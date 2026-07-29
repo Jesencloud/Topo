@@ -3,13 +3,14 @@ import os
 import shlex
 import shutil
 import sqlite3
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from ..core import system, terminal_state
-from ..core.constants import BOLD, GRAY, GREEN, PURPLE, RED, RESET, YELLOW
+from ..core.constants import BOLD, CLEAR_SCREEN, GRAY, GREEN, PURPLE, RED, RESET, YELLOW
 from ..core.desktop_entry import get_desktop_exec_command
 from ..core.file_ops import (
     bytes_to_human,
@@ -246,10 +247,11 @@ def run_systemd_user_service_cleanup(dry_run=False):
     broken_units = []
     for service_file in user_systemd_dir.glob("*.service"):
         try:
-            exec_target = _extract_service_exec_target(service_file)
+            exec_targets = _extract_service_exec_targets(service_file)
         except OSError:
             continue
-        if exec_target and not _service_exec_target_exists(exec_target):
+        # Only consider broken if ALL exec targets are missing.
+        if exec_targets and all(not _service_exec_target_exists(t) for t in exec_targets):
             broken_units.append(service_file)
 
     if not broken_units:
@@ -473,23 +475,25 @@ def run_broken_symlink_cleanup(dry_run=False):
     return None
 
 
-def _extract_service_exec_target(service_file: Path) -> str:
+def _extract_service_exec_targets(service_file: Path) -> list[str]:
+    targets: list[str] = []
     for line in service_file.read_text(errors="ignore").splitlines():
         line = line.strip()
         if not line.startswith("ExecStart="):
             continue
         value = line.split("=", 1)[1].strip()
         if not value:
-            return ""
+            continue
         try:
             parts = shlex.split(value)
         except ValueError:
             parts = value.split()
         if not parts:
-            return ""
+            continue
         command = parts[0].lstrip("-@+!")
-        return command
-    return ""
+        if command:
+            targets.append(command)
+    return targets
 
 
 def _service_exec_target_exists(command: str) -> bool:
@@ -563,13 +567,14 @@ def run_thumbnail_cleanup(dry_run=False):
     if os.path.exists(thumb_cache):
         if dry_run:
             return "Desktop thumbnail cache would be cleared"
-        shutil.rmtree(thumb_cache, ignore_errors=True)
+        safe_remove(thumb_cache, use_trash=False)
         return "Desktop thumbnail cache cleared"
     return None
 
 
 def optimize_system(dry_run=False):
-    os.system("clear")
+    sys.stdout.write(CLEAR_SCREEN)
+    sys.stdout.flush()
     print(f"\n{PURPLE}System Optimization{RESET}\n")
     print(f"{GRAY}Running maintenance tasks in parallel...{RESET}")
 

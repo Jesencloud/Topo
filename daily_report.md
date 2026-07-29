@@ -1,3 +1,57 @@
+# Daily Modification Report - 2026-07-29
+
+## Project: topo (Topo) - 安全审查与数据丢失风险修复
+
+本次工作对项目进行了正确性、安全性和数据丢失风险的全面审查，发现并修复了 2 个严重问题、3 个高危问题和 7 个中低危问题，涉及 8 个文件、+115 / -24 行。修复后 ruff lint 全部通过，321 项测试全部通过。
+
+### 1. 严重问题修复（CRITICAL）
+
+*   **C1 — Trash 失败静默永久删除**: `safe_remove()` 在 `use_trash=True` 时，若 gio 和 trash-put 均失败，原代码静默降级为 `shutil.rmtree` 永久删除。修复后 trash 失败立即返回 `False`，不再 fallthrough。新增 `TRASH_UNAVAILABLE_REASON` 模块常量标识此场景。
+*   **C2 — 目录 mtime 误删活跃数据**: `clean_path_by_age()` 仅按目录自身 mtime 判断是否过期，但目录 mtime 仅在直接子项增删时更新，深层文件修改不会反映。新增 `_has_recent_content()` 递归辅助函数，在删除目录前验证其内部所有文件均已过期。
+
+### 2. 高危问题修复（HIGH）
+
+*   **H1 — 孤儿检测误报**: `clean_orphaned_remnants()` 的搜索范围从 `~/.config`、`~/.cache`、`~/.local/share` 三目录收窄为仅 `~/.cache`。对 `.config` 和 `.local/share` 使用启发式名称匹配过于激进，误删配置目录会导致不可恢复的数据丢失。
+*   **H2 — 符号链接大小膨胀**: `get_size()` 中 `entry.stat().st_size` 默认跟随符号链接计入目标文件大小，改为 `entry.stat(follow_symlinks=False).st_size`。
+*   **H3 — Desktop Entry 覆盖**: `parse_desktop_entry()` 将所有 section 的 key=value 写入同一字典，导致 `[Desktop Action]` 的 `Exec=` 覆盖主 `[Desktop Entry]` 的值。修复后遇到第二个 section header 立即停止解析，同时兼容无 section header 的简单 key=value 文件。
+
+### 3. 中低危问题修复（MEDIUM / LOW）
+
+*   **M1 — TOCTOU 竞争**: `safe_remove()` 在执行删除前新增二次 `resolve()` + `validate_path_for_deletion()` 校验，防止攻击者在验证和删除之间替换符号链接。
+*   **M2 — rmtree 绕过审计**: `run_thumbnail_cleanup()` 中 `shutil.rmtree()` 直接删除绕过了 `safe_remove` 的审计和白名单检查，改为统一使用 `safe_remove()`。
+*   **M3 — Artifact 重复**: `PurgeManager.run_scan()` 对搜索路径重叠时的重复 artifact 进行基于 `resolve()` 的去重。
+*   **M4 — Temp 目录误删**: `clean_system_temp()` 中目录类型条目从 `safe_remove`（整个目录树永久删除）改为 `clean_path_by_age`（仅删除过期文件） + `rmdir`（仅在目录为空时删除壳）。
+*   **M5 — Systemd 单 ExecStart**: `_extract_service_exec_target()` 重构为 `_extract_service_exec_targets()` 返回所有 `ExecStart=` 行的目标列表，仅当全部目标不存在时才判定服务已损坏。
+*   **L1 — os.system("clear")**: `optimize.py` 和 `project.py` 中 `os.system("clear")` 替换为 `sys.stdout.write(CLEAR_SCREEN)`，消除子 shell 创建。
+
+### 4. Analyze 模块适配
+
+*   **显式删除回退**: `_safe_remove_analyze_path()` 中 trash 不可用时，通过精确匹配 `TRASH_UNAVAILABLE_REASON` 常量自动回退为永久删除（仅限用户显式发起的 Analyze 删除操作）。
+*   **子目录同步**: 白名单路径下的 cache 子目录清理同样应用回退逻辑。
+
+### 5. 冗余代码清理
+
+*   **消除魔法字符串**: `analyze.py` 中通过 `"trash" in reason.lower()` 的脆弱匹配改为 `reason == TRASH_UNAVAILABLE_REASON` 精确常量比较。
+*   **消除循环内导入**: `project.py` 中 `import sys` 和 `user.py` 中 `from ..core.file_ops import clean_path_by_age` 从循环体内移至文件顶部。
+
+### 6. 测试同步更新
+
+*   **`test_file_ops.py`**: 更新 `test_safe_remove_edge_cases` 测试用例，验证新的安全行为：trash 失败返回 `False`，文件保持不被删除。
+
+### 修改文件列表
+| 文件 | 变更类型 |
+|------|----------|
+| `src/core/file_ops.py` | C1 trash 回退 + C2 目录 mtime + H2 符号链接 + M1 TOCTOU |
+| `src/clean/apps.py` | H1 孤儿检测范围收窄 |
+| `src/core/desktop_entry.py` | H3 section 解析修复 |
+| `src/core/analyze.py` | 显式删除回退 + 常量替换 |
+| `src/clean/optimize.py` | M2 rmtree→safe_remove + M5 ExecStart + L1 clear |
+| `src/clean/project.py` | M3 去重 + L1 clear + import 提升 |
+| `src/clean/user.py` | M4 temp 目录按文件清理 + import 提升 |
+| `tests/test_file_ops.py` | 适配 C1 安全行为变更 |
+
+---
+
 # Daily Modification Report - 2026-07-27
 
 ## Project: topo (Topo) - 可维护性与性能优化

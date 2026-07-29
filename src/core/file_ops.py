@@ -19,6 +19,7 @@ from .whitelist import (
 CLEANED_PATHS: set[str] = set()
 CACHEDIR_TAG_FILE = "CACHEDIR.TAG"
 CACHEDIR_TAG_SIGNATURE = "Signature: 8a477f597d28d172789f06886806bc55"
+TRASH_UNAVAILABLE_REASON = "No trash utility available; refusing to permanently delete"
 
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
 _SYSTEM_CLEANABLE_CONTENT_DIRS = (
@@ -172,7 +173,7 @@ def get_size(path: str | Path) -> int:
     try:
         for entry in os.scandir(path):
             if entry.is_symlink() or entry.is_file():
-                total += entry.stat().st_size
+                total += entry.stat(follow_symlinks=False).st_size
             elif entry.is_dir():
                 total += get_size(entry.path)
     except OSError:
@@ -287,6 +288,20 @@ def safe_remove(
                 record_deletion_audit(raw_path, "trash", "trashed-trash-cli", size_bytes)
                 return True, "Moved to trash (trash-cli)"
             record_deletion_audit(raw_path, "trash", "trash-failed", size_bytes)
+            return False, TRASH_UNAVAILABLE_REASON
+
+        # Re-resolve to guard against TOCTOU symlink replacement.
+        try:
+            re_resolved = raw_path.resolve(strict=False)
+        except OSError:
+            re_resolved = raw_path.absolute()
+        re_valid, re_reason = validate_path_for_deletion(
+            re_resolved,
+            allow_app_data_removal=allow_app_data_removal,
+        )
+        if not re_valid:
+            record_deletion_audit(raw_path, mode, "rejected-toctou")
+            return False, f"TOCTOU check failed: {re_reason}"
 
         if raw_path.is_symlink() or raw_path.is_file():
             raw_path.unlink()
@@ -300,6 +315,26 @@ def safe_remove(
         failed_mode = "permanent" if use_trash else mode
         record_deletion_audit(raw_path, failed_mode, "failed", size_bytes)
         return False, str(e)
+
+
+def _has_recent_content(path: Path, cutoff: float) -> bool:
+    """Return True if any file under *path* has been touched after *cutoff*."""
+    try:
+        with os.scandir(path) as it:
+            for entry in it:
+                try:
+                    st = entry.stat(follow_symlinks=False)
+                except OSError:
+                    continue
+                if st.st_atime >= cutoff or st.st_mtime >= cutoff:
+                    return True
+                if entry.is_dir(follow_symlinks=False) and _has_recent_content(
+                    Path(entry.path), cutoff
+                ):
+                    return True
+    except OSError:
+        pass
+    return False
 
 
 def clean_path_by_age(path: str | Path, days: int, dry_run: bool = False) -> tuple[int, int]:
@@ -330,6 +365,9 @@ def clean_path_by_age(path: str | Path, days: int, dry_run: bool = False) -> tup
         if st.st_atime >= cutoff or st.st_mtime >= cutoff:
             continue
         item = Path(entry.path)
+        # For directories, verify no nested file is still active before removal.
+        if entry.is_dir(follow_symlinks=False) and _has_recent_content(item, cutoff):
+            continue
         size = get_size_fast(item)
         if dry_run:
             safe_remove(item, use_trash=False, dry_run=True, known_size_bytes=size)

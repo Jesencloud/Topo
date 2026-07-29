@@ -236,7 +236,7 @@ def clean_generic_xdg_caches(days=30, dry_run=False):
 
 def clean_orphaned_remnants(dry_run=False):
     """Finds 'orphan' folders belonging to uninstalled software, including AppImages."""
-    search_roots = [Path.home() / ".config", Path.home() / ".cache", Path.home() / ".local/share"]
+    search_roots = [Path.home() / ".cache"]
     total_size = 0
     total_items = 0
     system_folders = {

@@ -291,7 +291,7 @@ def test_safe_remove_edge_cases(test_env):
         assert success is False
         assert "critical system path" in msg.lower()
 
-    # Test fallback to permanent delete if trash fails
+    # Test that trash failure does NOT silently fall through to permanent delete
     test_file = test_env / "trash_test.txt"
     test_file.write_text("dummy")
     log_path = test_env / "state" / "topo" / "deletions.log"
@@ -300,13 +300,13 @@ def test_safe_remove_edge_cases(test_env):
         patch("shutil.which", return_value=True),
         patch("subprocess.run") as mock_run,
     ):
-        mock_run.return_value = MagicMock(returncode=1)  # But it fails
+        mock_run.return_value = MagicMock(returncode=1)  # Trash command fails
         success, msg = safe_remove(test_file, use_trash=True)
-        assert success is True
-        assert "Permanently deleted" in msg
+        assert success is False
+        assert "refusing" in msg.lower()
+    assert test_file.exists(), "File must survive when trash fails"
     lines = log_path.read_text().splitlines()
     assert lines[0].split("\t")[1:] == ["trash", "5", "trash-failed", str(test_file)]
-    assert lines[1].split("\t")[1:] == ["permanent", "5", "deleted", str(test_file)]
 
     # Test Exception handling during removal
     with patch("pathlib.Path.unlink", side_effect=OSError("mocked error")):

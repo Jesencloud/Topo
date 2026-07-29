@@ -1,4 +1,5 @@
 import os
+import sys
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -6,6 +7,7 @@ from typing import Any
 
 from ..core.config import get_purge_paths
 from ..core.constants import (
+    CLEAR_SCREEN,
     CYAN,
     MONOREPO_INDICATORS,
     PROJECT_INDICATORS,
@@ -103,9 +105,17 @@ class PurgeManager:
 
         # 2. Find artifacts in projects
         all_artifacts = []
+        seen_artifacts: set[str] = set()
         for project in projects:
             artifacts = self.scanner.scan_artifacts(project)
-            all_artifacts.extend(artifacts)
+            for artifact in artifacts:
+                try:
+                    key = str(artifact.resolve())
+                except OSError:
+                    key = str(artifact)
+                if key not in seen_artifacts:
+                    seen_artifacts.add(key)
+                    all_artifacts.append(artifact)
 
         if not all_artifacts:
             return []
@@ -164,7 +174,8 @@ def run_purge(dry_run=False):
             from ..core.config import add_purge_path, get_purge_paths, remove_purge_path
 
             while True:
-                os.system("clear")
+                sys.stdout.write(CLEAR_SCREEN)
+                sys.stdout.flush()
                 print(f"\n{CYAN}⚙️  topo Purge Settings{RESET}")
                 print()
                 paths = get_purge_paths()

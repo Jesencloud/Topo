@@ -11,10 +11,23 @@ def parse_desktop_entry(path: str | Path) -> dict[str, str]:
     """
     entry_path = Path(path).expanduser()
     fields: dict[str, str] = {}
+    in_main_section = False
+    has_any_section = False
     try:
         for raw_line in entry_path.read_text(encoding="utf-8", errors="ignore").splitlines():
             line = raw_line.strip()
-            if not line or line.startswith(("#", "[")) or "=" not in line:
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("["):
+                has_any_section = True
+                if line == "[Desktop Entry]":
+                    in_main_section = True
+                elif in_main_section:
+                    break  # Stop at the next section after [Desktop Entry]
+                continue
+            # Accept key=value lines in the main section, or when no
+            # section headers exist at all (simple key=value files).
+            if (not in_main_section and has_any_section) or "=" not in line:
                 continue
             key, value = line.split("=", 1)
             key = key.strip()
