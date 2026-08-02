@@ -15,6 +15,15 @@ from ..core.install_source import (
 )
 
 
+def _resolve_launcher_symlink(launcher: Path) -> Path | None:
+    """Resolve a launcher symlink to its real target, or None on failure."""
+    try:
+        raw = Path(os.readlink(launcher))
+        return (raw if raw.is_absolute() else launcher.parent / raw).resolve()
+    except (OSError, ValueError):
+        return None
+
+
 def _launcher_points_to_topo(launcher_path: Path, internal_dir: Path) -> bool:
     """True if the launcher is Topo's link, even when dangling (target removed)."""
     try:
@@ -22,13 +31,13 @@ def _launcher_points_to_topo(launcher_path: Path, internal_dir: Path) -> bool:
     except OSError:
         expected = internal_dir / "topo"
     if launcher_path.is_symlink():
-        raw = Path(os.readlink(launcher_path))
-        target = raw if raw.is_absolute() else launcher_path.parent / raw
-        try:
-            resolved = target.resolve()
-        except OSError:
-            resolved = target
-        return resolved == expected or os.path.normpath(target) == os.path.normpath(expected)
+        resolved = _resolve_launcher_symlink(launcher_path)
+        if not resolved:
+            # Fallback for dangling symlink string match
+            raw = Path(os.readlink(launcher_path))
+            target = raw if raw.is_absolute() else launcher_path.parent / raw
+            return os.path.normpath(target) == os.path.normpath(expected)
+        return resolved == expected or str(resolved) == str(expected)
     try:
         return launcher_path.resolve() == expected
     except (OSError, UnicodeDecodeError):
@@ -68,10 +77,10 @@ def _strip_topo_path_lines() -> bool:
 
 def _launcher_points_to_package(launcher_path: Path) -> bool:
     if launcher_path.is_symlink():
-        raw = Path(os.readlink(launcher_path))
-        target = raw if raw.is_absolute() else launcher_path.parent / raw
-        normalized = os.path.normpath(target)
-        return normalized in {
+        resolved = _resolve_launcher_symlink(launcher_path)
+        if not resolved:
+            return False
+        return str(resolved) in {
             os.path.normpath("/usr/bin/topo"),
             os.path.normpath("/usr/lib/topo/topo"),
         }

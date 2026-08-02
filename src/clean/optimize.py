@@ -38,6 +38,7 @@ GPU_SHADER_CACHE_PATHS = (
     Path("~/.cache/mesa_shader_cache"),
     Path("~/.cache/mesa_shader_cache_db"),
 )
+_MIN_RAM_SWAP_RATIO = 2
 
 
 def opt_log(message, success=True, skipped=False):
@@ -365,8 +366,8 @@ def run_swap_management(dry_run=False):
         if used_swap <= 0:
             return None
 
-        # Only reset if we have 2x the used swap available in RAM for safety
-        if available > used_swap * 2:
+        # Only reset if we have _MIN_RAM_SWAP_RATIOx the used swap available in RAM for safety
+        if available > used_swap * _MIN_RAM_SWAP_RATIO:
             if dry_run:
                 return f"Swap would be reset (Currently using {bytes_to_human(used_swap)})"
 
@@ -540,26 +541,32 @@ def run_memory_opt(dry_run=False):
     return None
 
 
-def run_desktop_database_refresh(dry_run=False):
-    app_dir = Path.home() / ".local/share/applications"
-    if not app_dir.exists() or not shutil.which("update-desktop-database"):
+def _refresh_database(cmd: str, target_dir: Path, label: str, dry_run: bool) -> str | None:
+    if not target_dir.exists() or not shutil.which(cmd):
         return None
     if dry_run:
-        return "Desktop application database would be refreshed"
-    if run_command(["update-desktop-database", str(app_dir)], capture=True, timeout=30).ok:
-        return "Desktop application database refreshed"
+        return f"{label} would be refreshed"
+    if run_command([cmd, str(target_dir)], capture=True, timeout=30).ok:
+        return f"{label} refreshed"
     return None
+
+
+def run_desktop_database_refresh(dry_run=False):
+    return _refresh_database(
+        "update-desktop-database",
+        Path.home() / ".local/share/applications",
+        "Desktop application database",
+        dry_run,
+    )
 
 
 def run_mime_database_refresh(dry_run=False):
-    mime_dir = Path.home() / ".local/share/mime"
-    if not mime_dir.exists() or not shutil.which("update-mime-database"):
-        return None
-    if dry_run:
-        return "MIME database would be refreshed"
-    if run_command(["update-mime-database", str(mime_dir)], capture=True, timeout=30).ok:
-        return "MIME database refreshed"
-    return None
+    return _refresh_database(
+        "update-mime-database",
+        Path.home() / ".local/share/mime",
+        "MIME database",
+        dry_run,
+    )
 
 
 def run_thumbnail_cleanup(dry_run=False):
@@ -602,45 +609,24 @@ def optimize_system(dry_run=False):
 
     start_time = time.time()
 
-    tasks = []
-    if not dry_run:
-        tasks = [
-            lambda: run_fstrim(dry_run),
-            lambda: run_fccache(dry_run),
-            lambda: run_dns_flush(dry_run),
-            lambda: run_memory_opt(dry_run),
-            lambda: run_swap_management(dry_run),
-            lambda: run_journal_optimization(dry_run),
-            lambda: run_coredump_cleanup(dry_run),
-            lambda: run_gpu_shader_cache_cleanup(dry_run),
-            lambda: run_broken_symlink_cleanup(dry_run),
-            lambda: run_thumbnail_cleanup(dry_run),
-            lambda: run_desktop_database_refresh(dry_run),
-            lambda: run_mime_database_refresh(dry_run),
-            lambda: run_vacuum_all(dry_run),
-            lambda: run_autostart_cleanup(dry_run),
-            lambda: run_systemd_user_service_cleanup(dry_run),
-            lambda: run_user_systemd_reset_failed(dry_run),
-        ]
-    else:
-        tasks = [
-            lambda: run_fstrim(True),
-            lambda: run_fccache(True),
-            lambda: run_dns_flush(True),
-            lambda: run_memory_opt(True),
-            lambda: run_swap_management(True),
-            lambda: run_journal_optimization(True),
-            lambda: run_coredump_cleanup(True),
-            lambda: run_gpu_shader_cache_cleanup(True),
-            lambda: run_broken_symlink_cleanup(True),
-            lambda: run_thumbnail_cleanup(True),
-            lambda: run_vacuum_all(True),
-            lambda: run_desktop_database_refresh(True),
-            lambda: run_mime_database_refresh(True),
-            lambda: run_autostart_cleanup(True),
-            lambda: run_systemd_user_service_cleanup(True),
-            lambda: run_user_systemd_reset_failed(True),
-        ]
+    tasks = [
+        lambda: run_fstrim(dry_run),
+        lambda: run_fccache(dry_run),
+        lambda: run_dns_flush(dry_run),
+        lambda: run_memory_opt(dry_run),
+        lambda: run_swap_management(dry_run),
+        lambda: run_journal_optimization(dry_run),
+        lambda: run_coredump_cleanup(dry_run),
+        lambda: run_gpu_shader_cache_cleanup(dry_run),
+        lambda: run_broken_symlink_cleanup(dry_run),
+        lambda: run_thumbnail_cleanup(dry_run),
+        lambda: run_desktop_database_refresh(dry_run),
+        lambda: run_mime_database_refresh(dry_run),
+        lambda: run_vacuum_all(dry_run),
+        lambda: run_autostart_cleanup(dry_run),
+        lambda: run_systemd_user_service_cleanup(dry_run),
+        lambda: run_user_systemd_reset_failed(dry_run),
+    ]
 
     with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
         futures = {executor.submit(task): task for task in tasks}

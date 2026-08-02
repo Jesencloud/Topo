@@ -303,9 +303,7 @@ def safe_remove(
             record_deletion_audit(raw_path, mode, "rejected-toctou")
             return False, f"TOCTOU check failed: {re_reason}"
 
-        if raw_path.is_symlink() or raw_path.is_file():
-            raw_path.unlink()
-        elif raw_path.is_dir():
+        if raw_path.is_dir() and not raw_path.is_symlink():
             shutil.rmtree(raw_path)
         else:
             raw_path.unlink()

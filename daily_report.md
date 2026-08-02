@@ -1,3 +1,61 @@
+# Daily Modification Report - 2026-08-03
+
+## Project: topo (Topo) - 代码冗余与风格清理
+
+本次工作对项目进行了代码冗余和风格一致性审查，修复了 15 个问题，涉及 13 个文件、+134 / -121 行。修复后 ruff lint 全部通过，321 项测试全部通过。
+
+### 1. 重复逻辑消除
+
+*   **D1 — optimize.py 任务列表复制**: `optimize_system()` 中 `if not dry_run:` 和 `else:` 分支包含完全相同的 16 个 task lambda 列表，合并为单一列表，减少 20 行。
+*   **D2 — optimize.py 数据库刷新重复**: `run_desktop_database_refresh()` 和 `run_mime_database_refresh()` 结构完全相同，提取 `_refresh_database()` 公共函数。
+*   **D3 — analyze.py 删除+刷新重复**: 两处 `_delete_analyze_paths()` + `ScanCache.clear()` 代码提取为 `_delete_and_refresh_cache()` 辅助函数。
+*   **D4 — analyze.py xdg-open 重复**: 三处目录打开代码提取为 `_open_in_file_manager()` 函数。
+*   **D5 — remove.py 符号链接解析重复**: `_launcher_points_to_topo()` 和 `_launcher_points_to_package()` 中重复的 readlink + resolve 逻辑提取为 `_resolve_launcher_symlink()` 共享函数。
+*   **D7 — whitelist.py Path.home().resolve() 重复**: 三处相同的 try/except 模式提取为 `_get_resolved_home()` 函数（不使用 `@functools.cache`，因 HOME 在测试中可变）。
+
+### 2. 冗余/可简化代码
+
+*   **V1 — safe_remove 文件类型判断**: `is_symlink()/is_file()` 和 `else` 分支都调用 `unlink()`，合并为 `if is_dir() and not is_symlink()` 二分逻辑。
+*   **V2 — get_show_scrollbar 冗余检查**: 移除多余的 `config_file.exists()` 检查（`load_config()` 内部已处理）。
+
+### 3. Bug 修复
+
+*   **I2 — clean_trash 大小统计 bug**: `dry_run=False` 时 `gio trash --empty` 返回 size=0，现在在清空前先测量 Trash 大小。
+
+### 4. 死代码移除
+
+*   **X1 — status.py 空 if 块**: 移除 `if nvme_path.exists(): pass` 空代码块。
+
+### 5. 魔法数字常量化
+
+*   **N1 — 清理阈值集中化**: 在 `constants.py` 新增 `CLEAN_CACHE_AGE_DAYS`(30)、`CLEAN_ORPHAN_AGE_DAYS`(60)、`CLEAN_CARGO_AGE_DAYS`(7)、`CLEAN_TEMP_AGE_DAYS`(3)，更新 `apps.py`、`dev.py`、`user.py` 引用。
+*   **N2 — analyze 超时常量**: 提取 `_ANALYZE_COMMAND_TIMEOUT = 300`。
+*   **N3 — swap 安全比率常量**: 提取 `_MIN_RAM_SWAP_RATIO = 2`。
+
+### 6. 导入/风格修复
+
+*   **S1 — runner.py 函数内导入**: `import contextlib` 和 `import io` 从 `run_clean()` 内移至文件顶部。
+*   **S2 — test_file_ops.py 嵌套导入**: 移除函数内冗余 `import os`，移至模块顶部。
+
+### 修改文件列表
+| 文件 | 变更类型 |
+|------|----------|
+| `src/clean/optimize.py` | D1 任务列表去重 + D2 刷新函数提取 + N3 常量 |
+| `src/core/analyze.py` | D3 + D4 辅助函数提取 + N2 超时常量 |
+| `src/core/whitelist.py` | D7 `_get_resolved_home()` 提取 |
+| `src/manage/remove.py` | D5 符号链接解析提取 |
+| `src/core/file_ops.py` | V1 文件类型判断简化 |
+| `src/core/config.py` | V2 冗余检查移除 |
+| `src/clean/user.py` | I2 trash 大小修复 + N1 常量引用 |
+| `src/core/status.py` | X1 死代码移除 |
+| `src/core/constants.py` | N1 清理阈值常量 |
+| `src/clean/apps.py` | N1 常量引用 |
+| `src/clean/dev.py` | N1 常量引用 |
+| `src/clean/runner.py` | S1 导入提升 |
+| `tests/test_file_ops.py` | S2 嵌套导入修复 |
+
+---
+
 # Daily Modification Report - 2026-07-29
 
 ## Project: topo (Topo) - 安全审查与数据丢失风险修复

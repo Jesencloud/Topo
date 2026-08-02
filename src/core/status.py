@@ -173,12 +173,6 @@ def get_ssd_info():
     """Try to find SSD health info from /sys (limited availability without root/smartctl)."""
     try:
         # NVMe specific health (some kernels expose this)
-        nvme_path = Path("/sys/class/nvme/nvme0/device/smart_log")
-        if nvme_path.exists():
-            # This is binary data, hard to parse without root.
-            # Fallback to model name
-            pass
-
         # Check for model and temperature
         drive_path = Path("/sys/class/block/nvme0n1/device")
         if not drive_path.exists():

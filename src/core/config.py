@@ -79,9 +79,6 @@ def get_purge_paths() -> list[str]:
 
 
 def get_show_scrollbar() -> bool:
-    config_file = get_config_file()
-    if not config_file.exists():
-        return bool(DEFAULT_CONFIG["show_scrollbar"])
     return bool(load_config().get("show_scrollbar", DEFAULT_CONFIG["show_scrollbar"]))
 
 

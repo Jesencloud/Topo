@@ -1,3 +1,5 @@
+import contextlib
+import io
 import os
 import shutil
 from functools import partial
@@ -70,9 +72,6 @@ def run_clean(dry_run=False):
     total_items = 0
     total_categories = 0
     category_results = []
-
-    import contextlib
-    import io
 
     # Define the grouped categories
     execution_groups = []

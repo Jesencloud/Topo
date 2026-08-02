@@ -1,7 +1,7 @@
 import shutil
 from pathlib import Path
 
-from ..core.constants import DEV_CACHES, OK
+from ..core.constants import CLEAN_CARGO_AGE_DAYS, DEV_CACHES, OK
 from ..core.file_ops import (
     bytes_to_human,
     clean_path_by_age,
@@ -140,7 +140,7 @@ def clean_developer_tools(dry_run=False):
     cargo_path = DEV_CACHES["cargo"]
     if cargo_path.exists():
         register_cleaned_path(cargo_path)
-        s, i = clean_path_by_age(cargo_path, days=7, dry_run=dry_run)
+        s, i = clean_path_by_age(cargo_path, days=CLEAN_CARGO_AGE_DAYS, dry_run=dry_run)
         if i > 0:
             total_size += s
             total_items += i

@@ -10,7 +10,15 @@ from ..core.app_cache import (
     resolve_cache_path,
 )
 from ..core.browser_cache import BROWSER_CACHE_DEFS, BROWSER_CACHE_ROOT_NAMES
-from ..core.constants import DETECTED_APPS_FILE, GRAY, OK, RESET, SKIP
+from ..core.constants import (
+    CLEAN_CACHE_AGE_DAYS,
+    CLEAN_ORPHAN_AGE_DAYS,
+    DETECTED_APPS_FILE,
+    GRAY,
+    OK,
+    RESET,
+    SKIP,
+)
 from ..core.desktop_app_cache import (
     DESKTOP_APP_DETECTION_NAMES,
     get_desktop_app_cleanup_defs,
@@ -189,7 +197,7 @@ def clean_flatpak_unused(dry_run=False):
     return 0, 0
 
 
-def clean_generic_xdg_caches(days=30, dry_run=False):
+def clean_generic_xdg_caches(days=CLEAN_CACHE_AGE_DAYS, dry_run=False):
     """Heuristic cleanup for unknown apps in ~/.cache."""
     cache_root = Path.home() / ".cache"
     if not cache_root.exists():
@@ -308,7 +316,7 @@ def clean_orphaned_remnants(dry_run=False):
 
                 if not is_installed:
                     # Final Safety: 60 days for unidentified orphans
-                    s, i = clean_path_by_age(item, days=60, dry_run=dry_run)
+                    s, i = clean_path_by_age(item, days=CLEAN_ORPHAN_AGE_DAYS, dry_run=dry_run)
                     if i > 0:
                         total_size += s
                         total_items += i

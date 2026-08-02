@@ -35,6 +35,7 @@ from .heavy_cache import get_analyze_cache_defs
 from .scan_cache import ScanCache
 from .system import run_command
 
+_ANALYZE_COMMAND_TIMEOUT = 300
 SCAN_SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 
 # Grace period before a scan paints the (screen-clearing) scan header + spinner.
@@ -76,7 +77,7 @@ def get_rust_scan_data(path: Path) -> dict[str, Any] | None:
     if cached:
         return cached
 
-    res = run_command([str(binary), str(path)], capture=True, timeout=300)
+    res = run_command([str(binary), str(path)], capture=True, timeout=_ANALYZE_COMMAND_TIMEOUT)
     if res.ok:
         try:
             data = json.loads(res.stdout)
@@ -387,7 +388,10 @@ def _sudo_remove(path: Path) -> bool:
 
     size_bytes = get_size_fast(target_path)
     res = run_command(
-        ["rm", "-rf", "--", str(target_path)], use_sudo=True, capture=True, timeout=300
+        ["rm", "-rf", "--", str(target_path)],
+        use_sudo=True,
+        capture=True,
+        timeout=_ANALYZE_COMMAND_TIMEOUT,
     )
     if res.ok:
         record_deletion_audit(target_path, "sudo-permanent", "deleted", size_bytes)
@@ -462,6 +466,23 @@ def _delete_analyze_paths(paths: list[Path]) -> bool:
     if changed:
         Navigator.play_delete()
     return changed
+
+
+def _open_in_file_manager(path: Path) -> None:
+    """Open the parent directory of *path* in the system file manager."""
+    target = path.parent if path.is_file() else path
+    run_command(["xdg-open", str(target)], capture=True, timeout=5)
+
+
+def _delete_and_refresh_cache(paths: list[Path], current_target: Path | None) -> bool:
+    """Delete paths and invalidate scan caches on success."""
+    if not _delete_analyze_paths(paths):
+        return False
+    if current_target:
+        ScanCache.discard(current_target)
+    else:
+        ScanCache.clear()
+    return True
 
 
 def run_deep_analysis(target_path: Path | None = None):
@@ -670,8 +691,7 @@ def run_deep_analysis(target_path: Path | None = None):
             scan_reason = "refresh"
         elif action == "OPEN":
             path = results[idx]["path"]
-            parent = path.parent if path.exists() else path
-            run_command(["xdg-open", str(parent)], capture=True, timeout=10)
+            _open_in_file_manager(path)
         elif action == "DRILL_DOWN":
             item = results[idx]
             if item.get("is_smart"):
@@ -680,8 +700,7 @@ def run_deep_analysis(target_path: Path | None = None):
                 selected_idxs = top_selector.run()
                 if selected_idxs:
                     paths = [item["smart_items"][s_idx]["path"] for s_idx in selected_idxs]
-                    if _delete_analyze_paths(paths):
-                        ScanCache.clear()
+                    if _delete_and_refresh_cache(paths, current_target):
                         needs_scan = True
                         scan_reason = "refresh"
             elif item["path"].is_dir():
@@ -722,19 +741,17 @@ def run_deep_analysis(target_path: Path | None = None):
 
                 if is_archive or is_exec or is_launchable:
                     # Open parent directory instead for safety
-                    run_command(["xdg-open", str(p.parent)], capture=True, timeout=10)
+                    _open_in_file_manager(p)
                 else:
                     run_command(["xdg-open", str(p)], capture=True, timeout=10)
         elif action == "DELETE_BATCH":
             selected_idxs = idx  # action was DELETE_BATCH, idx contains the list
             paths = [results[s_idx]["path"] for s_idx in selected_idxs]
-            if _delete_analyze_paths(paths):
-                ScanCache.clear()
+            if _delete_and_refresh_cache(paths, current_target):
                 needs_scan = True
                 scan_reason = "refresh"
         elif action == "OPEN_BATCH":
             selected_idxs = idx
             for s_idx in selected_idxs:
                 p = results[s_idx]["path"]
-                parent = p.parent if p.exists() else p
-                run_command(["xdg-open", str(parent)], capture=True, timeout=10)
+                _open_in_file_manager(p)

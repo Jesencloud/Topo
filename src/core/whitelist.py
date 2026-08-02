@@ -196,6 +196,13 @@ LINUX_PROTECTED_FLATPAK_APP_IDS = [
 ]
 
 
+def _get_resolved_home() -> Path:
+    try:
+        return Path.home().resolve()
+    except (OSError, RuntimeError):
+        return Path.home()
+
+
 def _ensure_config():
     config_dir = get_config_dir()
     whitelist_file = get_whitelist_file()
@@ -280,12 +287,9 @@ def get_hard_protection_reason(path) -> str | None:
     if _is_critical_system_path(path):
         return "critical system path"
 
-    try:
-        home = Path.home().resolve()
-        if path == home:
-            return "home directory"
-    except PATH_RESOLVE_ERRORS:
-        home = Path.home()
+    home = _get_resolved_home()
+    if path == home:
+        return "home directory"
 
     # Protect standard XDG user-data directories themselves (exact match) from
     # every deletion context, including uninstall residue removal. Files *inside*
@@ -356,10 +360,10 @@ def is_cleanable_linux_app_data(path: Path) -> bool:
     if not is_sensitive_linux_app_data(path):
         return False
 
+    home = _get_resolved_home()
     try:
-        home = Path.home().resolve()
         rel_parts = path.relative_to(home).parts
-    except (OSError, ValueError):
+    except ValueError:
         return False
 
     return any(part in CLEANABLE_APP_CACHE_DIR_NAMES for part in rel_parts)
@@ -367,10 +371,7 @@ def is_cleanable_linux_app_data(path: Path) -> bool:
 
 def is_sensitive_linux_app_data(path: Path) -> bool:
     """Protect Linux user data that should not be removed as app cache/residue."""
-    try:
-        home = Path.home().resolve()
-    except PATH_RESOLVE_ERRORS:
-        home = Path.home()
+    home = _get_resolved_home()
 
     # Only protect paths within the home directory
     if home not in path.parents and path != home:

@@ -4,7 +4,7 @@ import shutil
 import time
 from pathlib import Path
 
-from ..core.constants import OK
+from ..core.constants import CLEAN_TEMP_AGE_DAYS, OK
 from ..core.file_ops import bytes_to_human, clean_path_by_age, get_size_fast, safe_remove
 from ..core.system import run_command
 
@@ -16,20 +16,18 @@ def clean_trash(dry_run=False):
 
     # 1. Try with gio (preferred on GNOME/modern desktops)
     if shutil.which("gio"):
+        trash_path = Path.home() / ".local/share/Trash"
+        size = get_size_fast(trash_path) if trash_path.exists() else 0
         if dry_run:
-            # We need to estimate size
-            trash_path = Path.home() / ".local/share/Trash"
-            if trash_path.exists():
-                size = get_size_fast(trash_path)
-                if size > 0:
-                    print(f"  {OK} User Trash ({bytes_to_human(size)}) would be emptied")
-                    return size, 1, 1
+            if size > 0:
+                print(f"  {OK} User Trash ({bytes_to_human(size)}) would be emptied")
+                return size, 1, 1
             return 0, 0, 0
 
         res = run_command(["gio", "trash", "--empty"], capture=True, timeout=30)
         if res.ok:
-            print(f"  {OK} User Trash emptied")
-            return 0, 1, 1
+            print(f"  {OK} User Trash ({bytes_to_human(size)}) emptied")
+            return size, 1, 1
 
     # 2. Fallback: empty the standard home Trash and this user's /tmp trash.
     #    Paths use the real UID (not a literal "$USER"), and removal goes through
@@ -58,7 +56,7 @@ def clean_trash(dry_run=False):
     return total_size, total_items, (1 if total_items > 0 else 0)
 
 
-def clean_system_temp(dry_run=False, min_age_days=3):
+def clean_system_temp(dry_run=False, min_age_days=CLEAN_TEMP_AGE_DAYS):
     """Clean stale temporary files from /tmp and /var/tmp.
 
     Only removes entries that are (a) owned by the current user and (b) untouched

@@ -1,3 +1,4 @@
+import os
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -382,7 +383,6 @@ def test_clean_path_by_age(test_env):
     old_time = current_time - (15 * 86400)
 
     # Use a real os.stat_result to avoid TypeError on some platforms/Python versions
-    import os
 
     mock_st = os.stat_result((0, 0, 0, 0, 0, 0, 10, old_time, old_time, old_time))
 
