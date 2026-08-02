@@ -64,7 +64,7 @@ PACKAGE_MANAGER_CLEANER_DEFS = (
         label="DNF cache",
         os_ids=("fedora", "rhel", "centos"),
         executable="dnf",
-        command=("dnf", "clean", "all"),
+        command=("dnf", "clean", "packages"),
     ),
     PackageManagerCleanerDef(
         key="apt",
