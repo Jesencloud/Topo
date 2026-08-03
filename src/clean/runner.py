@@ -22,8 +22,10 @@ from .apps import clean_apps_deep, proactive_app_detection
 from .dev import clean_developer_tools
 from .system import (
     clean_journal,
+    clean_old_kernels,
     clean_orphaned_packages,
     clean_package_manager,
+    clean_rotated_logs,
     clean_zombies,
 )
 from .user import clean_user_data
@@ -82,7 +84,9 @@ def run_clean(dry_run=False):
                 [
                     ("Package Manager Cache", clean_package_manager),
                     ("Orphaned Packages", clean_orphaned_packages),
+                    ("Old Kernels", clean_old_kernels),
                     ("System Journal Logs", clean_journal),
+                    ("Rotated Log Files", clean_rotated_logs),
                     ("Zombie Processes", clean_zombies),
                 ],
             )

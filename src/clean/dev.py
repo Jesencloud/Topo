@@ -1,12 +1,13 @@
 import shutil
 from pathlib import Path
 
-from ..core.constants import CLEAN_CARGO_AGE_DAYS, DEV_CACHES, OK
+from ..core.constants import CLEAN_CARGO_AGE_DAYS, DEFAULT_PURGE_SEARCH_PATHS, DEV_CACHES, OK
 from ..core.file_ops import (
     bytes_to_human,
     clean_path_by_age,
     get_size_fast,
     register_cleaned_path,
+    safe_remove,
 )
 from ..core.heavy_cache import get_ai_model_cleanup_defs, get_container_cache_def
 from ..core.system import run_command
@@ -116,6 +117,56 @@ def clean_ai_models(dry_run=False):
     return total_size, total_items
 
 
+def clean_java_caches(dry_run=False):
+    """Clean Gradle and Maven build caches."""
+    total_size = 0
+    total_items = 0
+    home = Path.home()
+
+    targets = [
+        ("Gradle caches", home / ".gradle" / "caches"),
+        ("Gradle wrapper", home / ".gradle" / "wrapper" / "dists"),
+        ("Maven repository", home / ".m2" / "repository"),
+    ]
+    for label, cache_path in targets:
+        if not cache_path.is_dir():
+            continue
+        register_cleaned_path(cache_path)
+        s, i = clean_path_by_age(cache_path, days=60, dry_run=dry_run)
+        if i > 0:
+            total_size += s
+            total_items += i
+            status = "would be cleaned" if dry_run else "cleaned"
+            print(f"  {OK} {label} ({bytes_to_human(s)}) {status}")
+    return total_size, total_items
+
+
+def clean_python_pycache(dry_run=False):
+    """Clean __pycache__ directories from user project directories."""
+    total_size = 0
+    total_items = 0
+
+    for search_path in DEFAULT_PURGE_SEARCH_PATHS:
+        root = Path(search_path)
+        if not root.is_dir():
+            continue
+        try:
+            for pycache in root.rglob("__pycache__"):
+                if not pycache.is_dir():
+                    continue
+                size = get_size_fast(pycache)
+                if safe_remove(pycache, use_trash=False, dry_run=dry_run)[0]:
+                    total_size += size
+                    total_items += 1
+        except OSError:
+            continue
+
+    if total_items > 0:
+        status = "would be cleaned" if dry_run else "cleaned"
+        print(f"  {OK} Python __pycache__ ({bytes_to_human(total_size)}) {status}")
+    return total_size, total_items
+
+
 def clean_developer_tools(dry_run=False):
     """Main entry for developer-focused cleanup."""
     total_size = 0
@@ -148,7 +199,21 @@ def clean_developer_tools(dry_run=False):
             status = "would be cleaned" if dry_run else "cleaned"
             print(f"  {OK} Cargo cache ({bytes_to_human(s)}) {status}")
 
-    # 3. AI & Virtualization
+    # 3. Java build caches (Gradle, Maven)
+    s, i = clean_java_caches(dry_run=dry_run)
+    if i > 0:
+        total_size += s
+        total_items += i
+        total_categories += 1
+
+    # 4. Python __pycache__
+    s, i = clean_python_pycache(dry_run=dry_run)
+    if i > 0:
+        total_size += s
+        total_items += i
+        total_categories += 1
+
+    # 5. AI & Virtualization
     for func in [clean_ai_models, clean_docker, clean_podman, clean_multipass]:
         s, i = func(dry_run=dry_run)[:2]
         if i > 0:

@@ -366,6 +366,86 @@ def clean_snap_cache(dry_run=False):
     return total_size, total_items
 
 
+def clean_steam_shader_cache(dry_run=False):
+    """Clean Steam and Proton shader caches."""
+    total_size = 0
+    total_items = 0
+    home = Path.home()
+
+    shader_paths = [
+        home / ".steam" / "steam" / "shadercache",
+        home / ".local" / "share" / "Steam" / "shadercache",
+    ]
+    for shader_dir in shader_paths:
+        if not shader_dir.is_dir():
+            continue
+        s, i = clean_path_by_age(shader_dir, days=60, dry_run=dry_run)
+        if i > 0:
+            total_size += s
+            total_items += i
+
+    # Proton/Wine prefix shader caches
+    compatdata = home / ".steam" / "steam" / "steamapps" / "compatdata"
+    if compatdata.is_dir():
+        try:
+            for prefix_dir in compatdata.iterdir():
+                shader_cache = prefix_dir / "pfx" / "drive_c" / "windows" / "temp"
+                if shader_cache.is_dir():
+                    s, i = clean_path_by_age(shader_cache, days=30, dry_run=dry_run)
+                    if i > 0:
+                        total_size += s
+                        total_items += i
+        except OSError:
+            pass
+
+    if total_items > 0:
+        status = "would be cleaned" if dry_run else "cleaned"
+        print(f"  {OK} Steam/Proton shader cache ({bytes_to_human(total_size)}) {status}")
+    return total_size, total_items
+
+
+def clean_ide_caches(dry_run=False):
+    """Clean IDE and code editor caches."""
+    total_size = 0
+    total_items = 0
+    home = Path.home()
+
+    # Static known IDE cache paths
+    ide_caches = [
+        ("VS Code", home / ".config" / "Code" / "CachedData"),
+        ("VS Code", home / ".config" / "Code" / "CachedExtensionVSIXs"),
+        ("VS Code", home / ".config" / "Code" / "Cache"),
+        ("VS Codium", home / ".config" / "VSCodium" / "CachedData"),
+        ("VS Codium", home / ".config" / "VSCodium" / "Cache"),
+        ("Cursor", home / ".config" / "Cursor" / "CachedData"),
+        ("Cursor", home / ".config" / "Cursor" / "Cache"),
+    ]
+    for _label, cache_dir in ide_caches:
+        if cache_dir.is_dir():
+            s, i = clean_path_by_age(cache_dir, days=30, dry_run=dry_run)
+            if i > 0:
+                total_size += s
+                total_items += i
+
+    # JetBrains IDEs: ~/.cache/JetBrains/*/
+    jetbrains_cache = home / ".cache" / "JetBrains"
+    if jetbrains_cache.is_dir():
+        try:
+            for ide_dir in jetbrains_cache.iterdir():
+                if ide_dir.is_dir():
+                    s, i = clean_path_by_age(ide_dir, days=30, dry_run=dry_run)
+                    if i > 0:
+                        total_size += s
+                        total_items += i
+        except OSError:
+            pass
+
+    if total_items > 0:
+        status = "would be cleaned" if dry_run else "cleaned"
+        print(f"  {OK} IDE/Editor caches ({bytes_to_human(total_size)}) {status}")
+    return total_size, total_items
+
+
 def clean_apps_deep(dry_run=False, detected_apps=None):
     """Main entry point for deep application cleanup.
 
@@ -404,4 +484,19 @@ def clean_apps_deep(dry_run=False, detected_apps=None):
             total_size += s
             total_items += i
             total_categories += 1
+
+    # Steam/Proton shader cache
+    s, i = clean_steam_shader_cache(dry_run=dry_run)
+    total_size += s
+    total_items += i
+    if i > 0:
+        total_categories += 1
+
+    # IDE/Editor caches
+    s, i = clean_ide_caches(dry_run=dry_run)
+    total_size += s
+    total_items += i
+    if i > 0:
+        total_categories += 1
+
     return total_size, total_items, total_categories
