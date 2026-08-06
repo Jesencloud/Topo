@@ -383,7 +383,10 @@ def parse_size_to_bytes(text: str) -> int:
         return 0
     match = re.search(r"([0-9.]+)\s*([KMGTPE]?I?B|[KMGTPE])", text, re.IGNORECASE)
     if match:
-        val = float(match.group(1))
+        try:
+            val = float(match.group(1))
+        except ValueError:
+            val = 0.0
         unit = match.group(2).upper()
         if "P" in unit:
             val *= 1024**5
@@ -400,7 +403,10 @@ def parse_size_to_bytes(text: str) -> int:
     # whole value is numeric, so stray digits in command output aren't misread.
     stripped = text.strip()
     if stripped and stripped.replace(".", "", 1).isdigit():
-        return int(float(stripped))
+        try:
+            return int(float(stripped))
+        except ValueError:
+            return 0
     return 0
 
 

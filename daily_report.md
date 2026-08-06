@@ -49,7 +49,10 @@
 *   **ZRAM 压缩内存状态监测**:
     *   新增 `get_zram_info()`，实时读取 `/sys/block/zram0` 设备的物理压缩后占用、解压前数据量及压缩比率（如 `51.2x ratio`），准确反映桌面内存性能优化状态。
 
-### 5. 代码冗余与死代码清理
+### 5. 紧急 Bug 修复 (APT 输出解析异常)
+*   **parse_size_to_bytes 容错处理**: 修复在 Ubuntu 环境下执行 `topo clean` 时，因 `apt-get autoremove` 输出文本包含省略号（如 `... MB`）触发 `ValueError: could not convert string to float: '...'` 导致程序崩溃的问题。增加了 `try-except` 异常捕获并平滑降级为 `0` 字节。
+
+### 6. 代码冗余与死代码清理
 *   合并 `clean_rotated_logs` 中的文件后缀判定集合。
 *   移除 `optimize.py` 中因功能迁移/删除而废弃的常量（`MEMORY_PRESSURE_AVAILABLE_RATIO`, `GPU_SHADER_CACHE_AGE_DAYS`, `GPU_SHADER_CACHE_PATHS`）。
 

@@ -273,11 +273,12 @@ def test_parse_size_from_text():
     assert parse_size_to_bytes("1.5 GiB") == int(1.5 * 1024**3)
     assert parse_size_from_text("no size here") == 0
     assert parse_size_from_text("") == 0
-    # Bare numeric strings (no unit) are treated as raw bytes.
     assert parse_size_to_bytes("4096") == 4096
     assert parse_size_to_bytes("  1024  ") == 1024
     # ...but stray numbers inside non-numeric text are not misread as bytes.
     assert parse_size_to_bytes("deleted 5 files") == 0
+    # Invalid float captures (like '...' MB) safely fallback to 0 instead of crashing.
+    assert parse_size_to_bytes("Need ... MB of disk space") == 0
 
 
 def test_safe_remove_edge_cases(test_env):
