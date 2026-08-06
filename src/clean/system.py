@@ -79,7 +79,7 @@ def clean_package_manager(dry_run=False):
 
     cmd = list(cleaner.command)
     if cleaner.key == "dnf" and shutil.which("dnf5"):
-        cmd = ["dnf5", "clean", "all"]
+        cmd = ["dnf5", "clean", "packages"]
 
     res = run_command(cmd, use_sudo=True, capture=True)
 

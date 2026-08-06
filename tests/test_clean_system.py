@@ -95,7 +95,7 @@ def test_clean_package_manager_fedora(mock_get_os_id, mock_run, mock_which):
     s, i, c = clean_package_manager(dry_run=False)
     assert i == 1
     assert c == 1
-    mock_run.assert_called_with(["dnf", "clean", "all"], use_sudo=True, capture=True)
+    mock_run.assert_called_with(["dnf", "clean", "packages"], use_sudo=True, capture=True)
 
     s, i, c = clean_package_manager(dry_run=True)
     assert c == 1
