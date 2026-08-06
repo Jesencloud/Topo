@@ -22,14 +22,18 @@
 *   **移除争议/冗余维护任务**:
     *   移除 `run_dns_flush`: 现代 systemd-resolved 自动接管，手动刷新无明显收益。
     *   移除 `run_memory_opt` (`drop_caches`): 避免强行释放 PageCache 导致系统后续 I/O 重新预热变慢。
-*   **重叠项迁移**:
+*   **重叠与归类优化**:
     *   移除 `run_gpu_shader_cache_cleanup` 并将其合并至 Clean 模块 `clean_steam_shader_cache`，避免跨模块重复清理。
+    *   将桌面缩略图清理 `run_thumbnail_cleanup` 迁移至 Clean 模块 `User Data Cleanup` (新增 `clean_thumbnails`)，更符合磁盘空间回收归类。
 *   **新增实用系统维护任务**:
     *   新增 `run_sysctl_optimize`: 优化桌面 `vm.swappiness=10` 及 `vm.vfs_cache_pressure=50` 参数。
     *   新增 `run_tmpfiles_cleanup`: 触发 `systemd-tmpfiles --clean` 处理系统临时文件规则。
     *   新增 `run_ldconfig`: 刷新动态链接库缓存索引。
     *   新增 `run_locale_gen`: 重新生成并优化 system locale 区域归档。
     *   新增 `run_man_db_refresh`: 更新 `mandb` 手册索引。
+    *   新增 `run_flatpak_repair`: 校验并修复 Flatpak 系统与用户库对象完整性。
+    *   新增 `run_tracker_miner_reset`: 重置 GNOME Tracker 文件检索索引。
+    *   新增 `run_package_repo_refresh`: 刷新 PackageKit/APT-File 元数据索引库。
 
 ### 3. 代码冗余与死代码清理
 *   合并 `clean_rotated_logs` 中的文件后缀判定集合。
