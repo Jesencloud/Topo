@@ -108,18 +108,33 @@ class UninstallManager:
     _SYSTEM_COMPONENT_TOKENS = frozenset(
         {
             "akmod",
+            "cldr-emoji",
             "cinnamon",
+            "dracut",
+            "evolution-data-server",
+            "firmware",
+            "fontconfig",
+            "gcr",
+            "geoclue",
+            "glibc",
+            "gnome-bluetooth",
             "gnome-control-center",
             "gnome-session",
             "gnome-settings-daemon",
             "gnome-shell",
             "gnome-software",
+            "gnome-user-share",
+            "grub",
             "ibus",
+            "openjdk",
             "kernel",
             "kmod",
             "kwin",
+            "langpack",
             "linux-headers",
             "linux-image",
+            "llvm",
+            "malcontent",
             "mesa",
             "mutter",
             "networkmanager",
@@ -127,9 +142,15 @@ class UninstallManager:
             "pipewire",
             "plasma",
             "pulseaudio",
+            "qemu-common",
+            "rust-std",
+            "rygel",
+            "selinux",
             "systemd",
+            "tecla",
             "wayland",
             "wireplumber",
+            "xdg-user-dirs",
             "xfce",
             "xorg",
         }
@@ -152,6 +173,11 @@ class UninstallManager:
             "nautilus",
             "xdg-desktop-portal",
             "xdg-desktop-portal-gnome",
+            "xdg-desktop-portal-gtk",
+            "xdg-desktop-portal-kde",
+            "xdg-desktop-portal-wlr",
+            "xdg-desktop-portal-lxqt",
+            "xdg-user-dirs-gtk",
         }
     )
 
@@ -232,8 +258,28 @@ class UninstallManager:
     def _is_system_component(cls, app_id: str, app_name: str) -> bool:
         text = cls._app_text(app_id, app_name)
         app_id_lower = app_id.lower()
-        return app_id_lower in cls._SYSTEM_COMPONENT_EXACT_IDS or any(
+        if app_id_lower in cls._SYSTEM_COMPONENT_EXACT_IDS or any(
             token in text for token in cls._SYSTEM_COMPONENT_TOKENS
+        ):
+            return True
+
+        # Generic System Heuristics for non-app packages:
+        # Prevent non-GUI libraries, development headers, static archives from leaking
+        sys_suffixes = (
+            "-libs",
+            "-devel",
+            "-dev",
+            "-static",
+            "-headers",
+            "-plugins",
+            "-modules",
+        )
+        if app_id_lower.startswith("libreoffice"):
+            return any(app_id_lower.endswith(s) for s in sys_suffixes)
+
+        sys_prefixes = ("lib", "gsettings-", "desktop-file-", "shared-mime-")
+        return any(app_id_lower.endswith(s) for s in sys_suffixes) or any(
+            app_id_lower.startswith(p) for p in sys_prefixes
         )
 
     def _parse_size_to_bytes(self, size_str: str) -> int:
