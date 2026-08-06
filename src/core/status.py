@@ -34,6 +34,62 @@ def get_mem_info():
         return "Unknown", "Unknown", 0
 
 
+def get_swap_info():
+    """Read Swap info from /proc/meminfo."""
+    try:
+        with open("/proc/meminfo") as f:
+            lines = f.readlines()
+            total = 0
+            free = 0
+            for line in lines:
+                if line.startswith("SwapTotal:"):
+                    total = int(line.split()[1]) * 1024
+                elif line.startswith("SwapFree:"):
+                    free = int(line.split()[1]) * 1024
+            if total == 0:
+                return None
+            used = total - free
+            percent = (used / total) * 100 if total > 0 else 0
+            return bytes_to_human(used), bytes_to_human(total), percent
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def get_zram_info():
+    """Read ZRAM compressed RAM stats from /sys/block/zram0 if active."""
+    try:
+        zram_path = Path("/sys/block/zram0")
+        if not zram_path.exists():
+            return None
+        disksize_file = zram_path / "disksize"
+        orig_data_file = zram_path / "mm_stat"
+        if not disksize_file.exists():
+            return None
+
+        with open(disksize_file) as f:
+            total_size = int(f.read().strip())
+        if total_size == 0:
+            return None
+
+        used_size = 0
+        comp_size = 0
+        if orig_data_file.exists():
+            with open(orig_data_file) as f:
+                parts = f.read().split()
+                if len(parts) >= 2:
+                    used_size = int(parts[0])
+                    comp_size = int(parts[1])
+
+        if used_size == 0:
+            return None
+
+        ratio = (used_size / comp_size) if comp_size > 0 else 1.0
+        percent = (used_size / total_size) * 100
+        return bytes_to_human(comp_size), bytes_to_human(used_size), percent, f"{ratio:.1f}x"
+    except (OSError, ValueError, IndexError, ZeroDivisionError):
+        return None
+
+
 def get_uptime():
     try:
         with open("/proc/uptime") as f:
@@ -371,6 +427,22 @@ def show_status():
     print(
         f"🧠 Memory:       {mem_bar}  {mem_color}{mem_percent:>5.1f}%{RESET}  ({used_mem_str} / {total_mem_str})"
     )
+
+    swap_data = get_swap_info()
+    if swap_data:
+        swap_used_str, swap_total_str, swap_pct = swap_data
+        swap_bar = draw_bar(swap_pct, width=20)
+        swap_color = get_color_for_percent(swap_pct) if swap_pct > 0 else GRAY
+        print(
+            f"🔄 Swap:         {swap_bar}  {swap_color}{swap_pct:>5.1f}%{RESET}  ({swap_used_str} / {swap_total_str})"
+        )
+
+    zram_data = get_zram_info()
+    if zram_data:
+        comp_str, orig_str, zram_pct, ratio_str = zram_data
+        print(
+            f"⚡ ZRAM RAM:     {GRAY}{comp_str} (compressed from {orig_str}, {ratio_str} ratio){RESET}"
+        )
 
     disk_bar = draw_bar(disk_percent, width=20)
     disk_color = get_color_for_percent(disk_percent) if disk_percent > 0 else GRAY

@@ -43,7 +43,13 @@
     *   新增在卸载扫描中检索 `~/.config/systemd/user/` 下关联的应用服务文件 (`.service`)。
     *   在卸载删除过程中，若清理了用户服务定义，自动触发 `systemctl --user daemon-reload` 重新加载配置。
 
-### 4. 代码冗余与死代码清理
+### 4. Status 模块增强（系统健康状态面板）
+*   **Swap 内存交换区监控**:
+    *   在 `status.py` 中新增 `get_swap_info()`，从 `/proc/meminfo` 读取 Swap 使用量与总容量，并以可视化彩色进度条形式直观展现内存交换压力。
+*   **ZRAM 压缩内存状态监测**:
+    *   新增 `get_zram_info()`，实时读取 `/sys/block/zram0` 设备的物理压缩后占用、解压前数据量及压缩比率（如 `51.2x ratio`），准确反映桌面内存性能优化状态。
+
+### 5. 代码冗余与死代码清理
 *   合并 `clean_rotated_logs` 中的文件后缀判定集合。
 *   移除 `optimize.py` 中因功能迁移/删除而废弃的常量（`MEMORY_PRESSURE_AVAILABLE_RATIO`, `GPU_SHADER_CACHE_AGE_DAYS`, `GPU_SHADER_CACHE_PATHS`）。
 
