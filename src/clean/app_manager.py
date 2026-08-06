@@ -1,4 +1,5 @@
 import contextlib
+import json
 import os
 import shutil
 import subprocess
@@ -24,6 +25,7 @@ from ..core.constants import (
 from ..core.desktop_entry import get_desktop_exec_names, get_desktop_icon, get_desktop_name
 from ..core.file_ops import (
     bytes_to_human,
+    get_size_fast,
     parse_size_to_bytes,
     record_deletion_audit,
     safe_remove,
@@ -578,6 +580,179 @@ class UninstallManager:
             except (OSError, subprocess.SubprocessError):
                 pass
 
+        # 7. NPM Global Packages Scan
+        if shutil.which("npm"):
+            try:
+                res = system.run_command(
+                    ["npm", "list", "-g", "--json", "--depth=0"], capture=True, timeout=30
+                )
+                if res.ok and res.stdout:
+                    data = json.loads(res.stdout)
+                    dependencies = data.get("dependencies", {})
+                    system_npm_pkgs = {
+                        "npm",
+                        "corepack",
+                        "yarn",
+                        "pnpm",
+                        "npx",
+                        "cnpm",
+                    }
+                    # Get global node_modules root path as fallback
+                    npm_root_path = None
+                    res_root = system.run_command(["npm", "root", "-g"], capture=True, timeout=5)
+                    if res_root.ok and res_root.stdout.strip():
+                        npm_root_path = Path(res_root.stdout.strip())
+
+                    for pkg_name, info in dependencies.items():
+                        clean_name = pkg_name.split("/")[-1]
+                        if clean_name in system_npm_pkgs:
+                            continue
+                        if self._is_system_component(clean_name, pkg_name):
+                            continue
+
+                        pkg_path = info.get("path")
+                        if not pkg_path and npm_root_path:
+                            pkg_path = str(npm_root_path / pkg_name)
+
+                        size_bytes = 0
+                        install_time = 0
+                        if pkg_path:
+                            p = Path(pkg_path)
+                            if p.exists():
+                                try:
+                                    install_time = int(p.stat().st_mtime)
+                                    size_bytes = get_size_fast(p)
+                                except OSError:
+                                    pass
+
+                        size_str = bytes_to_human(size_bytes) if size_bytes > 0 else "N/A"
+                        apps.append(
+                            self._app_record(
+                                pkg_name,
+                                clean_name,
+                                size_bytes,
+                                size_str,
+                                "NPM",
+                                install_time,
+                            )
+                        )
+            except (OSError, subprocess.SubprocessError, json.JSONDecodeError, ValueError):
+                pass
+
+        # 8. Standalone CLI & Native Tools Dynamic Generic Scan
+        # Scans for non-packaged CLI tools installed via single-file/script installers (e.g. Claude, Ollama, Cargo, Bun, Deno, Nvm, UV)
+        home = Path.home()
+        discovered_standalone: list[dict[str, Any]] = []
+
+        # System/user systemd/env tokens to avoid misidentifying
+        skip_cli_names = {
+            "pip",
+            "python",
+            "python3",
+            "git",
+            "bash",
+            "zsh",
+            "topo",
+            "node",
+            "npm",
+            "yarn",
+            "systemd",
+        }
+
+        # Pattern A: ~/.local/bin/<cmd> with matching ~/.local/share/<cmd> or ~/.config/<cmd>
+        local_bin = home / ".local/bin"
+        if local_bin.is_dir():
+            try:
+                for entry in local_bin.iterdir():
+                    cmd_name = entry.name.lower()
+                    if cmd_name in skip_cli_names or cmd_name.startswith("."):
+                        continue
+                    if self._is_system_component(cmd_name, cmd_name):
+                        continue
+
+                    share_dir = home / ".local/share" / cmd_name
+                    config_dir = home / ".config" / cmd_name
+                    target_dir = (
+                        share_dir
+                        if share_dir.is_dir()
+                        else (config_dir if config_dir.is_dir() else None)
+                    )
+
+                    if target_dir:
+                        discovered_standalone.append(
+                            {
+                                "id": cmd_name,
+                                "name": entry.name,
+                                "binary": entry,
+                                "install_dir": target_dir,
+                            }
+                        )
+            except OSError:
+                pass
+
+        # Pattern B: Independent Home dot-directories with bin/ (e.g. ~/.bun, ~/.deno, ~/.cargo, ~/.nvm, ~/.kimi-code)
+        try:
+            for item in home.iterdir():
+                if item.name.startswith(".") and item.is_dir() and not item.is_symlink():
+                    tool_name = item.name.lstrip(".")
+                    if tool_name in skip_cli_names or len(tool_name) < 2:
+                        continue
+                    if self._is_system_component(tool_name, tool_name):
+                        continue
+
+                    bin_sub = item / "bin"
+                    if bin_sub.is_dir():
+                        short_name = tool_name.split("-")[0]
+                        matching_bins = [
+                            f
+                            for f in bin_sub.iterdir()
+                            if f.is_file()
+                            and (
+                                f.name.lower().startswith(tool_name) or f.name.lower() == short_name
+                            )
+                        ]
+                        if matching_bins:
+                            main_bin = matching_bins[0]
+                            if not any(d["id"] == tool_name for d in discovered_standalone):
+                                discovered_standalone.append(
+                                    {
+                                        "id": tool_name,
+                                        "name": tool_name,
+                                        "binary": main_bin,
+                                        "install_dir": item,
+                                    }
+                                )
+        except OSError:
+            pass
+
+        for tool in discovered_standalone:
+            tool_id = str(tool["id"])
+            tool_name = str(tool["name"])
+            bin_path: Path = tool["binary"]
+            inst_dir: Path = tool["install_dir"]
+
+            size_bytes = 0
+            install_time = 0
+            try:
+                install_time = int(inst_dir.stat().st_mtime)
+                size_bytes = get_size_fast(inst_dir)
+                if bin_path.is_symlink() and bin_path.exists():
+                    size_bytes += bin_path.lstat().st_size
+            except OSError:
+                pass
+
+            size_str = bytes_to_human(size_bytes) if size_bytes > 0 else "N/A"
+            apps.append(
+                self._app_record(
+                    tool_id,
+                    tool_name,
+                    size_bytes,
+                    size_str,
+                    "CLI",
+                    install_time,
+                )
+            )
+
         self.apps = sorted(
             apps,
             key=lambda x: (x.get("install_time", 0), x.get("size_bytes", 0)),
@@ -598,7 +773,7 @@ class UninstallManager:
         home_path = Path.home()
         seen = set()
 
-        # 1. Standard XDG paths
+        # 1. Standard XDG & Home CLI paths
         search_roots = [
             home_path / ".config",
             home_path / ".local/share",
@@ -610,6 +785,17 @@ class UninstallManager:
         targets = {app_id.lower(), app_name.lower()}
         if "." in app_id:
             targets.add(app_id.split(".")[-1].lower())
+        if "/" in app_id:
+            parts = [p.strip("@").lower() for p in app_id.split("/") if p.strip("@")]
+            targets.update(parts)
+
+        # Check direct home hidden directories (e.g. ~/.claude, ~/.kimi, ~/.codex, ~/.grok, ~/.cloudbase)
+        for t in list(targets):
+            if len(t) >= 3:
+                dot_dir = home_path / f".{t}"
+                if dot_dir.is_dir() and str(dot_dir) not in seen:
+                    paths.append(dot_dir)
+                    seen.add(str(dot_dir))
 
         # 3. .desktop file keywords
         desktop_paths = [
@@ -758,6 +944,34 @@ class UninstallManager:
             elif app["type"] == "Snap":
                 res = system.run_command(
                     ["snap", "remove", "--purge", app["id"]], use_sudo=True, capture=True
+                )
+            elif app["type"] == "NPM":
+                res = system.run_command(
+                    ["npm", "uninstall", "-g", app["id"]], capture=True, timeout=60
+                )
+                # Clean empty scoped directory in global node_modules (e.g. ~/.npm-global/lib/node_modules/@cloudbase)
+                if "/" in app["id"]:
+                    scope = app["id"].split("/")[0]
+                    res_root = system.run_command(["npm", "root", "-g"], capture=True, timeout=5)
+                    if res_root.ok and res_root.stdout.strip():
+                        scope_dir = Path(res_root.stdout.strip()) / scope
+                        if scope_dir.is_dir():
+                            with contextlib.suppress(OSError):
+                                if not any(scope_dir.iterdir()):
+                                    scope_dir.rmdir()
+            elif app["type"] == "CLI":
+                # Remove standalone binary & install directory
+                home_p = Path.home()
+                cli_targets = [
+                    home_p / ".local/bin" / app["id"],
+                    home_p / ".local/share" / app["id"],
+                    home_p / f".{app['id']}",
+                ]
+                for ct in cli_targets:
+                    if ct.exists():
+                        safe_remove(ct, use_trash=True, allow_app_data_removal=True)
+                res = system.CommandResult(
+                    args=["cli_uninstall"], returncode=0, stdout="CLI uninstalled"
                 )
             elif app["type"] == "APT":
                 res = system.run_command(

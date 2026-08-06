@@ -35,9 +35,16 @@
     *   新增 `run_tracker_miner_reset`: 重置 GNOME Tracker 文件检索索引。
     *   新增 `run_package_repo_refresh`: 刷新 PackageKit/APT-File 元数据索引库。
 
-### 3. Uninstall 模块增强（应用完全卸载）
+### 3. Uninstall 模块增强（应用与 AI Coding 工具完全卸载）
+*   **NPM 全局应用与 AI Coding CLI 识别**:
+    *   在 `run_full_scan()` 中新增 NPM 全局包扫描 (`npm list -g --json`)，并补全缺失路径的 `npm root -g` 容错计算，准确识别与测量 `@openai/codex`、`@cloudbase/cli`、`miniprogram-ci` 等 NPM 全局工具的大小的与安装时间。
+    *   在 `execute_uninstall()` 中实现 `npm uninstall -g` 官方卸载，并支持对作用域包（如 `@cloudbase/cli`）自动搜寻并擦除空 Scope 父目录。
+*   **Linux Standalone Native CLI 通用动态探测**:
+    *   构建零硬编码的单文件/独立 CLI 动态感知引擎，全面覆盖原生架构范式：自动扫描 `~/.local/bin/<cmd>` 关联 `~/.local/share/<cmd>` / `~/.config/<cmd>`，以及 `~/.*` 根目录中包含 `bin/` 的独立应用。
+    *   成功实现对 **Claude Code** (`~/.local/share/claude`)、**Kimi Code** (`~/.kimi-code`)、**Grok CLI** (`~/.grok`) 等热门 AI Vibe Coding 工具的动态识别与彻底安全卸载。
 *   **孤立桌面快捷方式与图标自动清理**:
     *   在 `find_residue_paths()` 中新增自动定位并加入应用在 `~/.local/share/applications/<app_id>.desktop` 的快捷方式。
+    *   支持解析带 `@org/pkg` 的 scoped 包名及前缀，自动关联匹配 `~/.config/.<scope>` 等隐藏残留配置。
     *   新增自动检索 `~/.local/share/icons/` 及 `~/.local/share/pixmaps/` 中属于应用名称/ID 的废弃图标文件。
 *   **Systemd 用户服务自动清理与重载**:
     *   新增在卸载扫描中检索 `~/.config/systemd/user/` 下关联的应用服务文件 (`.service`)。

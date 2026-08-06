@@ -1,3 +1,4 @@
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -186,7 +187,10 @@ def test_run_full_scan_rpm(mock_run, mock_which):
     )
 
     mgr = UninstallManager()
-    with patch("src.core.system.get_os_id", return_value="fedora"):
+    with (
+        patch("src.core.system.get_os_id", return_value="fedora"),
+        patch("pathlib.Path.home", return_value=Path("/nonexistent_home_for_tests")),
+    ):
         apps = mgr.run_full_scan()
 
     assert len(apps) >= 1
@@ -251,7 +255,10 @@ def test_run_full_scan_skips_system_components(mock_run, mock_which):
     )
 
     mgr = UninstallManager()
-    with patch("src.core.system.get_os_id", return_value="fedora"):
+    with (
+        patch("src.core.system.get_os_id", return_value="fedora"),
+        patch("pathlib.Path.home", return_value=Path("/nonexistent_home_for_tests")),
+    ):
         apps = mgr.run_full_scan()
 
     assert apps == []
@@ -276,7 +283,10 @@ def test_run_full_scan_keeps_user_gnome_apps(mock_run, mock_which):
     )
 
     mgr = UninstallManager()
-    with patch("src.core.system.get_os_id", return_value="fedora"):
+    with (
+        patch("src.core.system.get_os_id", return_value="fedora"),
+        patch("pathlib.Path.home", return_value=Path("/nonexistent_home_for_tests")),
+    ):
         apps = mgr.run_full_scan()
 
     assert [app["id"] for app in apps] == [
@@ -305,7 +315,10 @@ def test_run_full_scan_keeps_user_libreoffice_apps(mock_run, mock_which):
     )
 
     mgr = UninstallManager()
-    with patch("src.core.system.get_os_id", return_value="fedora"):
+    with (
+        patch("src.core.system.get_os_id", return_value="fedora"),
+        patch("pathlib.Path.home", return_value=Path("/nonexistent_home_for_tests")),
+    ):
         apps = mgr.run_full_scan()
 
     assert [app["id"] for app in apps] == [
@@ -325,7 +338,10 @@ def test_run_full_scan_apt(mock_which, mock_run_cmd):
     )
 
     mgr = UninstallManager()
-    with patch("src.core.system.get_os_id", return_value="ubuntu"):
+    with (
+        patch("src.core.system.get_os_id", return_value="ubuntu"),
+        patch("pathlib.Path.home", return_value=Path("/nonexistent_home_for_tests")),
+    ):
         apps = mgr.run_full_scan()
 
     assert [(app["id"], app["type"]) for app in apps] == [
@@ -353,7 +369,10 @@ def test_run_full_scan_pacman(mock_which, mock_run_cmd):
     )
 
     mgr = UninstallManager()
-    with patch("src.core.system.get_os_id", return_value="arch"):
+    with (
+        patch("src.core.system.get_os_id", return_value="arch"),
+        patch("pathlib.Path.home", return_value=Path("/nonexistent_home_for_tests")),
+    ):
         apps = mgr.run_full_scan()
 
     assert [(app["id"], app["type"]) for app in apps] == [
@@ -369,7 +388,10 @@ def test_run_full_scan_flatpaks(mock_run, mock_which):
     mock_run.return_value = MagicMock(returncode=0, stdout="MyApp\tcom.example.MyApp\t1.2 GB\n")
 
     mgr = UninstallManager()
-    with patch("src.core.system.get_os_id", return_value="fedora"):
+    with (
+        patch("src.core.system.get_os_id", return_value="fedora"),
+        patch("pathlib.Path.home", return_value=Path("/nonexistent_home_for_tests")),
+    ):
         apps = mgr.run_full_scan()
 
     assert len(apps) >= 1
@@ -389,7 +411,8 @@ def test_run_full_scan_snaps(mock_which, mock_run_cmd):
         stdout="Name Version Rev Tracking Publisher Notes\nmy-snap 1.0 1 latest/stable test -\n",
     )
 
-    apps = UninstallManager().run_full_scan()
+    with patch("pathlib.Path.home", return_value=Path("/nonexistent_home_for_tests")):
+        apps = UninstallManager().run_full_scan()
 
     assert apps == [
         {
