@@ -35,7 +35,9 @@
     *   新增 `run_tracker_miner_reset`: 重置 GNOME Tracker 文件检索索引。
     *   新增 `run_package_repo_refresh`: 刷新 PackageKit/APT-File 元数据索引库。
 
-### 3. Uninstall 模块增强（应用与 AI Coding 工具完全卸载）
+### 3. Uninstall 模块增强（应用与 DNF5 / AI Coding 工具完全卸载）
+*   **DNF5 新架构全流程深度适配**:
+    *   在应用扫描与卸载架构中实现对 `dnf5` 的优先兼容支持。当系统（如 Fedora 41/44+）配备 `dnf5` 时，自动启动 `dnf5 remove -y <app_id>` 执行高效率卸载；并在 `autoremove` 与旧内核清理时自动优先选择 `dnf5` 指令。
 *   **NPM 全局应用与 AI Coding CLI 识别**:
     *   在 `run_full_scan()` 中新增 NPM 全局包扫描 (`npm list -g --json`)，并补全缺失路径的 `npm root -g` 容错计算，准确识别与测量 `@openai/codex`、`@cloudbase/cli`、`miniprogram-ci` 等 NPM 全局工具的大小的与安装时间。
     *   在 `execute_uninstall()` 中实现 `npm uninstall -g` 官方卸载，并支持对作用域包（如 `@cloudbase/cli`）自动搜寻并擦除空 Scope 父目录。
@@ -45,6 +47,14 @@
 *   **系统底层组件与依赖库全自动精准防护**:
     *   在 `_SYSTEM_COMPONENT_TOKENS` 和 `_SYSTEM_COMPONENT_EXACT_IDS` 中补充了 `glibc`、`llvm`、`geoclue`、`evolution-data-server`、`cldr-emoji`、`gcr`、`rygel`、`rust-std`、`openjdk`、`gnome-bluetooth`、`gnome-user-share`、`tecla`、`malcontent` 及全系桌面 Portal/User-Dirs 网关等防护词汇。
     *   在 `_is_system_component()` 中构建通用底层包通配判定引擎，自动拦截非 GUI 依赖包前缀 (`lib*`, `gsettings-*`, `desktop-file-*`, `shared-mime-*`) 与开发库后缀 (`*-libs`, `*-devel`, `*-dev`, `*-static`, `*-headers`, `*-plugins`, `*-modules`)，彻底规避底层系统库误显示。
+
+### 4. Analyze & Clean 联动与 DNF5 缓存清理优化
+*   **Analyze Disk 洞察展示层级与图形优化**:
+    *   自动从 Analyze Disk 根视图中剔除位于 `Home` 内部的 `Flatpak App Data` (`~/.local/share/flatpak`)，彻底解决包含关系引起的“双重计数”与误导感。
+    *   为各种 Linux Insights 动态赋予精细化的分类图标（`📦` 包管理器/Flatpak、`🐳` Docker、`🤖` AI 模型、`🕒` 旧文件），消除单一 `👀` 带来的感官突兀。
+*   **DNF5 缓存路径自动识别与 Clean 释放容量精确测量**:
+    *   在 `heavy_cache.py` 中为 `Dnf Cache` 实现了针对 DNF5 (`/var/cache/libdnf5` / `/var/cache/dnf5daemon-server`) 的自动感知解析，确保在最新 Fedora 环境下可准确列出缓存空间。
+    *   在 Clean 模块中升级指令为 `dnf5 clean all` / `dnf clean all`，并在清理前后精准读取缓存目录字节物理差额，彻底解决以往 Clean 输出 `Cleaned DNF cache (0 B)` 与 Analyze 扫描结果不一致的问题。
 *   **孤立桌面快捷方式与图标自动清理**:
     *   在 `find_residue_paths()` 中新增自动定位并加入应用在 `~/.local/share/applications/<app_id>.desktop` 的快捷方式。
     *   支持解析带 `@org/pkg` 的 scoped 包名及前缀，自动关联匹配 `~/.config/.<scope>` 等隐藏残留配置。

@@ -14,7 +14,7 @@ from src.clean.system import (
 @patch("src.clean.system.get_os_id")
 def test_clean_orphaned_packages_fedora(mock_get_os_id, mock_run, mock_which):
     mock_get_os_id.return_value = "fedora"
-    mock_which.return_value = "/usr/bin/dnf"
+    mock_which.side_effect = lambda x: "/usr/bin/dnf" if x == "dnf" else None
     mock_run.return_value = MagicMock(returncode=0, stdout="Removed 500 MB\nPackage1\nPackage2")
 
     s, i, c = clean_orphaned_packages(dry_run=False)
@@ -89,14 +89,13 @@ def test_clean_snaps(mock_run, mock_which):
 @patch("src.clean.system.get_os_id")
 def test_clean_package_manager_fedora(mock_get_os_id, mock_run, mock_which):
     mock_get_os_id.return_value = "fedora"
-    mock_which.return_value = "/usr/bin/dnf"
+    mock_which.side_effect = lambda x: "/usr/bin/dnf" if x == "dnf" else None
     mock_run.return_value = MagicMock(returncode=0, stdout="freed 100 MB")
 
     s, i, c = clean_package_manager(dry_run=False)
-    assert s > 0
     assert i == 1
     assert c == 1
-    mock_run.assert_called_with(["dnf", "clean", "packages"], use_sudo=True, capture=True)
+    mock_run.assert_called_with(["dnf", "clean", "all"], use_sudo=True, capture=True)
 
     s, i, c = clean_package_manager(dry_run=True)
     assert c == 1

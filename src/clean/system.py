@@ -54,18 +54,45 @@ def clean_package_manager(dry_run=False):
     if not cleaner or not shutil.which(cleaner.executable):
         return freed, snap_items, snap_cats
 
+    # Determine cache directory path for accurate pre/post measurement
+    cache_path = None
+    if cleaner.key == "dnf":
+        for p in (
+            Path("/var/cache/libdnf5"),
+            Path("/var/cache/dnf5daemon-server"),
+            Path("/var/cache/dnf"),
+        ):
+            if p.exists():
+                cache_path = p
+                break
+    elif cleaner.key == "apt":
+        cache_path = Path("/var/cache/apt/archives")
+    elif cleaner.key == "pacman":
+        cache_path = Path("/var/cache/pacman/pkg")
+
+    pre_size = get_size_fast(cache_path) if cache_path and cache_path.exists() else 0
+
     if dry_run:
-        print(f"  {OK} {cleaner.label} would be cleaned")
-        return freed, snap_items, snap_cats + 1
+        size_hint = f" ({bytes_to_human(pre_size)})" if pre_size > 0 else ""
+        print(f"  {OK} {cleaner.label}{size_hint} would be cleaned")
+        return freed + pre_size, snap_items, snap_cats + 1
 
-    res = run_command(list(cleaner.command), use_sudo=True, capture=True)
-    if res.ok and res.stdout:
+    cmd = list(cleaner.command)
+    if cleaner.key == "dnf" and shutil.which("dnf5"):
+        cmd = ["dnf5", "clean", "all"]
+
+    res = run_command(cmd, use_sudo=True, capture=True)
+
+    post_size = get_size_fast(cache_path) if cache_path and cache_path.exists() else 0
+    measured_freed = max(0, pre_size - post_size)
+    if measured_freed > 0:
+        freed += measured_freed
+    elif res.ok and res.stdout:
         freed += parse_size_from_text(res.stdout)
-        print(f"  {OK} Cleaned {cleaner.label} ({bytes_to_human(freed)})")
-        return freed, snap_items + 1, snap_cats + 1
 
-    if res.ok and cleaner.key == "apt":  # apt-get clean is silent
-        print(f"  {OK} Cleaned {cleaner.label}")
+    if res.ok:
+        freed_str = f" ({bytes_to_human(freed)})" if freed > 0 else ""
+        print(f"  {OK} Cleaned {cleaner.label}{freed_str}")
         return freed, snap_items + 1, snap_cats + 1
 
     return freed, snap_items, snap_cats
@@ -107,11 +134,12 @@ def clean_orphaned_packages(dry_run=False):
 
     elif (
         os_id in ("fedora", "rhel", "centos", "rocky", "almalinux") or is_os_family("fedora")
-    ) and shutil.which("dnf"):
+    ) and (shutil.which("dnf5") or shutil.which("dnf")):
+        dnf_cmd = "dnf5" if shutil.which("dnf5") else "dnf"
         if dry_run:
             print(f"  {OK} Orphaned DNF packages would be autoremoved")
             return 0, 0, 1
-        res = run_command(["dnf", "autoremove", "-y"], use_sudo=True, capture=True)
+        res = run_command([dnf_cmd, "autoremove", "-y"], use_sudo=True, capture=True)
         if res.ok:
             freed = parse_size_from_text(res.stdout)
             # DNF autoremove output usually lists packages. We can estimate count.
@@ -211,9 +239,10 @@ def clean_old_kernels(dry_run=False):
         print(f"  {OK} Removed {len(to_remove)} old kernel(s)")
         return 0, len(to_remove), 1
 
-    elif shutil.which("dnf"):
+    elif shutil.which("dnf5") or shutil.which("dnf"):
+        dnf_cmd = "dnf5" if shutil.which("dnf5") else "dnf"
         # DNF respects installonly_limit but we can explicitly enforce keeping 2
-        res = run_command(["dnf", "repoquery", "--installonly", "--installed"], capture=True)
+        res = run_command([dnf_cmd, "repoquery", "--installonly", "--installed"], capture=True)
         if not res.ok or not res.stdout:
             return 0, 0, 0
         kernels = [k.strip() for k in res.stdout.splitlines() if k.strip()]
@@ -226,7 +255,7 @@ def clean_old_kernels(dry_run=False):
             print(f"  {OK} {len(to_remove)} old kernel(s) would be removed")
             return 0, 0, 1
         for pkg in to_remove:
-            run_command(["dnf", "remove", "-y", pkg], use_sudo=True, capture=True)
+            run_command([dnf_cmd, "remove", "-y", pkg], use_sudo=True, capture=True)
         print(f"  {OK} Removed {len(to_remove)} old kernel(s)")
         return 0, len(to_remove), 1
 

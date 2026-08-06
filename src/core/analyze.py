@@ -301,13 +301,19 @@ def build_analysis_entry(name: str, path: Path, size: int, total_size: int) -> d
 
 def build_linux_insights(home: Path) -> list[dict[str, Any]]:
     insights: list[dict[str, Any]] = [
-        {"name": "Old Downloads (90d+)", "path": home / "Downloads", "is_smart": True}
+        {
+            "name": "Old Downloads (90d+)",
+            "path": home / "Downloads",
+            "is_smart": True,
+            "icon": "🕒",
+        }
     ]
     insights.extend(
         {
             "name": definition.label,
             "path": definition.resolved_path(),
             "min_display_bytes": definition.min_display_bytes,
+            "icon": definition.icon,
         }
         for definition in get_analyze_cache_defs()
     )
@@ -620,7 +626,7 @@ def run_deep_analysis(target_path: Path | None = None):
                                     "size": size,
                                     "percent": (size / total_used) * 100,
                                     "color": YELLOW,
-                                    "icon": "👀",
+                                    "icon": ins.get("icon", "👀"),
                                     "age_hint": get_age_hint(p),
                                     "is_smart": ins.get("is_smart"),
                                     "smart_items": smart_items,

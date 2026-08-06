@@ -46,7 +46,7 @@ def test_package_manager_cleaners_define_commands():
     assert apt is not None
     assert apt.command == ("apt-get", "clean")
     assert dnf is not None
-    assert dnf.command == ("dnf", "clean", "packages")
+    assert dnf.command == ("dnf", "clean", "all")
     assert pacman is not None
     assert pacman.command == ("pacman", "-Sc", "--noconfirm")
     assert get_package_manager_cleaner("unknown") is None

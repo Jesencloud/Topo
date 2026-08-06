@@ -351,7 +351,11 @@ def test_build_linux_insights_uses_shared_heavy_cache_metadata(test_env):
     by_name = {item["name"]: item for item in insights}
 
     assert by_name["Apt Cache"]["path"] == Path("/var/cache/apt/archives")
-    assert by_name["Dnf Cache"]["path"] == Path("/var/cache/dnf")
+    assert by_name["Dnf Cache"]["path"] in (
+        Path("/var/cache/dnf"),
+        Path("/var/cache/libdnf5"),
+        Path("/var/cache/dnf5daemon-server"),
+    )
     assert by_name["Docker System"]["path"] == Path("/var/lib/docker")
     assert by_name["Podman Transfer Cache"]["path"] == test_env / ".cache/containers"
     assert "Podman Storage" not in by_name

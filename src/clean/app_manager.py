@@ -1030,8 +1030,9 @@ class UninstallManager:
                     capture=True,
                 )
             else:
+                dnf_cmd = "dnf5" if shutil.which("dnf5") else "dnf"
                 res = system.run_command(
-                    ["dnf", "remove", "-y", app["id"]], use_sudo=True, capture=True
+                    [dnf_cmd, "remove", "-y", app["id"]], use_sudo=True, capture=True
                 )
             package_status = "removed" if res.ok else "failed"
             record_deletion_audit(app["id"], package_mode, package_status, package_size)

@@ -16,9 +16,15 @@ class CachePathDef:
     label: str
     path: str
     min_display_bytes: int = 10 * 1024 * 1024
+    icon: str = "👀"
 
     def resolved_path(self) -> Path:
-        return Path(self.path).expanduser()
+        raw_p = Path(self.path).expanduser()
+        if not raw_p.exists() and self.key == "dnf":
+            for dnf5_path in (Path("/var/cache/libdnf5"), Path("/var/cache/dnf5daemon-server")):
+                if dnf5_path.exists():
+                    return dnf5_path
+        return raw_p
 
 
 @dataclass(frozen=True)
@@ -46,16 +52,19 @@ PACKAGE_MANAGER_CACHE_DEFS = (
         key="apt",
         label="Apt Cache",
         path="/var/cache/apt/archives",
+        icon="📦",
     ),
     CachePathDef(
         key="pacman",
         label="Pacman Cache",
         path="/var/cache/pacman/pkg",
+        icon="📦",
     ),
     CachePathDef(
         key="dnf",
         label="Dnf Cache",
         path="/var/cache/dnf",
+        icon="📦",
     ),
 )
 
@@ -65,7 +74,7 @@ PACKAGE_MANAGER_CLEANER_DEFS = (
         label="DNF cache",
         os_ids=("fedora", "rhel", "centos"),
         executable="dnf",
-        command=("dnf", "clean", "packages"),
+        command=("dnf", "clean", "all"),
     ),
     PackageManagerCleanerDef(
         key="apt",
@@ -88,21 +97,25 @@ CONTAINER_CACHE_DEFS = (
         key="docker-user",
         label="Docker Data",
         path="~/.docker",
+        icon="🐳",
     ),
     CachePathDef(
         key="docker-system",
         label="Docker System",
         path="/var/lib/docker",
+        icon="🐳",
     ),
     CachePathDef(
         key="podman-cache",
         label="Podman Transfer Cache",
         path="~/.cache/containers",
+        icon="🦭",
     ),
     CachePathDef(
         key="flatpak-data",
-        label="Flatpak Data",
+        label="Flatpak App Data",
         path="~/.local/share/flatpak",
+        icon="📦",
     ),
 )
 
@@ -111,31 +124,37 @@ AI_MODEL_CACHE_DEFS = (
         key="ollama-models",
         label="Ollama Models",
         path="~/.ollama/models",
+        icon="🤖",
     ),
     CachePathDef(
         key="huggingface",
         label="HuggingFace Hub",
         path="~/.cache/huggingface/hub",
+        icon="🤗",
     ),
     CachePathDef(
         key="lm-studio",
         label="LM Studio Cache",
         path="~/.cache/lm-studio",
+        icon="🤖",
     ),
     CachePathDef(
         key="torch",
         label="PyTorch Kernel Cache",
         path="~/.cache/torch/kernels",
+        icon="🔥",
     ),
     CachePathDef(
         key="triton",
         label="OpenAI Triton Cache",
         path="~/.triton/cache",
+        icon="🤖",
     ),
     CachePathDef(
         key="cuda",
         label="NVIDIA CUDA Cache",
         path="~/.nv/ComputeCache",
+        icon="⚡",
     ),
 )
 
@@ -180,7 +199,12 @@ AI_MODEL_CLEANUP_DEFS = (
 
 
 def get_analyze_cache_defs() -> tuple[CachePathDef, ...]:
-    return (*PACKAGE_MANAGER_CACHE_DEFS, *CONTAINER_CACHE_DEFS, *AI_MODEL_CACHE_DEFS)
+    # Exclude flatpak-data from Analyze Disk root view to avoid duplicate display & stats with Home (~/.local/share/flatpak)
+    return tuple(
+        d
+        for d in (*PACKAGE_MANAGER_CACHE_DEFS, *CONTAINER_CACHE_DEFS, *AI_MODEL_CACHE_DEFS)
+        if d.key != "flatpak-data"
+    )
 
 
 def get_package_manager_cleaner(os_id: str) -> PackageManagerCleanerDef | None:

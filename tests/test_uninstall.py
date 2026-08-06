@@ -491,6 +491,7 @@ def test_execute_uninstall_dnf(mock_run, mock_run_cmd, test_env):
     mock_run_cmd.return_value = MagicMock(returncode=0)
 
     with (
+        patch("shutil.which", side_effect=lambda x: "/usr/bin/dnf" if x == "dnf" else None),
         patch("pathlib.Path.home", return_value=test_env),
         patch("src.clean.app_manager.safe_remove", return_value=(True, "OK")),
     ):
