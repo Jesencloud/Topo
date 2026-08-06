@@ -199,11 +199,11 @@ AI_MODEL_CLEANUP_DEFS = (
 
 
 def get_analyze_cache_defs() -> tuple[CachePathDef, ...]:
-    # Exclude flatpak-data from Analyze Disk root view to avoid duplicate display & stats with Home (~/.local/share/flatpak)
+    # Exclude flatpak-data and dnf from Analyze Disk root view to avoid duplicate display & stats with Home / system metadata
     return tuple(
         d
         for d in (*PACKAGE_MANAGER_CACHE_DEFS, *CONTAINER_CACHE_DEFS, *AI_MODEL_CACHE_DEFS)
-        if d.key != "flatpak-data"
+        if d.key not in ("flatpak-data", "dnf")
     )
 
 

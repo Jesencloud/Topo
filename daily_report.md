@@ -50,11 +50,11 @@
 
 ### 4. Analyze & Clean 联动与 DNF5 缓存清理优化
 *   **Analyze Disk 洞察展示层级与图形优化**:
-    *   自动从 Analyze Disk 根视图中剔除位于 `Home` 内部的 `Flatpak App Data` (`~/.local/share/flatpak`)，彻底解决包含关系引起的“双重计数”与误导感。
+    *   自动从 Analyze Disk 根视图中剔除位于 `Home` 内部的 `Flatpak App Data` (`~/.local/share/flatpak`) 以及属于系统级别的 `Dnf Cache`，避免元数据数据库索引在分析视图中产生误导与骚扰。
     *   为各种 Linux Insights 动态赋予精细化的分类图标（`📦` 包管理器/Flatpak、`🐳` Docker、`🤖` AI 模型、`🕒` 旧文件），消除单一 `👀` 带来的感官突兀。
-*   **DNF5 缓存路径自动识别与 Clean 释放容量精确测量**:
+*   **DNF5 缓存路径自动识别、精准测量与索引保护**:
     *   在 `heavy_cache.py` 中为 `Dnf Cache` 实现了针对 DNF5 (`/var/cache/libdnf5` / `/var/cache/dnf5daemon-server`) 的自动感知解析，确保在最新 Fedora 环境下可准确列出缓存空间。
-    *   在 Clean 模块中升级指令为 `dnf5 clean all` / `dnf clean all`，并在清理前后精准读取缓存目录字节物理差额，彻底解决以往 Clean 输出 `Cleaned DNF cache (0 B)` 与 Analyze 扫描结果不一致的问题。
+    *   在 Clean 模块中采用 `dnf clean packages` / `dnf5 clean packages` 策略，安全清理空间占最大的废弃 `.rpm` 安装包，同时保留软件源数据库元数据索引，确保后续 `sudo dnf update` 命令快速响应无需重新下载索引。
 *   **孤立桌面快捷方式与图标自动清理**:
     *   在 `find_residue_paths()` 中新增自动定位并加入应用在 `~/.local/share/applications/<app_id>.desktop` 的快捷方式。
     *   支持解析带 `@org/pkg` 的 scoped 包名及前缀，自动关联匹配 `~/.config/.<scope>` 等隐藏残留配置。
