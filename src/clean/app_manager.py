@@ -314,7 +314,6 @@ class UninstallManager:
             return self.apps
 
         apps = []
-        os_id = cache_key[0]
 
         # 1. Pre-scan: identify native packages that provide desktop files.
         user_app_packages = set()
@@ -333,7 +332,11 @@ class UninstallManager:
                 batch_size = 500
                 for i in range(0, len(desktop_files), batch_size):
                     batch = desktop_files[i : i + batch_size]
-                    if os_id in ("fedora", "rhel", "centos") and shutil.which("rpm"):
+            if desktop_files:
+                batch_size = 500
+                for i in range(0, len(desktop_files), batch_size):
+                    batch = desktop_files[i : i + batch_size]
+                    if shutil.which("rpm"):
                         res = system.run_command(
                             ["rpm", "-qf", "--queryformat", "%{NAME}\n"] + batch,
                             capture=True,
@@ -345,20 +348,14 @@ class UninstallManager:
                                     "file "
                                 ):  # Filter out 'file X is not owned by any package'
                                     user_app_packages.add(line.strip())
-                    elif os_id in (
-                        "ubuntu",
-                        "debian",
-                        "linuxmint",
-                        "pop",
-                        "elementary",
-                    ) and shutil.which("dpkg-query"):
+                    elif shutil.which("dpkg-query"):
                         res = system.run_command(["dpkg-query", "-S", *batch], capture=True)
                         for line in res.stdout.splitlines():
                             if ":" in line:
                                 user_app_packages.add(
                                     self._strip_package_arch(line.split(":", 1)[0].strip())
                                 )
-                    elif os_id in ("arch", "manjaro", "endeavouros") and shutil.which("pacman"):
+                    elif shutil.which("pacman"):
                         res = system.run_command(["pacman", "-Qo", *batch], capture=True)
                         for line in res.stdout.splitlines():
                             if " is owned by " in line:
@@ -368,8 +365,8 @@ class UninstallManager:
         except (OSError, subprocess.SubprocessError, ValueError):
             pass
 
-        # 2. DNF (RPM) Scan - Filtered by user_app_packages
-        if os_id in ("fedora", "rhel", "centos") and shutil.which("rpm"):
+        # 2. DNF/RPM Scan - Filtered by user_app_packages
+        if shutil.which("rpm"):
             try:
                 # Get all installed packages with their size and install time
                 res = system.run_command(
@@ -404,10 +401,8 @@ class UninstallManager:
             except (OSError, subprocess.SubprocessError, ValueError):
                 pass
 
-        # 3. APT (DEB) Scan - Filtered by desktop packages or large packages
-        if os_id in ("ubuntu", "debian", "linuxmint", "pop", "elementary") and shutil.which(
-            "dpkg-query"
-        ):
+        # 3. APT/DEB Scan - Filtered by desktop packages or large packages
+        if shutil.which("dpkg-query"):
             try:
                 res = system.run_command(
                     ["dpkg-query", "-W", "-f=${binary:Package}\t${Installed-Size}\n"],
@@ -447,7 +442,7 @@ class UninstallManager:
                 pass
 
         # 4. Pacman Scan - Filtered by desktop packages or large packages
-        if os_id in ("arch", "manjaro", "endeavouros") and shutil.which("pacman"):
+        if shutil.which("pacman"):
             try:
                 res = system.run_command(["pacman", "-Qi"], capture=True, timeout=60)
                 if res.ok:

@@ -5,7 +5,7 @@ from pathlib import Path
 from ..core.constants import OK
 from ..core.file_ops import bytes_to_human, get_size_fast, parse_size_from_text, safe_remove
 from ..core.heavy_cache import get_package_manager_cleaner
-from ..core.system import get_os_id, run_command
+from ..core.system import get_os_id, is_os_family, run_command
 
 
 def clean_snaps(dry_run=False):
@@ -93,7 +93,21 @@ def clean_orphaned_packages(dry_run=False):
     freed = 0
     items = 0
 
-    if os_id in ("fedora", "rhel", "centos") and shutil.which("dnf"):
+    if (
+        os_id in ("ubuntu", "debian", "linuxmint", "pop", "elementary") or is_os_family("debian")
+    ) and shutil.which("apt-get"):
+        if dry_run:
+            print(f"  {OK} Orphaned APT packages would be autoremoved")
+            return 0, 0, 1
+        res = run_command(["apt-get", "autoremove", "-y"], use_sudo=True, capture=True)
+        if res.ok:
+            freed = parse_size_from_text(res.stdout)
+            print(f"  {OK} Removed orphaned APT packages")
+            return freed, 1, 1
+
+    elif (
+        os_id in ("fedora", "rhel", "centos", "rocky", "almalinux") or is_os_family("fedora")
+    ) and shutil.which("dnf"):
         if dry_run:
             print(f"  {OK} Orphaned DNF packages would be autoremoved")
             return 0, 0, 1
@@ -105,17 +119,7 @@ def clean_orphaned_packages(dry_run=False):
             print(f"  {OK} Removed orphaned DNF packages ({bytes_to_human(freed)})")
             return freed, items, 1
 
-    elif os_id in ("ubuntu", "debian") and shutil.which("apt-get"):
-        if dry_run:
-            print(f"  {OK} Orphaned APT packages would be autoremoved")
-            return 0, 0, 1
-        res = run_command(["apt-get", "autoremove", "-y"], use_sudo=True, capture=True)
-        if res.ok:
-            freed = parse_size_from_text(res.stdout)
-            print(f"  {OK} Removed orphaned APT packages")
-            return freed, 1, 1
-
-    elif os_id == "arch" and shutil.which("pacman"):
+    elif shutil.which("pacman"):
         # List orphans
         list_res = run_command(["pacman", "-Qtdq"], capture=True)
         if list_res.ok and list_res.stdout.strip():
@@ -173,10 +177,9 @@ def clean_zombies(dry_run=False):
 
 def clean_old_kernels(dry_run=False):
     """Remove old kernel packages, keeping current and one previous version."""
-    os_id = get_os_id()
     current_kernel = platform.release()
 
-    if os_id in ("ubuntu", "debian") and shutil.which("dpkg"):
+    if shutil.which("dpkg") and shutil.which("apt-get"):
         res = run_command(["dpkg", "-l", "linux-image-*"], capture=True)
         if not res.ok or not res.stdout:
             return 0, 0, 0
@@ -208,7 +211,7 @@ def clean_old_kernels(dry_run=False):
         print(f"  {OK} Removed {len(to_remove)} old kernel(s)")
         return 0, len(to_remove), 1
 
-    elif os_id in ("fedora", "rhel", "centos") and shutil.which("dnf"):
+    elif shutil.which("dnf"):
         # DNF respects installonly_limit but we can explicitly enforce keeping 2
         res = run_command(["dnf", "repoquery", "--installonly", "--installed"], capture=True)
         if not res.ok or not res.stdout:

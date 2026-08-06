@@ -27,16 +27,32 @@ class CommandResult:
         return self.returncode == 0 and not self.timed_out and not self.error
 
 
-def get_os_id():
+def get_os_info():
+    """Return tuple of (id, id_like) from /etc/os-release."""
+    os_id = "unknown"
+    id_like = ""
     try:
         if os.path.exists("/etc/os-release"):
             with open("/etc/os-release") as f:
                 for line in f:
                     if line.startswith("ID="):
-                        return line.strip().split("=")[1].strip('"')
+                        os_id = line.strip().split("=")[1].strip('"').lower()
+                    elif line.startswith("ID_LIKE="):
+                        id_like = line.strip().split("=")[1].strip('"').lower()
     except (OSError, IndexError):
         pass
-    return "unknown"
+    return os_id, id_like
+
+
+def get_os_id():
+    return get_os_info()[0]
+
+
+def is_os_family(family: str) -> bool:
+    """Check if current OS matches family by ID or ID_LIKE."""
+    os_id, id_like = get_os_info()
+    fam = family.lower()
+    return fam in os_id or fam in id_like.split()
 
 
 def get_invoking_user():

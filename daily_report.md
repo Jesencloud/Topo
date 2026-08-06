@@ -52,7 +52,11 @@
 ### 5. 紧急 Bug 修复 (APT 输出解析异常)
 *   **parse_size_to_bytes 容错处理**: 修复在 Ubuntu 环境下执行 `topo clean` 时，因 `apt-get autoremove` 输出文本包含省略号（如 `... MB`）触发 `ValueError: could not convert string to float: '...'` 导致程序崩溃的问题。增加了 `try-except` 异常捕获并平滑降级为 `0` 字节。
 
-### 6. 代码冗余与死代码清理
+### 6. DEB/RPM 跨发行版兼容性增强
+*   **Linux 大系识别 (is_os_family)**: 在 `system.py` 中新增 `get_os_info()` 及 `is_os_family()`，同时解析 `/etc/os-release` 的 `ID` 与 `ID_LIKE` 字段，精准识别 Pop!_OS、Linux Mint、Elementary OS、Rocky Linux、AlmaLinux 等衍生发行版。
+*   **工具存在性优先识别**: 在 `app_manager.py`、`system.py` 及 `heavy_cache.py` 中解耦硬编码 `os_id` 判定，改用 `shutil.which()` 优先检测包管理器可执行文件是否存在，确保所有 DEB / RPM / Arch 衍生系统均能正确清理包缓存与孤立残留。
+
+### 7. 代码冗余与死代码清理
 *   合并 `clean_rotated_logs` 中的文件后缀判定集合。
 *   移除 `optimize.py` 中因功能迁移/删除而废弃的常量（`MEMORY_PRESSURE_AVAILABLE_RATIO`, `GPU_SHADER_CACHE_AGE_DAYS`, `GPU_SHADER_CACHE_PATHS`）。
 

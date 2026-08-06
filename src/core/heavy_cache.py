@@ -5,6 +5,7 @@ actual cleanup actions because package managers, containers, and model tools
 usually need command-specific behavior rather than direct path deletion.
 """
 
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -183,10 +184,16 @@ def get_analyze_cache_defs() -> tuple[CachePathDef, ...]:
 
 
 def get_package_manager_cleaner(os_id: str) -> PackageManagerCleanerDef | None:
-    return next(
-        (definition for definition in PACKAGE_MANAGER_CLEANER_DEFS if os_id in definition.os_ids),
-        None,
-    )
+    # 1. Match by exact os_id if specified in definition
+    for definition in PACKAGE_MANAGER_CLEANER_DEFS:
+        if os_id in definition.os_ids:
+            return definition
+    # 2. Fallback to executable tool presence (covers derivatives), but skip if os_id is 'unknown' (e.g. tests)
+    if os_id != "unknown":
+        for definition in PACKAGE_MANAGER_CLEANER_DEFS:
+            if shutil.which(definition.executable):
+                return definition
+    return None
 
 
 def get_container_cache_def(key: str) -> CachePathDef:
