@@ -1,19 +1,16 @@
-import os
 import sqlite3
-import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from src.clean.optimize import (
-    GPU_SHADER_CACHE_AGE_DAYS,
     run_autostart_cleanup,
     run_broken_symlink_cleanup,
     run_coredump_cleanup,
     run_desktop_database_refresh,
-    run_gpu_shader_cache_cleanup,
-    run_memory_opt,
     run_mime_database_refresh,
+    run_sysctl_optimize,
     run_systemd_user_service_cleanup,
+    run_tmpfiles_cleanup,
     run_user_systemd_reset_failed,
     run_vacuum_all,
     vacuum_single_db,
@@ -240,37 +237,25 @@ def test_run_broken_symlink_cleanup_dry_run_keeps_broken_link(test_env):
     assert broken_link.is_symlink()
 
 
-def test_run_gpu_shader_cache_cleanup_removes_only_stale_entries(test_env):
-    cache_dir = test_env / ".cache/mesa_shader_cache"
-    cache_dir.mkdir(parents=True)
-    stale_file = cache_dir / "old-shader"
-    active_file = cache_dir / "active-shader"
-    stale_file.write_text("stale")
-    active_file.write_text("active")
-    stale_time = time.time() - ((GPU_SHADER_CACHE_AGE_DAYS + 1) * 86400)
-    os.utime(stale_file, (stale_time, stale_time))
-
-    with patch("pathlib.Path.home", return_value=test_env):
-        result = run_gpu_shader_cache_cleanup(dry_run=False)
-
-    assert result.startswith("Removed 1 stale GPU shader cache item(s)")
-    assert not stale_file.exists()
-    assert active_file.exists()
+def test_run_sysctl_optimize():
+    with (
+        patch("src.clean.optimize.shutil.which", return_value="/usr/sbin/sysctl"),
+        patch("src.clean.optimize.has_sudo", return_value=True),
+        patch("src.clean.optimize.run_command") as mock_run,
+    ):
+        mock_run.return_value = CommandResult(["sysctl"], 0)
+        res = run_sysctl_optimize(dry_run=False)
+        assert res == "Kernel memory & cache parameters tuned (sysctl)"
 
 
-def test_run_gpu_shader_cache_cleanup_dry_run_keeps_stale_entries(test_env):
-    cache_dir = test_env / ".nv/ComputeCache"
-    cache_dir.mkdir(parents=True)
-    stale_file = cache_dir / "old-kernel"
-    stale_file.write_text("stale")
-    stale_time = time.time() - ((GPU_SHADER_CACHE_AGE_DAYS + 1) * 86400)
-    os.utime(stale_file, (stale_time, stale_time))
-
-    with patch("pathlib.Path.home", return_value=test_env):
-        result = run_gpu_shader_cache_cleanup(dry_run=True)
-
-    assert result.startswith("Found 1 stale GPU shader cache item(s)")
-    assert stale_file.exists()
+def test_run_tmpfiles_cleanup():
+    with (
+        patch("src.clean.optimize.shutil.which", return_value="/usr/bin/systemd-tmpfiles"),
+        patch("src.clean.optimize.run_command") as mock_run,
+    ):
+        mock_run.return_value = CommandResult(["systemd-tmpfiles"], 0)
+        res = run_tmpfiles_cleanup(dry_run=False)
+        assert res == "Systemd tmpfiles clean rules processed"
 
 
 def test_run_user_systemd_reset_failed_resets_failed_units():
@@ -348,21 +333,6 @@ def test_run_vacuum_all_skips_when_browser_is_running(test_env):
         result = run_vacuum_all(dry_run=False)
 
     assert result == "Brave, Chrome, Edge, Firefox running; database optimization skipped"
-
-
-def test_run_memory_opt_skips_when_memory_pressure_is_low():
-    with (
-        patch(
-            "src.clean.optimize._read_memory_pressure", return_value=(False, "72% memory available")
-        ),
-        patch("src.clean.optimize.has_sudo") as mock_has_sudo,
-        patch("src.clean.optimize.run_command") as mock_run,
-    ):
-        result = run_memory_opt()
-
-    assert result == "Memory pressure already optimal (72% memory available)"
-    mock_has_sudo.assert_not_called()
-    mock_run.assert_not_called()
 
 
 def test_run_desktop_database_refresh_dry_run(test_env):

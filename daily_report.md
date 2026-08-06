@@ -1,3 +1,42 @@
+# Daily Modification Report - 2026-08-06
+
+## Project: topo (Topo) - 清理与优化模块功能扩充及结构调整
+
+本次工作对项目的 **Clean（磁盘清理）** 与 **Optimize（系统维护）** 模块进行了功能扩充与功能重叠/冗余清理。完成了 8 个新清理项添加、5 个新系统维护任务添加、2 个争议维护项移除以及 1 个重叠项迁移。全部代码经 ruff lint、mypy 类型检查、pytest 单元测试及 Rust 测试验证无误。
+
+### 1. Clean 模块扩充（磁盘空间清理）
+*   **System & Package Manager**:
+    *   新增 `clean_old_kernels`: 清理 Linux 旧内核包（支持 APT/DNF），保留当前运行内核及最近的前 1 个旧版本。
+    *   新增 `clean_rotated_logs`: 清理 `/var/log` 下的轮转/压缩日志文件（`*.gz`, `*.xz`, `*.old`, `*.1` 等）。
+*   **User Data Cleanup**:
+    *   新增 `clean_user_logs`: 清理用户应用大日志文件（如 `~/.xsession-errors`, `Xorg.log.old` 以及 `~/.local/share/*/logs` 中的过期日志）。
+    *   新增 `clean_backup_files`: 清理用户文档目录下的编辑器备份与临时文件（`*~`, `*.bak`, `*.swp`, `*.swo`）。
+*   **Deep App Cleanup**:
+    *   新增 `clean_steam_shader_cache`: 清理 Steam、Proton 及系统通用 GPU (NVIDIA/Mesa) 30/60 天未访问的着色器缓存。
+    *   新增 `clean_ide_caches`: 清理 VS Code、VSCodium、Cursor 和 JetBrains 系列 IDE 的过时缓存。
+*   **Developer Tools & AI Models**:
+    *   新增 `clean_java_caches`: 清理 Gradle 构建缓存、Wrapper 安装包及 Maven 本地仓库（>60 天）。
+    *   新增 `clean_python_pycache`: 扫描用户项目目录并清理 `__pycache__` 字节码编译目录。
+
+### 2. Optimize 模块调整（系统维护）
+*   **移除争议/冗余维护任务**:
+    *   移除 `run_dns_flush`: 现代 systemd-resolved 自动接管，手动刷新无明显收益。
+    *   移除 `run_memory_opt` (`drop_caches`): 避免强行释放 PageCache 导致系统后续 I/O 重新预热变慢。
+*   **重叠项迁移**:
+    *   移除 `run_gpu_shader_cache_cleanup` 并将其合并至 Clean 模块 `clean_steam_shader_cache`，避免跨模块重复清理。
+*   **新增实用系统维护任务**:
+    *   新增 `run_sysctl_optimize`: 优化桌面 `vm.swappiness=10` 及 `vm.vfs_cache_pressure=50` 参数。
+    *   新增 `run_tmpfiles_cleanup`: 触发 `systemd-tmpfiles --clean` 处理系统临时文件规则。
+    *   新增 `run_ldconfig`: 刷新动态链接库缓存索引。
+    *   新增 `run_locale_gen`: 重新生成并优化 system locale 区域归档。
+    *   新增 `run_man_db_refresh`: 更新 `mandb` 手册索引。
+
+### 3. 代码冗余与死代码清理
+*   合并 `clean_rotated_logs` 中的文件后缀判定集合。
+*   移除 `optimize.py` 中因功能迁移/删除而废弃的常量（`MEMORY_PRESSURE_AVAILABLE_RATIO`, `GPU_SHADER_CACHE_AGE_DAYS`, `GPU_SHADER_CACHE_PATHS`）。
+
+---
+
 # Daily Modification Report - 2026-08-03
 
 ## Project: topo (Topo) - 代码冗余与风格清理

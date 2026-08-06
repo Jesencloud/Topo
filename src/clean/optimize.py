@@ -14,7 +14,6 @@ from ..core.constants import BOLD, CLEAR_SCREEN, GRAY, GREEN, PURPLE, RED, RESET
 from ..core.desktop_entry import get_desktop_exec_command
 from ..core.file_ops import (
     bytes_to_human,
-    clean_path_by_age,
     get_size,
     parse_size_from_text,
     safe_remove,
@@ -27,17 +26,7 @@ SQLITE_MAX_OPTIMIZE_SIZE = 100 * 1024 * 1024
 SQLITE_MIN_FREE_BYTES = 5 * 1024 * 1024
 SQLITE_MIN_FREE_RATIO = 0.10
 SQLITE_VACUUM_TIMEOUT = 20
-MEMORY_PRESSURE_AVAILABLE_RATIO = 0.15
 COREDUMP_DIR = Path("/var/lib/systemd/coredump")
-GPU_SHADER_CACHE_AGE_DAYS = 7
-GPU_SHADER_CACHE_PATHS = (
-    Path("~/.nv/ComputeCache"),
-    Path("~/.nv/GLCache"),
-    Path("~/.cache/nvidia/ComputeCache"),
-    Path("~/.cache/nvidia/GLCache"),
-    Path("~/.cache/mesa_shader_cache"),
-    Path("~/.cache/mesa_shader_cache_db"),
-)
 _MIN_RAM_SWAP_RATIO = 2
 
 
@@ -193,18 +182,62 @@ def run_fccache(dry_run=False):
     return None
 
 
-def run_dns_flush(dry_run=False):
-    dns_cmd = None
-    if shutil.which("resolvectl"):
-        dns_cmd = ["resolvectl", "flush-caches"]
-    elif shutil.which("nscd"):
-        dns_cmd = ["nscd", "-i", "hosts"]
-    if not dns_cmd:
+def run_sysctl_optimize(dry_run=False):
+    """Optimize kernel memory/swap parameters if sysctl is available."""
+    if not shutil.which("sysctl"):
         return None
     if dry_run:
-        return "DNS resolver cache would be flushed"
-    if run_command(dns_cmd, use_sudo=True, capture=True).ok:
-        return "DNS resolver cache flushed"
+        return "Kernel memory & cache parameters would be tuned (sysctl)"
+    if not has_sudo():
+        return None
+    # Tune swappiness and vfs_cache_pressure to optimal desktop defaults
+    cmd = ["sysctl", "vm.swappiness=10", "vm.vfs_cache_pressure=50"]
+    if run_command(cmd, use_sudo=True, capture=True).ok:
+        return "Kernel memory & cache parameters tuned (sysctl)"
+    return None
+
+
+def run_tmpfiles_cleanup(dry_run=False):
+    """Trigger systemd-tmpfiles clean rules."""
+    if not shutil.which("systemd-tmpfiles"):
+        return None
+    if dry_run:
+        return "Systemd tmpfiles clean rules would be processed"
+    if run_command(["systemd-tmpfiles", "--clean"], use_sudo=True, capture=True).ok:
+        return "Systemd tmpfiles clean rules processed"
+    return None
+
+
+def run_ldconfig(dry_run=False):
+    """Refresh dynamic linker bindings cache."""
+    if not shutil.which("ldconfig"):
+        return None
+    if dry_run:
+        return "Dynamic linker cache would be updated (ldconfig)"
+    if run_command(["ldconfig"], use_sudo=True, capture=True).ok:
+        return "Dynamic linker cache updated (ldconfig)"
+    return None
+
+
+def run_locale_gen(dry_run=False):
+    """Regenerate locale archive files if locale-gen is available."""
+    if not shutil.which("locale-gen"):
+        return None
+    if dry_run:
+        return "System locale archive would be regenerated"
+    if run_command(["locale-gen"], use_sudo=True, capture=True).ok:
+        return "System locale archive regenerated"
+    return None
+
+
+def run_man_db_refresh(dry_run=False):
+    """Update manual page database index."""
+    if not shutil.which("mandb"):
+        return None
+    if dry_run:
+        return "Manual page database index would be updated (mandb)"
+    if run_command(["mandb", "-q"], capture=True).ok:
+        return "Manual page database index updated (mandb)"
     return None
 
 
@@ -308,39 +341,6 @@ def run_user_systemd_reset_failed(dry_run=False):
     if reset_result.ok:
         return f"Reset {len(failed_units)} failed user systemd unit state(s)"
     return None
-
-
-def run_gpu_shader_cache_cleanup(dry_run=False):
-    """Clean stale GPU shader cache entries without removing active cache roots."""
-    total_size = 0
-    total_items = 0
-    handled_paths: set[Path] = set()
-
-    for raw_path in GPU_SHADER_CACHE_PATHS:
-        path = raw_path.expanduser()
-        try:
-            resolved = path.resolve(strict=False)
-        except OSError:
-            resolved = path
-        if resolved in handled_paths:
-            continue
-        handled_paths.add(resolved)
-
-        size, items = clean_path_by_age(
-            path,
-            days=GPU_SHADER_CACHE_AGE_DAYS,
-            dry_run=dry_run,
-        )
-        total_size += size
-        total_items += items
-
-    if total_items == 0:
-        return None
-
-    size_label = f" ({bytes_to_human(total_size)})" if total_size > 0 else ""
-    if dry_run:
-        return f"Found {total_items} stale GPU shader cache item(s){size_label}"
-    return f"Removed {total_items} stale GPU shader cache item(s){size_label}"
 
 
 def run_swap_management(dry_run=False):
@@ -503,44 +503,6 @@ def _service_exec_target_exists(command: str) -> bool:
     return shutil.which(command) is not None
 
 
-def _read_memory_pressure() -> tuple[bool, str]:
-    try:
-        values = {}
-        with open("/proc/meminfo") as f:
-            for line in f:
-                key, raw_value = line.split(":", 1)
-                if key in {"MemTotal", "MemAvailable"}:
-                    values[key] = int(raw_value.strip().split()[0]) * 1024
-        total = values.get("MemTotal", 0)
-        available = values.get("MemAvailable", 0)
-        if total <= 0 or available <= 0:
-            return False, ""
-        ratio = available / total
-        return ratio < MEMORY_PRESSURE_AVAILABLE_RATIO, f"{ratio * 100:.0f}% memory available"
-    except (OSError, ValueError, IndexError):
-        return False, ""
-
-
-def run_memory_opt(dry_run=False):
-    pressure_high, detail = _read_memory_pressure()
-    if not pressure_high:
-        return (
-            f"Memory pressure already optimal ({detail})"
-            if detail
-            else "Memory pressure already optimal"
-        )
-    if dry_run:
-        return "PageCache would be released (Memory pressure high)"
-    if not has_sudo():
-        return None
-    run_command(["sync"], capture=True)
-    if run_command(
-        ["bash", "-c", "echo 1 > /proc/sys/vm/drop_caches"], use_sudo=True, capture=True
-    ).ok:
-        return "PageCache released (Memory relief)"
-    return None
-
-
 def _refresh_database(cmd: str, target_dir: Path, label: str, dry_run: bool) -> str | None:
     if not target_dir.exists() or not shutil.which(cmd):
         return None
@@ -612,12 +574,14 @@ def optimize_system(dry_run=False):
     tasks = [
         lambda: run_fstrim(dry_run),
         lambda: run_fccache(dry_run),
-        lambda: run_dns_flush(dry_run),
-        lambda: run_memory_opt(dry_run),
+        lambda: run_sysctl_optimize(dry_run),
+        lambda: run_tmpfiles_cleanup(dry_run),
+        lambda: run_ldconfig(dry_run),
+        lambda: run_locale_gen(dry_run),
+        lambda: run_man_db_refresh(dry_run),
         lambda: run_swap_management(dry_run),
         lambda: run_journal_optimization(dry_run),
         lambda: run_coredump_cleanup(dry_run),
-        lambda: run_gpu_shader_cache_cleanup(dry_run),
         lambda: run_broken_symlink_cleanup(dry_run),
         lambda: run_thumbnail_cleanup(dry_run),
         lambda: run_desktop_database_refresh(dry_run),

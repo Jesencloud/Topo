@@ -367,7 +367,7 @@ def clean_snap_cache(dry_run=False):
 
 
 def clean_steam_shader_cache(dry_run=False):
-    """Clean Steam and Proton shader caches."""
+    """Clean Steam, Proton, NVIDIA, and Mesa shader caches."""
     total_size = 0
     total_items = 0
     home = Path.home()
@@ -375,11 +375,17 @@ def clean_steam_shader_cache(dry_run=False):
     shader_paths = [
         home / ".steam" / "steam" / "shadercache",
         home / ".local" / "share" / "Steam" / "shadercache",
+        home / ".nv" / "ComputeCache",
+        home / ".nv" / "GLCache",
+        home / ".cache" / "nvidia" / "ComputeCache",
+        home / ".cache" / "nvidia" / "GLCache",
+        home / ".cache" / "mesa_shader_cache",
+        home / ".cache" / "mesa_shader_cache_db",
     ]
     for shader_dir in shader_paths:
         if not shader_dir.is_dir():
             continue
-        s, i = clean_path_by_age(shader_dir, days=60, dry_run=dry_run)
+        s, i = clean_path_by_age(shader_dir, days=30, dry_run=dry_run)
         if i > 0:
             total_size += s
             total_items += i
@@ -400,7 +406,7 @@ def clean_steam_shader_cache(dry_run=False):
 
     if total_items > 0:
         status = "would be cleaned" if dry_run else "cleaned"
-        print(f"  {OK} Steam/Proton shader cache ({bytes_to_human(total_size)}) {status}")
+        print(f"  {OK} GPU/Steam/Proton shader cache ({bytes_to_human(total_size)}) {status}")
     return total_size, total_items
 
 
