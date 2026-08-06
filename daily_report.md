@@ -35,7 +35,15 @@
     *   新增 `run_tracker_miner_reset`: 重置 GNOME Tracker 文件检索索引。
     *   新增 `run_package_repo_refresh`: 刷新 PackageKit/APT-File 元数据索引库。
 
-### 3. 代码冗余与死代码清理
+### 3. Uninstall 模块增强（应用完全卸载）
+*   **孤立桌面快捷方式与图标自动清理**:
+    *   在 `find_residue_paths()` 中新增自动定位并加入应用在 `~/.local/share/applications/<app_id>.desktop` 的快捷方式。
+    *   新增自动检索 `~/.local/share/icons/` 及 `~/.local/share/pixmaps/` 中属于应用名称/ID 的废弃图标文件。
+*   **Systemd 用户服务自动清理与重载**:
+    *   新增在卸载扫描中检索 `~/.config/systemd/user/` 下关联的应用服务文件 (`.service`)。
+    *   在卸载删除过程中，若清理了用户服务定义，自动触发 `systemctl --user daemon-reload` 重新加载配置。
+
+### 4. 代码冗余与死代码清理
 *   合并 `clean_rotated_logs` 中的文件后缀判定集合。
 *   移除 `optimize.py` 中因功能迁移/删除而废弃的常量（`MEMORY_PRESSURE_AVAILABLE_RATIO`, `GPU_SHADER_CACHE_AGE_DAYS`, `GPU_SHADER_CACHE_PATHS`）。
 

@@ -642,14 +642,52 @@ class UninstallManager:
             except OSError:
                 pass
 
-        # 5. Wine prefix check (optional, if wechat/etc)
+        # 5. Local Desktop Launchers & Icons
+        local_desktop = home_path / ".local/share/applications" / f"{app_id}.desktop"
+        if local_desktop.exists() and str(local_desktop) not in seen:
+            paths.append(local_desktop)
+            seen.add(str(local_desktop))
+
+        icon_roots = [
+            home_path / ".local/share/icons",
+            home_path / ".local/share/pixmaps",
+        ]
+        for icon_root in icon_roots:
+            if not icon_root.exists():
+                continue
+            with contextlib.suppress(OSError):
+                for icon_file in icon_root.rglob("*"):
+                    if not icon_file.is_file():
+                        continue
+                    file_lower = icon_file.name.lower()
+                    if (
+                        any(self._name_matches(file_lower, t) for t in targets)
+                        and str(icon_file) not in seen
+                    ):
+                        paths.append(icon_file)
+                        seen.add(str(icon_file))
+
+        # 6. Systemd User Services (~/.config/systemd/user/)
+        systemd_user_dir = home_path / ".config/systemd/user"
+        if systemd_user_dir.exists():
+            with contextlib.suppress(OSError):
+                for service_file in systemd_user_dir.glob("*.service"):
+                    file_lower = service_file.name.lower()
+                    if (
+                        any(self._name_matches(file_lower, t) for t in targets)
+                        and str(service_file) not in seen
+                    ):
+                        paths.append(service_file)
+                        seen.add(str(service_file))
+
+        # 7. Wine prefix check (optional, if wechat/etc)
         if "wechat" in app_name.lower():
             wine_p = home_path / ".xwechat"
             if wine_p.exists() and str(wine_p) not in seen:
                 paths.append(wine_p)
                 seen.add(str(wine_p))
 
-        # 6. Deep Subdirectory Search (home-root residue).
+        # 8. Deep Subdirectory Search (home-root residue).
         # Only HIDDEN dot-directories at the home root (e.g. ~/.someapp) are
         # considered here. Visible top-level home folders are user workspaces and
         # data — ~/Projects, ~/IdeaProjects, ~/studio-projects, ~/notes-backup,
@@ -747,6 +785,7 @@ class UninstallManager:
             # 3. Path removal: explicit uninstall may remove app-owned data,
             # but hard-protected credentials/system paths remain blocked.
             removed_details = []
+            removed_systemd_service = False
             for p in paths:
                 # Residue removal is recoverable (trash) rather than a permanent
                 # wipe: residue discovery is heuristic, so a mis-matched user
@@ -754,10 +793,17 @@ class UninstallManager:
                 # app-owned data go, while hard-protected paths (whitelist,
                 # credentials, system, XDG user-data dirs) stay blocked.
                 success, _ = safe_remove(p, use_trash=True, allow_app_data_removal=True)
+                if success and str(p).endswith(".service") and ".config/systemd/user" in str(p):
+                    removed_systemd_service = True
                 try:
                     removed_details.append((success, str(p.relative_to(Path.home()))))
                 except ValueError:
                     removed_details.append((success, str(p)))
+
+            if removed_systemd_service and shutil.which("systemctl"):
+                system.run_command(
+                    ["systemctl", "--user", "daemon-reload"], capture=True, timeout=10
+                )
 
             return {
                 "package_removed": package_status == "removed",
