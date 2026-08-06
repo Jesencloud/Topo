@@ -211,6 +211,26 @@ def clean_backup_files(dry_run=False):
     return 0, 0, 0
 
 
+def clean_thumbnails(dry_run=False):
+    """Clean desktop image/video thumbnail caches (~/.cache/thumbnails)."""
+    thumb_dir = Path.home() / ".cache" / "thumbnails"
+    if not thumb_dir.exists():
+        return 0, 0, 0
+    size = get_size_fast(thumb_dir)
+    if size == 0:
+        return 0, 0, 0
+
+    if dry_run:
+        print(f"  {OK} Desktop thumbnail cache ({bytes_to_human(size)}) would be cleaned")
+        return size, 1, 1
+
+    if safe_remove(thumb_dir, use_trash=False)[0]:
+        thumb_dir.mkdir(parents=True, exist_ok=True)
+        print(f"  {OK} Desktop thumbnail cache ({bytes_to_human(size)}) cleaned")
+        return size, 1, 1
+    return 0, 0, 0
+
+
 def clean_user_data(dry_run=False):
     """Combined user data cleanup."""
     total_size = 0
@@ -222,6 +242,7 @@ def clean_user_data(dry_run=False):
         clean_system_temp(dry_run),
         clean_user_logs(dry_run),
         clean_backup_files(dry_run),
+        clean_thumbnails(dry_run),
     ):
         total_size += s
         total_items += i

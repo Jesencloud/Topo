@@ -531,13 +531,48 @@ def run_mime_database_refresh(dry_run=False):
     )
 
 
-def run_thumbnail_cleanup(dry_run=False):
-    thumb_cache = os.path.expanduser("~/.cache/thumbnails")
-    if os.path.exists(thumb_cache):
-        if dry_run:
-            return "Desktop thumbnail cache would be cleared"
-        safe_remove(thumb_cache, use_trash=False)
-        return "Desktop thumbnail cache cleared"
+def run_flatpak_repair(dry_run=False):
+    """Verify and repair Flatpak system and user installations."""
+    if not shutil.which("flatpak"):
+        return None
+    if dry_run:
+        return "Flatpak system & user objects would be verified (flatpak repair)"
+    # Repair user installation first, then system if sudo available
+    run_command(["flatpak", "repair", "--user"], capture=True)
+    if has_sudo():
+        run_command(["flatpak", "repair"], use_sudo=True, capture=True)
+    return "Flatpak storage objects verified (flatpak repair)"
+
+
+def run_tracker_miner_reset(dry_run=False):
+    """Reset GNOME Tracker miner database if indices are corrupt/fragmented."""
+    cmd = None
+    if shutil.which("tracker3"):
+        cmd = ["tracker3", "reset", "-s"]
+    elif shutil.which("tracker"):
+        cmd = ["tracker", "reset", "-r"]
+    if not cmd:
+        return None
+    if dry_run:
+        return "GNOME Tracker search index would be reset"
+    if run_command(cmd, capture=True).ok:
+        return "GNOME Tracker search index reset"
+    return None
+
+
+def run_package_repo_refresh(dry_run=False):
+    """Refresh PackageKit or APT-File software repository metadata."""
+    cmd = None
+    if shutil.which("pkcon"):
+        cmd = ["pkcon", "refresh"]
+    elif shutil.which("apt-file"):
+        cmd = ["apt-file", "update"]
+    if not cmd:
+        return None
+    if dry_run:
+        return "Software repository index would be refreshed"
+    if run_command(cmd, use_sudo=True, capture=True, timeout=30).ok:
+        return "Software repository index refreshed"
     return None
 
 
@@ -583,7 +618,9 @@ def optimize_system(dry_run=False):
         lambda: run_journal_optimization(dry_run),
         lambda: run_coredump_cleanup(dry_run),
         lambda: run_broken_symlink_cleanup(dry_run),
-        lambda: run_thumbnail_cleanup(dry_run),
+        lambda: run_flatpak_repair(dry_run),
+        lambda: run_tracker_miner_reset(dry_run),
+        lambda: run_package_repo_refresh(dry_run),
         lambda: run_desktop_database_refresh(dry_run),
         lambda: run_mime_database_refresh(dry_run),
         lambda: run_vacuum_all(dry_run),
