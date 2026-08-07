@@ -69,6 +69,8 @@ def get_desktop_exec_names(path: str | Path) -> set[str]:
 
 def get_desktop_name(path: str | Path, locale: str = "zh_CN") -> str:
     fields = parse_desktop_entry(path)
+    if fields.get("NoDisplay", "").lower() == "true":
+        return ""
     localized_key = f"Name[{locale}]" if locale else ""
     if localized_key and fields.get(localized_key):
         return fields[localized_key]

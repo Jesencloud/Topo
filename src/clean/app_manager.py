@@ -1,5 +1,4 @@
 import contextlib
-import json
 import os
 import shutil
 import subprocess
@@ -419,8 +418,9 @@ class UninstallManager:
 
         apps = []
 
-        # 1. Pre-scan: identify native packages that provide desktop files.
+        # 1. Pre-scan: identify native packages that provide desktop files and map to display names.
         user_app_packages = set()
+        package_desktop_names: dict[str, str] = {}
         try:
             desktop_dirs = [
                 "/usr/share/applications",
@@ -430,42 +430,59 @@ class UninstallManager:
             for d in desktop_dirs:
                 p = Path(d)
                 if p.exists():
-                    desktop_files.extend([str(f) for f in p.glob("*.desktop")])
+                    desktop_files.extend(list(p.glob("*.desktop")))
 
             if desktop_files:
                 batch_size = 500
-                for i in range(0, len(desktop_files), batch_size):
-                    batch = desktop_files[i : i + batch_size]
-            if desktop_files:
-                batch_size = 500
-                for i in range(0, len(desktop_files), batch_size):
-                    batch = desktop_files[i : i + batch_size]
+                str_desktop_files = [str(f) for f in desktop_files]
+                for i in range(0, len(str_desktop_files), batch_size):
+                    batch_str = str_desktop_files[i : i + batch_size]
+                    batch_paths = desktop_files[i : i + batch_size]
                     if shutil.which("rpm"):
                         res = system.run_command(
-                            ["rpm", "-qf", "--queryformat", "%{NAME}\n"] + batch,
+                            ["rpm", "-qf", "--queryformat", "%{NAME}\n"] + batch_str,
                             capture=True,
                             timeout=60,
                         )
                         if res.stdout:
-                            for line in res.stdout.splitlines():
-                                if not line.startswith(
-                                    "file "
-                                ):  # Filter out 'file X is not owned by any package'
-                                    user_app_packages.add(line.strip())
+                            lines = res.stdout.splitlines()
+                            for df_path, line in zip(batch_paths, lines, strict=False):
+                                line_str = line.strip()
+                                if line_str and not line_str.startswith("file "):
+                                    pkg = line_str
+                                    user_app_packages.add(pkg)
+                                    if pkg not in package_desktop_names:
+                                        dname = get_desktop_name(df_path)
+                                        if dname:
+                                            package_desktop_names[pkg] = dname
                     elif shutil.which("dpkg-query"):
-                        res = system.run_command(["dpkg-query", "-S", *batch], capture=True)
+                        res = system.run_command(["dpkg-query", "-S", *batch_str], capture=True)
                         for line in res.stdout.splitlines():
                             if ":" in line:
-                                user_app_packages.add(
-                                    self._strip_package_arch(line.split(":", 1)[0].strip())
-                                )
+                                parts = line.split(":", 1)
+                                pkg = self._strip_package_arch(parts[0].strip())
+                                user_app_packages.add(pkg)
+                                if pkg not in package_desktop_names:
+                                    df_path = Path(parts[1].strip())
+                                    if df_path.exists():
+                                        dname = get_desktop_name(df_path)
+                                        if dname:
+                                            package_desktop_names[pkg] = dname
                     elif shutil.which("pacman"):
-                        res = system.run_command(["pacman", "-Qo", *batch], capture=True)
+                        res = system.run_command(["pacman", "-Qo", *batch_str], capture=True)
                         for line in res.stdout.splitlines():
                             if " is owned by " in line:
-                                owned = line.split(" is owned by ", 1)[1].split()
+                                df_str, owned_str = line.split(" is owned by ", 1)
+                                owned = owned_str.split()
                                 if owned:
-                                    user_app_packages.add(owned[0])
+                                    pkg = owned[0]
+                                    user_app_packages.add(pkg)
+                                    if pkg not in package_desktop_names:
+                                        df_path = Path(df_str.strip())
+                                        if df_path.exists():
+                                            dname = get_desktop_name(df_path)
+                                            if dname:
+                                                package_desktop_names[pkg] = dname
         except (OSError, subprocess.SubprocessError, ValueError):
             pass
 
@@ -492,10 +509,11 @@ class UninstallManager:
                             if self._is_system_component(app_id, app_id):
                                 continue
                             if app_id in user_app_packages or size_bytes > 100 * 1024 * 1024:
+                                display_name = package_desktop_names.get(app_id, app_id)
                                 apps.append(
                                     self._app_record(
                                         app_id,
-                                        app_id,
+                                        display_name,
                                         size_bytes,
                                         bytes_to_human(size_bytes),
                                         "DNF",
@@ -532,10 +550,11 @@ class UninstallManager:
                                 with contextlib.suppress(OSError):
                                     install_time = int(list_file.stat().st_mtime)
 
+                            display_name = package_desktop_names.get(app_id, app_id)
                             apps.append(
                                 self._app_record(
                                     app_id,
-                                    app_id,
+                                    display_name,
                                     size_bytes,
                                     bytes_to_human(size_bytes),
                                     "APT",
@@ -562,10 +581,11 @@ class UninstallManager:
                                 and not self._is_system_component(app_id, app_id)
                                 and (app_id in user_app_packages or size_bytes > 100 * 1024 * 1024)
                             ):
+                                display_name = package_desktop_names.get(app_id, app_id)
                                 apps.append(
                                     self._app_record(
                                         app_id,
-                                        app_id,
+                                        display_name,
                                         size_bytes,
                                         bytes_to_human(size_bytes),
                                         "Pacman",
@@ -674,71 +694,74 @@ class UninstallManager:
                                     except (OSError, ValueError, IndexError):
                                         pass
 
+                        display_name = package_desktop_names.get(app_id, app_id)
                         apps.append(
                             self._app_record(
-                                app_id, app_id, size_bytes, size_str, "Snap", install_time
+                                app_id, display_name, size_bytes, size_str, "Snap", install_time
                             )
                         )
             except (OSError, subprocess.SubprocessError):
                 pass
 
-        # 7. NPM Global Packages Scan
+        # 7. NPM Global Packages Scan (Fast Direct Directory Inspection)
         if shutil.which("npm"):
             try:
-                res = system.run_command(
-                    ["npm", "list", "-g", "--json", "--depth=0"], capture=True, timeout=30
-                )
-                if res.ok and res.stdout:
-                    data = json.loads(res.stdout)
-                    dependencies = data.get("dependencies", {})
-                    system_npm_pkgs = {
-                        "npm",
-                        "corepack",
-                        "yarn",
-                        "pnpm",
-                        "npx",
-                        "cnpm",
-                    }
-                    # Get global node_modules root path as fallback
-                    npm_root_path = None
-                    res_root = system.run_command(["npm", "root", "-g"], capture=True, timeout=5)
-                    if res_root.ok and res_root.stdout.strip():
-                        npm_root_path = Path(res_root.stdout.strip())
+                system_npm_pkgs = {"npm", "corepack", "yarn", "pnpm", "npx", "cnpm"}
+                npm_roots = [
+                    Path.home() / ".npm-global" / "lib" / "node_modules",
+                    Path("/usr/lib/node_modules"),
+                    Path("/usr/local/lib/node_modules"),
+                ]
+                seen_npm_pkgs = set()
+                for npm_modules_dir in npm_roots:
+                    if not npm_modules_dir.is_dir():
+                        continue
+                    try:
+                        for item in npm_modules_dir.iterdir():
+                            pkg_dirs = []
+                            if item.name.startswith("@") and item.is_dir():
+                                with contextlib.suppress(OSError):
+                                    pkg_dirs.extend([sub for sub in item.iterdir() if sub.is_dir()])
+                            elif item.is_dir():
+                                pkg_dirs.append(item)
 
-                    for pkg_name, info in dependencies.items():
-                        clean_name = pkg_name.split("/")[-1]
-                        if clean_name in system_npm_pkgs:
-                            continue
-                        if self._is_system_component(clean_name, pkg_name):
-                            continue
+                            for pkg_path in pkg_dirs:
+                                pkg_name = (
+                                    f"{item.name}/{pkg_path.name}"
+                                    if item.name.startswith("@")
+                                    else pkg_path.name
+                                )
+                                if pkg_name in seen_npm_pkgs:
+                                    continue
+                                clean_name = pkg_path.name
+                                if clean_name in system_npm_pkgs:
+                                    continue
+                                if self._is_system_component(clean_name, pkg_name):
+                                    continue
 
-                        pkg_path = info.get("path")
-                        if not pkg_path and npm_root_path:
-                            pkg_path = str(npm_root_path / pkg_name)
-
-                        size_bytes = 0
-                        install_time = 0
-                        if pkg_path:
-                            p = Path(pkg_path)
-                            if p.exists():
+                                seen_npm_pkgs.add(pkg_name)
+                                size_bytes = 0
+                                install_time = 0
                                 try:
-                                    install_time = int(p.stat().st_mtime)
-                                    size_bytes = get_size_fast(p)
+                                    install_time = int(pkg_path.stat().st_mtime)
+                                    size_bytes = get_size_fast(pkg_path)
                                 except OSError:
                                     pass
 
-                        size_str = bytes_to_human(size_bytes) if size_bytes > 0 else "N/A"
-                        apps.append(
-                            self._app_record(
-                                pkg_name,
-                                clean_name,
-                                size_bytes,
-                                size_str,
-                                "NPM",
-                                install_time,
-                            )
-                        )
-            except (OSError, subprocess.SubprocessError, json.JSONDecodeError, ValueError):
+                                size_str = bytes_to_human(size_bytes) if size_bytes > 0 else "N/A"
+                                apps.append(
+                                    self._app_record(
+                                        pkg_name,
+                                        clean_name,
+                                        size_bytes,
+                                        size_str,
+                                        "NPM",
+                                        install_time,
+                                    )
+                                )
+                    except OSError:
+                        pass
+            except OSError:
                 pass
 
         # 8. Standalone CLI & Native Tools Dynamic Generic Scan
@@ -855,9 +878,31 @@ class UninstallManager:
                 )
             )
 
+        # Pre-scan search_roots ONCE to avoid O(N) redundant disk scandirs across apps
+        home_path = Path.home()
+        search_roots = [
+            home_path / ".config",
+            home_path / ".local/share",
+            home_path / ".cache",
+            home_path / ".var/app",
+        ]
+        pre_scanned_entries: dict[Path, list[tuple[str, Path]]] = {}
+        for root in search_roots:
+            if root.exists():
+                try:
+                    entries: list[tuple[str, Path]] = []
+                    with os.scandir(root) as it:
+                        for item_entry in it:
+                            entries.append((item_entry.name.lower(), Path(item_entry.path)))
+                    pre_scanned_entries[root] = entries
+                except OSError:
+                    pass
+
         # Calculate total app size including user data and cache residues
         for app in apps:
-            residue_paths = self.find_residue_paths(app["id"], app["name"], app["type"])
+            residue_paths = self.find_residue_paths(
+                app["id"], app["name"], app["type"], pre_scanned_entries=pre_scanned_entries
+            )
             residue_size = sum(get_size_fast(p) for p in residue_paths)
             if residue_size > 0:
                 app["size_bytes"] += residue_size
@@ -874,7 +919,13 @@ class UninstallManager:
             self.__class__._scan_cache_key = cache_key
         return self.apps
 
-    def find_residue_paths(self, app_id: str, app_name: str, app_type: str) -> list[Path]:
+    def find_residue_paths(
+        self,
+        app_id: str,
+        app_name: str,
+        app_type: str,
+        pre_scanned_entries: dict[Path, list[tuple[str, Path]]] | None = None,
+    ) -> list[Path]:
         """Finds all data/config/cache paths associated with an app."""
         if self._requires_official_only_uninstall(app_id, app_name):
             return []
@@ -916,22 +967,29 @@ class UninstallManager:
             if dp.exists():
                 targets.update(self._get_app_keywords(dp))
 
-        # 4. Search
+        # 4. Search using pre-scanned index or fast scandir
         for root in search_roots:
             if not root.exists():
                 continue
-            try:
-                with os.scandir(root) as it:
-                    for entry in it:
-                        entry_lower = entry.name.lower()
-                        for t in targets:
-                            if self._name_matches(entry_lower, t):
-                                p = Path(entry.path)
-                                if str(p) not in seen:
-                                    paths.append(p)
-                                    seen.add(str(p))
-            except OSError:
-                pass
+            if pre_scanned_entries and root in pre_scanned_entries:
+                for entry_lower, p in pre_scanned_entries[root]:
+                    for t in targets:
+                        if self._name_matches(entry_lower, t) and str(p) not in seen:
+                            paths.append(p)
+                            seen.add(str(p))
+            else:
+                try:
+                    with os.scandir(root) as it:
+                        for entry in it:
+                            entry_lower = entry.name.lower()
+                            for t in targets:
+                                if self._name_matches(entry_lower, t):
+                                    p = Path(entry.path)
+                                    if str(p) not in seen:
+                                        paths.append(p)
+                                        seen.add(str(p))
+                except OSError:
+                    pass
 
         # 5. Local Desktop Launchers & Icons
         local_desktop = home_path / ".local/share/applications" / f"{app_id}.desktop"
