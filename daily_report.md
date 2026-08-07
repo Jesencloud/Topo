@@ -23,7 +23,10 @@
 *   **Swap 与 ZRAM 监控支持**:
     *   新增 Swap 交换内存使用量/总容量与彩色进度条展示；新增 ZRAM 压缩内存物理占用与压缩比率实时检测。
 
-### 3. Clean 模块白名单安全防线修复
+### 3. Clean 模块白名单安全防线修复与已卸载孤立残余清理
+*   **已卸载软件残余目录自动清理 (`~/.local/share` & `~/.config`)**:
+    *   扩展 `clean_orphaned_remnants` 检索范围至 `~/.local/share` 与 `~/.config`，当检测到属于已彻底卸载应用（系统包或可执行命令均不存在）的残余文件夹（如 `~/.local/share/mimocode`、`~/.local/share/qBittorrent` 等）时，在 `topo clean` 运行中实现整目录安全擦除。
+    *   在孤立残余检索中建立全面安全防线（`system_folders` 结合 `LINUX_PROTECTED_HOME_PATHS`），严禁扫除任何系统必备配置、桌面基础服务、词库或受保护的敏感凭证。
 *   **清理过程自动避让 `.config` 个人配置及账号 Token**:
     *   修正 `proactive_app_detection()` 探查机制，将其严格限制在 `~/.cache` 纯临时缓存目录下进行探查，严禁扫描 `~/.config` 目录。
     *   将 `.config/QQ`、`.config/tencent-qq`、`.config/Tencent`、`.config/WeChat` 等 IM 聊天软件配置目录显式加入 `LINUX_PROTECTED_HOME_PATHS` 核心受保护名录，确保 `topo clean` 垃圾清理绝不会擦除登录状态或账号 Token。

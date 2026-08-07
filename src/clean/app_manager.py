@@ -455,7 +455,7 @@ class UninstallManager:
                                         dname = get_desktop_name(df_path)
                                         if dname:
                                             package_desktop_names[pkg] = dname
-                    elif shutil.which("dpkg-query"):
+                    if shutil.which("dpkg-query"):
                         res = system.run_command(["dpkg-query", "-S", *batch_str], capture=True)
                         for line in res.stdout.splitlines():
                             if ":" in line:
@@ -468,7 +468,7 @@ class UninstallManager:
                                         dname = get_desktop_name(df_path)
                                         if dname:
                                             package_desktop_names[pkg] = dname
-                    elif shutil.which("pacman"):
+                    if shutil.which("pacman"):
                         res = system.run_command(["pacman", "-Qo", *batch_str], capture=True)
                         for line in res.stdout.splitlines():
                             if " is owned by " in line:

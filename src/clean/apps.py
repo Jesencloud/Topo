@@ -12,7 +12,6 @@ from ..core.app_cache import (
 from ..core.browser_cache import BROWSER_CACHE_DEFS, BROWSER_CACHE_ROOT_NAMES
 from ..core.constants import (
     CLEAN_CACHE_AGE_DAYS,
-    CLEAN_ORPHAN_AGE_DAYS,
     DETECTED_APPS_FILE,
     GRAY,
     OK,
@@ -244,7 +243,11 @@ def clean_generic_xdg_caches(days=CLEAN_CACHE_AGE_DAYS, dry_run=False):
 
 def clean_orphaned_remnants(dry_run=False):
     """Finds 'orphan' folders belonging to uninstalled software, including AppImages."""
-    search_roots = [Path.home() / ".cache"]
+    search_roots = [
+        Path.home() / ".cache",
+        Path.home() / ".local" / "share",
+        Path.home() / ".config",
+    ]
     total_size = 0
     total_items = 0
     system_folders = {
@@ -252,6 +255,7 @@ def clean_orphaned_remnants(dry_run=False):
         "dbus",
         "dconf",
         "gnome-session",
+        "gtk-2.0",
         "gtk-3.0",
         "gtk-4.0",
         "fontconfig",
@@ -267,6 +271,40 @@ def clean_orphaned_remnants(dry_run=False):
         "ibus",
         "nautilus",
         "common",
+        "fonts",
+        "keyrings",
+        "fcitx",
+        "fcitx5",
+        "rime",
+        "uim",
+        "JetBrains",
+        "nvim",
+        "TelegramDesktop",
+        "KeePassXC",
+        "keepassxc",
+        "DBeaverData",
+        "autostart",
+        "menus",
+        "user-dirs.dirs",
+        "mimeapps.list",
+        "fish",
+        "google-chrome",
+        "BraveSoftware",
+        "mozilla",
+        "Code",
+        "VSCodium",
+        "Cursor",
+        "QQ",
+        "tencent-qq",
+        "Tencent",
+        "tencent",
+        "wechat",
+        "WeChat",
+        "Signal",
+        "discord",
+        "Slack",
+        "Bitwarden",
+        "1Password",
     }
 
     # Pre-scan desktop files to find AppImage paths
@@ -315,18 +353,17 @@ def clean_orphaned_remnants(dry_run=False):
                         is_installed = True
 
                 if not is_installed:
-                    # Final Safety: 60 days for unidentified orphans
-                    s, i = clean_path_by_age(item, days=CLEAN_ORPHAN_AGE_DAYS, dry_run=dry_run)
-                    if i > 0:
+                    s = get_size_fast(item)
+                    if safe_remove(item, use_trash=True, dry_run=dry_run, known_size_bytes=s)[0]:
                         total_size += s
-                        total_items += i
+                        total_items += 1
                         if not dry_run:
                             msg = f"  {OK} Orphaned Remnant: {item.name} ({bytes_to_human(s)})"
                             print(msg)
         except OSError:
             pass
     if dry_run and total_size > 0:
-        msg = f"  {OK} Orphaned app remnants ({bytes_to_human(total_size)}) would be checked"
+        msg = f"  {OK} Orphaned app remnants ({bytes_to_human(total_size)}) would be cleaned"
         print(msg)
     return total_size, total_items
 
