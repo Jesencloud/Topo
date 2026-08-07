@@ -62,6 +62,12 @@ LINUX_PROTECTED_HOME_PATHS = [
     ".thunderbird",
     # Messaging and social
     ".local/share/TelegramDesktop",
+    ".config/QQ",
+    ".config/tencent-qq",
+    ".config/Tencent",
+    ".config/tencent",
+    ".config/wechat",
+    ".config/WeChat",
     ".config/Signal",
     ".config/discord",
     ".config/Slack",

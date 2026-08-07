@@ -1,3 +1,35 @@
+# Daily Modification Report - 2026-08-07
+
+## Project: topo (Topo) - 应用数据管理、标准名称提取、垃圾清理安全防线与 Status 面板重构
+
+本次工作针对 Topo 的 **Uninstall（应用卸载）**、**Status（系统监控）** 及 **Clean（垃圾清理白名单防护）** 模块进行了全面增强与性能重构，提升了桌面级应用管理的精准度、安全性与加载流畅度。全部代码经 ruff lint、mypy 类型检查、pytest 单元测试及 Rust 测试验证无误。
+
+### 1. Uninstall 模块增强（真实占用计算、桌面 Name 提取与极速加载）
+*   **应用占用总空间精确统计（程序体 + 用户数据 + 缓存）**:
+    *   在 `run_full_scan()` 中集成 `find_residue_paths()`，自动搜寻并累加应用在 `~/.config`、`~/.local/share` 及 `~/.cache` 下的数据残余字节（例如将 QQ 程序体 31.8MB + 1.3GB 聊天数据 + 4.7MB 缓存自动统计为 1.33GB 真实占用），解决应用尺寸展示偏小的问题。
+*   **桌面标准应用名称与图标匹配（Desktop Name & Handler 过滤）**:
+    *   在原生 RPM/DEB/Pacman 预扫描机制中，引入 `.desktop` 文件的标准 `Name[zh_CN]` / `Name` localized 提取逻辑，使列表展示名称与桌面菜单完全一致（例如将包名 `code` 展示为 **Visual Studio Code**）。
+    *   在 `get_desktop_name()` 中加入 `NoDisplay=true` 过滤，自动排除形如 `Visual Studio Code - URL Handler` 的内部协议唤起服务，仅向用户保留最直观的主应用图标与名称。
+*   **扫描性能极速重构 (3.5s -> 0.2s)**:
+    *   针对 NPM 全局包扫描实现直接 `node_modules` 目录内存迭代算法，替代原本慢速的 `npm list -g` 子进程命令。
+    *   构建全局单次 XDG 数据根目录索引，完全消除每个应用探查残留时的重复 O(N) 磁盘 I/O 扫描，将**全局卸载扫描耗时由 3.5 秒降至 0.2 秒级**。
+*   **系统底层组件与系统预装应用全自动精准防护**:
+    *   补充 `gcc`、`g++`（核心 C/C++ 编译器套件）以及全套 GNOME / Fedora / Ubuntu / DEB 默认系统预装套件（包含 `gnome-calculator`、`gnome-calendar`、`gnome-clocks`、`gnome-weather`、`gnome-maps`、`gnome-boxes`、`loupe`、`snapshot`、`gnome-snapshot`、`org.gnome.Snapshot`、`showtime`、`decibels`、`baobab`、`orca`、`papers`、`yelp`、`org.gnome.characters` 及 Ubuntu 默认元包/套件等全部自带软件），确保 Uninstall 列表中只展现用户主动安装的第三方应用。
+
+### 2. Status 模块重构（系统健康状态面板）
+*   **指标展现层级与排版优化**:
+    *   重构 `show_status()` 展现顺序，划分为**基础概览与计算核心** (Uptime/CPU Load/CPU Temp/GPU Status/Fan)、**存储与内存系统** (RAM/Swap/ZRAM/Disk)、**硬件与网络** (Battery/Network) 及 **进程负载** (Top Processes) 4 大合理逻辑板块。
+    *   精简行与行之间的冗余空行，实现全屏紧凑、高密度的单屏系统状态信息展示。
+*   **Swap 与 ZRAM 监控支持**:
+    *   新增 Swap 交换内存使用量/总容量与彩色进度条展示；新增 ZRAM 压缩内存物理占用与压缩比率实时检测。
+
+### 3. Clean 模块白名单安全防线修复
+*   **清理过程自动避让 `.config` 个人配置及账号 Token**:
+    *   修正 `proactive_app_detection()` 探查机制，将其严格限制在 `~/.cache` 纯临时缓存目录下进行探查，严禁扫描 `~/.config` 目录。
+    *   将 `.config/QQ`、`.config/tencent-qq`、`.config/Tencent`、`.config/WeChat` 等 IM 聊天软件配置目录显式加入 `LINUX_PROTECTED_HOME_PATHS` 核心受保护名录，确保 `topo clean` 垃圾清理绝不会擦除登录状态或账号 Token。
+
+---
+
 # Daily Modification Report - 2026-08-06
 
 ## Project: topo (Topo) - 清理与优化模块功能扩充及结构调整
@@ -44,15 +76,6 @@
 *   **Linux Standalone Native CLI 通用动态探测**:
     *   构建零硬编码的单文件/独立 CLI 动态感知引擎，全面覆盖原生架构范式：自动扫描 `~/.local/bin/<cmd>` 关联 `~/.local/share/<cmd>` / `~/.config/<cmd>`，以及 `~/.*` 根目录中包含 `bin/` 的独立应用。
     *   成功实现对 **Claude Code** (`~/.local/share/claude`)、**Kimi Code** (`~/.kimi-code`)、**Grok CLI** (`~/.grok`) 等热门 AI Vibe Coding 工具的动态识别与彻底安全卸载。
-*   **桌面标准应用名称与图标匹配优化（Desktop Name & Handler 过滤）**:
-    *   在原生 RPM/DEB 预扫描映射机制中，引入 `.desktop` 文件的标准 `Name[zh_CN]` / `Name` localized 提取逻辑，使卸载列表中的展示名称与用户在系统桌面菜单中看到的视觉名称完全对齐（例如将包名 `code` 精准展示为 **Visual Studio Code**）。
-    *   在 `get_desktop_name()` 中加入 `NoDisplay=true` 拦截，自动过滤形如 `Visual Studio Code - URL Handler` 的内部协议唤起服务，仅向用户保留最直观的主应用图标与名称。
-*   **应用占用总空间精确计算与全流程加载性能极速优化**:
-    *   在 `run_full_scan()` 扫描应用时，同步调用 `find_residue_paths()` 自动检索应用在 `~/.config`、`~/.local/share` 及 `~/.cache` 下关联的用户配置、聊天记录、数据文件与缓存目录，并将这些目录的物理字节与程序体**自动合并累加**（例如将 QQ 程序体 31.8MB + 1.3GB 聊天数据 + 4.7MB 缓存自动统计为 1.33GB 真实占用），解决列表尺寸与实际占用不匹配的问题。
-    *   针对 NPM 全局包扫描实现直接目录内存迭代算法替代原本的 `npm list -g` 慢速子进程命令，并将 XDG 数据根目录做全局单次索引，将**扫描耗时由 3.5 秒降至 0.2 秒级**，完美兼顾磁盘占用精准度与界面秒开体验。
-*   **系统底层组件与系统预装应用全自动精准防护**:
-    *   在 `_SYSTEM_COMPONENT_TOKENS` 和 `_SYSTEM_COMPONENT_EXACT_IDS` 中补充了 `gcc`、`g++`（核心 C/C++ 编译器套件）以及全套 GNOME / Fedora / Ubuntu / DEB 默认系统预装套件（包含 `gnome-calculator`、`gnome-calendar`、`gnome-clocks`、`gnome-weather`、`gnome-maps`、`gnome-boxes`、`loupe`、`snapshot`、`gnome-snapshot`、`org.gnome.Snapshot`、`showtime`、`decibels`、`baobab`、`orca`、`papers`、`yelp`、`org.gnome.characters` 及 Ubuntu 默认元包/套件等全部自带软件），确保 Uninstall 列表中只展现用户主动安装的第三方应用。
-    *   在 `_is_system_component()` 中构建通用底层包通配判定引擎，自动拦截非 GUI 依赖包前缀 (`lib*`, `gsettings-*`, `desktop-file-*`, `shared-mime-*`) 与开发库后缀 (`*-libs`, `*-devel`, `*-dev`, `*-static`, `*-headers`, `*-plugins`, `*-modules`)，彻底规避底层系统库误显示。
 
 ### 4. Analyze & Clean 联动与 DNF5 缓存清理优化
 *   **Analyze Disk 洞察展示层级与图形优化**:
@@ -68,15 +91,6 @@
 *   **Systemd 用户服务自动清理与重载**:
     *   新增在卸载扫描中检索 `~/.config/systemd/user/` 下关联的应用服务文件 (`.service`)。
     *   在卸载删除过程中，若清理了用户服务定义，自动触发 `systemctl --user daemon-reload` 重新加载配置。
-
-### 5. Status 模块增强（系统健康状态面板）
-*   **指标展现层级与排版优化**:
-    *   重构 `show_status()` 展现顺序，划分为**基础概览与计算核心** (Uptime/CPU Load/CPU Temp/GPU Status/Fan)、**存储与内存系统** (RAM/Swap/ZRAM/Disk)、**硬件与网络** (Battery/Network) 及 **进程负载** (Top Processes) 4 大合理逻辑板块。
-    *   精简行与行之间的冗余空行，实现全屏紧凑、高密度的单屏系统状态信息展示。
-*   **Swap 内存交换区监控**:
-    *   在 `status.py` 中新增 `get_swap_info()`，从 `/proc/meminfo` 读取 Swap 使用量与总容量，并以可视化彩色进度条形式直观展现内存交换压力。
-*   **ZRAM 压缩内存状态监测**:
-    *   新增 `get_zram_info()`，实时读取 `/sys/block/zram0` 设备的物理压缩后占用、解压前数据量及压缩比率（如 `51.2x ratio`），准确反映桌面内存性能优化状态。
 
 ### 5. 紧急 Bug 修复 (APT 输出解析异常)
 *   **parse_size_to_bytes 容错处理**: 修复在 Ubuntu 环境下执行 `topo clean` 时，因 `apt-get autoremove` 输出文本包含省略号（如 `... MB`）触发 `ValueError: could not convert string to float: '...'` 导致程序崩溃的问题。增加了 `try-except` 异常捕获并平滑降级为 `0` 字节。

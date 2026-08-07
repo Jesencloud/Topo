@@ -66,7 +66,7 @@ def proactive_app_detection():
     handled_names.update(n.lower() for n in detected)
 
     new_found = False
-    for root_str in ["~/.cache", "~/.config"]:
+    for root_str in ["~/.cache"]:
         root = Path(root_str).expanduser()
         if not root.exists():
             continue
