@@ -242,7 +242,7 @@ def clean_generic_xdg_caches(days=CLEAN_CACHE_AGE_DAYS, dry_run=False):
 
 
 def clean_orphaned_remnants(dry_run=False):
-    """Finds 'orphan' folders belonging to uninstalled software, including AppImages."""
+    """Finds 'orphan' folders belonging to uninstalled software under standard XDG directories (~/.cache, ~/.local/share, ~/.config)."""
     search_roots = [
         Path.home() / ".cache",
         Path.home() / ".local" / "share",
@@ -250,6 +250,7 @@ def clean_orphaned_remnants(dry_run=False):
     ]
     total_size = 0
     total_items = 0
+
     system_folders = {
         "pulse",
         "dbus",

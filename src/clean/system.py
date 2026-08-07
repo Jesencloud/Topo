@@ -65,12 +65,16 @@ def clean_package_manager(dry_run=False):
             if p.exists():
                 cache_path = p
                 break
+        pre_size = get_size_fast(cache_path) if cache_path and cache_path.exists() else 0
     elif cleaner.key == "apt":
         cache_path = Path("/var/cache/apt/archives")
+        partial_path = Path("/var/cache/apt/archives/partial")
+        pre_size = (get_size_fast(cache_path) if cache_path.exists() else 0) + (
+            get_size_fast(partial_path) if partial_path.exists() else 0
+        )
     elif cleaner.key == "pacman":
         cache_path = Path("/var/cache/pacman/pkg")
-
-    pre_size = get_size_fast(cache_path) if cache_path and cache_path.exists() else 0
+        pre_size = get_size_fast(cache_path) if cache_path and cache_path.exists() else 0
 
     if dry_run:
         size_hint = f" ({bytes_to_human(pre_size)})" if pre_size > 0 else ""

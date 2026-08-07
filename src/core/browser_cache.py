@@ -59,7 +59,8 @@ BROWSER_DEFS = {
         "procs": ("opera", "opera-beta", "opera-developer"),
     },
     "Firefox": {
-        **_home_browser_roots("mozilla"),
+        "profile_roots": (".mozilla", ".config/mozilla"),
+        "cache_roots": (".cache/mozilla",),
         "flatpak_ids": ("org.mozilla.firefox",),
         "procs": ("firefox", "firefox-esr"),
     },

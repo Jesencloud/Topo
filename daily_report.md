@@ -1,3 +1,23 @@
+# Daily Modification Report - 2026-08-08
+
+## Project: topo (Topo) - Google Chrome/Package 名称提取与残余扫描增强、Firefox 路径补全及 APT 清理精确统计
+
+本次工作针对 Topo 的 **Uninstall（软件卸载目标匹配）**、**Clean（浏览器缓存防线与包管理器清理）** 模块进行了关键修补与细节增强。全部代码经过格式化、Lint、类型检查以及全套单测与 Rust 引擎测试验证通过。
+
+### 1. App Manager 模块增强（应用残余目标词提取优化）
+*   **支持剥离连字符/下划线包名后缀 (`google-chrome-stable` 匹配 `google-chrome`)**:
+    *   在 `find_residue_paths()` 的目标词生成算法中，新增对应用 ID（如 `google-chrome-stable`）进行分隔符（`-` / `_`）前缀自动提取。
+    *   解决了当 APT/DNF 包名为 `google-chrome-stable` 时，卸载检索缺失匹配 `~/.config/google-chrome` 文件夹的问题，确保能够完整扫描并安全彻底擦除书签、历史记录与用户配置文件。
+
+### 2. Clean 模块与受保护防线修补
+*   **Firefox 配置文件根路径补全**:
+    *   在 `browser_cache.py` 的 Firefox 定义中，补全 `.config/mozilla` 路径（包含 Firefox 的扩展语言包等），与原有的 `.mozilla` 共同构成完整的 Firefox profile_roots 定义。
+    *   提升了 `topo clean` 在垃圾清理过程中的硬核白名单安全防线，防止误清火狐扩展语言包；同时在彻底卸载火狐时能做到残余无死角清理。
+*   **APT / DNF 包管理器清理 pre_size 统计精确化**:
+    *   修正 `system.py` 中 `clean_package_manager()` 对 APT 归档包缓存及 `/var/cache/apt/archives/partial` 目录字节大小的准确测算，提升了清理前后的占用反馈精确度。
+
+---
+
 # Daily Modification Report - 2026-08-07
 
 ## Project: topo (Topo) - 应用数据管理、标准名称提取、垃圾清理安全防线与 Status 面板重构

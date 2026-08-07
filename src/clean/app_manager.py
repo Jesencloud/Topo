@@ -949,6 +949,12 @@ class UninstallManager:
         if "/" in app_id:
             parts = [p.strip("@").lower() for p in app_id.split("/") if p.strip("@")]
             targets.update(parts)
+        for t in list(targets):
+            for sep in ("-", "_"):
+                if sep in t:
+                    prefix = t.rsplit(sep, 1)[0]
+                    if len(prefix) >= 3 and prefix not in UninstallManager._GENERIC_TOKENS:
+                        targets.add(prefix)
 
         # Check direct home hidden directories (e.g. ~/.claude, ~/.kimi, ~/.codex, ~/.grok, ~/.cloudbase)
         for t in list(targets):
