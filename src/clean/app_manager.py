@@ -228,6 +228,11 @@ class UninstallManager:
             "xdg-desktop-portal-wlr",
             "xdg-desktop-portal-lxqt",
             "xdg-user-dirs-gtk",
+            "snapshot",
+            "gnome-snapshot",
+            "org.gnome.Snapshot",
+            "org.gnome.snapshot",
+            "cheese",
             "yelp",
         }
     )
@@ -849,6 +854,14 @@ class UninstallManager:
                     install_time,
                 )
             )
+
+        # Calculate total app size including user data and cache residues
+        for app in apps:
+            residue_paths = self.find_residue_paths(app["id"], app["name"], app["type"])
+            residue_size = sum(get_size_fast(p) for p in residue_paths)
+            if residue_size > 0:
+                app["size_bytes"] += residue_size
+                app["size_str"] = bytes_to_human(app["size_bytes"])
 
         self.apps = sorted(
             apps,

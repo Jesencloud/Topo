@@ -44,8 +44,10 @@
 *   **Linux Standalone Native CLI 通用动态探测**:
     *   构建零硬编码的单文件/独立 CLI 动态感知引擎，全面覆盖原生架构范式：自动扫描 `~/.local/bin/<cmd>` 关联 `~/.local/share/<cmd>` / `~/.config/<cmd>`，以及 `~/.*` 根目录中包含 `bin/` 的独立应用。
     *   成功实现对 **Claude Code** (`~/.local/share/claude`)、**Kimi Code** (`~/.kimi-code`)、**Grok CLI** (`~/.grok`) 等热门 AI Vibe Coding 工具的动态识别与彻底安全卸载。
+*   **应用占用总空间精确计算（程序体 + 用户数据 + 缓存）**:
+    *   在 `run_full_scan()` 扫描应用时，同步调用 `find_residue_paths()` 自动检索应用在 `~/.config`、`~/.local/share` 及 `~/.cache` 下关联的用户配置、聊天记录、数据文件与缓存目录，并将这些目录的物理字节与程序体**自动合并累加**（例如将 QQ 程序体 31.8MB + 1.3GB 聊天数据 + 4.7MB 缓存自动统计为 1.33GB 真实占用），解决列表尺寸与实际占用不匹配的问题。
 *   **系统底层组件与系统预装应用全自动精准防护**:
-    *   在 `_SYSTEM_COMPONENT_TOKENS` 和 `_SYSTEM_COMPONENT_EXACT_IDS` 中补充了 `gcc`、`g++`（核心 C/C++ 编译器套件）以及全套 GNOME / Fedora / Ubuntu / DEB 默认系统预装套件（包含 `gnome-calculator`、`gnome-calendar`、`gnome-clocks`、`gnome-weather`、`gnome-maps`、`gnome-boxes`、`loupe`、`snapshot`、`showtime`、`decibels`、`baobab`、`orca`、`papers`、`yelp`、`org.gnome.characters` 及 Ubuntu 默认元包/套件等全部自带软件），确保 Uninstall 列表中只展现用户主动安装的第三方应用。
+    *   在 `_SYSTEM_COMPONENT_TOKENS` 和 `_SYSTEM_COMPONENT_EXACT_IDS` 中补充了 `gcc`、`g++`（核心 C/C++ 编译器套件）以及全套 GNOME / Fedora / Ubuntu / DEB 默认系统预装套件（包含 `gnome-calculator`、`gnome-calendar`、`gnome-clocks`、`gnome-weather`、`gnome-maps`、`gnome-boxes`、`loupe`、`snapshot`、`gnome-snapshot`、`org.gnome.Snapshot`、`showtime`、`decibels`、`baobab`、`orca`、`papers`、`yelp`、`org.gnome.characters` 及 Ubuntu 默认元包/套件等全部自带软件），确保 Uninstall 列表中只展现用户主动安装的第三方应用。
     *   在 `_is_system_component()` 中构建通用底层包通配判定引擎，自动拦截非 GUI 依赖包前缀 (`lib*`, `gsettings-*`, `desktop-file-*`, `shared-mime-*`) 与开发库后缀 (`*-libs`, `*-devel`, `*-dev`, `*-static`, `*-headers`, `*-plugins`, `*-modules`)，彻底规避底层系统库误显示。
 
 ### 4. Analyze & Clean 联动与 DNF5 缓存清理优化
@@ -63,7 +65,10 @@
     *   新增在卸载扫描中检索 `~/.config/systemd/user/` 下关联的应用服务文件 (`.service`)。
     *   在卸载删除过程中，若清理了用户服务定义，自动触发 `systemctl --user daemon-reload` 重新加载配置。
 
-### 4. Status 模块增强（系统健康状态面板）
+### 5. Status 模块增强（系统健康状态面板）
+*   **指标展现层级与排版优化**:
+    *   重构 `show_status()` 展现顺序，划分为**基础概览与计算核心** (Uptime/CPU Load/CPU Temp/GPU Status/Fan)、**存储与内存系统** (RAM/Swap/ZRAM/Disk)、**硬件与网络** (Battery/Network) 及 **进程负载** (Top Processes) 4 大合理逻辑板块。
+    *   精简行与行之间的冗余空行，实现全屏紧凑、高密度的单屏系统状态信息展示。
 *   **Swap 内存交换区监控**:
     *   在 `status.py` 中新增 `get_swap_info()`，从 `/proc/meminfo` 读取 Swap 使用量与总容量，并以可视化彩色进度条形式直观展现内存交换压力。
 *   **ZRAM 压缩内存状态监测**:

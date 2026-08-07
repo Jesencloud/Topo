@@ -407,10 +407,10 @@ def show_status():
     home_stats = shutil.disk_usage(os.path.expanduser("~"))
     disk_percent = (home_stats.used / home_stats.total) * 100
 
+    # 1. Overview & Compute (Uptime, CPU, GPU, Fans)
     print(f"⏱️  Uptime:       {uptime}")
     print(f"📊 CPU Load:     {cpu_load}")
 
-    # CPU Temp Color
     temp_color = GREEN
     if temp_val > 80:
         temp_color = RED
@@ -418,10 +418,13 @@ def show_status():
         temp_color = YELLOW
     print(f"🌡️  CPU Temp:     {temp_color}{cpu_temp_str}{RESET}")
 
+    if gpu:
+        print(f"🎮 GPU Status:   {gpu}")
+
     if fans:
         print(f"⚙️  Fan Speed:    {fans}")
 
-    # Visual Progress Bars
+    # 2. Memory & Storage (RAM, Swap, ZRAM, Disk)
     mem_bar = draw_bar(mem_percent, width=20)
     mem_color = get_color_for_percent(mem_percent) if mem_percent > 0 else GRAY
     print(
@@ -450,9 +453,7 @@ def show_status():
         f"💾 Disk:         {disk_bar}  {disk_color}{disk_percent:>5.1f}%{RESET}  ({bytes_to_human(home_stats.used)} / {bytes_to_human(home_stats.total)})"
     )
 
-    if gpu:
-        print(f"🎮 GPU Status:   {gpu}")
-
+    # 3. Hardware & Network (Battery, Network)
     if battery_data:
         bat_val, bat_pct_str, bat_details = battery_data
         bat_color = GREEN
@@ -464,6 +465,7 @@ def show_status():
 
     print(f"🌐 Network:      ↓ {rx} / ↑ {tx} | {local_ip}{RESET}")
 
+    # 4. Workload (Top Processes)
     if top_procs:
         print(f"🔝 Top Processes: {', '.join(top_procs)}")
 
