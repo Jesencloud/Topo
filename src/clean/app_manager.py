@@ -167,6 +167,7 @@ class UninstallManager:
             "gnome-online-accounts",
             "gnome-system-monitor",
             "gnome-terminal",
+            "ptyxis",
             "gvfs",
             "libreoffice-core",
             "libreoffice-xsltfilter",

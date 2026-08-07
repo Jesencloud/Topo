@@ -240,6 +240,7 @@ def test_run_full_scan_skips_system_components(mock_run, mock_which):
             "gnome-software\t200000000\t1700000000\n"
             "gnome-system-monitor\t200000000\t1700000000\n"
             "gnome-terminal\t200000000\t1700000000\n"
+            "ptyxis\t200000000\t1700000000\n"
             "nautilus\t200000000\t1700000000\n"
             "gvfs\t200000000\t1700000000\n"
             "dconf\t200000000\t1700000000\n"

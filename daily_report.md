@@ -45,7 +45,7 @@
     *   构建零硬编码的单文件/独立 CLI 动态感知引擎，全面覆盖原生架构范式：自动扫描 `~/.local/bin/<cmd>` 关联 `~/.local/share/<cmd>` / `~/.config/<cmd>`，以及 `~/.*` 根目录中包含 `bin/` 的独立应用。
     *   成功实现对 **Claude Code** (`~/.local/share/claude`)、**Kimi Code** (`~/.kimi-code`)、**Grok CLI** (`~/.grok`) 等热门 AI Vibe Coding 工具的动态识别与彻底安全卸载。
 *   **系统底层组件与依赖库全自动精准防护**:
-    *   在 `_SYSTEM_COMPONENT_TOKENS` 和 `_SYSTEM_COMPONENT_EXACT_IDS` 中补充了 `glibc`、`llvm`、`geoclue`、`evolution-data-server`、`cldr-emoji`、`gcr`、`rygel`、`rust-std`、`openjdk`、`gnome-bluetooth`、`gnome-user-share`、`tecla`、`malcontent` 及全系桌面 Portal/User-Dirs 网关等防护词汇。
+    *   在 `_SYSTEM_COMPONENT_TOKENS` 和 `_SYSTEM_COMPONENT_EXACT_IDS` 中补充了 `glibc`、`llvm`、`geoclue`、`evolution-data-server`、`cldr-emoji`、`gcr`、`rygel`、`rust-std`、`openjdk`、`gnome-bluetooth`、`gnome-user-share`、`tecla`、`malcontent`、`ptyxis`（现代系统默认终端）及全系桌面 Portal/User-Dirs 网关等防护词汇。
     *   在 `_is_system_component()` 中构建通用底层包通配判定引擎，自动拦截非 GUI 依赖包前缀 (`lib*`, `gsettings-*`, `desktop-file-*`, `shared-mime-*`) 与开发库后缀 (`*-libs`, `*-devel`, `*-dev`, `*-static`, `*-headers`, `*-plugins`, `*-modules`)，彻底规避底层系统库误显示。
 
 ### 4. Analyze & Clean 联动与 DNF5 缓存清理优化
