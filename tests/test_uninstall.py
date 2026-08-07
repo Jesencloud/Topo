@@ -227,6 +227,8 @@ def test_run_full_scan_skips_system_components(mock_run, mock_which):
         returncode=0,
         stdout=(
             "nvidia-driver\t200000000\t1700000000\n"
+            "gcc\t200000000\t1700000000\n"
+            "gcc-c++\t200000000\t1700000000\n"
             "kernel-core\t200000000\t1700000000\n"
             "gdm\t200000000\t1700000000\n"
             "gnome-browser-connector\t200000000\t1700000000\n"
@@ -267,7 +269,7 @@ def test_run_full_scan_skips_system_components(mock_run, mock_which):
 
 @patch("shutil.which")
 @patch("subprocess.run")
-def test_run_full_scan_keeps_user_gnome_apps(mock_run, mock_which):
+def test_run_full_scan_filters_gnome_default_apps(mock_run, mock_which):
     mock_which.side_effect = lambda x: "/usr/bin/rpm" if x == "rpm" else None
     mock_run.return_value = MagicMock(
         returncode=0,
@@ -290,16 +292,7 @@ def test_run_full_scan_keeps_user_gnome_apps(mock_run, mock_which):
     ):
         apps = mgr.run_full_scan()
 
-    assert [app["id"] for app in apps] == [
-        "gnome-calculator",
-        "gnome-calendar",
-        "gnome-characters",
-        "gnome-clocks",
-        "gnome-connections",
-        "gnome-contacts",
-        "gnome-font-viewer",
-        "gnome-maps",
-    ]
+    assert apps == []
 
 
 @patch("shutil.which")
