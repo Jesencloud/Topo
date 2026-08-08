@@ -873,16 +873,16 @@ class UninstallManager:
                 pass
 
             size_str = bytes_to_human(size_bytes) if size_bytes > 0 else "N/A"
-            apps.append(
-                self._app_record(
-                    tool_id,
-                    tool_name,
-                    size_bytes,
-                    size_str,
-                    "CLI",
-                    install_time,
-                )
+            record = self._app_record(
+                tool_id,
+                tool_name,
+                size_bytes,
+                size_str,
+                "CLI",
+                install_time,
             )
+            record["install_dir"] = inst_dir
+            apps.append(record)
 
         # Pre-scan search_roots ONCE to avoid O(N) redundant disk scandirs across apps
         home_path = Path.home()
@@ -909,7 +909,16 @@ class UninstallManager:
             residue_paths = self.find_residue_paths(
                 app["id"], app["name"], app["type"], pre_scanned_entries=pre_scanned_entries
             )
-            residue_size = sum(get_size_fast(p) for p in residue_paths)
+            # Exclude install_dir from residue_size calculation to prevent double-counting
+            inst_dir_val = app.get("install_dir")
+            target_inst_dir: Path | None = Path(inst_dir_val) if inst_dir_val else None
+            filtered_residue_paths = [
+                p
+                for p in residue_paths
+                if target_inst_dir is None or Path(p).resolve() != target_inst_dir.resolve()
+            ]
+
+            residue_size = sum(get_size_fast(p) for p in filtered_residue_paths)
             if residue_size > 0:
                 app["size_bytes"] += residue_size
                 app["size_str"] = bytes_to_human(app["size_bytes"])
