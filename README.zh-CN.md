@@ -1,6 +1,6 @@
 <div align="center">
   <h1>🦡 Topo</h1>
-  <p><em>High-performance system optimization and cleanup for Linux.</em></p>
+  <p><em>专为 Linux 设计的高性能系统优化与垃圾清理工具。</em></p>
 </div>
 
 <p align="center">
@@ -20,31 +20,31 @@
   <img src="assets/topo.png" alt="Topo - Clean Your Linux" width="800" />
 </p>
 
-> The most elegant way to keep your Linux system lean and mean. Inspired by [Mole](https://github.com/tw93/mole) on macOS.
+> 保持 Linux 系统干练与高效的最优雅方式。灵感源自 macOS 上的 [Mole](https://github.com/tw93/mole)。
 
-## Quick Start
+## 快速开始
 
-**Script Installation (Recommended)**
+**一键脚本安装 (推荐)**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Jesencloud/Topo/main/install.sh | bash
 ```
 
-**Package Manager (.deb / .rpm)**
+**包管理器安装 (.deb / .rpm)**
 
-Download from the [latest release](https://github.com/Jesencloud/Topo/releases/latest), then install via:
+从 [最新 Release 页面](https://github.com/Jesencloud/Topo/releases/latest) 下载，然后通过以下命令安装：
 ```bash
 sudo apt install ./topo_xxx_amd64.deb   # Debian / Ubuntu
 sudo dnf install ./topo-xxx-1.x86_64.rpm  # Fedora / RHEL
 ```
 
-> **Supported Architectures**: `amd64`/`x86_64` & `arm64`/`aarch64`. Arch Linux users please use the script installer.
+> **支持架构**: `amd64`/`x86_64` 与 `arm64`/`aarch64`。Arch Linux 用户请使用脚本安装。
 
 ---
 
-## Features
+## 功能特性
 
-### 1. One-Key Deep Cleanup (`topo clean`)
-Safely remove package manager caches, journal logs, developer build artifacts, and system caches.
+### 1. 一键深度清理 (`topo clean`)
+安全清除包管理器缓存、journal 系统日志、开发构建产物和系统缓存。
 ```bash
 $ topo clean
 
@@ -58,8 +58,8 @@ $ topo clean
 Total space freed: 1.25 GB | Free space now: 482.2 GB
 ```
 
-### 2. Smart App Uninstaller (`topo uninstall`)
-Interactively select applications to remove. Topo automatically traces and purges all associated config files, caches, and residues.
+### 2. 智能应用卸载 (`topo uninstall`)
+交互式选择需要卸载的应用。Topo 会自动追踪并清除关联的所有配置文件、缓存和残留。
 ```bash
 $ topo uninstall
 
@@ -68,8 +68,8 @@ $ topo uninstall
    ✓  2. Thunderbird                             368.7 MB
 ```
 
-### 3. Disk Usage Explorer (`topo analyze`)
-Powered by a high-speed Rust engine, scan hundreds of thousands of files in milliseconds to explore storage hogs.
+### 3. 磁盘占用分析 (`topo analyze`)
+基于 Rust 极速引擎，毫秒级遍历数十万文件，精准探索空间占用大户。
 ```bash
 $ topo analyze
 
@@ -78,8 +78,8 @@ Exploring: /home/users/.config/Cursor
   ✓  2. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    6.8%  🗂️ Cache          |   12.4 MiB
 ```
 
-### 4. Audit & History (`topo history`)
-Track deletion events and audit what changed after a cleanup or uninstall.
+### 4. 审计与历史 (`topo history`)
+跟踪删除事件，审计清理或卸载后的变更记录。
 ```bash
 $ topo history --limit 5
 2026-06-04T18:17:03+08:00  uninstall wechat  size=820.4 MiB
@@ -87,12 +87,12 @@ $ topo history --limit 5
 
 ---
 
-## Highlights
+## 项目亮点
 
-- **Safety First**: Built-in global whitelist protecting system binaries, user credentials, and XDG folders.
-- **High-Speed Engine**: Python flexibility paired with Rust raw speed for ultra-fast file scanning.
-- **Terminal Friendly**: Uses Alternate Screen Buffer to preserve your shell session history upon exit.
+- **安全第一**：内置全局白名单，保护系统二进制文件、用户凭据与 XDG 目录。
+- **极速引擎**：Python 灵活性结合 Rust 原生极速，实现超高速文件扫描。
+- **终端友好**：使用备用屏幕缓冲区（Alternate Screen Buffer），退出时完好保留终端会话历史。
 
-## License
+## 开源协议
 
-MIT License. Developed with ❤️ for the Linux community.
+MIT License. 用心为 Linux 社区打造 ❤️
