@@ -797,10 +797,15 @@ class UninstallManager:
 
                     share_dir = home / ".local/share" / cmd_name
                     config_dir = home / ".config" / cmd_name
+                    dot_home_dir = home / f".{cmd_name}"
                     target_dir = (
                         share_dir
                         if share_dir.is_dir()
-                        else (config_dir if config_dir.is_dir() else None)
+                        else (
+                            config_dir
+                            if config_dir.is_dir()
+                            else (dot_home_dir if dot_home_dir.is_dir() else None)
+                        )
                     )
 
                     if target_dir:
@@ -812,6 +817,7 @@ class UninstallManager:
                                 "install_dir": target_dir,
                             }
                         )
+
             except OSError:
                 pass
 
