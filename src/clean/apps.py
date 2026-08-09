@@ -1,5 +1,6 @@
 import json
 import shutil
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from ..core.desktop_app_cache import (
     DESKTOP_APP_DETECTION_NAMES,
     get_desktop_app_cleanup_defs,
 )
+from ..core.desktop_entry import get_desktop_exec_command
 from ..core.file_ops import (
     CLEANED_PATHS,
     bytes_to_human,
@@ -241,16 +243,24 @@ def clean_generic_xdg_caches(days=CLEAN_CACHE_AGE_DAYS, dry_run=False):
     return total_size, total_items
 
 
-def clean_orphaned_remnants(dry_run=False):
-    """Finds 'orphan' folders belonging to uninstalled software under standard XDG directories (~/.cache, ~/.local/share, ~/.config)."""
-    search_roots = [
-        Path.home() / ".cache",
-        Path.home() / ".local" / "share",
-        Path.home() / ".config",
-    ]
+def clean_orphaned_remnants(dry_run=False, max_age_days=60):
+    """Finds 'orphan' cache folders belonging to uninstalled software under ~/.cache.
+
+    Safety Design Guarantees:
+    1. NEVER scans ~/.config or ~/.local/share (user data and configurations are strictly protected).
+    2. Collects all .desktop links across user and system directories (~/.local/share/applications,
+       /usr/share/applications, /var/lib/flatpak/exports/share/applications).
+    3. Requires cache folders to have no access/modification activity for at least `max_age_days` (default 60 days).
+    """
+    cache_root = Path.home() / ".cache"
+    if not cache_root.exists():
+        return 0, 0
+
     total_size = 0
     total_items = 0
+    cutoff = time.time() - (max_age_days * 86400)
 
+    # Core desktop and system infrastructure cache folders that must always be skipped
     system_folders = {
         "pulse",
         "dbus",
@@ -278,93 +288,78 @@ def clean_orphaned_remnants(dry_run=False):
         "fcitx5",
         "rime",
         "uim",
-        "JetBrains",
-        "nvim",
-        "TelegramDesktop",
-        "KeePassXC",
-        "keepassxc",
-        "DBeaverData",
-        "autostart",
-        "menus",
-        "user-dirs.dirs",
-        "mimeapps.list",
-        "fish",
-        "google-chrome",
-        "BraveSoftware",
-        "mozilla",
-        "Code",
-        "VSCodium",
-        "Cursor",
-        "QQ",
-        "tencent-qq",
-        "Tencent",
-        "tencent",
-        "wechat",
-        "WeChat",
-        "Signal",
-        "discord",
-        "Slack",
-        "Bitwarden",
-        "1Password",
+        "mesa_shader_cache",
+        "mesa_shader_cache_db",
+        "nvidia",
     }
 
-    # Pre-scan desktop files to find AppImage paths
-    desktop_links = {}
-    desktop_dir = Path.home() / ".local/share/applications"
-    if desktop_dir.exists():
-        try:
-            for d in desktop_dir.glob("*.desktop"):
-                with open(d, errors="ignore") as f:
-                    content = f.read()
-                    exec_line = [line for line in content.splitlines() if line.startswith("Exec=")]
-                    if exec_line:
-                        # Extract the path, removing args
-                        path_part = exec_line[0].split("=")[1].split()[0].strip("\"'")
-                        desktop_links[d.stem.lower()] = path_part
-        except OSError:
-            pass
-
-    for root in search_roots:
-        if not root.exists():
+    # Gather executable/link targets from all system and local .desktop files
+    desktop_links: dict[str, str] = {}
+    desktop_dirs = [
+        Path.home() / ".local/share/applications",
+        Path("/usr/share/applications"),
+        Path("/usr/local/share/applications"),
+        Path("/var/lib/flatpak/exports/share/applications"),
+    ]
+    for d_dir in desktop_dirs:
+        if not d_dir.exists():
             continue
         try:
-            for item in root.iterdir():
-                if not item.is_dir() or item.name.startswith(".") or item.name in system_folders:
-                    continue
-                resolved_item = item.resolve()
-                if (
-                    str(resolved_item) in CLEANED_PATHS
-                    or resolved_item == DETECTED_APPS_FILE.parent.resolve()
-                ):
-                    continue
-
-                cmd_name = item.name.lower()
-
-                # Check 1: Traditional Binary
-                is_installed = any(
-                    shutil.which(c)
-                    for c in [cmd_name, cmd_name.split("-")[0], cmd_name.replace("-", "")]
-                )
-
-                # Check 2: AppImage / Desktop link
-                if not is_installed:
-                    # Look if any desktop file points to a missing file for this app name
-                    potential_path = desktop_links.get(cmd_name)
-                    if potential_path and Path(potential_path).exists():
-                        is_installed = True
-
-                if not is_installed:
-                    s = get_size_fast(item)
-                    if safe_remove(item, use_trash=True, dry_run=dry_run, known_size_bytes=s)[0]:
-                        total_size += s
-                        total_items += 1
-                        if not dry_run:
-                            msg = f"  {OK} Orphaned Remnant: {item.name} ({bytes_to_human(s)})"
-                            print(msg)
+            for d in d_dir.glob("*.desktop"):
+                exec_cmd = get_desktop_exec_command(d)
+                if exec_cmd:
+                    desktop_links[d.stem.lower()] = exec_cmd
         except OSError:
             pass
+
+    try:
+        for item in cache_root.iterdir():
+            if not item.is_dir() or item.name.startswith(".") or item.name in system_folders:
+                continue
+            resolved_item = item.resolve()
+            if (
+                str(resolved_item) in CLEANED_PATHS
+                or resolved_item == DETECTED_APPS_FILE.parent.resolve()
+            ):
+                continue
+
+            cmd_name = item.name.lower()
+
+            # Check 1: Traditional Binary in PATH
+            is_installed = any(
+                shutil.which(c)
+                for c in [cmd_name, cmd_name.split("-")[0], cmd_name.replace("-", "")]
+            )
+
+            # Check 2: AppImage / System Desktop Link
+            if not is_installed:
+                potential_path = desktop_links.get(cmd_name)
+                if potential_path and (
+                    shutil.which(potential_path) or Path(potential_path).exists()
+                ):
+                    is_installed = True
+
+            if not is_installed:
+                # Check 3: Safety Age Cutoff - skip recently touched/modified cache folders
+                try:
+                    st = item.stat()
+                    if st.st_mtime > cutoff or st.st_atime > cutoff:
+                        continue
+                except OSError:
+                    continue
+
+                s = get_size_fast(item)
+                if safe_remove(item, use_trash=True, dry_run=dry_run, known_size_bytes=s)[0]:
+                    total_size += s
+                    total_items += 1
+                    if not dry_run:
+                        msg = f"  {OK} Orphaned Cache Remnant: {item.name} ({bytes_to_human(s)})"
+                        print(msg)
+    except OSError:
+        pass
+
     if dry_run and total_size > 0:
-        msg = f"  {OK} Orphaned app remnants ({bytes_to_human(total_size)}) would be cleaned"
+        msg = f"  {OK} Orphaned app cache remnants ({bytes_to_human(total_size)}) would be cleaned"
         print(msg)
     return total_size, total_items
 

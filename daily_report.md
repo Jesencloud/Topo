@@ -1,4 +1,28 @@
+# Daily Modification Report - 2026-08-09
+
+## Project: topo (Topo) - Standalone CLI 发现增强、应用空间重排去重与孤立清理防误删重构
+
+本次工作针对 Topo 的 **Uninstall（独立 CLI 应用检索与占用精准度）** 以及 **Clean（孤立残留垃圾清理安全机制）** 模块进行了深度优化与架构重构，彻底消除了由于可执行命令缺失可能导致的用户配置误删隐患。全部代码通过全套单测与 Rust 校验。
+
+### 1. Uninstall 模块增强（Codex/CLI 扫描与空间去重）
+*   **支持扫描官方 Shell 脚本安装的独立 CLI 工具 (`~/.<cmd>`)**:
+    *   在 `app_manager.py` 的 Pattern A Standalone CLI 检索逻辑中，新增对 `~/.<cmd_name>`（如 `~/.codex`）主目录的检测与自动关联。
+    *   成功识别通过官方 `curl -fsSL https://chatgpt.com/codex/install.sh | sh` 安装的 Codex 工具，实现对 `codex` (`CLI`)、`claude` (`CLI`)、`grok` (`CLI`) 的精准识别与连根擦除。
+*   **应用总尺寸计算去重 (防止 `install_dir` 翻倍统计)**:
+    *   在 `run_full_scan()` 空间累加循环中，过滤掉已作为 `install_dir` 录入的应用主目录，解决独立 CLI 应用大小被重复叠加导致展示尺寸翻倍（如 383 MiB 误算为 766 MiB）的问题。
+
+### 2. Clean 模块架构重构（孤立残余垃圾安全清理）
+*   **彻底剥离 `~/.config` 与 `~/.local/share` 孤立扫描**:
+    *   重构 `clean_orphaned_remnants()` 算法，**将孤立残余文件清理严格限制在 `~/.cache`（纯临时缓存）目录下**。
+    *   严禁扫描 `~/.config` 与 `~/.local/share`，彻底消除因免安装/便携运行软件（如 Clash Verge 等）缺乏系统命令而导致用户配置文件被误判为“孤立残留”擦除的风险。
+*   **多重包管理器/桌面快捷方式校验与 60 天访问年龄限制**:
+    *   遍历扫描全局多来源 Desktop 快捷方式（包含 `/usr/share/applications`、`/var/lib/flatpak/exports/` 等），结合命令探查提升判断精度。
+    *   在 `~/.cache` 下引入 60 天 `st_mtime` / `st_atime` 活动年龄门槛，自动保护活跃使用中的软件缓存文件夹。
+
+---
+
 # Daily Modification Report - 2026-08-08
+
 
 ## Project: topo (Topo) - Google Chrome/Package 名称提取与残余扫描增强、Firefox 路径补全及 APT 清理精确统计
 
