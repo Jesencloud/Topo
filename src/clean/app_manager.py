@@ -798,13 +798,25 @@ class UninstallManager:
                     share_dir = home / ".local/share" / cmd_name
                     config_dir = home / ".config" / cmd_name
                     dot_home_dir = home / f".{cmd_name}"
+
+                    # Known CLI tool binary to data directory alias mapping
+                    cli_dir_aliases = {
+                        "agy": [home / ".gemini"],
+                    }
+
+                    alias_dirs = [d for d in cli_dir_aliases.get(cmd_name, []) if d.is_dir()]
+
                     target_dir = (
                         share_dir
                         if share_dir.is_dir()
                         else (
                             config_dir
                             if config_dir.is_dir()
-                            else (dot_home_dir if dot_home_dir.is_dir() else None)
+                            else (
+                                dot_home_dir
+                                if dot_home_dir.is_dir()
+                                else (alias_dirs[0] if alias_dirs else None)
+                            )
                         )
                     )
 
@@ -867,8 +879,12 @@ class UninstallManager:
             try:
                 install_time = int(inst_dir.stat().st_mtime)
                 size_bytes = get_size_fast(inst_dir)
-                if bin_path.is_symlink() and bin_path.exists():
-                    size_bytes += bin_path.lstat().st_size
+                if bin_path.exists():
+                    size_bytes += (
+                        bin_path.lstat().st_size
+                        if bin_path.is_symlink()
+                        else get_size_fast(bin_path)
+                    )
             except OSError:
                 pass
 
