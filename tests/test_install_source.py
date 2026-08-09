@@ -21,42 +21,6 @@ def test_get_install_source_treats_unknown_marker_as_script(monkeypatch, tmp_pat
     assert install_source.get_install_source() == install_source.SCRIPT_INSTALL
 
 
-def test_get_package_manager_commands_uses_apt_for_ubuntu():
-    assert install_source.get_package_manager_commands(
-        "update", os_id="ubuntu", machine="x86_64"
-    ) == ["sudo apt install ./topo_xxx_amd64.deb"]
-    assert install_source.get_package_manager_commands("remove", os_id="ubuntu") == [
-        "sudo apt remove topo"
-    ]
-
-
-def test_get_package_manager_commands_uses_dnf_for_fedora():
-    assert install_source.get_package_manager_commands(
-        "update", os_id="fedora", machine="x86_64"
-    ) == ["sudo dnf upgrade ./topo-xxx-1.x86_64.rpm"]
-    assert install_source.get_package_manager_commands("remove", os_id="fedora") == [
-        "sudo dnf remove topo"
-    ]
-
-
-def test_get_package_manager_commands_uses_arm64_package_names():
-    assert install_source.get_package_manager_commands(
-        "update", os_id="ubuntu", machine="aarch64"
-    ) == ["sudo apt install ./topo_xxx_arm64.deb"]
-    assert install_source.get_package_manager_commands(
-        "update", os_id="fedora", machine="aarch64"
-    ) == ["sudo dnf upgrade ./topo-xxx-1.aarch64.rpm"]
-
-
-def test_get_package_manager_commands_falls_back_to_common_managers():
-    assert install_source.get_package_manager_commands(
-        "update", os_id="unknown", machine="x86_64"
-    ) == [
-        "sudo apt install ./topo_xxx_amd64.deb",
-        "sudo dnf upgrade ./topo-xxx-1.x86_64.rpm",
-    ]
-
-
 def test_get_package_asset_name_uses_distro_and_arch():
     assert (
         install_source.get_package_asset_name("v1.2.3", os_id="ubuntu", machine="x86_64")

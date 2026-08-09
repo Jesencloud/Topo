@@ -26,17 +26,6 @@ class Scanner:
         self.found_projects: set[Path] = set()
         self.found_artifacts: list[Path] = []
 
-    def is_project_root(self, path: Path) -> bool:
-        """Checks if a directory is a project root based on indicators."""
-        try:
-            with os.scandir(path) as it:
-                for entry in it:
-                    if entry.name in MONOREPO_INDICATORS or entry.name in PROJECT_INDICATORS:
-                        return True
-        except OSError:
-            pass
-        return False
-
     def scan_for_projects(self, max_depth: int = 4) -> Iterator[Path]:
         """Discovers project roots within search paths."""
         for root in self.search_paths:

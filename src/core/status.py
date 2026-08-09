@@ -225,24 +225,6 @@ def get_ip_info():
     return local_ip or "N/A"
 
 
-def get_ssd_info():
-    """Try to find SSD health info from /sys (limited availability without root/smartctl)."""
-    try:
-        # NVMe specific health (some kernels expose this)
-        # Check for model and temperature
-        drive_path = Path("/sys/class/block/nvme0n1/device")
-        if not drive_path.exists():
-            drive_path = Path("/sys/class/block/sda/device")
-
-        if drive_path.exists():
-            with open(drive_path / "model") as f:
-                model = f.read().strip()
-            return model
-    except OSError:
-        pass
-    return "Generic Drive"
-
-
 def get_cpu_temp():
     """Try to read CPU temperature from /sys/class/thermal."""
     try:

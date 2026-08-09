@@ -115,27 +115,3 @@ def get_package_remove_argv(os_id: str | None = None) -> list[str] | None:
     if package_manager == "dnf":
         return [*sudo, "dnf", "remove", "-y", "topo"]
     return None
-
-
-def get_package_manager_commands(
-    action: str, os_id: str | None = None, machine: str | None = None
-) -> list[str]:
-    """Return distro-appropriate package-manager commands for package installs."""
-    if action == "update":
-        current_machine = _normalize_machine(machine)
-        deb_arch = DEB_ARCH_BY_MACHINE.get(current_machine, "amd64")
-        rpm_arch = RPM_ARCH_BY_MACHINE.get(current_machine, "x86_64")
-        apt_command = f"sudo apt install ./topo_xxx_{deb_arch}.deb"
-        dnf_command = f"sudo dnf upgrade ./topo-xxx-1.{rpm_arch}.rpm"
-    elif action == "remove":
-        apt_command = "sudo apt remove topo"
-        dnf_command = "sudo dnf remove topo"
-    else:
-        raise ValueError(f"Unsupported package-manager action: {action}")
-
-    distro = (os_id or get_os_id()).lower()
-    if distro in APT_OS_IDS:
-        return [apt_command]
-    if distro in DNF_OS_IDS:
-        return [dnf_command]
-    return [apt_command, dnf_command]

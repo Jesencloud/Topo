@@ -41,13 +41,6 @@ class FrameState:
     thumb_height: int = 0
 
 
-def get_terminal_width():
-    try:
-        return os.get_terminal_size().columns
-    except OSError:
-        return 80
-
-
 def _char_width(char):
     if unicodedata.combining(char):
         return 0

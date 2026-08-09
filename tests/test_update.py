@@ -7,19 +7,10 @@ from src.manage.update import (
     _download_file,
     _fetch_latest_release_tag,
     _release_signature_status_matches,
-    _should_update,
     _verify_release_checksum,
     _verify_release_signature,
     run_update,
 )
-
-
-def test_should_update_uses_semantic_version_ordering():
-    assert _should_update("1.9.0", "1.10.0") is True
-    assert _should_update("1.9.0", "v1.10.0") is True
-    assert _should_update("1.10.0", "1.9.0") is False
-    assert _should_update("1.10.0", "1.10.0") is False
-    assert _should_update("1.10.0", "not-a-version") is False
 
 
 @patch("src.manage.update.subprocess.check_output")

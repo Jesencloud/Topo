@@ -571,26 +571,6 @@ def test_execute_uninstall_writes_history_for_package_only(mock_run_cmd, test_en
     assert sessions[0].total_size == 2048
 
 
-def test_get_app_localized_name(test_env):
-    mgr = UninstallManager()
-    desktop_file = test_env / "test.desktop"
-
-    # Test Name[zh_CN] priority
-    desktop_file.write_text("Name=EnglishName\nName[zh_CN]=中文名字\n")
-    name = mgr._get_app_localized_name(desktop_file, "fallback")
-    assert name == "中文名字"
-
-    # Test Name fallback
-    desktop_file.write_text("Exec=test\nName=EnglishName\n")
-    name = mgr._get_app_localized_name(desktop_file, "fallback")
-    assert name == "EnglishName"
-
-    # Test complete fallback
-    desktop_file.write_text("Exec=test\n")
-    name = mgr._get_app_localized_name(desktop_file, "fallback")
-    assert name == "fallback"
-
-
 def test_get_app_keywords(test_env):
     mgr = UninstallManager()
     desktop_file = test_env / "test.desktop"

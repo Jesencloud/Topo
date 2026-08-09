@@ -29,12 +29,6 @@ def _parse_version(version_text: str) -> Version | None:
         return None
 
 
-def _should_update(local_version: str, remote_version: str) -> bool:
-    local = _parse_version(local_version)
-    remote = _parse_version(remote_version)
-    return local is not None and remote is not None and remote > local
-
-
 def _fetch_latest_release_tag() -> str:
     latest_release_url = "https://api.github.com/repos/Jesencloud/Topo/releases/latest"
     try:

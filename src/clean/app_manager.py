@@ -362,10 +362,6 @@ class UninstallManager:
             "install_time": install_time,
         }
 
-    def _get_app_localized_name(self, desktop_file: Path, name: str) -> str:
-        """Tries to find Name[zh_CN] or Name in .desktop file."""
-        return get_desktop_name(desktop_file) or name
-
     def _get_app_keywords(self, desktop_file: Path) -> list[str]:
         """Extracts potential folder name keywords from Exec and Icon fields."""
         keywords = {name.lower() for name in get_desktop_exec_names(desktop_file)}

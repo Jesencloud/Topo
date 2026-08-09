@@ -1,20 +1,6 @@
 from src.clean.project import Scanner
 
 
-def test_is_project_root(test_env):
-    scanner = Scanner([])
-
-    project_dir = test_env / "my_project"
-    project_dir.mkdir()
-    (project_dir / "package.json").touch()
-
-    assert scanner.is_project_root(project_dir) is True
-
-    regular_dir = test_env / "docs"
-    regular_dir.mkdir()
-    assert scanner.is_project_root(regular_dir) is False
-
-
 def test_scan_artifacts(test_env):
     scanner = Scanner([])
     project_dir = test_env / "my_project"
