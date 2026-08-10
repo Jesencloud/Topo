@@ -947,8 +947,10 @@ class UninstallManager:
         search_roots = [
             home_path / ".config",
             home_path / ".local/share",
+            home_path / ".local/state",
             home_path / ".cache",
             home_path / ".var/app",
+            home_path / "snap",
         ]
         pre_scanned_entries: dict[Path, list[tuple[str, Path]]] = {}
         for root in search_roots:
@@ -1007,12 +1009,14 @@ class UninstallManager:
         home_path = Path.home()
         seen = set()
 
-        # 1. Standard XDG & Home CLI paths
+        # 1. Standard XDG, Flatpak & Snap paths
         search_roots = [
             home_path / ".config",
             home_path / ".local/share",
+            home_path / ".local/state",
             home_path / ".cache",
             home_path / ".var/app",  # Flatpak
+            home_path / "snap",  # Snap
         ]
 
         # 2. Common variants of the name
