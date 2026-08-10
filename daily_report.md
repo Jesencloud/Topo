@@ -1,3 +1,39 @@
+# Daily Modification Report - 2026-08-10
+
+## Project: topo (Topo) - 死代码清理、Tach 模块边界配置、安全与性能增强及通用进程自动发现
+
+本次工作对 Topo 的 **代码质量（死代码与僵尸代码清理）**、**模块架构（Tach 模块边界与 pytest 联动）**、**安全性与性能（子进程超时与魔法数字重构）** 以及 **Uninstall（通用无硬编码常驻进程自动查杀）** 进行了深度优化与安全加固。全部代码通过 Formatting、Python Lint (Ruff/Mypy)、Rust Clippy、ShellCheck 以及全套 313 个单元测试校验。
+
+### 1. 代码清理与架构规范
+* **死代码 (DEAD) 与僵尸代码 (ZOMBIE) 彻底擦除**：
+  - 通过 AST 解析 + 全项目交叉引用 grep 审计，移除了 2 处零调用的死代码：`get_ssd_info()` 和 `get_terminal_width()`。
+  - 移除了 4 处仅在测试用例中调用、生产代码从未引用的僵尸代码：`_get_app_localized_name()`、`is_project_root()`、`get_package_manager_commands()`、`_should_update()`。
+  - 同步清理对应的 7 个僵尸测试用例（测试用例数从 320 精简至 313）。
+* **Tach 模块边界配置 (`tach.toml`)**：
+  - 初始化并配置了项目 5 大模块（`src.core`, `src.ui`, `src.clean`, `src.manage`, `src.main`）的依赖边界规则。
+  - 实现了 `tach check` 自动化依赖越界校验，并集成了 `pytest --tach` 受影响测试增量运行能力。
+
+### 2. 安全性加固与性能重构
+* **子进程超时防护 (`timeout=300`)**：
+  - 为 `remove.py`（包管理器系统卸载）与 `update.py`（包管理器系统更新）中的 `subprocess.run` 补充了 5 分钟超时处理，防止底层 `dnf`/`apt` 因锁文件而无限阻塞。
+* **安全审计通道与删除统一化**：
+  - 将 `remove.py` 中所有的文件/目录删除逻辑完全收拢重构为调用 `safe_remove(..., allow_app_data_removal=True)`，确保自卸载清理过程同样经过 TOCTOU 二次校验与全量审计日志记录。
+* **魔法数字重构与开销优化**：
+  - 提取 `SECONDS_PER_DAY = 86400`、`RPM_QUERY_BATCH_SIZE = 500`、`SQLITE_PROGRESS_INTERVAL = 10000` 到 `constants.py`。
+  - 提升 `app_manager.py` 中的 `cli_dir_aliases` 实例定位到循环外部，避免在迭代中重复创建。
+  - 缩小了 `navigator.py` 中终端转义序列读取的 `except Exception` 范围至具体的 `(OSError, UnicodeDecodeError, ValueError)`。
+
+### 3. Uninstall 模块增强（通用无硬编码常驻进程自动发现与查杀）
+* **通用自动化进程发现机制（彻底摆脱单软件硬编码）**：
+  - **规则 1：动态 `/proc` & `fuser` 文件占用反查**：在卸载前检查该 App 相关的残留配置/数据路径，若存在正在读写该目录的活动进程，自动通过 `/proc/<pid>/comm` 提取真实二进制进程名。
+  - **规则 2：全量 `.desktop` `Exec` 二进制解析**：自动检索关联桌面快捷方式中的 `Exec` 路径，提取物理可执行文件名。
+  - **规则 3：通用 Token 智能切分与前缀剥离**：自动切分包名中的横线/下划线及常见前缀（如 `google-chrome-stable` -> `chrome`、`org.telegram.desktop` -> `telegram.desktop`）。
+* **卸载彻底度保证**：
+  - 解决由于包名与后台真实进程名不一致（如包名 `linuxqq` 与后台进程 `qq`/`qqnt`）导致进程未关停、文件句柄被占用、应用退回时重新写回 `~/.config` 的问题。
+  - 确保任何正在运行的应用在卸载时均可被先精确查杀关停，再完成文件解封抹除。
+
+---
+
 # Daily Modification Report - 2026-08-09
 
 ## Project: topo (Topo) - Standalone CLI 发现增强、应用空间重排去重与孤立清理防误删重构

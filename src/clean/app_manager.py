@@ -1,5 +1,6 @@
 import contextlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -18,6 +19,7 @@ from ..core.constants import (
     PURPLE,
     RED,
     RESET,
+    RPM_QUERY_BATCH_SIZE,
     THEME_TITLE,
     YELLOW,
 )
@@ -370,39 +372,84 @@ class UninstallManager:
             keywords.add(icon_name)
         return list(keywords)
 
-    def _executable_names_from_desktop(self, app_id: str) -> set[str]:
-        """Real executable (comm) names parsed from the app's .desktop Exec line.
-
-        These are what actually appear in the process table, unlike the localized
-        display name (which can never match `pkill -x`).
-        """
-        names: set[str] = set()
-        if not app_id:
-            return names
-        desktop_paths = [
-            Path(f"/usr/share/applications/{app_id}.desktop"),
-            Path.home() / f".local/share/applications/{app_id}.desktop",
-        ]
-        for dp in desktop_paths:
-            if not dp.exists():
-                continue
-            names.update(get_desktop_exec_names(dp))
-        return names
-
-    @staticmethod
-    def _candidate_process_names(app: dict[str, Any], extra: set[str] | None = None) -> list[str]:
+    def _candidate_process_names(
+        self, app: dict[str, Any], paths: list[Path] | None = None
+    ) -> list[str]:
         """Plausible process (comm) names to terminate before removing an app.
 
-        Uses the package/flatpak id and any executable names from .desktop, but
-        NOT the localized display name: a name like "Telegram Desktop" can never
-        match `pkill -x`, and a short display name could kill an unrelated process.
+        Dynamically discovers process names using:
+        1. Package/Flatpak/Snap ID
+        2. Binary names parsed from all associated .desktop Exec fields
+        3. Active PIDs occupying the app's residue directories via fuser
+        4. Name tokens (splitting hyphens/underscores/prefixes)
         """
-        names: set[str] = set(extra or set())
+        names: set[str] = set()
         app_id = str(app.get("id") or "")
+        app_name = str(app.get("name") or "")
+
         if app_id:
             names.add(app_id)
+            names.add(app_id.lower())
             if "." in app_id:  # flatpak: org.gnome.Music -> music
                 names.add(app_id.rsplit(".", 1)[-1].lower())
+
+        # Generic token splitting: e.g. "google-chrome-stable" -> "chrome", "linuxqq" -> "qq"
+        for raw in (app_id, app_name):
+            if not raw or " " in raw:
+                continue
+            lower_raw = raw.lower()
+            for prefix in ("linux", "org.", "com.", "net.", "io.", "io.github."):
+                if lower_raw.startswith(prefix) and len(lower_raw) > len(prefix) + 2:
+                    names.add(lower_raw[len(prefix) :])
+            for part in lower_raw.replace("_", "-").split("-"):
+                if len(part) >= 3 and part not in (
+                    "stable",
+                    "beta",
+                    "dev",
+                    "desktop",
+                    "linux",
+                    "free",
+                    "community",
+                ):
+                    names.add(part)
+
+        # Dynamic .desktop Exec binary extraction
+        desktop_dirs = [
+            Path("/usr/share/applications"),
+            Path.home() / ".local/share/applications",
+            Path("/var/lib/flatpak/exports/share/applications"),
+            Path.home() / ".local/share/flatpak/exports/share/applications",
+        ]
+        for ddir in desktop_dirs:
+            if not ddir.is_dir():
+                continue
+            with contextlib.suppress(OSError):
+                for entry in ddir.glob("*.desktop"):
+                    entry_name = entry.name.lower()
+                    if any(
+                        t in entry_name for t in (app_id.lower(), app_name.lower()) if len(t) >= 2
+                    ):
+                        names.update(get_desktop_exec_names(entry))
+
+        # Dynamic fuser / lsof inspection on app residue paths
+        if paths:
+            for p in paths:
+                if p.exists():
+                    try:
+                        res = system.run_command(["fuser", str(p)], capture=True, timeout=3)
+                        stdout_text = str(res.stdout or "")
+                        if res.ok and stdout_text.strip():
+                            # fuser outputs PIDs like '1234m'; extract pure numeric PIDs
+                            for pid_clean in re.findall(r"\b\d+\b", stdout_text):
+                                comm_path = Path(f"/proc/{pid_clean}/comm")
+                                if comm_path.exists():
+                                    with contextlib.suppress(OSError):
+                                        comm_name = comm_path.read_text().strip()
+                                        if comm_name:
+                                            names.add(comm_name)
+                    except (OSError, subprocess.SubprocessError):
+                        pass
+
         return [n for n in names if n]
 
     def run_full_scan(self, *, use_cache: bool = False) -> list[dict[str, Any]]:
@@ -429,7 +476,7 @@ class UninstallManager:
                     desktop_files.extend(list(p.glob("*.desktop")))
 
             if desktop_files:
-                batch_size = 500
+                batch_size = RPM_QUERY_BATCH_SIZE
                 str_desktop_files = [str(f) for f in desktop_files]
                 for i in range(0, len(str_desktop_files), batch_size):
                     batch_str = str_desktop_files[i : i + batch_size]
@@ -781,6 +828,10 @@ class UninstallManager:
         }
 
         # Pattern A: ~/.local/bin/<cmd> with matching ~/.local/share/<cmd> or ~/.config/<cmd>
+        # Known CLI tool binary to data directory alias mapping
+        cli_dir_aliases = {
+            "agy": [home / ".gemini"],
+        }
         local_bin = home / ".local/bin"
         if local_bin.is_dir():
             try:
@@ -794,11 +845,6 @@ class UninstallManager:
                     share_dir = home / ".local/share" / cmd_name
                     config_dir = home / ".config" / cmd_name
                     dot_home_dir = home / f".{cmd_name}"
-
-                    # Known CLI tool binary to data directory alias mapping
-                    cli_dir_aliases = {
-                        "agy": [home / ".gemini"],
-                    }
 
                     alias_dirs = [d for d in cli_dir_aliases.get(cmd_name, []) if d.is_dir()]
 
@@ -1112,9 +1158,7 @@ class UninstallManager:
         try:
             # 1. Graceful Kill (SIGTERM -> Wait -> SIGKILL). Use real executable
             # names (id + .desktop Exec), never the localized display name.
-            all_process_names = self._candidate_process_names(
-                app, self._executable_names_from_desktop(str(app.get("id") or ""))
-            )
+            all_process_names = self._candidate_process_names(app, paths)
             if app["type"] == "Flatpak":
                 with contextlib.suppress(OSError, subprocess.SubprocessError):
                     system.run_command(["flatpak", "kill", app["id"]], capture=True, timeout=20)
@@ -1254,17 +1298,15 @@ def run_uninstall():
         selected_apps = [apps[i] for i in selected_indices]
         all_targets = []
         for app in selected_apps:
+            app_paths = manager.find_residue_paths(app["id"], app["name"], app["type"])
             is_running = False
-            for proc in manager._candidate_process_names(
-                app, manager._executable_names_from_desktop(str(app.get("id") or ""))
-            ):
+            for proc in manager._candidate_process_names(app, app_paths):
                 try:
                     if system.run_command(["pgrep", "-x", proc], capture=True, timeout=5).ok:
                         is_running = True
                         break
                 except (OSError, subprocess.SubprocessError):
                     pass
-            app_paths = manager.find_residue_paths(app["id"], app["name"], app["type"])
             all_targets.append((app, app_paths, is_running))
 
         confirmed = UninstallPreviewSelector(all_targets).run()

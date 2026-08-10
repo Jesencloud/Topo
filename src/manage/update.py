@@ -318,7 +318,7 @@ def _run_package_update(local_version: str, remote_tag: str) -> None:
 
         print(f" {GRAY}Running package upgrade:{RESET} {BOLD}{' '.join(command)}{RESET}")
         try:
-            process = subprocess.run(command)
+            process = subprocess.run(command, timeout=300)
         except (OSError, subprocess.SubprocessError) as e:
             print(f" {RED}❌ Package upgrade failed: {e}{RESET}")
             return

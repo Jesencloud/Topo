@@ -4,7 +4,7 @@ import shutil
 import time
 from pathlib import Path
 
-from ..core.constants import CLEAN_TEMP_AGE_DAYS, OK
+from ..core.constants import CLEAN_TEMP_AGE_DAYS, OK, SECONDS_PER_DAY
 from ..core.file_ops import bytes_to_human, clean_path_by_age, get_size_fast, safe_remove
 from ..core.system import run_command
 
@@ -66,7 +66,7 @@ def clean_system_temp(dry_run=False, min_age_days=CLEAN_TEMP_AGE_DAYS):
     total_size = 0
     total_items = 0
     uid = os.getuid()
-    cutoff = time.time() - (min_age_days * 86400)
+    cutoff = time.time() - (min_age_days * SECONDS_PER_DAY)
 
     # Intentional temp cleanup roots, not temp file creation.
     temp_paths = [Path("/tmp"), Path("/var/tmp")]  # nosec B108
@@ -116,7 +116,7 @@ def clean_user_logs(dry_run=False):
     total_size = 0
     total_items = 0
     home = Path.home()
-    cutoff = time.time() - (30 * 86400)  # 30 days
+    cutoff = time.time() - (30 * SECONDS_PER_DAY)  # 30 days
 
     # Specific known oversized log files
     known_logs = [

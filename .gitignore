@@ -49,3 +49,7 @@ settings.local.json
 # --- Sensitive Info ---
 .env
 .python-version
+
+# tach module graph
+tach_module_graph.dot
+tach.toml

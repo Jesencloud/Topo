@@ -17,6 +17,7 @@ from ..core.constants import (
     GRAY,
     OK,
     RESET,
+    SECONDS_PER_DAY,
     SKIP,
 )
 from ..core.desktop_app_cache import (
@@ -258,7 +259,7 @@ def clean_orphaned_remnants(dry_run=False, max_age_days=60):
 
     total_size = 0
     total_items = 0
-    cutoff = time.time() - (max_age_days * 86400)
+    cutoff = time.time() - (max_age_days * SECONDS_PER_DAY)
 
     # Core desktop and system infrastructure cache folders that must always be skipped
     system_folders = {

@@ -1,5 +1,4 @@
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -7,7 +6,7 @@ from typing import TypedDict
 
 from ..core import terminal_state
 from ..core.constants import BLUE, BOLD, GRAY, GREEN, MAGENTA, RED, RESET
-from ..core.file_ops import bytes_to_human, get_size_fast
+from ..core.file_ops import bytes_to_human, get_size_fast, safe_remove
 from ..core.install_source import (
     PACKAGE_INSTALL,
     get_install_source,
@@ -94,16 +93,8 @@ def _launcher_points_to_package(launcher_path: Path) -> bool:
 
 
 def _remove_path(path: Path) -> bool:
-    try:
-        if path.is_dir() and not path.is_symlink():
-            shutil.rmtree(path)
-        elif path.exists() or path.is_symlink():
-            path.unlink()
-        else:
-            return False
-    except OSError:
-        return False
-    return True
+    ok, _ = safe_remove(path, use_trash=False, allow_app_data_removal=True)
+    return ok
 
 
 def _remove_package_user_residue() -> list[str]:
@@ -155,7 +146,7 @@ def run_remove(dry_run=False):
             print(f" {GREEN}✓{RESET} Dry run complete. Package removal command was not executed.")
             return
         try:
-            process = subprocess.run(command)
+            process = subprocess.run(command, timeout=300)
         except (OSError, subprocess.SubprocessError) as e:
             print(f" {RED}✗ Package removal failed: {e}{RESET}")
             return
@@ -264,15 +255,12 @@ def run_remove(dry_run=False):
     had_errors = False
     for item in to_remove:
         p: Path = item["path"]
-        try:
-            if item["type"] == "dir":
-                shutil.rmtree(p)
-            else:
-                p.unlink()
+        ok, reason = safe_remove(p, use_trash=False, allow_app_data_removal=True)
+        if ok:
             print(f"  {GREEN}✓{RESET} Removed {item['desc']}")
-        except OSError as e:
+        else:
             had_errors = True
-            print(f"  {RED}✗{RESET} Failed to remove {p}: {e}")
+            print(f"  {RED}✗{RESET} Failed to remove {p}: {reason}")
 
     if _strip_topo_path_lines():
         print(f"  {GREEN}✓{RESET} Removed PATH entry from shell config")

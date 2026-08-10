@@ -426,7 +426,7 @@ class Navigator:
             # Check if it was a fragmented mouse sequence
             if ("M" in ch or "m" in ch) and (ch.startswith("\x1b[M") or ch.startswith("\x1b[<")):
                 return "MOUSE_EVENT"
-        except Exception:
+        except (OSError, UnicodeDecodeError, ValueError):
             # Terminal escape/mouse sequences can arrive fragmented; ignore bad reads
             # so the TUI keeps control of cursor/raw-mode cleanup.
             return ""

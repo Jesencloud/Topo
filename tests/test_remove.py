@@ -8,14 +8,27 @@ from src.manage.remove import (
 )
 
 
+def _do_remove(path):
+    import shutil
+    from pathlib import Path
+
+    p = Path(path)
+    if p.is_dir() and not p.is_symlink():
+        shutil.rmtree(p)
+    elif p.exists() or p.is_symlink():
+        p.unlink()
+    return True
+
+
 @patch("src.manage.remove.get_install_source", return_value="package")
 @patch(
     "src.manage.remove.get_package_remove_argv",
     return_value=["sudo", "apt", "remove", "-y", "topo"],
 )
 @patch("src.manage.remove.subprocess.run")
+@patch("src.manage.remove.safe_remove", side_effect=lambda p, **kw: (_do_remove(p), "ok"))
 def test_run_remove_executes_package_manager_removal(
-    mock_run, _mock_command, _mock_install_source, monkeypatch, test_env, capsys
+    _mock_safe, mock_run, _mock_command, _mock_install_source, monkeypatch, test_env, capsys
 ):
     mock_run.return_value = MagicMock(returncode=0)
     config_dir = test_env / ".config/topo"
@@ -46,7 +59,7 @@ def test_run_remove_executes_package_manager_removal(
     assert not state_dir.exists()
     assert not script_dir.exists()
     assert not launcher.exists()
-    mock_run.assert_called_once_with(["sudo", "apt", "remove", "-y", "topo"])
+    mock_run.assert_called_once_with(["sudo", "apt", "remove", "-y", "topo"], timeout=300)
 
 
 @patch("src.manage.remove.get_install_source", return_value="package")

@@ -10,7 +10,17 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from ..core import system, terminal_state
-from ..core.constants import BOLD, CLEAR_SCREEN, GRAY, GREEN, PURPLE, RED, RESET, YELLOW
+from ..core.constants import (
+    BOLD,
+    CLEAR_SCREEN,
+    GRAY,
+    GREEN,
+    PURPLE,
+    RED,
+    RESET,
+    SQLITE_PROGRESS_INTERVAL,
+    YELLOW,
+)
 from ..core.desktop_entry import get_desktop_exec_command
 from ..core.file_ops import (
     bytes_to_human,
@@ -66,7 +76,7 @@ def _set_sqlite_timeout(conn: sqlite3.Connection, deadline: float) -> None:
     def abort_if_expired():
         return 1 if time.monotonic() > deadline else 0
 
-    conn.set_progress_handler(abort_if_expired, 10000)
+    conn.set_progress_handler(abort_if_expired, SQLITE_PROGRESS_INTERVAL)
 
 
 def vacuum_single_db(db_file):

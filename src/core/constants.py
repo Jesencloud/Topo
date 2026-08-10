@@ -124,3 +124,12 @@ CLEAN_CACHE_AGE_DAYS = 30
 CLEAN_ORPHAN_AGE_DAYS = 60
 CLEAN_CARGO_AGE_DAYS = 7
 CLEAN_TEMP_AGE_DAYS = 3
+
+# Time conversion
+SECONDS_PER_DAY = 86400
+
+# Batch processing
+RPM_QUERY_BATCH_SIZE = 500
+
+# SQLite progress handler callback interval (virtual-machine instructions)
+SQLITE_PROGRESS_INTERVAL = 10000

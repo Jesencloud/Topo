@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .constants import SECONDS_PER_DAY
 from .system import run_command
 from .whitelist import (
     CRITICAL_PREFIX_PATHS,
@@ -343,7 +344,7 @@ def clean_path_by_age(path: str | Path, days: int, dry_run: bool = False) -> tup
 
     total_size = 0
     items_count = 0
-    cutoff = time.time() - (days * 86400)
+    cutoff = time.time() - (days * SECONDS_PER_DAY)
 
     try:
         with os.scandir(path) as it:

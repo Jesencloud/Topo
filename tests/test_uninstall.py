@@ -634,10 +634,10 @@ def test_uninstall_cannot_delete_xdg_user_data_dir(test_env):
 def test_candidate_process_names_uses_ids_not_display_name():
     mgr = UninstallManager()
     app = {"id": "org.telegram.desktop", "name": "Telegram Desktop", "type": "Flatpak"}
-    names = mgr._candidate_process_names(app, {"telegram-desktop"})
+    names = mgr._candidate_process_names(app)
     assert "org.telegram.desktop" in names
     assert "desktop" in names  # flatpak last segment
-    assert "telegram-desktop" in names  # real executable name passed in
+    assert "telegram.desktop" in names  # token split from org.
     # A localized display name with a space can never match `pkill -x`.
     assert "telegram desktop" not in names
 
@@ -649,11 +649,9 @@ def test_executable_names_from_desktop(test_env):
     (app_dir / "com.example.App.desktop").write_text(
         "[Desktop Entry]\nName=Fancy App\nExec=/usr/bin/fancy-bin %U\n"
     )
-    with (
-        patch("pathlib.Path.home", return_value=test_env),
-        patch("src.clean.app_manager.safe_remove", return_value=(True, "OK")),
-    ):
-        names = mgr._executable_names_from_desktop("com.example.App")
+    with patch("pathlib.Path.home", return_value=test_env):
+        app = {"id": "com.example.App", "name": "Fancy App", "type": "Flatpak"}
+        names = mgr._candidate_process_names(app)
     assert "fancy-bin" in names
 
 
