@@ -1,4 +1,4 @@
-from ..core.constants import CYAN, GRAY, GREEN, RESET, TOPO_VERSION
+from ..core.constants import GREEN, RESET, TOPO_VERSION, WHITE
 from .navigator import InteractiveMenu
 
 CLEAN_ACTION = "clean"
@@ -8,12 +8,25 @@ ANALYZE_ACTION = "analyze"
 STATUS_ACTION = "status"
 QUIT_ACTION = "quit"
 
+STATUS_PULSE_COLORS = [
+    "\033[1;36m",  # High-contrast Cyan
+    "\033[1;32m",  # Active Green
+    "\033[1;35m",  # Pulse Purple
+]
+
+_pulse_step = 0
+
 
 def render_banner():
-    # 2-line Braille vector typography for "TOPO" with version
-    return f"""{GREEN}
- ⠶⣶⠶  ⢰⠶⡆ ⢰⠶⡆ ⢰⠶⡆
-  ⠿   ⠸⠤⠇ ⢸⠉⠁ ⠸⠤⠇   {CYAN}●{RESET}{GRAY} v{TOPO_VERSION} is digging deeper 🦡{RESET}"""
+    """Renders professional industrial monochrome TUI header for TOPO."""
+    global _pulse_step
+    _pulse_step = (_pulse_step + 1) % len(STATUS_PULSE_COLORS)
+    pulse = STATUS_PULSE_COLORS[_pulse_step]
+
+    # Professional clean monochrome ASCII typography with single active status dot pulse
+    return f"""
+ {GREEN}⠶⣶⠶  ⢰⠶⡆ ⢰⠶⡆ ⢰⠶⡆{RESET}
+  {GREEN}⠿   ⠸⠤⠇ ⢸⠉⠁ ⠸⠤⠇{RESET}   {pulse}●{RESET}{WHITE} v{TOPO_VERSION} is digging deeper 🦡{RESET}"""
 
 
 def main_menu():

@@ -105,7 +105,7 @@ def test_main_menu_clean_action_routes_to_clean():
     with (
         patch("sys.argv", ["topo"]),
         patch("src.main.terminal_state.install_signal_handlers"),
-        patch("src.main.alternate_screen", return_value=nullcontext()),
+        patch("src.main.SingleInstanceLock", return_value=nullcontext()),
         patch("src.main.main_menu", return_value="clean"),
         patch("src.main._run_terminal_tui_command", return_value=False) as run_terminal,
     ):
