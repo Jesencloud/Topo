@@ -19,6 +19,7 @@ from .core.constants import (
 )
 from .core.doctor import run_doctor
 from .core.history import show_history
+from .core.lock import SingleInstanceLock
 from .core.status import show_status
 from .core.whitelist import add_to_whitelist, remove_from_whitelist
 from .manage.install import run_install_link
@@ -311,6 +312,17 @@ def _main():
                 print(f"   - {p}")
         return
 
+    # Commands requiring single-instance concurrency lock
+    LOCK_REQUIRED_COMMANDS = {"clean", "purge", "uninstall", "optimize", "all", "remove", None}
+
+    if args.command in LOCK_REQUIRED_COMMANDS:
+        with SingleInstanceLock():
+            _execute_main_router(args, dry_run, wl_parser)
+    else:
+        _execute_main_router(args, dry_run, wl_parser)
+
+
+def _execute_main_router(args, dry_run, wl_parser):
     # If no command is provided, enter TUI
     if args.command is None:
         menu_routes = {

@@ -307,6 +307,11 @@ def safe_remove(
         if raw_path.is_dir() and not raw_path.is_symlink():
             shutil.rmtree(raw_path)
         else:
+            from .lock import is_file_locked
+
+            if is_file_locked(raw_path):
+                record_deletion_audit(raw_path, mode, "file-locked", size_bytes)
+                return False, f"File is currently locked by an active process: {raw_path.name}"
             raw_path.unlink()
         record_deletion_audit(raw_path, "permanent", "deleted", size_bytes)
         return True, "Permanently deleted"

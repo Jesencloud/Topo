@@ -29,6 +29,7 @@ from ..core.file_ops import (
     parse_size_from_text,
     safe_remove,
 )
+from ..core.lock import is_file_locked
 from ..core.system import has_sudo, run_command
 
 # Lock to ensure parallel tasks don't corrupt the terminal output
@@ -100,6 +101,8 @@ def vacuum_single_db(db_file):
     if db_path.name.endswith(("-wal", "-shm")):
         return 0
     if not _is_sqlite_database(db_path):
+        return 0
+    if is_file_locked(db_path):
         return 0
     try:
         if db_path.stat().st_size > SQLITE_MAX_OPTIMIZE_SIZE:

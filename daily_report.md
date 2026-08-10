@@ -67,6 +67,17 @@
   - 解决全盘底栏按键提示词（如 `↑/↓ | M: Mute | Enter: Select | ESC: Quit` 及 `Press Enter to return...`）硬编码 `\033[1;90m` 导致在浅色/自定义终端背景下融色“完全不可见”的 Bug。
   - 将所有底栏按键提示词重构为 **高对比度复合中性色（按键名称高亮 Green/Cyan，说明字词统一使用中性高对比度 White）**，彻底保障在任何浅色、黑底、高对比度终端背景下的极致清晰视觉度。
 
+### 8. 工业级并发安全与文件锁机制 (Concurrency & File Locking Safety)
+* **多实例运行互斥保护 (`SingleInstanceLock`)**：
+  - 引入基于 POSIX `fcntl.flock` 独占锁的 `SingleInstanceLock` 类，锁定句柄放置于 `~/.config/topo/topo.lock`（隔离用户 Session）。
+  - 在 `main.py` 入口对 `clean` / `uninstall` / `purge` / `optimize` / `all` / `remove` 及 TUI 模式挂载单实例互斥机制。若在另一终端尝试双开进程，提示 `Another topo instance is already running` 并优雅退出，彻底防范多实例并发竞态（TOCTOU）导致的数据损坏。
+* **外部进程写锁防护 (`is_file_locked`)**：
+  - 提炼 `is_file_locked()` 文件读写锁检测，在 `safe_remove()` 对物理文件 unlink 前增加独占锁校验。若目标文件正被活动中的浏览器或 IDE 写锁定，自动记录 `file-locked` 审计日志并友好跳过，防止删除发生死锁或写入损坏文件。
+* **SQLite `VACUUM` 竞态防范 (`safe_vacuum_sqlite`)**：
+  - 重构 `optimize.py` 中的 `vacuum_db()` 逻辑，在执行 SQLite `VACUUM` 整理前强校验写锁冲突。若数据库正被外部进程（如 Firefox/Chrome）使用，自动优雅跳过，彻底避免 `database is locked` 运行时崩溃与数据库文件损毁。
+* **新增并发锁单元测试 (`test_lock.py`)**：
+  - 增加了覆盖 `SingleInstanceLock` 锁申请/释放、`is_file_locked` 文件争用检测与 `safe_vacuum_sqlite` 锁争用防护的测试套件（单测总数提升至 **319 passed**）。
+
 ---
 
 # Daily Modification Report - 2026-08-09
