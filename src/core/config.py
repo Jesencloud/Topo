@@ -67,10 +67,14 @@ def normalize_config(user_config: Any) -> dict[str, Any]:
     return config
 
 
-def save_config(config: dict[str, Any]):
-    _ensure_config()
-    with open(get_config_file(), "w") as f:
-        json.dump(config, f, indent=4)
+def save_config(config: dict[str, Any]) -> bool:
+    try:
+        _ensure_config()
+        with open(get_config_file(), "w") as f:
+            json.dump(config, f, indent=4)
+        return True
+    except OSError:
+        return False
 
 
 def get_purge_paths() -> list[str]:

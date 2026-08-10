@@ -210,14 +210,17 @@ def _get_resolved_home() -> Path:
 
 
 def _ensure_config():
-    config_dir = get_config_dir()
-    whitelist_file = get_whitelist_file()
-    if not config_dir.exists():
-        config_dir.mkdir(parents=True, exist_ok=True)
-    if not whitelist_file.exists():
-        with open(whitelist_file, "w") as f:
-            # Seed with empty list; critical paths are hardcoded for safety
-            json.dump([], f, indent=4)
+    try:
+        config_dir = get_config_dir()
+        whitelist_file = get_whitelist_file()
+        if not config_dir.exists():
+            config_dir.mkdir(parents=True, exist_ok=True)
+        if not whitelist_file.exists():
+            with open(whitelist_file, "w") as f:
+                # Seed with empty list; critical paths are hardcoded for safety
+                json.dump([], f, indent=4)
+    except OSError:
+        pass
 
 
 def get_whitelist():
@@ -232,27 +235,33 @@ def get_whitelist():
     return [path for path in data if path not in LEGACY_SEEDED_WHITELIST_PATHS]
 
 
-def add_to_whitelist(path_str: str):
+def add_to_whitelist(path_str: str) -> bool:
     _ensure_config()
     path = Path(path_str).expanduser().resolve()
     current = get_whitelist()
     if str(path) not in current:
         current.append(str(path))
-        with open(get_whitelist_file(), "w") as f:
-            json.dump(current, f, indent=4)
-        return True
+        try:
+            with open(get_whitelist_file(), "w") as f:
+                json.dump(current, f, indent=4)
+            return True
+        except OSError:
+            return False
     return False
 
 
-def remove_from_whitelist(path_str: str):
+def remove_from_whitelist(path_str: str) -> bool:
     _ensure_config()
     path = Path(path_str).expanduser().resolve()
     current = get_whitelist()
     if str(path) in current:
         current.remove(str(path))
-        with open(get_whitelist_file(), "w") as f:
-            json.dump(current, f, indent=4)
-        return True
+        try:
+            with open(get_whitelist_file(), "w") as f:
+                json.dump(current, f, indent=4)
+            return True
+        except OSError:
+            return False
     return False
 
 

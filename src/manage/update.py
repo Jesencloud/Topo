@@ -52,23 +52,26 @@ def _fetch_latest_release_tag() -> str:
     except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
         pass
 
-    latest_redirect_url = subprocess.check_output(
-        [
-            "curl",
-            "-fsSLI",
-            "-o",
-            "/dev/null",
-            "-w",
-            "%{url_effective}",
-            "-A",
-            "topo-updater",
-            "https://github.com/Jesencloud/Topo/releases/latest",
-        ],
-        stderr=subprocess.DEVNULL,
-        text=True,
-        timeout=15,
-    )
-    return latest_redirect_url.rstrip("/").rsplit("/", 1)[-1].split("?", 1)[0].strip()
+    try:
+        latest_redirect_url = subprocess.check_output(
+            [
+                "curl",
+                "-fsSLI",
+                "-o",
+                "/dev/null",
+                "-w",
+                "%{url_effective}",
+                "-A",
+                "topo-updater",
+                "https://github.com/Jesencloud/Topo/releases/latest",
+            ],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=15,
+        )
+        return latest_redirect_url.rstrip("/").rsplit("/", 1)[-1].split("?", 1)[0].strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
 
 
 def _read_local_version() -> str:

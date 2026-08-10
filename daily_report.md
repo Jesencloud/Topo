@@ -32,6 +32,11 @@
   - 解决由于包名与后台真实进程名不一致（如包名 `linuxqq` 与后台进程 `qq`/`qqnt`）导致进程未关停、文件句柄被占用、应用退回时重新写回 `~/.config` 的问题。
   - 确保任何正在运行的应用在卸载时均可被先精确查杀关停，再完成文件解封抹除。
 
+### 4. 正确性 (Correctness) 全面加固
+* **离线/断网更新崩溃防护**：在 `update.py` 的 `_fetch_latest_release_tag` 后备 `curl` 命令中加入 `try...except (OSError, subprocess.SubprocessError)` 异常捕获，解决网络超时或离线时抛出未捕获 `CalledProcessError` 崩溃的问题。
+* **文件系统符号链接环路与边界防护**：在 `project.py` 的项目目录发现逻辑中，为 `entry.is_dir()` 显式加上 `follow_symlinks=False` 限制，防止因指向父级/同级的 Symlink 导致遍历死循环或重复扫描。
+* **配置与白名单持久化安全**：在 `config.py` 与 `whitelist.py` 的 `save_config` / `add_to_whitelist` / `remove_from_whitelist` 写入操作中补充 `try...except OSError` 防护，防止只读文件系统或权限不足引发未捕获异常。
+
 ---
 
 # Daily Modification Report - 2026-08-09

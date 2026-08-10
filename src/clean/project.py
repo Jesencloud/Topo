@@ -54,7 +54,7 @@ class Scanner:
             yield path
 
         for entry in entries:
-            if entry.is_dir() and not entry.name.startswith("."):
+            if entry.is_dir(follow_symlinks=False) and not entry.name.startswith("."):
                 yield from self._recursive_scan(Path(entry.path), depth + 1, max_depth)
 
     def scan_artifacts(self, project_path: Path) -> list[Path]:
