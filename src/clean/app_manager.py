@@ -449,17 +449,9 @@ class UninstallManager:
 
         return [n for n in names if n]
 
-    def run_full_scan(self, *, use_cache: bool = False) -> list[dict[str, Any]]:
-        """Scans for user-facing applications across Linux package managers."""
-        cache_key = self._current_scan_cache_key()
-        if use_cache and self.has_fresh_scan_cache():
-            self.apps = [app.copy() for app in self._scan_cache_apps or []]
-            return self.apps
-
-        apps = []
-
-        # 1. Pre-scan: identify native packages that provide desktop files and map to display names.
-        user_app_packages = set()
+    def _pre_scan_package_desktop_names(self) -> tuple[set[str], dict[str, str]]:
+        """Pre-scans native packages that provide desktop files and maps display names."""
+        user_app_packages: set[str] = set()
         package_desktop_names: dict[str, str] = {}
         try:
             desktop_dirs = [
@@ -525,71 +517,32 @@ class UninstallManager:
                                                 package_desktop_names[pkg] = dname
         except (OSError, subprocess.SubprocessError, ValueError):
             pass
+        return user_app_packages, package_desktop_names
 
-        # 2. DNF/RPM Scan - Filtered by user_app_packages
-        if shutil.which("rpm"):
-            try:
-                # Get all installed packages with their size and install time
-                res = system.run_command(
-                    ["rpm", "-qa", "--queryformat", "%{NAME}\t%{SIZE}\t%{INSTALLTIME}\n"],
-                    capture=True,
-                    timeout=60,
-                )
-                if res.ok:
-                    for line in res.stdout.splitlines():
-                        parts = line.split("\t")
-                        if len(parts) >= 3:
-                            app_id, size_bytes, install_time = (
-                                parts[0],
-                                int(parts[1]),
-                                int(parts[2]),
-                            )
-
-                            # SMART FILTER: Only include if it's a known user app or very large (> 100MB)
-                            if self._is_system_component(app_id, app_id):
-                                continue
-                            if app_id in user_app_packages or size_bytes > 100 * 1024 * 1024:
-                                display_name = package_desktop_names.get(app_id, app_id)
-                                apps.append(
-                                    self._app_record(
-                                        app_id,
-                                        display_name,
-                                        size_bytes,
-                                        bytes_to_human(size_bytes),
-                                        "DNF",
-                                        install_time,
-                                    )
-                                )
-            except (OSError, subprocess.SubprocessError, ValueError):
-                pass
-
-        # 3. APT/DEB Scan - Filtered by desktop packages or large packages
-        if shutil.which("dpkg-query"):
-            try:
-                res = system.run_command(
-                    ["dpkg-query", "-W", "-f=${binary:Package}\t${Installed-Size}\n"],
-                    capture=True,
-                    timeout=60,
-                )
-                if res.ok:
-                    for line in res.stdout.splitlines():
-                        parts = line.split("\t")
-                        if len(parts) < 2:
-                            continue
-                        app_id = self._strip_package_arch(parts[0].strip())
-                        try:
-                            size_bytes = int(parts[1]) * 1024
-                        except ValueError:
-                            continue
+    def _scan_rpm_packages(
+        self, user_app_packages: set[str], package_desktop_names: dict[str, str]
+    ) -> list[dict[str, Any]]:
+        if not shutil.which("rpm"):
+            return []
+        apps = []
+        try:
+            res = system.run_command(
+                ["rpm", "-qa", "--queryformat", "%{NAME}\t%{SIZE}\t%{INSTALLTIME}\n"],
+                capture=True,
+                timeout=60,
+            )
+            if res.ok:
+                for line in res.stdout.splitlines():
+                    parts = line.split("\t")
+                    if len(parts) >= 3:
+                        app_id, size_bytes, install_time = (
+                            parts[0],
+                            int(parts[1]),
+                            int(parts[2]),
+                        )
                         if self._is_system_component(app_id, app_id):
                             continue
                         if app_id in user_app_packages or size_bytes > 100 * 1024 * 1024:
-                            install_time = 0
-                            list_file = Path(f"/var/lib/dpkg/info/{app_id}.list")
-                            if list_file.exists():
-                                with contextlib.suppress(OSError):
-                                    install_time = int(list_file.stat().st_mtime)
-
                             display_name = package_desktop_names.get(app_id, app_id)
                             apps.append(
                                 self._app_record(
@@ -597,217 +550,269 @@ class UninstallManager:
                                     display_name,
                                     size_bytes,
                                     bytes_to_human(size_bytes),
-                                    "APT",
+                                    "DNF",
                                     install_time,
                                 )
                             )
-            except (OSError, subprocess.SubprocessError, ValueError):
-                pass
+        except (OSError, subprocess.SubprocessError, ValueError):
+            pass
+        return apps
 
-        # 4. Pacman Scan - Filtered by desktop packages or large packages
-        if shutil.which("pacman"):
-            try:
-                res = system.run_command(["pacman", "-Qi"], capture=True, timeout=60)
-                if res.ok:
-                    package: dict[str, str] = {}
-                    for line in [*res.stdout.splitlines(), ""]:
-                        if not line.strip():
-                            app_id = package.get("Name", "").strip()
-                            size_bytes = parse_size_to_bytes(package.get("Installed Size", ""))
-                            if (
-                                app_id
-                                and not self._is_system_component(app_id, app_id)
-                                and (app_id in user_app_packages or size_bytes > 100 * 1024 * 1024)
-                            ):
-                                display_name = package_desktop_names.get(app_id, app_id)
-                                apps.append(
-                                    self._app_record(
-                                        app_id,
-                                        display_name,
-                                        size_bytes,
-                                        bytes_to_human(size_bytes),
-                                        "Pacman",
-                                    )
-                                )
-                            package = {}
-                            continue
-                        if ":" in line:
-                            key, value = line.split(":", 1)
-                            package[key.strip()] = value.strip()
-            except (OSError, subprocess.SubprocessError, ValueError):
-                pass
-
-        # 5. Flatpak Scan
-        if shutil.which("flatpak"):
-            try:
-                res = system.run_command(
-                    ["flatpak", "list", "--app", "--columns=name,application,size,installation"],
-                    capture=True,
-                    timeout=60,
-                )
-                if res.ok:
-                    for line in res.stdout.splitlines():
-                        parts = line.split("\t")
-                        if len(parts) >= 3:
-                            app_name, app_id, size_str = parts[0], parts[1], parts[2]
-
-                            # Estimate install time from flatpak directory
-                            install_time = 0
-                            try:
-                                # Standard flatpak paths
-                                paths_to_check = [
-                                    Path(f"/var/lib/flatpak/app/{app_id}"),
-                                    Path.home() / f".local/share/flatpak/app/{app_id}",
-                                ]
-                                for p in paths_to_check:
-                                    if p.exists():
-                                        install_time = int(p.stat().st_mtime)
-                                        break
-                            except OSError:
-                                pass
-
-                            id_lower = app_id.lower()
-                            if "org.freedesktop" in id_lower or "org.gnome.platform" in id_lower:
-                                continue
-                            if self._is_system_component(app_id, app_name):
-                                continue
-
-                            size_bytes = parse_size_to_bytes(size_str)
-                            apps.append(
-                                self._app_record(
-                                    app_id, app_name, size_bytes, size_str, "Flatpak", install_time
-                                )
-                            )
-            except (OSError, subprocess.SubprocessError):
-                pass
-
-        # 6. Snap Scan
-        if shutil.which("snap"):
-            try:
-                res = system.run_command(["snap", "list"], capture=True, timeout=60)
-                if res.ok:
-                    for line in res.stdout.splitlines()[1:]:
-                        parts = line.split()
-                        if len(parts) < 2:
-                            continue
-                        app_id = parts[0]
-                        revision = parts[2] if len(parts) >= 3 else ""
-                        if app_id in {"core", "core18", "core20", "core22", "core24", "snapd"}:
-                            continue
-                        if self._is_system_component(app_id, app_id):
-                            continue
-
-                        # Estimate size and time
-                        size_bytes = 0
-                        size_str = "N/A"
+    def _scan_apt_packages(
+        self, user_app_packages: set[str], package_desktop_names: dict[str, str]
+    ) -> list[dict[str, Any]]:
+        if not shutil.which("dpkg-query"):
+            return []
+        apps = []
+        try:
+            res = system.run_command(
+                ["dpkg-query", "-W", "-f=${binary:Package}\t${Installed-Size}\n"],
+                capture=True,
+                timeout=60,
+            )
+            if res.ok:
+                for line in res.stdout.splitlines():
+                    parts = line.split("\t")
+                    if len(parts) < 2:
+                        continue
+                    app_id = self._strip_package_arch(parts[0].strip())
+                    try:
+                        size_bytes = int(parts[1]) * 1024
+                    except ValueError:
+                        continue
+                    if self._is_system_component(app_id, app_id):
+                        continue
+                    if app_id in user_app_packages or size_bytes > 100 * 1024 * 1024:
                         install_time = 0
-
-                        # Primary method: Check the actual .snap file (most accurate)
-                        if revision:
-                            snap_file = Path(f"/var/lib/snapd/snaps/{app_id}_{revision}.snap")
-                            if snap_file.exists():
-                                try:
-                                    size_bytes = snap_file.stat().st_size
-                                    size_str = bytes_to_human(size_bytes)
-                                    install_time = int(snap_file.stat().st_mtime)
-                                except OSError:
-                                    pass
-
-                        # Fallback: Check mount points
-                        if size_bytes == 0:
-                            for mount_root in ["/snap", "/var/lib/snapd/snap"]:
-                                snap_path = Path(f"{mount_root}/{app_id}/current")
-                                if snap_path.exists():
-                                    try:
-                                        if install_time == 0:
-                                            install_time = int(snap_path.stat().st_mtime)
-                                        res_size = system.run_command(
-                                            ["du", "-sk", str(snap_path)], capture=True, timeout=5
-                                        )
-                                        if res_size.ok and res_size.stdout:
-                                            kb = int(res_size.stdout.split()[0])
-                                            size_bytes = kb * 1024
-                                            size_str = bytes_to_human(size_bytes)
-                                            break
-                                    except (OSError, ValueError, IndexError):
-                                        pass
+                        list_file = Path(f"/var/lib/dpkg/info/{app_id}.list")
+                        if list_file.exists():
+                            with contextlib.suppress(OSError):
+                                install_time = int(list_file.stat().st_mtime)
 
                         display_name = package_desktop_names.get(app_id, app_id)
                         apps.append(
                             self._app_record(
-                                app_id, display_name, size_bytes, size_str, "Snap", install_time
+                                app_id,
+                                display_name,
+                                size_bytes,
+                                bytes_to_human(size_bytes),
+                                "APT",
+                                install_time,
                             )
                         )
-            except (OSError, subprocess.SubprocessError):
-                pass
+        except (OSError, subprocess.SubprocessError, ValueError):
+            pass
+        return apps
 
-        # 7. NPM Global Packages Scan (Fast Direct Directory Inspection)
-        if shutil.which("npm"):
-            try:
-                system_npm_pkgs = {"npm", "corepack", "yarn", "pnpm", "npx", "cnpm"}
-                npm_roots = [
-                    Path.home() / ".npm-global" / "lib" / "node_modules",
-                    Path("/usr/lib/node_modules"),
-                    Path("/usr/local/lib/node_modules"),
-                ]
-                seen_npm_pkgs = set()
-                for npm_modules_dir in npm_roots:
-                    if not npm_modules_dir.is_dir():
-                        continue
-                    try:
-                        for item in npm_modules_dir.iterdir():
-                            pkg_dirs = []
-                            if item.name.startswith("@") and item.is_dir():
-                                with contextlib.suppress(OSError):
-                                    pkg_dirs.extend([sub for sub in item.iterdir() if sub.is_dir()])
-                            elif item.is_dir():
-                                pkg_dirs.append(item)
-
-                            for pkg_path in pkg_dirs:
-                                pkg_name = (
-                                    f"{item.name}/{pkg_path.name}"
-                                    if item.name.startswith("@")
-                                    else pkg_path.name
+    def _scan_pacman_packages(
+        self, user_app_packages: set[str], package_desktop_names: dict[str, str]
+    ) -> list[dict[str, Any]]:
+        if not shutil.which("pacman"):
+            return []
+        apps = []
+        try:
+            res = system.run_command(["pacman", "-Qi"], capture=True, timeout=60)
+            if res.ok:
+                package: dict[str, str] = {}
+                for line in [*res.stdout.splitlines(), ""]:
+                    if not line.strip():
+                        app_id = package.get("Name", "").strip()
+                        size_bytes = parse_size_to_bytes(package.get("Installed Size", ""))
+                        if (
+                            app_id
+                            and not self._is_system_component(app_id, app_id)
+                            and (app_id in user_app_packages or size_bytes > 100 * 1024 * 1024)
+                        ):
+                            display_name = package_desktop_names.get(app_id, app_id)
+                            apps.append(
+                                self._app_record(
+                                    app_id,
+                                    display_name,
+                                    size_bytes,
+                                    bytes_to_human(size_bytes),
+                                    "Pacman",
                                 )
-                                if pkg_name in seen_npm_pkgs:
-                                    continue
-                                clean_name = pkg_path.name
-                                if clean_name in system_npm_pkgs:
-                                    continue
-                                if self._is_system_component(clean_name, pkg_name):
-                                    continue
+                            )
+                        package = {}
+                        continue
+                    if ":" in line:
+                        key, value = line.split(":", 1)
+                        package[key.strip()] = value.strip()
+        except (OSError, subprocess.SubprocessError, ValueError):
+            pass
+        return apps
 
-                                seen_npm_pkgs.add(pkg_name)
-                                size_bytes = 0
-                                install_time = 0
+    def _scan_flatpak_apps(self) -> list[dict[str, Any]]:
+        if not shutil.which("flatpak"):
+            return []
+        apps = []
+        try:
+            res = system.run_command(
+                ["flatpak", "list", "--app", "--columns=name,application,size,installation"],
+                capture=True,
+                timeout=60,
+            )
+            if res.ok:
+                for line in res.stdout.splitlines():
+                    parts = line.split("\t")
+                    if len(parts) >= 3:
+                        app_name, app_id, size_str = parts[0], parts[1], parts[2]
+                        install_time = 0
+                        try:
+                            paths_to_check = [
+                                Path(f"/var/lib/flatpak/app/{app_id}"),
+                                Path.home() / f".local/share/flatpak/app/{app_id}",
+                            ]
+                            for p in paths_to_check:
+                                if p.exists():
+                                    install_time = int(p.stat().st_mtime)
+                                    break
+                        except OSError:
+                            pass
+
+                        id_lower = app_id.lower()
+                        if "org.freedesktop" in id_lower or "org.gnome.platform" in id_lower:
+                            continue
+                        if self._is_system_component(app_id, app_name):
+                            continue
+
+                        size_bytes = parse_size_to_bytes(size_str)
+                        apps.append(
+                            self._app_record(
+                                app_id, app_name, size_bytes, size_str, "Flatpak", install_time
+                            )
+                        )
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return apps
+
+    def _scan_snap_apps(self, package_desktop_names: dict[str, str]) -> list[dict[str, Any]]:
+        if not shutil.which("snap"):
+            return []
+        apps = []
+        try:
+            res = system.run_command(["snap", "list"], capture=True, timeout=60)
+            if res.ok:
+                for line in res.stdout.splitlines()[1:]:
+                    parts = line.split()
+                    if len(parts) < 2:
+                        continue
+                    app_id = parts[0]
+                    revision = parts[2] if len(parts) >= 3 else ""
+                    if app_id in {"core", "core18", "core20", "core22", "core24", "snapd"}:
+                        continue
+                    if self._is_system_component(app_id, app_id):
+                        continue
+
+                    size_bytes = 0
+                    size_str = "N/A"
+                    install_time = 0
+
+                    if revision:
+                        snap_file = Path(f"/var/lib/snapd/snaps/{app_id}_{revision}.snap")
+                        if snap_file.exists():
+                            try:
+                                size_bytes = snap_file.stat().st_size
+                                size_str = bytes_to_human(size_bytes)
+                                install_time = int(snap_file.stat().st_mtime)
+                            except OSError:
+                                pass
+
+                    if size_bytes == 0:
+                        for mount_root in ["/snap", "/var/lib/snapd/snap"]:
+                            snap_path = Path(f"{mount_root}/{app_id}/current")
+                            if snap_path.exists():
                                 try:
-                                    install_time = int(pkg_path.stat().st_mtime)
-                                    size_bytes = get_size_fast(pkg_path)
-                                except OSError:
+                                    if install_time == 0:
+                                        install_time = int(snap_path.stat().st_mtime)
+                                    res_size = system.run_command(
+                                        ["du", "-sk", str(snap_path)], capture=True, timeout=5
+                                    )
+                                    if res_size.ok and res_size.stdout:
+                                        kb = int(res_size.stdout.split()[0])
+                                        size_bytes = kb * 1024
+                                        size_str = bytes_to_human(size_bytes)
+                                        break
+                                except (OSError, ValueError, IndexError):
                                     pass
 
-                                size_str = bytes_to_human(size_bytes) if size_bytes > 0 else "N/A"
-                                apps.append(
-                                    self._app_record(
-                                        pkg_name,
-                                        clean_name,
-                                        size_bytes,
-                                        size_str,
-                                        "NPM",
-                                        install_time,
-                                    )
-                                )
-                    except OSError:
-                        pass
-            except OSError:
-                pass
+                    display_name = package_desktop_names.get(app_id, app_id)
+                    apps.append(
+                        self._app_record(
+                            app_id, display_name, size_bytes, size_str, "Snap", install_time
+                        )
+                    )
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return apps
 
-        # 8. Standalone CLI & Native Tools Dynamic Generic Scan
-        # Scans for non-packaged CLI tools installed via single-file/script installers (e.g. Claude, Ollama, Cargo, Bun, Deno, Nvm, UV)
+    def _scan_npm_global_packages(self) -> list[dict[str, Any]]:
+        if not shutil.which("npm"):
+            return []
+        apps = []
+        try:
+            system_npm_pkgs = {"npm", "corepack", "yarn", "pnpm", "npx", "cnpm"}
+            npm_roots = [
+                Path.home() / ".npm-global" / "lib" / "node_modules",
+                Path("/usr/lib/node_modules"),
+                Path("/usr/local/lib/node_modules"),
+            ]
+            seen_npm_pkgs = set()
+            for npm_modules_dir in npm_roots:
+                if not npm_modules_dir.is_dir():
+                    continue
+                try:
+                    for item in npm_modules_dir.iterdir():
+                        pkg_dirs = []
+                        if item.name.startswith("@") and item.is_dir():
+                            with contextlib.suppress(OSError):
+                                pkg_dirs.extend([sub for sub in item.iterdir() if sub.is_dir()])
+                        elif item.is_dir():
+                            pkg_dirs.append(item)
+
+                        for pkg_path in pkg_dirs:
+                            pkg_name = (
+                                f"{item.name}/{pkg_path.name}"
+                                if item.name.startswith("@")
+                                else pkg_path.name
+                            )
+                            if pkg_name in seen_npm_pkgs:
+                                continue
+                            clean_name = pkg_path.name
+                            if clean_name in system_npm_pkgs:
+                                continue
+                            if self._is_system_component(clean_name, pkg_name):
+                                continue
+
+                            seen_npm_pkgs.add(pkg_name)
+                            size_bytes = 0
+                            install_time = 0
+                            try:
+                                install_time = int(pkg_path.stat().st_mtime)
+                                size_bytes = get_size_fast(pkg_path)
+                            except OSError:
+                                pass
+
+                            size_str = bytes_to_human(size_bytes) if size_bytes > 0 else "N/A"
+                            apps.append(
+                                self._app_record(
+                                    pkg_name,
+                                    clean_name,
+                                    size_bytes,
+                                    size_str,
+                                    "NPM",
+                                    install_time,
+                                )
+                            )
+                except OSError:
+                    pass
+        except OSError:
+            pass
+        return apps
+
+    def _scan_standalone_cli_apps(self) -> list[dict[str, Any]]:
         home = Path.home()
         discovered_standalone: list[dict[str, Any]] = []
-
-        # System/user systemd/env tokens to avoid misidentifying
         skip_cli_names = {
             "pip",
             "python",
@@ -821,12 +826,10 @@ class UninstallManager:
             "yarn",
             "systemd",
         }
-
-        # Pattern A: ~/.local/bin/<cmd> with matching ~/.local/share/<cmd> or ~/.config/<cmd>
-        # Known CLI tool binary to data directory alias mapping
         cli_dir_aliases = {
             "agy": [home / ".gemini"],
         }
+
         local_bin = home / ".local/bin"
         if local_bin.is_dir():
             try:
@@ -840,7 +843,6 @@ class UninstallManager:
                     share_dir = home / ".local/share" / cmd_name
                     config_dir = home / ".config" / cmd_name
                     dot_home_dir = home / f".{cmd_name}"
-
                     alias_dirs = [d for d in cli_dir_aliases.get(cmd_name, []) if d.is_dir()]
 
                     target_dir = (
@@ -866,11 +868,9 @@ class UninstallManager:
                                 "install_dir": target_dir,
                             }
                         )
-
             except OSError:
                 pass
 
-        # Pattern B: Independent Home dot-directories with bin/ (e.g. ~/.bun, ~/.deno, ~/.cargo, ~/.nvm, ~/.kimi-code)
         try:
             for item in home.iterdir():
                 if item.name.startswith(".") and item.is_dir() and not item.is_symlink():
@@ -905,6 +905,7 @@ class UninstallManager:
         except OSError:
             pass
 
+        apps = []
         for tool in discovered_standalone:
             tool_id = str(tool["id"])
             tool_name = str(tool["name"])
@@ -937,7 +938,10 @@ class UninstallManager:
             record["install_dir"] = inst_dir
             apps.append(record)
 
-        # Pre-scan search_roots ONCE to avoid O(N) redundant disk scandirs across apps
+        return apps
+
+    def _pre_scan_search_roots(self) -> dict[Path, list[tuple[str, Path]]]:
+        """Pre-scans search_roots ONCE to avoid O(N) redundant disk scandirs."""
         home_path = Path.home()
         search_roots = [
             home_path / ".config",
@@ -958,13 +962,16 @@ class UninstallManager:
                     pre_scanned_entries[root] = entries
                 except OSError:
                     pass
+        return pre_scanned_entries
 
-        # Calculate total app size including user data and cache residues
+    def _calculate_app_sizes_and_residues(
+        self, apps: list[dict[str, Any]], pre_scanned_entries: dict[Path, list[tuple[str, Path]]]
+    ) -> None:
+        """Calculates total app sizes including user data and cache residues."""
         for app in apps:
             residue_paths = self.find_residue_paths(
                 app["id"], app["name"], app["type"], pre_scanned_entries=pre_scanned_entries
             )
-            # Exclude install_dir from residue_size calculation to prevent double-counting
             inst_dir_val = app.get("install_dir")
             target_inst_dir: Path | None = Path(inst_dir_val) if inst_dir_val else None
             filtered_residue_paths = [
@@ -978,11 +985,33 @@ class UninstallManager:
                 app["size_bytes"] += residue_size
                 app["size_str"] = bytes_to_human(app["size_bytes"])
 
+    def run_full_scan(self, *, use_cache: bool = False) -> list[dict[str, Any]]:
+        """Scans for user-facing applications across Linux package managers."""
+        cache_key = self._current_scan_cache_key()
+        if use_cache and self.has_fresh_scan_cache():
+            self.apps = [app.copy() for app in self._scan_cache_apps or []]
+            return self.apps
+
+        user_app_packages, package_desktop_names = self._pre_scan_package_desktop_names()
+
+        apps = []
+        apps.extend(self._scan_rpm_packages(user_app_packages, package_desktop_names))
+        apps.extend(self._scan_apt_packages(user_app_packages, package_desktop_names))
+        apps.extend(self._scan_pacman_packages(user_app_packages, package_desktop_names))
+        apps.extend(self._scan_flatpak_apps())
+        apps.extend(self._scan_snap_apps(package_desktop_names))
+        apps.extend(self._scan_npm_global_packages())
+        apps.extend(self._scan_standalone_cli_apps())
+
+        pre_scanned_entries = self._pre_scan_search_roots()
+        self._calculate_app_sizes_and_residues(apps, pre_scanned_entries)
+
         self.apps = sorted(
             apps,
             key=lambda x: (x.get("install_time", 0), x.get("size_bytes", 0)),
             reverse=True,
         )
+
         if use_cache:
             self.__class__._scan_cache_apps = [app.copy() for app in self.apps]
             self.__class__._scan_cache_time = time.monotonic()

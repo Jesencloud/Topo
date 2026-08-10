@@ -35,27 +35,30 @@ class Scanner:
             yield from self._recursive_scan(root, 0, max_depth)
 
     def _recursive_scan(self, path: Path, depth: int, max_depth: int) -> Iterator[Path]:
-        """Recursive helper for project discovery."""
-        if depth > max_depth:
-            return
+        """Iterative (stack-based) non-recursive helper for project discovery."""
+        stack: list[tuple[Path, int]] = [(path, depth)]
+        while stack:
+            curr_path, curr_depth = stack.pop()
+            if curr_depth > max_depth:
+                continue
 
-        try:
-            with os.scandir(path) as it:
-                entries = list(it)
-        except OSError:
-            return
+            try:
+                with os.scandir(curr_path) as it:
+                    entries = list(it)
+            except OSError:
+                continue
 
-        # Check for project indicators in a single pass
-        is_root = any(
-            entry.name in MONOREPO_INDICATORS or entry.name in PROJECT_INDICATORS
-            for entry in entries
-        )
-        if is_root:
-            yield path
+            is_root = any(
+                entry.name in MONOREPO_INDICATORS or entry.name in PROJECT_INDICATORS
+                for entry in entries
+            )
+            if is_root:
+                yield curr_path
 
-        for entry in entries:
-            if entry.is_dir(follow_symlinks=False) and not entry.name.startswith("."):
-                yield from self._recursive_scan(Path(entry.path), depth + 1, max_depth)
+            if curr_depth < max_depth:
+                for entry in reversed(entries):
+                    if entry.is_dir(follow_symlinks=False) and not entry.name.startswith("."):
+                        stack.append((Path(entry.path), curr_depth + 1))
 
     def scan_artifacts(self, project_path: Path) -> list[Path]:
         """Finds heavy artifacts within a discovered project root."""

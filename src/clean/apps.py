@@ -3,6 +3,7 @@ import shutil
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from ..core.app_cache import (
     find_cleanable_cache_dirs_in_roots,
@@ -507,57 +508,72 @@ def clean_ide_caches(dry_run=False):
     return total_size, total_items
 
 
-def clean_apps_deep(dry_run=False, detected_apps=None):
-    """Main entry point for deep application cleanup.
-
-    ``detected_apps`` may be passed by the caller to reuse an existing proactive
-    scan and avoid walking ~/.cache and ~/.config a second time in one pass.
-    """
+def clean_desktop_apps_caches(
+    detected_apps: dict[str, dict[str, Any]], dry_run: bool = False
+) -> tuple[int, int]:
+    """Cleans deep caches for statically defined and auto-discovered desktop applications."""
     total_size = 0
     total_items = 0
-    total_categories = 0
-    if detected_apps is None:
-        detected_apps = proactive_app_detection()
-
-    s, i, c = clean_browser_caches(dry_run=dry_run)
-    total_size += s
-    total_items += i
-    total_categories += c
-
-    # Combined loop for defined and detected apps
     all_apps = {**get_desktop_app_cleanup_defs(), **detected_apps}
     for name, info in all_apps.items():
         s, i = clean_app_generic(name, info["paths"], info.get("procs"), dry_run=dry_run)
         if i > 0:
             total_size += s
             total_items += i
-            total_categories += 1
+    return total_size, total_items
 
-    cleanup_funcs: list[Callable[..., tuple[int, int]]] = [
-        clean_flatpak_unused,
-        clean_snap_cache,
-        clean_generic_xdg_caches,
-        clean_orphaned_remnants,
-    ]
-    for func in cleanup_funcs:
-        s, i = func(dry_run=dry_run)
-        if i > 0:
-            total_size += s
-            total_items += i
-            total_categories += 1
 
-    # Steam/Proton shader cache
-    s, i = clean_steam_shader_cache(dry_run=dry_run)
+class AppCleanerRegistry:
+    """Registry and pipeline for deep application cache cleaners."""
+
+    cleaners: list[Callable[..., tuple[int, int] | tuple[int, int, int]]] = []
+
+    @classmethod
+    def register(
+        cls, func: Callable[..., tuple[int, int] | tuple[int, int, int]]
+    ) -> Callable[..., tuple[int, int] | tuple[int, int, int]]:
+        cls.cleaners.append(func)
+        return func
+
+
+register_app_cleaner = AppCleanerRegistry.register
+
+# Register individual sub-cleaners into the deep app cleaning pipeline
+register_app_cleaner(clean_browser_caches)
+register_app_cleaner(clean_flatpak_unused)
+register_app_cleaner(clean_snap_cache)
+register_app_cleaner(clean_generic_xdg_caches)
+register_app_cleaner(clean_orphaned_remnants)
+register_app_cleaner(clean_steam_shader_cache)
+register_app_cleaner(clean_ide_caches)
+
+
+def clean_apps_deep(
+    dry_run: bool = False, detected_apps: dict[str, dict[str, Any]] | None = None
+) -> tuple[int, int, int]:
+    """Deep cleanup for installed apps, browsers, IDEs, Flatpak/Snap, games, and XDG remnants."""
+    total_size = 0
+    total_items = 0
+    total_categories = 0
+
+    if detected_apps is None:
+        detected_apps = proactive_app_detection()
+
+    # 1. Clean desktop applications caches
+    s, i = clean_desktop_apps_caches(detected_apps=detected_apps, dry_run=dry_run)
     total_size += s
     total_items += i
     if i > 0:
         total_categories += 1
 
-    # IDE/Editor caches
-    s, i = clean_ide_caches(dry_run=dry_run)
-    total_size += s
-    total_items += i
-    if i > 0:
-        total_categories += 1
+    # 2. Run all registered sub-cleaners in the pipeline
+    for cleaner in AppCleanerRegistry.cleaners:
+        result = cleaner(dry_run=dry_run)
+        s, i = result[0], result[1]
+        c = result[2] if len(result) >= 3 else (1 if i > 0 else 0)
+
+        total_size += s
+        total_items += i
+        total_categories += c
 
     return total_size, total_items, total_categories

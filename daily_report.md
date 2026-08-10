@@ -37,9 +37,21 @@
 * **文件系统符号链接环路与边界防护**：在 `project.py` 的项目目录发现逻辑中，为 `entry.is_dir()` 显式加上 `follow_symlinks=False` 限制，防止因指向父级/同级的 Symlink 导致遍历死循环或重复扫描。
 * **配置与白名单持久化安全**：在 `config.py` 与 `whitelist.py` 的 `save_config` / `add_to_whitelist` / `remove_from_whitelist` 写入操作中补充 `try...except OSError` 防护，防止只读文件系统或权限不足引发未捕获异常。
 
-### 5. 可维护性 (Maintainability) 与代码卫生提升
-* **冗余死代理函数清理**：移除了 `UninstallManager._parse_size_to_bytes` 冗余代理方法，全项目统一收拢至 `file_ops.py` 的公共 `parse_size_to_bytes()` 函数，提炼代码卫生与执行效率。
-* **Guard Clause 扁平化重构**：在 `install.py` 的 PATH 挂载逻辑中使用 Guard Clause 提前 `continue` 剔除无效路径，将原本 7 层深度的嵌套重构降至 4 层，提升代码可读性。
+### 6. 全盘核心模块架构重构 (Major Refactoring & Modularization)
+* **`runner.py:run_clean` 模块化编排 (`TaskRegistry`)**：
+  - 引入 `@dataclass CleanupTask` 与 `TaskRegistry` 声明式管理清理管道，提炼 `_authenticate_sudo_session` 授权与 `_print_cleanup_summary` 格式化总结输出，将主流程由 150 行杂乱过程代码精简为 40 行干练的高内聚调度逻辑。
+* **`app_manager.py:run_full_scan` 540 行超长函数策略拆解**：
+  - 采用策略模式将单函数拆解为 8 个专有扫描器（`_scan_rpm_packages`、`_scan_apt_packages`、`_scan_pacman_packages`、`_scan_flatpak_apps`、`_scan_snap_apps`、`_scan_npm_global_packages`、`_scan_standalone_cli_apps`）与 2 个预处理方法（`_pre_scan_package_desktop_names`、`_pre_scan_search_roots`），主入口精简 95%（仅剩 25 行），极大提升了未来扩展新包管理器的灵活性。
+* **`optimize.py:optimize_system` 装饰器自动注册机制**：
+  - 引入 `OptimizationRegistry` 与 `@register_optimization_task` 装饰器，实现 20 项维护任务在模块加载时自动注册，移除了在主流程中手动维持长串 `lambda` 数组的硬编码模式。
+* **`apps.py:clean_apps_deep` 声明式子清理管道**：
+  - 引入 `AppCleanerRegistry` 与 `@register_app_cleaner` 装饰器，将浏览器、IDE、Steam 着色器、Snap/Flatpak 缓存拆解为独立子函数并注册为统一管道。恢复并保持了 `clean_apps_deep(dry_run=False, detected_apps=None)` 的 100% 向后 API 兼容契约。
+* **`system.py` 包管理器解耦与 `DryRunReporter` 规范**：
+  - 抽象 `DryRunReporter` 统一收拢清理与预览模式下的终端格式化输出；拆解 `_get_package_manager_cache_paths` 与 `_measure_package_cache_size`，消除多函数间的模板冗余。
+* **`dev.py:clean_developer_tools` 深度开发工具解耦**：
+  - 将杂乱的 `clean_developer_tools` 拆分为 `clean_package_manager_caches` (npm/pip/go)、`clean_cargo_cache` (Cargo/Rust)、`clean_container_and_virtualization_caches` (Docker/Podman/Multipass) 等具体的独立子函数。
+* **`project.py:Scanner._recursive_scan` 非递归算法升级**：
+  - 彻底废弃递归函数调用，重构为基于**显式栈 (Stack-based Explicit Loop)** 的非递归迭代扫描算法，消除递归帧开销，彻底规避极端嵌套目录下的栈溢出风险，显著提升超大工程目录的搜索性能与可测试性。
 
 ---
 

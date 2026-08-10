@@ -2,7 +2,9 @@ import contextlib
 import io
 import os
 import shutil
-from functools import partial
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
 
 from ..core import system, terminal_state
 from ..core.constants import (
@@ -33,95 +35,91 @@ from .user import clean_user_data
 _read_sudo_choice = terminal_state.read_sudo_choice
 
 
-def run_clean(dry_run=False):
-    # 0. Proactive Detection (Auto-Discovery) - Run once and reuse downstream
-    detected_apps = proactive_app_detection()
+@dataclass(frozen=True)
+class CleanupTask:
+    name: str
+    action: Callable[..., tuple[int, int, int]]
+    requires_sudo: bool = False
 
-    # 1. Prepare categories
-    print(f"\n{PURPLE}Clean Your Linux{RESET}\n")
-    print(
-        f"{GRAY}● Use 'topo clean --dry-run' to preview, 'topo whitelist --help' for whitelist details.{RESET}"
-    )
 
-    run_system_tasks = True
-    # Pre-authorize sudo to avoid interrupting the progress list
-    if not dry_run:
-        print(
-            f"{PURPLE}➔{RESET} System caches need sudo. "
-            f"{GREEN}Enter{RESET} continue, {GRAY}Space{RESET} skip:",
-            end=" ",
-            flush=True,
-        )
-        choice = _read_sudo_choice()
-        print()
-        if choice in (" ", "\x1b"):
-            return False
-        elif not system.ensure_sudo_session(
-            f"{PURPLE}➔{RESET} System cleanup requires admin access\n{PURPLE}➔{RESET} Password: "
-        ):
-            if system.SUDO_CANCELLED:
-                print(f" {YELLOW}⚠️  Cleanup cancelled by user.{RESET}", end="")
-            else:
-                print(f" {RED}✗{RESET} Authorization failed. Cleanup skipped.\n")
-            return
-        else:
-            print(f" {GREEN}✓{RESET} Authorization successful.\n")
+class TaskRegistry:
+    """Registry and pipeline manager for clean operations."""
 
-    session_command = "clean --dry-run" if dry_run else "clean"
-    record_history_session(session_command, "started")
-
-    total_size = 0
-    total_items = 0
-    total_categories = 0
-    category_results = []
-
-    # Define the grouped categories
-    execution_groups = []
-    if run_system_tasks:
-        execution_groups.append(
+    @staticmethod
+    def build_execution_groups(
+        detected_apps: dict[str, dict[str, Any]],
+    ) -> list[tuple[str, list[CleanupTask]]]:
+        return [
             (
                 f"{THEME_TITLE}➤ System & Package Manager{RESET}",
                 [
-                    ("Package Manager Cache", clean_package_manager),
-                    ("Orphaned Packages", clean_orphaned_packages),
-                    ("Old Kernels", clean_old_kernels),
-                    ("System Journal Logs", clean_journal),
-                    ("Rotated Log Files", clean_rotated_logs),
-                    ("Zombie Processes", clean_zombies),
+                    CleanupTask("Package Manager Cache", clean_package_manager, requires_sudo=True),
+                    CleanupTask("Orphaned Packages", clean_orphaned_packages, requires_sudo=True),
+                    CleanupTask("Old Kernels", clean_old_kernels, requires_sudo=True),
+                    CleanupTask("System Journal Logs", clean_journal, requires_sudo=True),
+                    CleanupTask("Rotated Log Files", clean_rotated_logs, requires_sudo=True),
+                    CleanupTask("Zombie Processes", clean_zombies, requires_sudo=True),
                 ],
-            )
-        )
-    execution_groups.extend(
-        [
-            (f"{THEME_TITLE}➤ User Data Cleanup{RESET}", [("User Data & Trash", clean_user_data)]),
+            ),
+            (
+                f"{THEME_TITLE}➤ User Data Cleanup{RESET}",
+                [CleanupTask("User Data & Trash", clean_user_data)],
+            ),
             (
                 f"{THEME_TITLE}➤ Deep App Cleanup{RESET}",
-                [("Deep App Caches", partial(clean_apps_deep, detected_apps=detected_apps))],
+                [
+                    CleanupTask(
+                        "Deep App Caches",
+                        lambda dry_run=False: clean_apps_deep(
+                            dry_run=dry_run, detected_apps=detected_apps
+                        ),
+                    )
+                ],
             ),
             (
                 f"{THEME_TITLE}➤ Developer Tools & AI Models{RESET}",
-                [("Developer Artifacts", clean_developer_tools)],
+                [CleanupTask("Developer Artifacts", clean_developer_tools)],
             ),
         ]
+
+
+def _authenticate_sudo_session(dry_run: bool) -> bool:
+    """Pre-authorizes sudo to prevent progress interruptions."""
+    if dry_run:
+        return True
+
+    print(
+        f"{PURPLE}➔{RESET} System caches need sudo. "
+        f"{GREEN}Enter{RESET} continue, {GRAY}Space{RESET} skip:",
+        end=" ",
+        flush=True,
     )
+    choice = _read_sudo_choice()
+    print()
 
-    for header, tasks in execution_groups:
-        f = io.StringIO()
-        with contextlib.redirect_stdout(f):
-            for cat_name, func in tasks:
-                s, i, c = func(dry_run=dry_run)
-                total_size += s
-                total_items += i
-                total_categories += c
-                if s > 0 or i > 0:
-                    category_results.append((cat_name, s, i))
+    if choice in (" ", "\x1b"):
+        return False
 
-        output = f.getvalue()
-        if output.strip():
-            print(header)
-            print(output, end="")
+    if not system.ensure_sudo_session(
+        f"{PURPLE}➔{RESET} System cleanup requires admin access\n{PURPLE}➔{RESET} Password: "
+    ):
+        if system.SUDO_CANCELLED:
+            print(f" {YELLOW}⚠️  Cleanup cancelled by user.{RESET}", end="")
+        else:
+            print(f" {RED}✗{RESET} Authorization failed. Cleanup skipped.\n")
+        return False
 
-    # 3. Final Summary
+    print(f" {GREEN}✓{RESET} Authorization successful.\n")
+    return True
+
+
+def _print_cleanup_summary(
+    dry_run: bool,
+    total_size: int,
+    total_items: int,
+    category_results: list[tuple[str, int, int]],
+) -> None:
+    """Prints the formatted completion breakdown and disk space summary."""
     free_now = shutil.disk_usage(os.path.expanduser("~")).free
     print("\n" + "=" * 60)
     status_text = "Scan complete (Preview)" if dry_run else "Cleanup complete"
@@ -144,6 +142,47 @@ def run_clean(dry_run=False):
     print("=" * 60)
     if dry_run:
         print(f"\n{GRAY}ℹ️  Run without --dry-run to actually delete these files.{RESET}")
-    else:
+
+
+def run_clean(dry_run: bool = False) -> bool | None:
+    """Orchestrates system, user, app, and developer tool cleanup pipelines."""
+    detected_apps = proactive_app_detection()
+
+    print(f"\n{PURPLE}Clean Your Linux{RESET}\n")
+    print(
+        f"{GRAY}● Use 'topo clean --dry-run' to preview, 'topo whitelist --help' for whitelist details.{RESET}"
+    )
+
+    if not _authenticate_sudo_session(dry_run):
+        return False
+
+    session_command = "clean --dry-run" if dry_run else "clean"
+    record_history_session(session_command, "started")
+
+    total_size = 0
+    total_items = 0
+    category_results: list[tuple[str, int, int]] = []
+    execution_groups = TaskRegistry.build_execution_groups(detected_apps)
+
+    for header, tasks in execution_groups:
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            for task in tasks:
+                size, items, _ = task.action(dry_run=dry_run)
+                total_size += size
+                total_items += items
+                if size > 0 or items > 0:
+                    category_results.append((task.name, size, items))
+
+        output = buf.getvalue()
+        if output.strip():
+            print(header)
+            print(output, end="")
+
+    _print_cleanup_summary(dry_run, total_size, total_items, category_results)
+
+    if not dry_run:
         ScanCache.clear()
+
     record_history_session(session_command, "ended")
+    return None

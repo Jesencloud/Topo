@@ -167,13 +167,10 @@ def clean_python_pycache(dry_run=False):
     return total_size, total_items
 
 
-def clean_developer_tools(dry_run=False):
-    """Main entry for developer-focused cleanup."""
+def clean_package_manager_caches(dry_run: bool = False) -> tuple[int, int]:
+    """Clean standard developer package manager caches (npm, pip, go)."""
     total_size = 0
     total_items = 0
-    total_categories = 0
-
-    # 1. Standard package managers
     pm_tools = [
         ("npm cache", ["npm", "cache", "clean", "--force"], DEV_CACHES["npm"]),
         ("pip cache", ["pip3", "cache", "purge"], DEV_CACHES["pip"]),
@@ -185,39 +182,56 @@ def clean_developer_tools(dry_run=False):
             if i > 0:
                 total_size += s
                 total_items += i
-                total_categories += 1
+    return total_size, total_items
 
-    # 2. Cargo registry (custom removal)
+
+def clean_cargo_cache(dry_run: bool = False) -> tuple[int, int]:
+    """Clean Rust Cargo registry cache based on age."""
     cargo_path = DEV_CACHES["cargo"]
-    if cargo_path.exists():
-        register_cleaned_path(cargo_path)
-        s, i = clean_path_by_age(cargo_path, days=CLEAN_CARGO_AGE_DAYS, dry_run=dry_run)
-        if i > 0:
-            total_size += s
-            total_items += i
-            total_categories += 1
-            status = "would be cleaned" if dry_run else "cleaned"
-            print(f"  {OK} Cargo cache ({bytes_to_human(s)}) {status}")
+    if not cargo_path.exists():
+        return 0, 0
 
-    # 3. Java build caches (Gradle, Maven)
-    s, i = clean_java_caches(dry_run=dry_run)
+    register_cleaned_path(cargo_path)
+    s, i = clean_path_by_age(cargo_path, days=CLEAN_CARGO_AGE_DAYS, dry_run=dry_run)
     if i > 0:
-        total_size += s
-        total_items += i
-        total_categories += 1
+        status = "would be cleaned" if dry_run else "cleaned"
+        print(f"  {OK} Cargo cache ({bytes_to_human(s)}) {status}")
+        return s, i
+    return 0, 0
 
-    # 4. Python __pycache__
-    s, i = clean_python_pycache(dry_run=dry_run)
-    if i > 0:
-        total_size += s
-        total_items += i
-        total_categories += 1
 
-    # 5. AI & Virtualization
-    for func in [clean_ai_models, clean_docker, clean_podman, clean_multipass]:
+def clean_container_and_virtualization_caches(dry_run: bool = False) -> tuple[int, int]:
+    """Clean Docker, Podman, and Multipass virtualization caches."""
+    total_size = 0
+    total_items = 0
+    for func in [clean_docker, clean_podman, clean_multipass]:
         s, i = func(dry_run=dry_run)[:2]
         if i > 0:
             total_size += s
             total_items += i
+    return total_size, total_items
+
+
+def clean_developer_tools(dry_run: bool = False) -> tuple[int, int, int]:
+    """Main entry for developer-focused cleanup pipeline."""
+    total_size = 0
+    total_items = 0
+    total_categories = 0
+
+    dev_sub_cleaners = [
+        clean_package_manager_caches,
+        clean_cargo_cache,
+        clean_java_caches,
+        clean_python_pycache,
+        clean_ai_models,
+        clean_container_and_virtualization_caches,
+    ]
+
+    for cleaner in dev_sub_cleaners:
+        s, i = cleaner(dry_run=dry_run)[:2]
+        if i > 0:
+            total_size += s
+            total_items += i
             total_categories += 1
+
     return total_size, total_items, total_categories

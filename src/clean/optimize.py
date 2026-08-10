@@ -8,6 +8,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import Any
 
 from ..core import system, terminal_state
 from ..core.constants import (
@@ -54,6 +55,20 @@ def opt_log(message, success=True, skipped=False):
 
 
 _read_sudo_choice = terminal_state.read_sudo_choice
+
+
+class OptimizationRegistry:
+    """Registry for automatic discovery of system optimization tasks."""
+
+    tasks: list[Any] = []
+
+    @classmethod
+    def register(cls, func: Any) -> Any:
+        cls.tasks.append(func)
+        return func
+
+
+register_optimization_task = OptimizationRegistry.register
 
 
 def _is_any_process_running(process_names: list[str]) -> bool:
@@ -122,6 +137,7 @@ def vacuum_single_db(db_file):
         return 0
 
 
+@register_optimization_task
 def run_vacuum_all(dry_run=False):
     """Task to optimize all browser databases."""
     targets = [
@@ -172,6 +188,7 @@ def run_vacuum_all(dry_run=False):
     return f"Optimized {len(db_files)} browser database(s){saved_str}{suffix}"
 
 
+@register_optimization_task
 def run_fstrim(dry_run=False):
     if not shutil.which("fstrim"):
         return None
@@ -182,6 +199,7 @@ def run_fstrim(dry_run=False):
     return None
 
 
+@register_optimization_task
 def run_fccache(dry_run=False):
     if not shutil.which("fc-cache"):
         return None
@@ -192,6 +210,7 @@ def run_fccache(dry_run=False):
     return None
 
 
+@register_optimization_task
 def run_sysctl_optimize(dry_run=False):
     """Optimize kernel memory/swap parameters if sysctl is available."""
     if not shutil.which("sysctl"):
@@ -207,6 +226,7 @@ def run_sysctl_optimize(dry_run=False):
     return None
 
 
+@register_optimization_task
 def run_tmpfiles_cleanup(dry_run=False):
     """Trigger systemd-tmpfiles clean rules."""
     if not shutil.which("systemd-tmpfiles"):
@@ -218,6 +238,7 @@ def run_tmpfiles_cleanup(dry_run=False):
     return None
 
 
+@register_optimization_task
 def run_ldconfig(dry_run=False):
     """Refresh dynamic linker bindings cache."""
     if not shutil.which("ldconfig"):
@@ -229,6 +250,7 @@ def run_ldconfig(dry_run=False):
     return None
 
 
+@register_optimization_task
 def run_locale_gen(dry_run=False):
     """Regenerate locale archive files if locale-gen is available."""
     if not shutil.which("locale-gen"):
@@ -240,6 +262,7 @@ def run_locale_gen(dry_run=False):
     return None
 
 
+@register_optimization_task
 def run_man_db_refresh(dry_run=False):
     """Update manual page database index."""
     if not shutil.which("mandb"):
@@ -251,6 +274,7 @@ def run_man_db_refresh(dry_run=False):
     return None
 
 
+@register_optimization_task
 def run_autostart_cleanup(dry_run=False):
     """Remove zombie autostart entries whose executable no longer exists."""
     autostart_dir = Path.home() / ".config" / "autostart"
@@ -282,6 +306,7 @@ def run_autostart_cleanup(dry_run=False):
     return None
 
 
+@register_optimization_task
 def run_systemd_user_service_cleanup(dry_run=False):
     """Remove user service units whose ExecStart target no longer exists."""
     user_systemd_dir = Path.home() / ".config" / "systemd" / "user"
@@ -315,6 +340,7 @@ def run_systemd_user_service_cleanup(dry_run=False):
     return f"Found {len(broken_units)} broken user systemd service(s)"
 
 
+@register_optimization_task
 def run_user_systemd_reset_failed(dry_run=False):
     """Reset failed user-level systemd unit states without touching D-Bus runtime files."""
     if not shutil.which("systemctl"):
@@ -353,6 +379,7 @@ def run_user_systemd_reset_failed(dry_run=False):
     return None
 
 
+@register_optimization_task
 def run_swap_management(dry_run=False):
     """Reset swap if RAM is plentiful to reduce micro-stutter."""
     if not shutil.which("swapoff") or not shutil.which("swapon"):
@@ -390,6 +417,7 @@ def run_swap_management(dry_run=False):
     return None
 
 
+@register_optimization_task
 def run_journal_optimization(dry_run=False):
     """Aggressive journal vacuuming (keep 3 days)."""
     if not shutil.which("journalctl"):
@@ -405,6 +433,7 @@ def run_journal_optimization(dry_run=False):
     return "Journal already optimized (under 3 days)"
 
 
+@register_optimization_task
 def run_coredump_cleanup(dry_run=False):
     """Clean system coredump files from /var/lib/systemd/coredump."""
     coredump_dir = COREDUMP_DIR
@@ -447,6 +476,7 @@ def run_coredump_cleanup(dry_run=False):
     return "System coredumps cleared"
 
 
+@register_optimization_task
 def run_broken_symlink_cleanup(dry_run=False):
     """Remove broken symlinks in common user directories."""
     search_dirs = [
@@ -523,6 +553,7 @@ def _refresh_database(cmd: str, target_dir: Path, label: str, dry_run: bool) -> 
     return None
 
 
+@register_optimization_task
 def run_desktop_database_refresh(dry_run=False):
     return _refresh_database(
         "update-desktop-database",
@@ -532,6 +563,7 @@ def run_desktop_database_refresh(dry_run=False):
     )
 
 
+@register_optimization_task
 def run_mime_database_refresh(dry_run=False):
     return _refresh_database(
         "update-mime-database",
@@ -541,6 +573,7 @@ def run_mime_database_refresh(dry_run=False):
     )
 
 
+@register_optimization_task
 def run_flatpak_repair(dry_run=False):
     """Verify and repair Flatpak system and user installations."""
     if not shutil.which("flatpak"):
@@ -554,6 +587,7 @@ def run_flatpak_repair(dry_run=False):
     return "Flatpak storage objects verified (flatpak repair)"
 
 
+@register_optimization_task
 def run_tracker_miner_reset(dry_run=False):
     """Reset GNOME Tracker miner database if indices are corrupt/fragmented."""
     cmd = None
@@ -570,6 +604,7 @@ def run_tracker_miner_reset(dry_run=False):
     return None
 
 
+@register_optimization_task
 def run_package_repo_refresh(dry_run=False):
     """Refresh PackageKit or APT-File software repository metadata."""
     cmd = None
@@ -586,61 +621,46 @@ def run_package_repo_refresh(dry_run=False):
     return None
 
 
-def optimize_system(dry_run=False):
+def _authenticate_sudo_session(dry_run: bool) -> bool:
+    if dry_run:
+        return True
+
+    print(
+        f"{PURPLE}➔{RESET} Optimization tasks need sudo. "
+        f"{GREEN}Enter{RESET} continue, {GRAY}Space{RESET} skip:",
+        end=" ",
+        flush=True,
+    )
+    choice = _read_sudo_choice()
+    print()
+    if choice in (" ", "\x1b"):
+        return False
+    if not system.ensure_sudo_session(
+        f"{PURPLE}➔{RESET} System optimization requires admin access\n{PURPLE}➔{RESET} Password: "
+    ):
+        if system.SUDO_CANCELLED:
+            print(f" {YELLOW}⚠️  Optimization cancelled by user.{RESET}", end="")
+        else:
+            print(f" {RED}✗{RESET} Authorization failed. Optimization skipped.\n")
+        return False
+    print(f" {GREEN}✓{RESET} Authorization successful.\n")
+    return True
+
+
+def optimize_system(dry_run: bool = False) -> bool | None:
     sys.stdout.write(CLEAR_SCREEN)
     sys.stdout.flush()
     print(f"\n{PURPLE}System Optimization{RESET}\n")
     print(f"{GRAY}Running maintenance tasks in parallel...{RESET}")
 
-    if not dry_run:
-        print(
-            f"{PURPLE}➔{RESET} Optimization tasks need sudo. "
-            f"{GREEN}Enter{RESET} continue, {GRAY}Space{RESET} skip:",
-            end=" ",
-            flush=True,
-        )
-        choice = _read_sudo_choice()
-        print()
-        if choice in (" ", "\x1b"):
-            return False
-        if not system.ensure_sudo_session(
-            f"{PURPLE}➔{RESET} System optimization requires admin access\n"
-            f"{PURPLE}➔{RESET} Password: "
-        ):
-            if system.SUDO_CANCELLED:
-                print(f" {YELLOW}⚠️  Optimization cancelled by user.{RESET}", end="")
-            else:
-                print(f" {RED}✗{RESET} Authorization failed. Optimization skipped.\n")
-            return
-        print(f" {GREEN}✓{RESET} Authorization successful.\n")
+    if not _authenticate_sudo_session(dry_run):
+        return False
 
     start_time = time.time()
+    registered_tasks = OptimizationRegistry.tasks
 
-    tasks = [
-        lambda: run_fstrim(dry_run),
-        lambda: run_fccache(dry_run),
-        lambda: run_sysctl_optimize(dry_run),
-        lambda: run_tmpfiles_cleanup(dry_run),
-        lambda: run_ldconfig(dry_run),
-        lambda: run_locale_gen(dry_run),
-        lambda: run_man_db_refresh(dry_run),
-        lambda: run_swap_management(dry_run),
-        lambda: run_journal_optimization(dry_run),
-        lambda: run_coredump_cleanup(dry_run),
-        lambda: run_broken_symlink_cleanup(dry_run),
-        lambda: run_flatpak_repair(dry_run),
-        lambda: run_tracker_miner_reset(dry_run),
-        lambda: run_package_repo_refresh(dry_run),
-        lambda: run_desktop_database_refresh(dry_run),
-        lambda: run_mime_database_refresh(dry_run),
-        lambda: run_vacuum_all(dry_run),
-        lambda: run_autostart_cleanup(dry_run),
-        lambda: run_systemd_user_service_cleanup(dry_run),
-        lambda: run_user_systemd_reset_failed(dry_run),
-    ]
-
-    with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
-        futures = {executor.submit(task): task for task in tasks}
+    with ThreadPoolExecutor(max_workers=max(len(registered_tasks), 1)) as executor:
+        futures = {executor.submit(task, dry_run=dry_run): task for task in registered_tasks}
 
         for future in as_completed(futures):
             try:
@@ -654,3 +674,4 @@ def optimize_system(dry_run=False):
 
     duration = time.time() - start_time
     print(f"\n{GREEN}{BOLD}✨ All tasks completed in {duration:.1f}s.{RESET}")
+    return None

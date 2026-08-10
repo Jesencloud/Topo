@@ -8,37 +8,91 @@ from ..core.heavy_cache import get_package_manager_cleaner
 from ..core.system import get_os_id, is_os_family, run_command
 
 
-def clean_snaps(dry_run=False):
-    """Removes old revisions of snaps to save massive space on Ubuntu."""
-    if shutil.which("snap"):
-        if dry_run:
-            print(f"  {OK} Old Snap revisions would be removed")
-            return 0, 0, 1
+class DryRunReporter:
+    """Helper to handle uniform output reporting across dry-run and actual execution modes."""
 
-        res = run_command(["snap", "list", "--all"], capture=True)
-        if not res or not res.stdout:
+    @staticmethod
+    def report(
+        action_name: str,
+        freed_bytes: int = 0,
+        items_count: int = 0,
+        dry_run: bool = False,
+    ) -> tuple[int, int, int]:
+        if freed_bytes == 0 and items_count == 0:
             return 0, 0, 0
 
-        count = 0
-        for line in res.stdout.splitlines():
-            if "disabled" in line:
-                parts = line.split()
-                if len(parts) >= 3:
-                    res = run_command(
-                        ["snap", "remove", parts[0], "--revision", parts[2]],
-                        use_sudo=True,
-                        capture=True,
-                    )
-                    if res.ok:
-                        count += 1
+        size_str = f" ({bytes_to_human(freed_bytes)})" if freed_bytes > 0 else ""
+        items_str = f" ({items_count} items)" if items_count > 0 and freed_bytes == 0 else ""
 
-        if count > 0:
-            print(f"  {OK} Removed {count} old Snap revisions")
-            return 0, count, 1
+        if dry_run:
+            print(f"  {OK} {action_name}{size_str}{items_str} would be cleaned")
+        else:
+            print(f"  {OK} Cleaned {action_name}{size_str}{items_str}")
+
+        return freed_bytes, items_count, 1
+
+
+def clean_snaps(dry_run: bool = False) -> tuple[int, int, int]:
+    """Removes old revisions of snaps to save massive space on Ubuntu."""
+    if not shutil.which("snap"):
+        return 0, 0, 0
+
+    if dry_run:
+        print(f"  {OK} Old Snap revisions would be removed")
+        return 0, 0, 1
+
+    res = run_command(["snap", "list", "--all"], capture=True)
+    if not res or not res.stdout:
+        return 0, 0, 0
+
+    count = 0
+    for line in res.stdout.splitlines():
+        if "disabled" in line:
+            parts = line.split()
+            if len(parts) >= 3:
+                rm_res = run_command(
+                    ["snap", "remove", parts[0], "--revision", parts[2]],
+                    use_sudo=True,
+                    capture=True,
+                )
+                if rm_res.ok:
+                    count += 1
+
+    if count > 0:
+        print(f"  {OK} Removed {count} old Snap revisions")
+        return 0, count, 1
     return 0, 0, 0
 
 
-def clean_package_manager(dry_run=False):
+def _get_package_manager_cache_paths(cleaner_key: str) -> list[Path]:
+    """Determines the physical cache directory paths for a package manager."""
+    if cleaner_key == "dnf":
+        for p in (
+            Path("/var/cache/libdnf5"),
+            Path("/var/cache/dnf5daemon-server"),
+            Path("/var/cache/dnf"),
+        ):
+            if p.exists():
+                return [p]
+        return []
+    elif cleaner_key == "apt":
+        paths = [Path("/var/cache/apt/archives")]
+        partial_path = Path("/var/cache/apt/archives/partial")
+        if partial_path.exists():
+            paths.append(partial_path)
+        return paths
+    elif cleaner_key == "pacman":
+        pkg_path = Path("/var/cache/pacman/pkg")
+        return [pkg_path] if pkg_path.exists() else []
+    return []
+
+
+def _measure_package_cache_size(cache_paths: list[Path]) -> int:
+    """Measures total bytes stored in package manager cache directories."""
+    return sum(get_size_fast(p) for p in cache_paths if p.exists())
+
+
+def clean_package_manager(dry_run: bool = False) -> tuple[int, int, int]:
     """Clean system package manager caches."""
     freed = 0
     snap_items = 0
@@ -47,34 +101,14 @@ def clean_package_manager(dry_run=False):
     cleaner = get_package_manager_cleaner(os_id)
 
     if cleaner and cleaner.key == "apt" and shutil.which(cleaner.executable):
-        # Old Snap revisions are a separate cleanup category; keep their stats.
         s, snap_items, snap_cats = clean_snaps(dry_run=dry_run)
         freed += s
 
     if not cleaner or not shutil.which(cleaner.executable):
         return freed, snap_items, snap_cats
 
-    # Determine cache directory path for accurate pre/post measurement
-    cache_path = None
-    if cleaner.key == "dnf":
-        for p in (
-            Path("/var/cache/libdnf5"),
-            Path("/var/cache/dnf5daemon-server"),
-            Path("/var/cache/dnf"),
-        ):
-            if p.exists():
-                cache_path = p
-                break
-        pre_size = get_size_fast(cache_path) if cache_path and cache_path.exists() else 0
-    elif cleaner.key == "apt":
-        cache_path = Path("/var/cache/apt/archives")
-        partial_path = Path("/var/cache/apt/archives/partial")
-        pre_size = (get_size_fast(cache_path) if cache_path.exists() else 0) + (
-            get_size_fast(partial_path) if partial_path.exists() else 0
-        )
-    elif cleaner.key == "pacman":
-        cache_path = Path("/var/cache/pacman/pkg")
-        pre_size = get_size_fast(cache_path) if cache_path and cache_path.exists() else 0
+    cache_paths = _get_package_manager_cache_paths(cleaner.key)
+    pre_size = _measure_package_cache_size(cache_paths)
 
     if dry_run:
         size_hint = f" ({bytes_to_human(pre_size)})" if pre_size > 0 else ""
@@ -86,9 +120,9 @@ def clean_package_manager(dry_run=False):
         cmd = ["dnf5", "clean", "packages"]
 
     res = run_command(cmd, use_sudo=True, capture=True)
-
-    post_size = get_size_fast(cache_path) if cache_path and cache_path.exists() else 0
+    post_size = _measure_package_cache_size(cache_paths)
     measured_freed = max(0, pre_size - post_size)
+
     if measured_freed > 0:
         freed += measured_freed
     elif res.ok and res.stdout:
@@ -102,27 +136,28 @@ def clean_package_manager(dry_run=False):
     return freed, snap_items, snap_cats
 
 
-def clean_journal(dry_run=False):
+def clean_journal(dry_run: bool = False) -> tuple[int, int, int]:
     """Vacuum systemd journal logs."""
-    if shutil.which("journalctl"):
-        if dry_run:
-            print(f"  {OK} journal logs would be vacuumed")
-            return 0, 0, 1
+    if not shutil.which("journalctl"):
+        return 0, 0, 0
 
-        res = run_command(["journalctl", "--vacuum-size=1M"], use_sudo=True, capture=True)
-        if res.ok and res.stdout:
-            freed = parse_size_from_text(res.stdout)
-            if freed > 0:
-                print(f"  {OK} Vacuumed journal logs ({bytes_to_human(freed)})")
-                return freed, 1, 1
+    if dry_run:
+        print(f"  {OK} journal logs would be vacuumed")
+        return 0, 0, 1
+
+    res = run_command(["journalctl", "--vacuum-size=1M"], use_sudo=True, capture=True)
+    if res.ok and res.stdout:
+        freed = parse_size_from_text(res.stdout)
+        if freed > 0:
+            print(f"  {OK} Vacuumed journal logs ({bytes_to_human(freed)})")
+            return freed, 1, 1
     return 0, 0, 0
 
 
-def clean_orphaned_packages(dry_run=False):
+def clean_orphaned_packages(dry_run: bool = False) -> tuple[int, int, int]:
     """Remove orphaned dependencies that are no longer needed."""
     os_id = get_os_id()
     freed = 0
-    items = 0
 
     if (
         os_id in ("ubuntu", "debian", "linuxmint", "pop", "elementary") or is_os_family("debian")
@@ -146,20 +181,17 @@ def clean_orphaned_packages(dry_run=False):
         res = run_command([dnf_cmd, "autoremove", "-y"], use_sudo=True, capture=True)
         if res.ok:
             freed = parse_size_from_text(res.stdout)
-            # DNF autoremove output usually lists packages. We can estimate count.
-            items = res.stdout.count("\n") // 2  # Rough estimate
+            items = res.stdout.count("\n") // 2
             print(f"  {OK} Removed orphaned DNF packages ({bytes_to_human(freed)})")
             return freed, items, 1
 
     elif shutil.which("pacman"):
-        # List orphans
         list_res = run_command(["pacman", "-Qtdq"], capture=True)
         if list_res.ok and list_res.stdout.strip():
             orphans = list_res.stdout.split()
             if dry_run:
                 print(f"  {OK} {len(orphans)} orphaned Pacman packages would be removed")
                 return 0, 0, 1
-            # Remove them
             remove_res = run_command(
                 ["pacman", "-Rns", "--noconfirm"] + orphans, use_sudo=True, capture=True
             )
@@ -171,9 +203,8 @@ def clean_orphaned_packages(dry_run=False):
     return 0, 0, 0
 
 
-def clean_zombies(dry_run=False):
+def clean_zombies(dry_run: bool = False) -> tuple[int, int, int]:
     """Identify and attempt to reap zombie processes."""
-    # Find zombies: state 'Z'
     res = run_command(["ps", "-eo", "state,pid,ppid,comm"], capture=True)
     if not res.ok:
         return 0, 0, 0
@@ -193,13 +224,11 @@ def clean_zombies(dry_run=False):
         print(f"  {OK} {count} zombie processes detected")
         return 0, 0, 1
 
-    # Attempt to signal parents to reap zombies
     parents = set(z["ppid"] for z in zombies)
     reaped = 0
     for ppid in parents:
         if ppid == "1":
-            continue  # Init will reap eventually
-        # Send SIGCHLD to parent
+            continue
         run_command(["kill", "-SIGCHLD", ppid], use_sudo=True, capture=True)
         reaped += 1
 
@@ -207,7 +236,7 @@ def clean_zombies(dry_run=False):
     return 0, count, 1
 
 
-def clean_old_kernels(dry_run=False):
+def clean_old_kernels(dry_run: bool = False) -> tuple[int, int, int]:
     """Remove old kernel packages, keeping current and one previous version."""
     current_kernel = platform.release()
 
@@ -221,20 +250,16 @@ def clean_old_kernels(dry_run=False):
                 parts = line.split()
                 if len(parts) >= 2:
                     pkg = parts[1]
-                    # Skip meta-packages like linux-image-generic
                     is_meta = pkg.endswith("-generic") and not any(
                         c.isdigit() for c in pkg.split("-")[2:3]
                     )
                     if is_meta:
                         continue
                     installed.append(pkg)
-        # Filter out current kernel's package
         removable = [p for p in installed if current_kernel.split("-")[0] not in p]
-        # Keep at most 1 old kernel (the most recent non-current)
-        # Sort by version and remove all but the last
         if len(removable) <= 1:
             return 0, 0, 0
-        to_remove = removable[:-1]  # Keep the latest removable one
+        to_remove = removable[:-1]
         if dry_run:
             print(f"  {OK} {len(to_remove)} old kernel(s) would be removed")
             return 0, 0, 1
@@ -245,12 +270,10 @@ def clean_old_kernels(dry_run=False):
 
     elif shutil.which("dnf5") or shutil.which("dnf"):
         dnf_cmd = "dnf5" if shutil.which("dnf5") else "dnf"
-        # DNF respects installonly_limit but we can explicitly enforce keeping 2
         res = run_command([dnf_cmd, "repoquery", "--installonly", "--installed"], capture=True)
         if not res.ok or not res.stdout:
             return 0, 0, 0
         kernels = [k.strip() for k in res.stdout.splitlines() if k.strip()]
-        # Filter out current kernel
         removable = [k for k in kernels if current_kernel.split("-")[0] not in k]
         if len(removable) <= 1:
             return 0, 0, 0
@@ -266,7 +289,7 @@ def clean_old_kernels(dry_run=False):
     return 0, 0, 0
 
 
-def clean_rotated_logs(dry_run=False):
+def clean_rotated_logs(dry_run: bool = False) -> tuple[int, int, int]:
     """Remove rotated and compressed log files from /var/log."""
     total_size = 0
     total_items = 0
@@ -289,8 +312,7 @@ def clean_rotated_logs(dry_run=False):
                         total_items += 1
     except PermissionError:
         pass
-    if total_items > 0:
-        status = "would be cleaned" if dry_run else "cleaned"
-        print(f"  {OK} Rotated log files ({bytes_to_human(total_size)}) {status}")
-        return total_size, total_items, 1
-    return 0, 0, 0
+
+    return DryRunReporter.report(
+        "Rotated log files", freed_bytes=total_size, items_count=total_items, dry_run=dry_run
+    )
