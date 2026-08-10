@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 from ..ui.navigator import draw_bar, get_color_for_percent
-from .constants import GRAY, GREEN, PURPLE, RED, RESET, YELLOW
+from .constants import GREEN, PURPLE, RED, RESET, YELLOW
 from .file_ops import bytes_to_human
 from .system import run_command
 
@@ -408,7 +408,7 @@ def show_status():
 
     # 2. Memory & Storage (RAM, Swap, ZRAM, Disk)
     mem_bar = draw_bar(mem_percent, width=20)
-    mem_color = get_color_for_percent(mem_percent) if mem_percent > 0 else GRAY
+    mem_color = get_color_for_percent(mem_percent)
     print(
         f"🧠 Memory:       {mem_bar}  {mem_color}{mem_percent:>5.1f}%{RESET}  ({used_mem_str} / {total_mem_str})"
     )
@@ -417,7 +417,7 @@ def show_status():
     if swap_data:
         swap_used_str, swap_total_str, swap_pct = swap_data
         swap_bar = draw_bar(swap_pct, width=20)
-        swap_color = get_color_for_percent(swap_pct) if swap_pct > 0 else GRAY
+        swap_color = get_color_for_percent(swap_pct)
         print(
             f"🔄 Swap:         {swap_bar}  {swap_color}{swap_pct:>5.1f}%{RESET}  ({swap_used_str} / {swap_total_str})"
         )
@@ -425,12 +425,14 @@ def show_status():
     zram_data = get_zram_info()
     if zram_data:
         comp_str, orig_str, zram_pct, ratio_str = zram_data
+        zram_bar = draw_bar(zram_pct, width=20)
+        zram_color = get_color_for_percent(zram_pct)
         print(
-            f"⚡ ZRAM RAM:     {GRAY}{comp_str} (compressed from {orig_str}, {ratio_str} ratio){RESET}"
+            f"⚡ ZRAM RAM:     {zram_bar}  {zram_color}{zram_pct:>5.1f}%{RESET}  ({comp_str} compressed from {orig_str}, {ratio_str} ratio)"
         )
 
     disk_bar = draw_bar(disk_percent, width=20)
-    disk_color = get_color_for_percent(disk_percent) if disk_percent > 0 else GRAY
+    disk_color = get_color_for_percent(disk_percent)
     print(
         f"💾 Disk:         {disk_bar}  {disk_color}{disk_percent:>5.1f}%{RESET}  ({bytes_to_human(home_stats.used)} / {bytes_to_human(home_stats.total)})"
     )
@@ -438,12 +440,10 @@ def show_status():
     # 3. Hardware & Network (Battery, Network)
     if battery_data:
         bat_val, bat_pct_str, bat_details = battery_data
-        bat_color = GREEN
-        if bat_val < 20:
-            bat_color = RED
-        elif bat_val < 50:
-            bat_color = YELLOW
-        print(f"🔋 Battery:      {bat_color}{bat_pct_str}{RESET}{bat_details}")
+        bat_color = GREEN if bat_val >= 50 else (YELLOW if bat_val >= 20 else RED)
+        bat_bar = draw_bar(bat_val, width=20, force_color=bat_color)
+        details_fmt = f"  ({bat_details.strip()})" if bat_details.strip() else ""
+        print(f"🔋 Battery:      {bat_bar}  {bat_color}{float(bat_val):>5.1f}%{RESET}{details_fmt}")
 
     print(f"🌐 Network:      ↓ {rx} / ↑ {tx} | {local_ip}{RESET}")
 

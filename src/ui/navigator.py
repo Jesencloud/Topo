@@ -14,7 +14,18 @@ from pathlib import Path
 
 from ..core import terminal_state
 from ..core.config import get_show_scrollbar
-from ..core.constants import BOLD, GRAY, GREEN, PURPLE, RED, RESET, THEME_TITLE, WHITE, YELLOW
+from ..core.constants import (
+    BOLD,
+    CYAN,
+    GRAY,
+    GREEN,
+    PURPLE,
+    RED,
+    RESET,
+    THEME_TITLE,
+    WHITE,
+    YELLOW,
+)
 from ..core.file_ops import bytes_to_human
 
 ANSI_CSI_RE = re.compile("\x1b\\[[0-?]*[ -/]*[@-~]")
@@ -320,11 +331,11 @@ def draw_bar(percent, width=20, force_color=None):
     color = force_color or get_color_for_percent(percent)
 
     if percent <= 0:
-        # For 0%, show a consistent gray empty bar
-        return f"{GRAY}{'▬' * width}{RESET}"
+        # For 0%, show a high-contrast neutral empty bar visible on both dark and light terminal backgrounds
+        return f"{WHITE}{'▬' * width}{RESET}"
 
-    # For >0%, show colored filled part and gray empty part
-    return f"{color}{'▬' * filled}{RESET}{GRAY}{'▬' * empty}{RESET}"
+    # For >0%, show colored filled part and neutral white/gray empty part
+    return f"{color}{'▬' * filled}{RESET}{WHITE}{'▬' * empty}{RESET}"
 
 
 class Navigator:
@@ -466,9 +477,13 @@ class Navigator:
         return Navigator._parse_mouse_code(code, x, y, "M")
 
     @staticmethod
-    def wait_for_return(message="Press Enter to return to Main Menu, ESC to exit..."):
+    def wait_for_return(message=None):
         """Standardized non-blocking return/exit prompt."""
-        print(f"\n\033[1;90m{message} \033[0m", end="", flush=True)
+        if message is None:
+            msg_str = f"Press {GREEN}Enter{RESET} {WHITE}to return to Main Menu{RESET}, {CYAN}ESC{RESET} {WHITE}to exit...{RESET}"
+        else:
+            msg_str = message
+        print(f"\n{msg_str} ", end="", flush=True)
         while True:
             key = Navigator.get_key()
             if key in Navigator.ENTER:
@@ -655,7 +670,9 @@ class InteractiveMenu:
                 buf.append(f"{prefix}{label:<15} {desc}\033[K\n")
         buf.append("\033[K\n")
         mute_label = "Unmute" if Navigator.is_muted else "Mute"
-        buf.append(f"{GRAY} ↑/↓ | M: {mute_label} | Enter: Select | ESC: Quit{RESET}\033[K\n")
+        buf.append(
+            f" {GREEN}↑/↓{RESET} | {GREEN}M{RESET}: {WHITE}{mute_label}{RESET} | {GREEN}Enter{RESET}: {WHITE}Select{RESET} | {CYAN}ESC{RESET}: {WHITE}Quit{RESET}\033[K\n"
+        )
         buf.append("\033[J")
         _render_scrollable_frame(self, buf, focus_line)
 
@@ -771,11 +788,14 @@ class AnalyzeSelector(_PagedSelector):
                 size_known = item.get("size_known", True)
                 if size_known:
                     bar = draw_bar(item["percent"], width=bar_w)
-                    percent_str = f"{item['percent']:>5.1f}%"
+                    pct_color = (
+                        get_color_for_percent(item["percent"]) if item["percent"] > 0 else WHITE
+                    )
+                    percent_str = f"{pct_color}{item['percent']:>5.1f}%{RESET}"
                     size_str = bytes_to_human(item["size"])
                 else:
-                    bar = f"{GRAY}{' ' * bar_w}{RESET}" if bar_w > 0 else ""
-                    percent_str = "   --"
+                    bar = f"{WHITE}{' ' * bar_w}{RESET}" if bar_w > 0 else ""
+                    percent_str = f"{WHITE}   --{RESET}"
                     size_str = "--"
                 bar_str = f"{bar}  " if bar_w > 0 else ""
                 style = "\033[1;35m" if is_hover else ""
@@ -793,18 +813,20 @@ class AnalyzeSelector(_PagedSelector):
 
         if self.can_select:
             prompts = [
-                f" {page_info} ↑↓←→ | PgUp/PgDn: Page | A:All | F:Open Folder | R:Reload | S:Sort {order_icon} | Space:Select"
+                f" {WHITE}{page_info}{RESET} {GREEN}↑↓←→{RESET} | {GREEN}PgUp/PgDn{RESET}: {WHITE}Page{RESET} | {GREEN}A{RESET}: {WHITE}All{RESET} | {GREEN}F{RESET}: {WHITE}Folder{RESET} | {GREEN}R{RESET}: {WHITE}Reload{RESET} | {GREEN}S{RESET}: {WHITE}Sort {order_icon}{RESET} | {GREEN}Space{RESET}: {WHITE}Select{RESET} | {CYAN}ESC{RESET}: {WHITE}Skip{RESET}"
             ]
         else:
-            prompts = [f" {page_info} ↑↓→ | F:Open Folder | R:Reload | S:Sort {order_icon}"]
+            prompts = [
+                f" {WHITE}{page_info}{RESET} {GREEN}↑↓→{RESET} | {GREEN}F{RESET}: {WHITE}Folder{RESET} | {GREEN}R{RESET}: {WHITE}Reload{RESET} | {GREEN}S{RESET}: {WHITE}Sort {order_icon}{RESET} | {CYAN}ESC{RESET}: {WHITE}Skip{RESET}"
+            ]
 
         buf.append("\n\033[K\n")
         for p in prompts:
-            buf.append(f"\033[1;90m{p}\033[0m\033[K\n")
+            buf.append(f"{p}\033[K\n")
 
         if self.selected_items:
             buf.append(
-                f"\n {THEME_TITLE}☉ Selected Items to Remove:{RESET} {GRAY}Enter:Delete{RESET}\033[K\n"
+                f"\n {THEME_TITLE}☉ Selected Items to Remove:{RESET} {GREEN}Enter{RESET}: {WHITE}Delete{RESET}\033[K\n"
             )
             selected_indices = sorted(list(self.selected_items))
             for i in range(0, len(selected_indices), 2):
@@ -945,7 +967,7 @@ class PaginatedSelector(_PagedSelector):
             is_checked = i in self.selected_items
             cursor = "\033[1;35m>\033[0m" if is_hover else " "
             checkbox = "[\033[1;32m✓\033[0m]" if is_checked else "[ ]"
-            style = "\033[1;37m" if is_hover else ""
+            style = PURPLE if is_hover else ""
             name_padded = pad_and_truncate(item["project"], 20)
             size_str = bytes_to_human(item["size"])
             if is_hover:
@@ -954,7 +976,7 @@ class PaginatedSelector(_PagedSelector):
         buf.append("\033[K\n")
         total_pages = (len(self.items) + self.page_size - 1) // self.page_size
         buf.append(
-            f" Page {self.current_page + 1}/{total_pages} | {GRAY}Space: Select | A: All | Enter: Confirm | S: Manage Paths | ESC: Exit{RESET}\033[K\n"
+            f" {WHITE}Page {self.current_page + 1}/{total_pages}{RESET} | {GREEN}Space{RESET}: {WHITE}Select{RESET} | {GREEN}A{RESET}: {WHITE}All{RESET} | {GREEN}Enter{RESET}: {WHITE}Confirm{RESET} | {GREEN}S{RESET}: {WHITE}Paths{RESET} | {CYAN}ESC{RESET}: {WHITE}Exit{RESET}\033[K\n"
         )
         buf.append("\033[J")
         _render_scrollable_frame(self, buf, focus_line)
@@ -1064,7 +1086,7 @@ class UninstallSelector(_PagedSelector):
                     else f"{GRAY}○{RESET} {num_key}."
                 )
                 name_style = PURPLE if is_hover else "\033[1;35m" if is_selected else ""
-                time_style = PURPLE if is_hover else ""
+                time_style = name_style
                 name_padded = pad_and_truncate(item["name"], 35)
                 install_time = self._format_time_ago(item["install_time"])
                 if is_hover:
@@ -1092,7 +1114,7 @@ class UninstallSelector(_PagedSelector):
         if self.selected_ids:
             buf.append(
                 f"\n {THEME_TITLE}☉ Selected Apps to Remove:{RESET} "
-                f"{GRAY}Press Enter to Uninstall, ESC to Exit{RESET}\033[K\n"
+                f"Press {GREEN}Enter{RESET} {WHITE}to Uninstall{RESET}, {CYAN}ESC{RESET} {WHITE}to Exit{RESET}\033[K\n"
             )
             selected_names = [i["name"] for i in self.items if i["id"] in self.selected_ids]
             for i in range(0, len(selected_names), 2):
@@ -1274,7 +1296,9 @@ class TopFilesSelector:
                 f"{cursor} {checkbox} {WHITE}{bytes_to_human(item.get('size', item.get('size_bytes', 0))):>12}{RESET} | {str(item['path'])}\033[K\n"
             )
         buf.append("\033[K\n")
-        buf.append(f"{GRAY} ↑/↓: Move | Space: Toggle | Enter: Delete | ESC: Back{RESET}\033[K\n")
+        buf.append(
+            f" {GREEN}↑/↓{RESET}: {WHITE}Move{RESET} | {GREEN}Space{RESET}: {WHITE}Toggle{RESET} | {GREEN}Enter{RESET}: {WHITE}Delete{RESET} | {CYAN}ESC{RESET}: {WHITE}Back{RESET}\033[K\n"
+        )
         if self.selected_items:
             buf.append(f"\n {THEME_TITLE}☉ Selected Large Files to Remove:{RESET}\033[K\n")
             selected_indices = sorted(list(self.selected_items))
@@ -1428,7 +1452,7 @@ class CleanSelector:
         buf.append("\033[K\n")
         buf.append(f" Total Selected: \033[1;32m{bytes_to_human(total_freed)}\033[0m\033[K\n")
         buf.append(
-            f"\n{GRAY} ↑/↓: Move | Space: Toggle | Enter: Clean Selected | ESC: Cancel{RESET}\033[K\n"
+            f"\n {GREEN}↑/↓{RESET}: {WHITE}Move{RESET} | {GREEN}Space{RESET}: {WHITE}Toggle{RESET} | {GREEN}Enter{RESET}: {WHITE}Clean Selected{RESET} | {CYAN}ESC{RESET}: {WHITE}Cancel{RESET}\033[K\n"
         )
         buf.append("\033[J")
         _render_scrollable_frame(self, buf, focus_line)

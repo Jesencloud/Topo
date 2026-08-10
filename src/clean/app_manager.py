@@ -13,6 +13,7 @@ from ..core.constants import (
     BLUE,
     BOLD,
     CLEAR_SCREEN,
+    CYAN,
     GRAY,
     GREEN,
     MAGENTA,
@@ -21,6 +22,7 @@ from ..core.constants import (
     RESET,
     RPM_QUERY_BATCH_SIZE,
     THEME_TITLE,
+    WHITE,
     YELLOW,
 )
 from ..core.desktop_entry import get_desktop_exec_names, get_desktop_icon, get_desktop_name
@@ -1348,7 +1350,7 @@ def run_uninstall():
                     # Navigator.wait_for_return already adds a leading newline
                     print(f" {YELLOW}⚠️  Uninstall cancelled by user.{RESET}", end="")
                     if not Navigator.wait_for_return(
-                        "Press Enter to return to application list, ESC to exit..."
+                        f"Press {GREEN}Enter{RESET} {WHITE}to return to application list{RESET}, {CYAN}ESC{RESET} {WHITE}to exit...{RESET}"
                     ):
                         return
                     continue
@@ -1359,7 +1361,7 @@ def run_uninstall():
             print(f" {GREEN}✓{RESET} Authorization successful.\n")
 
             # --- EXECUTION ---
-            print(f"\n {GRAY}🚀 Processing...{RESET}\n")
+            print(f"\n {WHITE}🚀 Processing...{RESET}\n")
             removed_names = []
             failed_names = []
             total_freed_all = 0
@@ -1400,6 +1402,6 @@ def run_uninstall():
 
             # Standardized return/exit prompt
             if not Navigator.wait_for_return(
-                "Press Enter to return to application list, ESC to exit..."
+                f"Press {GREEN}Enter{RESET} {WHITE}to return to application list{RESET}, {CYAN}ESC{RESET} {WHITE}to exit...{RESET}"
             ):
                 return  # Exit uninstall completely

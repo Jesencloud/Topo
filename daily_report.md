@@ -53,6 +53,20 @@
 * **`project.py:Scanner._recursive_scan` 非递归算法升级**：
   - 彻底废弃递归函数调用，重构为基于**显式栈 (Stack-based Explicit Loop)** 的非递归迭代扫描算法，消除递归帧开销，彻底规避极端嵌套目录下的栈溢出风险，显著提升超大工程目录的搜索性能与可测试性。
 
+### 7. 无障碍与 NO_COLOR 规范全面遵循 (Accessibility & NO_COLOR Spec)
+* **遵循 NO_COLOR 规范 (https://no-color.org/)**：
+  - 实现模块加载时自动检测环境变量 `NO_COLOR`。当环境变量中包含非空 `NO_COLOR` 时，全局禁用所有 ANSI 颜色与控制转义字符，保障浅色背景终端（Light Mode Terminal）的高对比度可读性。
+* **全局 `--no-color` CLI 选项**：
+  - 在全局命令行中添加 `--no-color` 标志，允许用户显式禁用彩色输出。
+* **非 TTY 输出自动降级**：
+  - 当标准输出（`sys.stdout`）被重定向到非终端管道或文件时，自动切断 ANSI 转义字符串，保障脚本化集成的输出干净度。
+* **新增单元测试 (`test_no_color.py`)**：
+  - 增加了覆盖 `NO_COLOR` 环境变量、`--no-color` 命令行标志与非 TTY 重定向的全量测试用例（测试用例数提升至 316 passed）。
+* **浅色/自定义背景终端对比度渲染修复**：
+  - 解决改变终端背景颜色（如浅色背景 Light Mode Terminal）时，百分比文本 `percent_str` 与 `draw_bar` 未填充轨道与自定义背景颜色融合重叠“看不清”的 Bug。
+  - 解决全盘底栏按键提示词（如 `↑/↓ | M: Mute | Enter: Select | ESC: Quit` 及 `Press Enter to return...`）硬编码 `\033[1;90m` 导致在浅色/自定义终端背景下融色“完全不可见”的 Bug。
+  - 将所有底栏按键提示词重构为 **高对比度复合中性色（按键名称高亮 Green/Cyan，说明字词统一使用中性高对比度 White）**，彻底保障在任何浅色、黑底、高对比度终端背景下的极致清晰视觉度。
+
 ---
 
 # Daily Modification Report - 2026-08-09

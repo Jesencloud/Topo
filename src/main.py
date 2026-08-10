@@ -8,7 +8,15 @@ from .clean.project import run_purge
 from .clean.runner import run_clean
 from .core import system, terminal_state
 from .core.analyze import run_deep_analysis
-from .core.constants import BLUE, CLEAR_LINE, CLEAR_SCREEN, RESET, THEME_TITLE, TOPO_VERSION
+from .core.constants import (
+    BLUE,
+    CLEAR_LINE,
+    CLEAR_SCREEN,
+    RESET,
+    THEME_TITLE,
+    TOPO_VERSION,
+    setup_color_mode,
+)
 from .core.doctor import run_doctor
 from .core.history import show_history
 from .core.status import show_status
@@ -259,8 +267,14 @@ def _main():
 
     # --- Global Options ---
     parser.add_argument("--version", action="version", version=f"topo {TOPO_VERSION}")
+    parser.add_argument(
+        "--no-color",
+        action="store_true",
+        help="Disable colored output (respects NO_COLOR specification https://no-color.org/)",
+    )
 
     args = parser.parse_args()
+    setup_color_mode(getattr(args, "no_color", False))
     dry_run = getattr(args, "dry_run", False)
 
     # Authorization setup command
