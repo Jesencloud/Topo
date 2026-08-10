@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -969,8 +970,9 @@ class UninstallManager:
     def _calculate_app_sizes_and_residues(
         self, apps: list[dict[str, Any]], pre_scanned_entries: dict[Path, list[tuple[str, Path]]]
     ) -> None:
-        """Calculates total app sizes including user data and cache residues."""
-        for app in apps:
+        """Calculates total app sizes including user data and cache residues in parallel."""
+
+        def _process_single_app(app: dict[str, Any]):
             residue_paths = self.find_residue_paths(
                 app["id"], app["name"], app["type"], pre_scanned_entries=pre_scanned_entries
             )
@@ -987,8 +989,11 @@ class UninstallManager:
                 app["size_bytes"] += residue_size
                 app["size_str"] = bytes_to_human(app["size_bytes"])
 
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            list(executor.map(_process_single_app, apps))
+
     def run_full_scan(self, *, use_cache: bool = False) -> list[dict[str, Any]]:
-        """Scans for user-facing applications across Linux package managers."""
+        """Scans for user-facing applications across Linux package managers in parallel."""
         cache_key = self._current_scan_cache_key()
         if use_cache and self.has_fresh_scan_cache():
             self.apps = [app.copy() for app in self._scan_cache_apps or []]
@@ -996,14 +1001,22 @@ class UninstallManager:
 
         user_app_packages, package_desktop_names = self._pre_scan_package_desktop_names()
 
+        scan_tasks = [
+            lambda: self._scan_rpm_packages(user_app_packages, package_desktop_names),
+            lambda: self._scan_apt_packages(user_app_packages, package_desktop_names),
+            lambda: self._scan_pacman_packages(user_app_packages, package_desktop_names),
+            lambda: self._scan_flatpak_apps(),
+            lambda: self._scan_snap_apps(package_desktop_names),
+            lambda: self._scan_npm_global_packages(),
+            lambda: self._scan_standalone_cli_apps(),
+        ]
+
         apps = []
-        apps.extend(self._scan_rpm_packages(user_app_packages, package_desktop_names))
-        apps.extend(self._scan_apt_packages(user_app_packages, package_desktop_names))
-        apps.extend(self._scan_pacman_packages(user_app_packages, package_desktop_names))
-        apps.extend(self._scan_flatpak_apps())
-        apps.extend(self._scan_snap_apps(package_desktop_names))
-        apps.extend(self._scan_npm_global_packages())
-        apps.extend(self._scan_standalone_cli_apps())
+        with ThreadPoolExecutor(max_workers=len(scan_tasks)) as executor:
+            futures = [executor.submit(task) for task in scan_tasks]
+            for future in as_completed(futures):
+                with contextlib.suppress(Exception):
+                    apps.extend(future.result())
 
         pre_scanned_entries = self._pre_scan_search_roots()
         self._calculate_app_sizes_and_residues(apps, pre_scanned_entries)

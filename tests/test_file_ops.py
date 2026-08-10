@@ -253,6 +253,7 @@ def test_get_size_error_handling():
         patch("pathlib.Path.exists", return_value=True),
         patch("pathlib.Path.is_file", return_value=False),
         patch("pathlib.Path.is_symlink", return_value=False),
+        patch("src.core.file_ops._get_fast_scan_data", return_value=None),
         patch("os.scandir", side_effect=OSError),
     ):
         assert get_size(Path("/tmp")) == 0

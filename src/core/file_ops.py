@@ -160,23 +160,32 @@ def has_valid_cachedir_tag(path: str | Path) -> bool:
 
 
 def get_size(path: str | Path) -> int:
-    """Recursive size calculation in bytes."""
-    path = Path(path)
-    if not path.exists():
+    """Recursive size calculation in bytes (delegates directory walks to Rust engine when available)."""
+    p = Path(path)
+    if not p.exists():
         return 0
-    if path.is_file() or path.is_symlink():
+    if p.is_file() or p.is_symlink():
         try:
-            return path.stat().st_size
+            return p.stat().st_size
         except OSError:
             return 0
 
+    if p.is_dir():
+        try:
+            fast_size = _get_fast_scan_data(p)
+            if fast_size is not None:
+                return _coerce_non_negative_size(fast_size.get("total_size_bytes")) or 0
+        except Exception:
+            pass
+
     total = 0
     try:
-        for entry in os.scandir(path):
-            if entry.is_symlink() or entry.is_file():
-                total += entry.stat(follow_symlinks=False).st_size
-            elif entry.is_dir():
-                total += get_size(entry.path)
+        with os.scandir(p) as it:
+            for entry in it:
+                if entry.is_symlink() or entry.is_file():
+                    total += entry.stat(follow_symlinks=False).st_size
+                elif entry.is_dir():
+                    total += get_size(entry.path)
     except OSError:
         pass
     return total

@@ -1,3 +1,4 @@
+import functools
 import json
 from pathlib import Path
 
@@ -244,6 +245,7 @@ def add_to_whitelist(path_str: str) -> bool:
         try:
             with open(get_whitelist_file(), "w") as f:
                 json.dump(current, f, indent=4)
+            get_hard_protection_reason_cached.cache_clear()
             return True
         except OSError:
             return False
@@ -259,20 +261,24 @@ def remove_from_whitelist(path_str: str) -> bool:
         try:
             with open(get_whitelist_file(), "w") as f:
                 json.dump(current, f, indent=4)
+            get_hard_protection_reason_cached.cache_clear()
             return True
         except OSError:
             return False
     return False
 
 
-def _resolve_path(path) -> Path:
-    if not isinstance(path, Path):
-        path = Path(path)
-
+@functools.lru_cache(maxsize=4096)
+def _resolve_path_str(path_str: str) -> Path:
+    p = Path(path_str)
     try:
-        return path.expanduser().resolve()
+        return p.expanduser().resolve()
     except PATH_RESOLVE_ERRORS:
-        return path.absolute()
+        return p.absolute()
+
+
+def _resolve_path(path) -> Path:
+    return _resolve_path_str(str(path))
 
 
 def _is_system_carve_out(path: Path) -> bool:
@@ -295,9 +301,9 @@ def _is_critical_system_path(path: Path) -> bool:
     return False
 
 
-def get_hard_protection_reason(path) -> str | None:
-    """Return why a path is protected across every deletion context."""
-    path = _resolve_path(path)
+@functools.lru_cache(maxsize=4096)
+def get_hard_protection_reason_cached(path_str: str) -> str | None:
+    path = _resolve_path(path_str)
 
     if _is_critical_system_path(path):
         return "critical system path"
@@ -344,8 +350,12 @@ def get_hard_protection_reason(path) -> str | None:
                 return "user whitelist"
         except PATH_RESOLVE_ERRORS:
             continue
-
     return None
+
+
+def get_hard_protection_reason(path) -> str | None:
+    """Return why a path is protected across every deletion context."""
+    return get_hard_protection_reason_cached(str(path))
 
 
 def is_hard_protected(path) -> bool:
