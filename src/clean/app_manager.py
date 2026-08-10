@@ -339,9 +339,6 @@ class UninstallManager:
             app_id_lower.startswith(p) for p in sys_prefixes
         )
 
-    def _parse_size_to_bytes(self, size_str: str) -> int:
-        return parse_size_to_bytes(size_str)
-
     @staticmethod
     def _strip_package_arch(package_name: str) -> str:
         return package_name.split(":", 1)[0]
@@ -616,9 +613,7 @@ class UninstallManager:
                     for line in [*res.stdout.splitlines(), ""]:
                         if not line.strip():
                             app_id = package.get("Name", "").strip()
-                            size_bytes = self._parse_size_to_bytes(
-                                package.get("Installed Size", "")
-                            )
+                            size_bytes = parse_size_to_bytes(package.get("Installed Size", ""))
                             if (
                                 app_id
                                 and not self._is_system_component(app_id, app_id)
@@ -677,7 +672,7 @@ class UninstallManager:
                             if self._is_system_component(app_id, app_name):
                                 continue
 
-                            size_bytes = self._parse_size_to_bytes(size_str)
+                            size_bytes = parse_size_to_bytes(size_str)
                             apps.append(
                                 self._app_record(
                                     app_id, app_name, size_bytes, size_str, "Flatpak", install_time

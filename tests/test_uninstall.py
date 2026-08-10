@@ -98,13 +98,14 @@ def test_run_uninstall_cancel():
 
 
 def test_parse_size_to_bytes():
-    mgr = UninstallManager()
+    from src.core.file_ops import parse_size_to_bytes
+
     # Now using Base-2 (1024)
-    assert mgr._parse_size_to_bytes("1 GB") == 1024**3
-    assert mgr._parse_size_to_bytes("500 MB") == 500 * 1024**2
-    assert mgr._parse_size_to_bytes("100 KB") == 100 * 1024
-    assert mgr._parse_size_to_bytes("N/A") == 0
-    assert mgr._parse_size_to_bytes("") == 0
+    assert parse_size_to_bytes("1 GB") == 1024**3
+    assert parse_size_to_bytes("500 MB") == 500 * 1024**2
+    assert parse_size_to_bytes("100 KB") == 100 * 1024
+    assert parse_size_to_bytes("N/A") == 0
+    assert parse_size_to_bytes("") == 0
 
 
 def test_find_residue_paths(test_env):

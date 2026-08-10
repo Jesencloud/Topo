@@ -37,6 +37,10 @@
 * **文件系统符号链接环路与边界防护**：在 `project.py` 的项目目录发现逻辑中，为 `entry.is_dir()` 显式加上 `follow_symlinks=False` 限制，防止因指向父级/同级的 Symlink 导致遍历死循环或重复扫描。
 * **配置与白名单持久化安全**：在 `config.py` 与 `whitelist.py` 的 `save_config` / `add_to_whitelist` / `remove_from_whitelist` 写入操作中补充 `try...except OSError` 防护，防止只读文件系统或权限不足引发未捕获异常。
 
+### 5. 可维护性 (Maintainability) 与代码卫生提升
+* **冗余死代理函数清理**：移除了 `UninstallManager._parse_size_to_bytes` 冗余代理方法，全项目统一收拢至 `file_ops.py` 的公共 `parse_size_to_bytes()` 函数，提炼代码卫生与执行效率。
+* **Guard Clause 扁平化重构**：在 `install.py` 的 PATH 挂载逻辑中使用 Guard Clause 提前 `continue` 剔除无效路径，将原本 7 层深度的嵌套重构降至 4 层，提升代码可读性。
+
 ---
 
 # Daily Modification Report - 2026-08-09

@@ -76,16 +76,18 @@ def run_install_link(silent=False):
             export_line = f'export PATH="{target_dir}:$PATH"'
 
         for config in shell_configs:
-            if config.exists():
-                try:
-                    content = config.read_text()
-                    if export_line not in content:
-                        with open(config, "a") as f:
-                            f.write(f"\n# Added by topo\n{export_line}\n")
-                        print(f"  {GREEN}✓{RESET} Added to {GRAY}{config.name}{RESET}")
-                        added = True
-                except OSError:
-                    pass
+            if not config.exists():
+                continue
+            try:
+                content = config.read_text()
+                if export_line in content:
+                    continue
+                with open(config, "a") as f:
+                    f.write(f"\n# Added by topo\n{export_line}\n")
+                print(f"  {GREEN}✓{RESET} Added to {GRAY}{config.name}{RESET}")
+                added = True
+            except OSError:
+                pass
 
         if added:
             print(f"\n {BOLD}Please restart your terminal or run:{RESET}")
