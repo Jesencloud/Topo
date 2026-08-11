@@ -3,6 +3,7 @@ import json
 import os
 import platform
 import shutil
+import stat
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -34,6 +35,7 @@ from .file_ops import (
 from .heavy_cache import get_analyze_cache_defs
 from .scan_cache import ScanCache
 from .system import run_command
+from .text import sanitize_for_display
 
 _ANALYZE_COMMAND_TIMEOUT = 300
 SCAN_SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
@@ -383,9 +385,12 @@ def _sudo_remove(path: Path) -> bool:
         target_path = raw_path.absolute()
 
     valid, reason = validate_path_for_deletion(target_path)
+    # These messages report a *security decision* about an attacker-controllable
+    # name, so the name must never be able to rewrite the line it is printed on.
+    safe_target = sanitize_for_display(str(target_path))
     if not valid:
         record_deletion_audit(target_path, "sudo-permanent", "rejected-validation")
-        print(f" {RED}✗{RESET} {target_path}: {reason}")
+        print(f" {RED}✗{RESET} {safe_target}: {reason}")
         return False
 
     if not target_path.exists() and not target_path.is_symlink():
@@ -393,8 +398,34 @@ def _sudo_remove(path: Path) -> bool:
         return False
 
     size_bytes = get_size_fast(target_path)
+    current_uid = os.getuid()
+    for parent in [target_path, *target_path.parents]:
+        safe_parent = sanitize_for_display(str(parent))
+        try:
+            st = parent.lstat()
+        except OSError:
+            record_deletion_audit(target_path, "sudo-permanent", "rejected-unreadable-ancestor")
+            print(f" {RED}✗{RESET} {safe_target}: cannot stat path component ({safe_parent})")
+            return False
+
+        if parent == target_path:
+            continue
+
+        if stat.S_ISLNK(st.st_mode):
+            record_deletion_audit(target_path, "sudo-permanent", "rejected-ancestor-symlink")
+            print(f" {RED}✗{RESET} {safe_target}: ancestor directory is a symlink ({safe_parent})")
+            return False
+
+        # Ancestor component must belong to root or current user, and cannot be writable by unprivileged group/others without sticky bit
+        if st.st_uid not in (0, current_uid) or (
+            (st.st_mode & 0o022) and not (st.st_mode & stat.S_ISVTX)
+        ):
+            record_deletion_audit(target_path, "sudo-permanent", "rejected-unsafe-ancestor")
+            print(f" {RED}✗{RESET} {safe_target}: untrusted ancestor directory ({safe_parent})")
+            return False
+
     res = run_command(
-        ["rm", "-rf", "--", str(target_path)],
+        ["rm", "-rf", "--one-file-system", "--", str(target_path)],
         use_sudo=True,
         capture=True,
         timeout=_ANALYZE_COMMAND_TIMEOUT,
@@ -429,12 +460,14 @@ def _safe_remove_analyze_path(path: Path) -> bool:
             if child_removed:
                 cleaned_child = True
             else:
-                print(f" {YELLOW}⚠{RESET} Skipped {child}: {child_reason}")
+                safe_child = sanitize_for_display(str(child))
+                print(f" {YELLOW}⚠{RESET} Skipped {safe_child}: {child_reason}")
 
     if cleaned_child:
         return True
 
-    print(f" {YELLOW}⚠{RESET} Skipped {Path(path).expanduser()}: {reason}")
+    safe_path = sanitize_for_display(str(Path(path).expanduser()))
+    print(f" {YELLOW}⚠{RESET} Skipped {safe_path}: {reason}")
     return False
 
 

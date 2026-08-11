@@ -36,6 +36,7 @@ from ..core.file_ops import (
 )
 from ..core.history import record_history_session
 from ..core.scan_cache import ScanCache
+from ..core.text import sanitize_for_display
 from ..core.whitelist import LINUX_USER_DATA_DIRS
 from ..ui.navigator import Navigator, UninstallPreviewSelector, UninstallSelector
 
@@ -1381,18 +1382,21 @@ def run_uninstall():
             has_apt = False
 
             for app, paths, _ in all_targets:
-                print(f"  {PURPLE}➔{RESET} Removing {BOLD}{app['name']}{RESET}...")
+                # `name` comes from a .desktop Name= field, so it is untrusted; these
+                # lists feed the summary lines only, never a filesystem operation.
+                safe_app_name = sanitize_for_display(str(app["name"]))
+                print(f"  {PURPLE}➔{RESET} Removing {BOLD}{safe_app_name}{RESET}...")
                 if app["type"] == "APT":
                     has_apt = True
                 result = manager.execute_uninstall(app, paths)
                 package_removed = bool(result.get("package_removed"))
                 paths_removed = any(ok for ok, _ in result.get("removed_paths", []))
                 if package_removed or paths_removed:
-                    removed_names.append(app["name"])
+                    removed_names.append(safe_app_name)
                     if package_removed:
                         total_freed_all += app["size_bytes"]
                 else:
-                    failed_names.append(app["name"])
+                    failed_names.append(safe_app_name)
 
             if has_apt and removed_names:
                 print(f"  {PURPLE}➔{RESET} Cleaning up orphaned dependencies...")

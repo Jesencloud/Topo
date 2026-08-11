@@ -49,16 +49,25 @@ def get_deletion_log_path() -> Path:
 
 
 def _sanitize_audit_field(value: str) -> str:
-    """Escape characters that could forge or corrupt a tab-separated log line.
-
-    A rejected deletion target may contain control characters (it can be
-    rejected *for* containing them), and that raw value is still logged. Without
-    escaping, an embedded newline would inject a forged audit record and a tab
-    would shift the column layout.
-    """
-    return (
-        value.replace("\\", "\\\\").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
-    )
+    """Escape control characters that could forge log lines or trigger ANSI injection when cat/less-ed."""
+    out = []
+    for ch in value:
+        code = ord(ch)
+        if ch == "\\":
+            out.append("\\\\")
+        elif (
+            code < 0x20
+            or code == 0x7F
+            or 0x80 <= code <= 0x9F
+            # U+2028/U+2029 are line breaks for str.splitlines(), so an unescaped
+            # one would split a single audit record across two parsed lines.
+            or 0x2028 <= code <= 0x202E
+            or 0x2066 <= code <= 0x2069
+        ):
+            out.append(f"\\x{code:02x}" if code <= 0xFF else f"\\u{code:04x}")
+        else:
+            out.append(ch)
+    return "".join(out)
 
 
 def record_deletion_audit(
@@ -284,6 +293,19 @@ def safe_remove(
         return True, "Dry run"
 
     try:
+        # Re-resolve to guard against TOCTOU symlink replacement for both trash & permanent branches
+        try:
+            re_resolved = raw_path.resolve(strict=False)
+        except OSError:
+            re_resolved = raw_path.absolute()
+        re_valid, re_reason = validate_path_for_deletion(
+            re_resolved,
+            allow_app_data_removal=allow_app_data_removal,
+        )
+        if not re_valid:
+            record_deletion_audit(raw_path, mode, "rejected-toctou")
+            return False, f"TOCTOU check failed: {re_reason}"
+
         if use_trash:
             if (
                 _which_cached("gio")
@@ -299,19 +321,6 @@ def safe_remove(
                 return True, "Moved to trash (trash-cli)"
             record_deletion_audit(raw_path, "trash", "trash-failed", size_bytes)
             return False, TRASH_UNAVAILABLE_REASON
-
-        # Re-resolve to guard against TOCTOU symlink replacement.
-        try:
-            re_resolved = raw_path.resolve(strict=False)
-        except OSError:
-            re_resolved = raw_path.absolute()
-        re_valid, re_reason = validate_path_for_deletion(
-            re_resolved,
-            allow_app_data_removal=allow_app_data_removal,
-        )
-        if not re_valid:
-            record_deletion_audit(raw_path, mode, "rejected-toctou")
-            return False, f"TOCTOU check failed: {re_reason}"
 
         if raw_path.is_dir() and not raw_path.is_symlink():
             shutil.rmtree(raw_path)

@@ -172,6 +172,23 @@ LINUX_HARD_PROTECTED_HOME_PATHS = [
     ".kube",
     ".docker",
     ".config/gh",
+    # Password managers & 2FA authenticators
+    ".config/Bitwarden",
+    ".config/1Password",
+    ".config/keepassxc",
+    ".config/KeePassXC",
+    ".local/share/keepassxc",
+    ".local/share/KeePassXC",
+    ".config/authy-desktop",
+    # Crypto wallets (non-recoverable private keys)
+    ".electrum",
+    ".config/Electrum",
+    ".config/Exodus",
+    ".config/Ledger Live",
+    ".config/Trezor",
+    # Cloud & Remote credentials
+    ".config/gcloud",
+    ".config/rclone",
 ]
 
 # Standard XDG user-data directories. Protected as DIRECTORIES (exact match

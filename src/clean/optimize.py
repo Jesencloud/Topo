@@ -24,6 +24,7 @@ from ..core.constants import (
 )
 from ..core.desktop_entry import get_desktop_exec_command
 from ..core.file_ops import (
+    TRASH_UNAVAILABLE_REASON,
     bytes_to_human,
     get_size,
     parse_size_from_text,
@@ -298,7 +299,11 @@ def run_autostart_cleanup(dry_run=False):
             )
             if is_zombie:
                 if not dry_run:
-                    desktop_file.unlink()
+                    ok, reason = safe_remove(desktop_file, use_trash=True)
+                    if not ok and reason == TRASH_UNAVAILABLE_REASON:
+                        ok, _ = safe_remove(desktop_file, use_trash=False)
+                    if not ok:
+                        continue
                 zombies += 1
         except OSError:
             continue

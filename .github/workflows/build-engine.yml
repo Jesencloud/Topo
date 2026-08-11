@@ -211,6 +211,7 @@ jobs:
           cp artifacts/topo-core-aarch64/topo-core-aarch64 release-assets/
           cp dist/packages/*.deb release-assets/
           cp dist/packages/*.rpm release-assets/
+          cp install.sh release-assets/
 
       - name: Generate Release Checksums
         shell: bash
@@ -221,6 +222,7 @@ jobs:
           sha256sum \
             topo-core-x86_64 \
             topo-core-aarch64 \
+            install.sh \
             *.deb \
             *.rpm \
             > SHA256SUMS

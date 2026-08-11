@@ -462,4 +462,4 @@ def test_sudo_remove_operates_on_resolved_path(test_env):
         assert _sudo_remove(link) is True
 
     # rm must target the resolved real directory, never the raw symlink path.
-    assert captured["cmd"] == ["rm", "-rf", "--", str(real_dir.resolve())]
+    assert captured["cmd"] == ["rm", "-rf", "--one-file-system", "--", str(real_dir.resolve())]

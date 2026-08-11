@@ -98,12 +98,14 @@ def test_ensure_sudo_session_treats_sigint_return_as_user_cancel():
 def test_setup_passwordless_sudo_uses_invoking_user(monkeypatch, capsys):
     monkeypatch.setenv("SUDO_USER", "realuser")
     monkeypatch.setenv("USER", "root")
-    monkeypatch.setattr("sys.argv", ["/home/realuser/.topo/topo"])
+    monkeypatch.setattr("sys.argv", ["/usr/bin/topo"])
 
-    setup_passwordless_sudo()
+    with patch("pathlib.Path.lstat") as mock_lstat:
+        mock_lstat.return_value = MagicMock(st_uid=0, st_mode=0o755)
+        setup_passwordless_sudo()
 
     out = capsys.readouterr().out
-    assert "realuser ALL=(ALL) NOPASSWD: /home/realuser/.topo/topo" in out
+    assert "realuser ALL=(ALL) NOPASSWD: /usr/bin/topo" in out
 
 
 def test_setup_passwordless_sudo_refuses_path_with_spaces(monkeypatch, capsys):
@@ -113,5 +115,5 @@ def test_setup_passwordless_sudo_refuses_path_with_spaces(monkeypatch, capsys):
     setup_passwordless_sudo()
 
     out = capsys.readouterr().out
+    assert "special characters or spaces" in out
     assert "NOPASSWD" not in out
-    assert "Could not generate a safe sudoers rule" in out

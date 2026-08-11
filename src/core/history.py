@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .file_ops import bytes_to_human, get_deletion_log_path, record_deletion_audit
+from .text import sanitize_for_display
 
 REMOVED_STATUSES = {"deleted", "removed"}
 TRASHED_PREFIXES = ("trashed",)
@@ -122,7 +123,7 @@ def render_history(sessions: list[HistorySession], limit: int = 10) -> str:
             f"size={bytes_to_human(session.total_size)}"
         )
         for event in session.events[-3:]:
-            lines.append(f"    {event.status:<20} {event.path}")
+            lines.append(f"    {event.status:<20} {sanitize_for_display(event.path)}")
     return "\n".join(lines)
 
 

@@ -27,6 +27,7 @@ from ..core.constants import (
     YELLOW,
 )
 from ..core.file_ops import bytes_to_human
+from ..core.text import sanitize_for_display
 
 ANSI_CSI_RE = re.compile("\x1b\\[[0-?]*[ -/]*[@-~]")
 SGR_MOUSE_RE = re.compile("\x1b\\[<(?P<button>\\d+);(?P<x>\\d+);(?P<y>\\d+)(?P<final>[mM])")
@@ -799,7 +800,7 @@ class AnalyzeSelector(_PagedSelector):
                     size_str = "--"
                 bar_str = f"{bar}  " if bar_w > 0 else ""
                 style = "\033[1;35m" if is_hover else ""
-                name_padded = pad_and_truncate(item["name"], name_w)
+                name_padded = pad_and_truncate(sanitize_for_display(item["name"]), name_w)
                 icon = item.get("icon", "🗂️")
                 icon_gap = "  " if icon == "🗂️" else " "
                 if is_hover:
@@ -836,7 +837,7 @@ class AnalyzeSelector(_PagedSelector):
                     item = self.items[idx]
                     icon = item.get("icon", "🗂️")
                     icon_gap = "  " if icon == "🗂️" else " "
-                    name_padded = pad_and_truncate(item["name"], 35)
+                    name_padded = pad_and_truncate(sanitize_for_display(item["name"]), 35)
                     line += f"   {THEME_TITLE}•{RESET} {icon}{icon_gap}{name_padded}"
                 buf.append(line + "\033[K\n")
 
@@ -968,7 +969,8 @@ class PaginatedSelector(_PagedSelector):
             cursor = "\033[1;35m>\033[0m" if is_hover else " "
             checkbox = "[\033[1;32m✓\033[0m]" if is_checked else "[ ]"
             style = PURPLE if is_hover else ""
-            name_padded = pad_and_truncate(item["project"], 20)
+            clean_proj = sanitize_for_display(item["project"])
+            name_padded = pad_and_truncate(clean_proj, 20)
             size_str = bytes_to_human(item["size"])
             if is_hover:
                 focus_line = _frame_line_count(buf)
@@ -1087,7 +1089,8 @@ class UninstallSelector(_PagedSelector):
                 )
                 name_style = PURPLE if is_hover else "\033[1;35m" if is_selected else ""
                 time_style = name_style
-                name_padded = pad_and_truncate(item["name"], 35)
+                clean_name = sanitize_for_display(item["name"])
+                name_padded = pad_and_truncate(clean_name, 35)
                 install_time = self._format_time_ago(item["install_time"])
                 if is_hover:
                     focus_line = _frame_line_count(buf)
@@ -1121,7 +1124,8 @@ class UninstallSelector(_PagedSelector):
                 pair = selected_names[i : i + 2]
                 line = ""
                 for name in pair:
-                    line += f"   {THEME_TITLE}•{RESET} {pad_and_truncate(name, 35)}"
+                    clean_n = sanitize_for_display(name)
+                    line += f"   {THEME_TITLE}•{RESET} {pad_and_truncate(clean_n, 35)}"
                 buf.append(line + "\033[K\n")
 
         buf.append("\033[J")
@@ -1292,8 +1296,9 @@ class TopFilesSelector:
             checkbox = "[\033[1;32m✓\033[0m]" if i in self.selected_items else "[ ]"
             if i == self.selected_index:
                 focus_line = _frame_line_count(buf)
+            clean_path = sanitize_for_display(str(item["path"]))
             buf.append(
-                f"{cursor} {checkbox} {WHITE}{bytes_to_human(item.get('size', item.get('size_bytes', 0))):>12}{RESET} | {str(item['path'])}\033[K\n"
+                f"{cursor} {checkbox} {WHITE}{bytes_to_human(item.get('size', item.get('size_bytes', 0))):>12}{RESET} | {clean_path}\033[K\n"
             )
         buf.append("\033[K\n")
         buf.append(
@@ -1306,7 +1311,8 @@ class TopFilesSelector:
                 pair = selected_indices[i : i + 2]
                 line = ""
                 for idx in pair:
-                    line += f"   {THEME_TITLE}•{RESET} 📄 {Path(self.items[idx]['path']).name}"
+                    clean_fname = sanitize_for_display(Path(self.items[idx]["path"]).name)
+                    line += f"   {THEME_TITLE}•{RESET} 📄 {clean_fname}"
                 buf.append(line + "\033[K\n")
 
         if self.confirming_delete:
@@ -1442,12 +1448,13 @@ class CleanSelector:
                 total_freed += item["size"]
             cursor = "\033[1;36m▶\033[0m" if is_hover else " "
             checkbox = "[\033[1;32m✓\033[0m]" if is_checked else "[ ]"
-            name_padded = pad_and_truncate(item["name"], 25)
+            clean_name = sanitize_for_display(item["name"])
+            name_padded = pad_and_truncate(clean_name, 25)
             size_str = bytes_to_human(item["size"]) if item["size"] > 0 else "Scan Result"
             if is_hover:
                 focus_line = _frame_line_count(buf)
             buf.append(
-                f"{cursor} {checkbox} \033[1;36m{name_padded}{RESET} |     {size_str:>12} | {GRAY}{item['desc']}{RESET}\033[K\n"
+                f"{cursor} {checkbox} \033[1;36m{name_padded}{RESET} |     {size_str:>12} | {GRAY}{sanitize_for_display(item['desc'])}{RESET}\033[K\n"
             )
         buf.append("\033[K\n")
         buf.append(f" Total Selected: \033[1;32m{bytes_to_human(total_freed)}\033[0m\033[K\n")

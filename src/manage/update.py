@@ -1,3 +1,4 @@
+import hmac
 import json
 import re
 import shutil
@@ -190,12 +191,11 @@ def _verify_release_signature(
     sha256sums_path: Path, signature_path: Path, public_key_path: Path
 ) -> bool:
     if not shutil.which("gpg"):
-        print(f" {YELLOW}⚠️  gpg not found; falling back to SHA256 verification only.{RESET}")
+        print(f" {RED}❌ gpg tool not found in system PATH. Refusing unverified update.{RESET}")
         print(
-            f" {GRAY}SHA256 detects download corruption but does not authenticate "
-            f"the release publisher. Install gnupg for signature verification.{RESET}"
+            f" {GRAY}Signature verification requires gnupg. Install 'gnupg' package or update manually.{RESET}"
         )
-        return True
+        return False
 
     gpg_home = sha256sums_path.parent / "gnupg"
     try:
@@ -385,19 +385,63 @@ def run_update():
     print(f" {YELLOW}⬆️  New version available: {remote_tag}{RESET}")
     print(f" {GRAY}Updating Topo from v{local_version} to {remote_tag}...{RESET}\n")
 
-    # 4. Download the release installer, then run it via `bash -s` stdin.
-    # No shell=True and no string interpolation into a command line: the tag is
-    # passed as a separate argv element, so a crafted tag cannot inject commands.
-    script_url = f"https://raw.githubusercontent.com/Jesencloud/Topo/{remote_tag}/install.sh"
-    try:
-        script = subprocess.check_output(["curl", "-fsSL", script_url], text=True, timeout=30)
-    except (OSError, subprocess.SubprocessError) as e:
-        print(f"\n {RED}❌ Failed to download installer: {e}{RESET}")
-        return
+    # 4. Verify release signature and SHA256 checksum for install.sh before execution
+    with TemporaryDirectory(prefix="topo_script_update_") as td:
+        tmp_dir = Path(td)
+        sums_path = tmp_dir / "SHA256SUMS"
+        sig_path = tmp_dir / "SHA256SUMS.asc"
 
-    # Sanity-check the payload before piping it into `bash`. The tag-pinned URL
-    # over HTTPS already fixes the content for an untampered repo; this refuses
-    # obviously-wrong bodies (CDN/error pages, truncated or empty downloads).
+        sums_url = f"https://github.com/Jesencloud/Topo/releases/download/{remote_tag}/SHA256SUMS"
+        sig_url = (
+            f"https://github.com/Jesencloud/Topo/releases/download/{remote_tag}/SHA256SUMS.asc"
+        )
+
+        try:
+            _download_file(sums_url, sums_path)
+            _download_file(sig_url, sig_path)
+            key_path = tmp_dir / RELEASE_KEY_ASSET_NAME
+            _download_file(
+                f"https://github.com/Jesencloud/Topo/releases/download/{remote_tag}/{RELEASE_KEY_ASSET_NAME}",
+                key_path,
+            )
+
+            if not _verify_release_signature(sums_path, sig_path, key_path):
+                print(
+                    f"\n {RED}❌ Release signature verification failed. Aborting script update.{RESET}"
+                )
+                return
+
+            sums_text = sums_path.read_text(encoding="utf-8")
+            expected_sha = None
+            for line in sums_text.splitlines():
+                parts = line.strip().split()
+                if len(parts) == 2 and parts[1].lstrip("*") == "install.sh":
+                    expected_sha = parts[0]
+                    break
+
+            if expected_sha is None:
+                print(
+                    f"\n {RED}❌ install.sh is not listed in the signed SHA256SUMS; aborting update.{RESET}"
+                )
+                return
+
+            script_url = (
+                f"https://raw.githubusercontent.com/Jesencloud/Topo/{remote_tag}/install.sh"
+            )
+            raw_bytes = subprocess.check_output(["curl", "-fsSL", script_url], timeout=30)
+            actual_sha = sha256(raw_bytes).hexdigest()
+
+            if not hmac.compare_digest(actual_sha.lower(), expected_sha.lower()):
+                print(
+                    f"\n {RED}❌ SHA256 checksum mismatch for install.sh; aborting update.{RESET}"
+                )
+                return
+
+            script = raw_bytes.decode("utf-8", errors="strict")
+        except (OSError, UnicodeDecodeError, subprocess.SubprocessError) as e:
+            print(f"\n {RED}❌ Failed to download signature/installer assets: {e}{RESET}")
+            return
+
     if not script.lstrip().startswith("#!"):
         print(f"\n {RED}❌ Downloaded installer is not a valid script; aborting update.{RESET}")
         return

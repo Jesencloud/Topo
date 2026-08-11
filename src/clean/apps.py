@@ -38,6 +38,7 @@ from ..core.file_ops import (
     safe_remove,
 )
 from ..core.system import run_command
+from ..core.text import sanitize_for_display
 
 
 def proactive_app_detection():
@@ -112,9 +113,10 @@ def proactive_app_detection():
 
 
 def clean_app_generic(name, paths, process_names=None, dry_run=False):
-    """Unified cleaner for any app with process safety."""
+    """Unified cleaner for any app with strict process safety."""
     if process_names and any(is_app_running(p) for p in process_names):
-        print(f"  {SKIP} {name} is running · cleanup skipped")
+        display_name = name.removesuffix(" Cache")
+        print(f"  {SKIP} {display_name} is active · cache cleanup skipped")
         return 0, 0
 
     total_freed = 0
@@ -224,7 +226,8 @@ def clean_generic_xdg_caches(days=CLEAN_CACHE_AGE_DAYS, dry_run=False):
                 total_size += s
                 total_items += 1
                 if not dry_run:
-                    print(f"  {OK} Tagged Cache: {item.name} ({bytes_to_human(s)})")
+                    safe_name = sanitize_for_display(item.name)
+                    print(f"  {OK} Tagged Cache: {safe_name} ({bytes_to_human(s)})")
 
         for candidate in find_xdg_cache_candidates(cache_root, days=days):
             item = candidate.path
@@ -236,7 +239,8 @@ def clean_generic_xdg_caches(days=CLEAN_CACHE_AGE_DAYS, dry_run=False):
                 total_size += s
                 total_items += i
                 if not dry_run:
-                    print(f"  {OK} {candidate.label}: {item.name} ({bytes_to_human(s)})")
+                    safe_name = sanitize_for_display(item.name)
+                    print(f"  {OK} {candidate.label}: {safe_name} ({bytes_to_human(s)})")
     except OSError:
         pass
     if dry_run and total_size > 0:
@@ -376,7 +380,8 @@ def clean_orphaned_remnants(dry_run=False, max_age_days=60):
                     total_size += s
                     total_items += 1
                     if not dry_run:
-                        msg = f"  {OK} Orphaned Cache Remnant: {item.name} ({bytes_to_human(s)})"
+                        safe_name = sanitize_for_display(item.name)
+                        msg = f"  {OK} Orphaned Cache Remnant: {safe_name} ({bytes_to_human(s)})"
                         print(msg)
     except OSError:
         pass
@@ -413,7 +418,8 @@ def clean_snap_cache(dry_run=False):
                     total_size += s
                     total_items += i
                     if not dry_run and s > 0:
-                        print(f"  {OK} Snap Cache: {app_dir.name} ({bytes_to_human(s)})")
+                        safe_name = sanitize_for_display(app_dir.name)
+                        print(f"  {OK} Snap Cache: {safe_name} ({bytes_to_human(s)})")
     except OSError:
         pass
 

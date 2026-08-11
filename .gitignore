@@ -53,3 +53,4 @@ settings.local.json
 # tach module graph
 tach_module_graph.dot
 tach.toml
+docs/SECURITY_*.md

@@ -32,6 +32,11 @@ else
     ruff check src tests
 fi
 mypy --check-untyped-defs src/
+if command -v tach &> /dev/null; then
+    tach check
+else
+    echo -e "${YELLOW}⚠️  tach not installed; module boundary check SKIPPED (pip install tach).${NC}"
+fi
 echo -e "${GREEN}✓ Python linting complete.${NC}\n"
 
 echo -e "${YELLOW}🦀 3. Running Rust Clippy...${NC}"

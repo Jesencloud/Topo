@@ -410,19 +410,29 @@ def test_clean_path_by_age(test_env):
 
 
 def test_record_deletion_audit_escapes_control_chars(test_env):
-    """Regression (L1): a rejected path containing newlines/tabs must not forge
-    extra audit records or shift the tab-separated column layout."""
+    """Regression (L1/N-4): a rejected path carrying newlines, tabs, ANSI escapes,
+    Unicode line separators or BiDi overrides must not forge extra audit records,
+    shift the tab-separated column layout, or reach the log raw."""
     from src.core.file_ops import record_deletion_audit
     from src.core.history import parse_deletion_history
 
     log_path = test_env / "state" / "topo" / "deletions.log"
     with patch.dict("os.environ", {"TOPO_DELETE_LOG": str(log_path)}):
-        record_deletion_audit("/tmp/evil\nFORGED\trow", "permanent", "rejected-validation")
+        record_deletion_audit(
+            "/tmp/evil\x1b[2K\nFORGED\trow\N{LINE SEPARATOR}LS\N{RIGHT-TO-LEFT OVERRIDE}RLO",
+            "permanent",
+            "rejected-validation",
+        )
 
     content = log_path.read_text()
     # The embedded newline is escaped, so the file holds exactly one record line.
     assert content.count("\n") == 1
-    assert "\\nFORGED" in content
+    assert "\\x1b[2K\\x0aFORGED\\x09row\\u2028LS\\u202eRLO" in content
+    # U+2028 is a line break for str.splitlines(), and U+202E flips the rendered
+    # order of the rest of the line, so neither may survive raw in the log.
+    assert "\N{LINE SEPARATOR}" not in content
+    assert "\N{RIGHT-TO-LEFT OVERRIDE}" not in content
+    assert len(content.splitlines()) == 1
     # The parser sees a single event, never a forged second one.
     sessions = parse_deletion_history(log_path)
     assert sum(len(s.events) for s in sessions) == 1

@@ -154,12 +154,12 @@ def test_verify_release_signature_falls_back_without_gpg(_mock_which, tmp_path, 
             tmp_path / "SHA256SUMS.asc",
             tmp_path / "topo-release-public.asc",
         )
-        is True
+        is False
     )
 
     output = capsys.readouterr().out
-    assert "falling back to SHA256 verification only" in output
-    assert "does not authenticate the release publisher" in output
+    assert "gpg tool not found" in output
+    assert "Refusing unverified update" in output
 
 
 @patch("src.manage.update.shutil.which", return_value="/usr/bin/gpg")
@@ -264,7 +264,7 @@ def test_run_update_downloads_and_installs_package_update(
     capsys,
 ):
     package_bytes = b"rpm package"
-    monkeypatch.setattr("src.manage.update.shutil.which", lambda _name: None)
+    monkeypatch.setattr("src.manage.update._verify_release_signature", lambda *a, **kw: True)
 
     def fake_download(_url, destination, timeout=60):
         if destination.name == "SHA256SUMS":
@@ -365,18 +365,26 @@ def test_run_update_does_not_install_when_remote_version_is_invalid(mock_check_o
     mock_run.assert_not_called()
 
 
+@patch("src.manage.update._verify_release_signature", return_value=True)
 @patch("src.manage.update.subprocess.run")
 @patch("src.manage.update.subprocess.check_output")
-def test_run_update_installs_only_when_remote_is_newer(mock_check_output, mock_run):
-    # 1st check_output fetches the release tag; 2nd downloads install.sh.
-    mock_check_output.side_effect = ['{"tag_name": "v999.0.0"}', "#!/usr/bin/env bash\n"]
-    mock_run.return_value = MagicMock(returncode=0)
+def test_run_update_installs_only_when_remote_is_newer(mock_check_output, mock_run, _mock_verify):
+    # 1st check_output fetches release tag; 2nd downloads install.sh.
+    script_content = "#!/usr/bin/env bash\n"
+    script_sha = sha256(script_content.encode()).hexdigest()
+    sums_content = f"{script_sha}  install.sh\n"
 
-    run_update()
+    def fake_download(url, destination, timeout=60):
+        if destination.name == "SHA256SUMS":
+            destination.write_text(sums_content)
+        else:
+            destination.write_bytes(b"sig")
 
-    # Installer downloaded for the resolved tag (curl invoked as an argv list).
-    download_argv = mock_check_output.call_args_list[1].args[0]
-    assert any("Topo/v999.0.0/install.sh" in part for part in download_argv)
+    with patch("src.manage.update._download_file", fake_download):
+        mock_check_output.side_effect = ['{"tag_name": "v999.0.0"}', script_content.encode("utf-8")]
+        mock_run.return_value = MagicMock(returncode=0)
+
+        run_update()
 
     # Executed without a shell, with the tag as a separate argv element.
     mock_run.assert_called_once()
@@ -397,16 +405,26 @@ def test_run_update_rejects_unsafe_tag(mock_check_output, mock_run):
     mock_run.assert_not_called()
 
 
+@patch("src.manage.update._verify_release_signature", return_value=True)
 @patch("src.manage.update.subprocess.run")
 @patch("src.manage.update.subprocess.check_output")
-def test_run_update_rejects_non_script_payload(mock_check_output, mock_run):
-    # L2: a downloaded "installer" that isn't a script (e.g. a CDN/error page or
-    # a truncated body) must never be piped into bash.
-    mock_check_output.side_effect = [
-        '{"tag_name": "v999.0.0"}',
-        "<html><body>503 Service Unavailable</body></html>",
-    ]
+def test_run_update_rejects_non_script_payload(mock_check_output, mock_run, _mock_verify):
+    non_script = "<html><body>503 Service Unavailable</body></html>"
+    non_script_sha = sha256(non_script.encode()).hexdigest()
+    sums_content = f"{non_script_sha}  install.sh\n"
 
-    run_update()
+    def fake_download(url, destination, timeout=60):
+        if destination.name == "SHA256SUMS":
+            destination.write_text(sums_content)
+        else:
+            destination.write_bytes(b"sig")
+
+    with patch("src.manage.update._download_file", fake_download):
+        mock_check_output.side_effect = [
+            '{"tag_name": "v999.0.0"}',
+            non_script.encode("utf-8"),
+        ]
+
+        run_update()
 
     mock_run.assert_not_called()

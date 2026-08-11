@@ -1,11 +1,16 @@
 import os
+import re
 import signal
 import subprocess
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from .constants import BOLD, CLEAR_LINE, ERASE_BELOW, RESET, YELLOW
+
+_SAFE_USERNAME_RE = re.compile(r"[a-z_][a-z0-9_-]{0,31}\$?\Z")
+_SAFE_SUDOERS_PATH_RE = re.compile(r"/[A-Za-z0-9._+/-]*\Z")
 
 # Global flag to track if user explicitly cancelled sudo auth
 SUDO_CANCELLED = False
@@ -150,17 +155,46 @@ def setup_passwordless_sudo():
     script_path = os.path.realpath(sys.argv[0])
 
     print(f"\n{BOLD}🛡️  Setup Passwordless Mode{RESET}")
-    # A sudoers NOPASSWD command path must be a single, unquoted token. Refuse to
-    # emit a rule for paths with spaces/quotes (or a bogus invoking user) rather
-    # than print one that is syntactically wrong or broader than intended.
-    if not user or user == "unknown" or " " in script_path or "'" in script_path:
+
+    if not user or user == "unknown" or not _SAFE_USERNAME_RE.match(user):
         print(
-            "Could not generate a safe sudoers rule for this install "
-            f"(user={user!r}, path={script_path!r})."
+            f"{YELLOW}⚠️  Could not determine a safe username; refusing to generate a sudoers rule.{RESET}"
+        )
+        return
+
+    if not _SAFE_SUDOERS_PATH_RE.match(script_path):
+        print(
+            f"{YELLOW}⚠️  Could not generate a safe sudoers rule for path with special characters or spaces: {script_path!r}{RESET}"
+        )
+        return
+
+    # Check if script is owned by root and not writable by non-root users
+    script_p = Path(script_path)
+    is_user_writable = False
+    for p in [script_p, *script_p.parents]:
+        try:
+            st = p.lstat()
+            if st.st_uid != 0 or (st.st_mode & 0o022):
+                is_user_writable = True
+                break
+        except OSError:
+            is_user_writable = True
+            break
+
+    if is_user_writable:
+        print(
+            f"{YELLOW}⚠️  Refusing NOPASSWD rule for script at {script_path}:{RESET}\n"
+            f"  This script is user-writable. Granting NOPASSWD to user-writable scripts allows local privilege escalation.\n"
+        )
+        print(
+            "To allow passwordless maintenance safely, grant NOPASSWD for specific binaries with strict parameters instead:"
+        )
+        print(
+            f"\n{YELLOW}echo '{user} ALL=(root) NOPASSWD: /usr/sbin/fstrim -a, /usr/bin/journalctl --vacuum-time=3d' | sudo tee /etc/sudoers.d/topo{RESET}\n"
         )
         return
 
     rule = f"{user} ALL=(ALL) NOPASSWD: {script_path}"
     print("To allow topo to run without ever asking for a password, run this command once:")
     print(f"\n{YELLOW}echo '{rule}' | sudo tee /etc/sudoers.d/topo{RESET}\n")
-    print("This will create a safe rule specifically for the topo script.")
+    print("This will create a specific rule for the system-installed topo binary.")

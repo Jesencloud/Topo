@@ -313,7 +313,16 @@ def _main():
         return
 
     # Commands requiring single-instance concurrency lock
-    LOCK_REQUIRED_COMMANDS = {"clean", "purge", "uninstall", "optimize", "all", "remove", None}
+    LOCK_REQUIRED_COMMANDS = {
+        "clean",
+        "purge",
+        "uninstall",
+        "optimize",
+        "all",
+        "remove",
+        "analyze",
+        None,
+    }
 
     if args.command in LOCK_REQUIRED_COMMANDS:
         with SingleInstanceLock():
