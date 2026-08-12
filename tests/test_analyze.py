@@ -1,4 +1,5 @@
 import json
+import stat
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -500,14 +501,10 @@ def test_needs_admin_for_deletion_rejects_non_home_path():
     assert _needs_admin_for_deletion(Path("/usr/share/topo-test")) is True
 
 
-def test_sudo_remove_operates_on_resolved_path(test_env):
-    """Regression (M1): the path validated must be the exact path handed to
-    `rm -rf`. Operate on the resolved path so a symlinked component cannot make
-    validation and deletion disagree (validate target A, delete target B)."""
-    real_dir = test_env / "real-target"
-    real_dir.mkdir()
-    link = test_env / "link-to-target"
-    link.symlink_to(real_dir)
+def test_sudo_remove_operates_on_resolved_root_managed_path():
+    """The validated object is the exact path handed to privileged rm."""
+    real_dir = Path("/var/tmp/topo-test-target")
+    link = Path("/var/tmp/topo-test-link")
 
     captured = {}
 
@@ -518,8 +515,30 @@ def test_sudo_remove_operates_on_resolved_path(test_env):
     with (
         patch("src.core.analyze.run_command", side_effect=fake_run),
         patch("src.core.analyze.get_size_fast", return_value=0),
+        patch("src.core.analyze.validate_path_for_deletion", return_value=(True, "")),
+        patch.object(
+            Path,
+            "lstat",
+            return_value=type("Stat", (), {"st_mode": stat.S_IFDIR | 0o755, "st_uid": 0})(),
+        ),
+        patch.object(Path, "exists", return_value=True),
+        patch.object(Path, "is_symlink", return_value=False),
+        patch.object(Path, "resolve", side_effect=lambda strict=False: real_dir),
     ):
         assert _sudo_remove(link) is True
 
     # rm must target the resolved real directory, never the raw symlink path.
-    assert captured["cmd"] == ["rm", "-rf", "--one-file-system", "--", str(real_dir.resolve())]
+    assert captured["cmd"] == ["rm", "-rf", "--one-file-system", "--", str(real_dir)]
+
+
+def test_sudo_remove_rejects_user_writable_ancestor(test_env):
+    target = test_env / "mutable-parent" / "target"
+    target.mkdir(parents=True)
+
+    with (
+        patch("src.core.analyze.run_command") as mock_run,
+        patch("src.core.analyze.get_size_fast", return_value=0),
+    ):
+        assert _sudo_remove(target) is False
+
+    mock_run.assert_not_called()

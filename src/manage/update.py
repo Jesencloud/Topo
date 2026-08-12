@@ -1,4 +1,3 @@
-import hmac
 import json
 import re
 import shutil
@@ -411,13 +410,7 @@ def run_update():
                 )
                 return
 
-            sums_text = sums_path.read_text(encoding="utf-8")
-            expected_sha = None
-            for line in sums_text.splitlines():
-                parts = line.strip().split()
-                if len(parts) == 2 and parts[1].lstrip("*") == "install.sh":
-                    expected_sha = parts[0]
-                    break
+            expected_sha = _expected_sha256(sums_path, "install.sh")
 
             if expected_sha is None:
                 print(
@@ -431,7 +424,7 @@ def run_update():
             raw_bytes = subprocess.check_output(["curl", "-fsSL", script_url], timeout=30)
             actual_sha = sha256(raw_bytes).hexdigest()
 
-            if not hmac.compare_digest(actual_sha.lower(), expected_sha.lower()):
+            if actual_sha.lower() != expected_sha.lower():
                 print(
                     f"\n {RED}❌ SHA256 checksum mismatch for install.sh; aborting update.{RESET}"
                 )

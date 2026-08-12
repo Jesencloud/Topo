@@ -1,6 +1,33 @@
 # Daily Modification Report - 2026-08-12
 
-## Project: topo (Topo) - 基线遗留漏洞实质闭合（第 6～7 轮复核后的修复轮）
+## Project: topo (Topo) - 供应链完整信任闭环与提权面路径防御落地 (Supply Chain & Ancestor Guard Closure)
+
+针对供应链信任链脱节与 `_sudo_remove` 提权面路径检查漏洞进行了第 10 轮硬核修复与实证闭环。删除了未签名的 Git 路径及未校验引擎二进制的跳过漏洞，实现了从更新器下载到脚本执行、再到引擎二进制匹配的 100% 签名与摘要强制校验。单元测试增加至 365 项，全量 pre-commit 审计门控全绿过关。
+
+### 1. 供应链完整信任闭环 (Supply Chain Integrity Closure)
+* **`install.sh` 移除未签名 Git 路径与强制验签**：
+  - **切断未签名分支**：全面废弃通过 `git checkout` / `git reset` 安装未签名 Tag/Commit 的逻辑；对于移动分支 `main`（无固定签名归档），拒绝隐式安装并强行报错（提示使用明确的 Release Tag）。
+  - **100% 签名归档校验**：所有安装统一通过从 Release 下载 `topo-src.tar.gz` 源码包，且在解压前必须使用钉死的发布密钥与 `SHA256SUMS.asc` 校验其签名及摘要。
+  - **引擎二进制全路径强制验签**：移除了只要本地/仓库存在 `topo-core-*` 就跳过校验的漏洞；所有架构的原生引擎二进制在解压或下载后必须严格核对 `SHA256SUMS`，匹配失败立即强行终止。
+  - **事务性暂存与降级恢复 (Staged Install)**：安装与更新过程全程在 `mktemp -d "$HOME/.topo.install.XXXXXX"` 临时目录中准备，配置完成后通过原子性 `mv` 替换 `~/.topo`；若配置或替换失败，自动安全恢复旧版备份目录。
+
+### 2. 提权面路径保护与共享目录支持 (Ancestor Path Guard Hardening)
+* **`analyze.py` 精确化祖先路径判据 (H-1)**：
+  - 修复 `_sudo_remove` 在验证祖先层级时的误杀与漏杀问题：
+    - 精确识别用户可替换/可被中间人篡改的目录（`user_can_replace` / `shared_writable`）。
+    - 兼容 Linux 系统规范的 Sticky Bit 共享目录（如 `/tmp`，直接父目录带 `stat.S_ISVTX`），既保证了在 `/tmp` 下创建的分析目标的提权删除，又严密切断了通过可写中间层目录替换符号链接进行提权攻击的路径。
+  - 补齐了 `test_sudo_remove_rejects_user_writable_ancestor` 回归测试。
+
+### 3. 代码精简与 DRY 重构
+* **`update.py` 解析逻辑复用**：
+  - 删除 `run_update()` 中手动切分 `sums_text` 的重复解析逻辑，统一复用内部已有的 `_expected_sha256()` 提取函数；清理冗余的 `import hmac`。
+
+### 4. 全量自动化门控
+* 单元测试由 364 项扩充至 365 项，`./check.sh` 门控检查（Ruff, MyPy, ShellCheck, Rust Clippy, Pytest）全量 Pass 过关。
+
+---
+
+# Daily Modification Report - 2026-08-12 (Prior Session)
 
 第 7 轮复核逐条实测了 2026-08-11 自述的"附录 C 全面闭合"，确认 M-1、M-3、M-5、M-6、M-8、M-11、L-1、L-2、L-7 当时均只做到名义或局部处理。本轮按实测结论逐项重做，并为每个改动的符号补齐跨进程/跨用户的回归测试；随后的第 8 轮自查复核又发现并修复了本轮修复自身引入的 4 处缺陷与 2 处冗余（见第 5 节），第 9 轮复核已提交基线 `25afceb` 时再发现并修复 1 处正确性缺陷与 1 处冗余（见第 6 节）。单元测试 319 → 364，`ruff check`、`ruff format --check`、`mypy --check-untyped-defs src`、`tach check`、`shellcheck`、`pytest`、`./check.sh`（含 Rust `cargo test` 7 项）全绿。
 

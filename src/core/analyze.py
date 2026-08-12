@@ -401,7 +401,8 @@ def _sudo_remove(path: Path) -> bool:
 
     size_bytes = get_size_fast(target_path)
     current_uid = os.getuid()
-    for parent in [target_path, *target_path.parents]:
+    ancestors = list(target_path.parents)
+    for index, parent in enumerate(ancestors):
         safe_parent = sanitize_for_display(str(parent))
         try:
             st = parent.lstat()
@@ -410,18 +411,21 @@ def _sudo_remove(path: Path) -> bool:
             print(f" {RED}✗{RESET} {safe_target}: cannot stat path component ({safe_parent})")
             return False
 
-        if parent == target_path:
-            continue
-
         if stat.S_ISLNK(st.st_mode):
             record_deletion_audit(target_path, "sudo-permanent", "rejected-ancestor-symlink")
             print(f" {RED}✗{RESET} {safe_target}: ancestor directory is a symlink ({safe_parent})")
             return False
 
-        # Ancestor component must belong to root or current user, and cannot be writable by unprivileged group/others without sticky bit
-        if st.st_uid not in (0, current_uid) or (
-            (st.st_mode & 0o022) and not (st.st_mode & stat.S_ISVTX)
-        ):
+        # `rm` receives a pathname, so every directory used to resolve that name
+        # must be immune to replacement by the invoking user until sudo opens it.
+        # A sticky shared directory is safe only for the final name directly
+        # below it: sticky semantics protect that entry, but not a user-owned
+        # directory nested below it.
+        user_can_replace = st.st_uid == current_uid and bool(st.st_mode & stat.S_IWUSR)
+        shared_writable = bool(st.st_mode & 0o022)
+        direct_sticky_parent = index == 0 and bool(st.st_mode & stat.S_ISVTX)
+        foreign_owner = st.st_uid not in (0, current_uid) and not direct_sticky_parent
+        if user_can_replace or (shared_writable and not direct_sticky_parent) or foreign_owner:
             record_deletion_audit(target_path, "sudo-permanent", "rejected-unsafe-ancestor")
             print(f" {RED}✗{RESET} {safe_target}: untrusted ancestor directory ({safe_parent})")
             return False

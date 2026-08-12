@@ -39,12 +39,10 @@ if [ "$MINIMAL" = false ]; then
     echo -e "${CYAN}☉ Checking prerequisites...${NC}"
 fi
 
-HAS_GIT=false
 if command -v git >/dev/null 2>&1; then
     if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓ git installed${NC}"; fi
-    HAS_GIT=true
 else
-    if [ "$MINIMAL" = false ]; then echo -e "  ${YELLOW}ℹ git not found, will use direct download fallback${NC}"; fi
+    if [ "$MINIMAL" = false ]; then echo -e "  ${YELLOW}ℹ git not found (signed release installation is unaffected)${NC}"; fi
 fi
 
 command -v python3 >/dev/null 2>&1 || { echo -e "  ${RED}✗ Error: python3 is required but not installed.${NC}"; exit 1; }
@@ -134,8 +132,6 @@ SUMS_FILE=""
 cleanup_verify_dir() {
     if [ -n "$VERIFY_DIR" ]; then rm -rf "$VERIFY_DIR"; fi
 }
-trap cleanup_verify_dir EXIT
-
 abort_verification() {
     echo -e "  ${RED}✗ ${1}${NC}" >&2
     echo -e "  ${GRAY}Refusing to install unverified files. Nothing was executed.${NC}" >&2
@@ -200,89 +196,42 @@ verify_release_file() {
     fi
 }
 
-checkout_target_ref() {
-    if [ "$TARGET_REF" = "main" ]; then
-        git fetch --quiet --depth 1 origin main
-        git reset --hard FETCH_HEAD --quiet
-    else
-        git fetch --quiet --depth 1 origin tag "$TARGET_REF"
-        git -c advice.detachedHead=false checkout --quiet "$TARGET_REF"
-        git reset --hard "$TARGET_REF" --quiet
-    fi
-}
-
-clone_target_ref() {
-    git clone --quiet --depth 1 "$REPO_URL" "$INSTALL_DIR"
-    cd "$INSTALL_DIR"
-    checkout_target_ref
-}
-
 # 2. Define paths
 INSTALL_DIR="$HOME/.topo"
-REPO_URL="https://github.com/Jesencloud/Topo.git"
-if [ "$TARGET_REF" = "main" ]; then
-    TARBALL_URL="https://github.com/Jesencloud/Topo/archive/refs/heads/main.tar.gz"
-else
-    TARBALL_URL="https://github.com/Jesencloud/Topo/archive/refs/tags/${TARGET_REF}.tar.gz"
-fi
+FINAL_INSTALL="$INSTALL_DIR"
 WAS_INSTALLED=false
+if [ -e "$INSTALL_DIR" ]; then WAS_INSTALLED=true; fi
+STAGED_INSTALL=""
+BACKUP_INSTALL=""
+
+cleanup_install_staging() {
+    if [ -n "$STAGED_INSTALL" ] && [ -d "$STAGED_INSTALL" ]; then rm -rf "$STAGED_INSTALL"; fi
+    if [ -n "$BACKUP_INSTALL" ] && [ -d "$BACKUP_INSTALL" ]; then
+        if [ -e "$FINAL_INSTALL" ]; then rm -rf "$FINAL_INSTALL"; fi
+        mv "$BACKUP_INSTALL" "$FINAL_INSTALL"
+    fi
+}
+trap 'cleanup_install_staging; cleanup_verify_dir' EXIT
 
 # 3. Clone or download source
 if [ "$MINIMAL" = false ]; then
     echo -e "\n${CYAN}☉ Fetching Topo...${NC}"
 fi
 
-if [ "$HAS_GIT" = true ]; then
-    if [ -d "$INSTALL_DIR" ]; then
-        WAS_INSTALLED=true
-        if [ "$MINIMAL" = false ]; then echo -e "  ${GRAY}↺ Updating Topo in ${INSTALL_DIR} (${TARGET_REF})...${NC}"; fi
-        cd "$INSTALL_DIR"
-        if [ -d ".git" ]; then
-            checkout_target_ref
-        else
-            if [ "$MINIMAL" = false ]; then echo -e "  ${YELLOW}⚠ Existing install is not a git checkout; reinstalling cleanly.${NC}"; fi
-            cd "$HOME"
-            rm -rf "$INSTALL_DIR"
-            clone_target_ref
-            WAS_INSTALLED=false
-        fi
-    else
-        if [ "$MINIMAL" = false ]; then echo -e "  ${GRAY}↓ Downloading Topo via Git (${TARGET_REF})...${NC}"; fi
-        clone_target_ref
-    fi
-else
-    if [ "$MINIMAL" = false ]; then echo -e "  ${GRAY}↓ Downloading Topo archive (${TARGET_REF})...${NC}"; fi
-    mkdir -p "$INSTALL_DIR"
-    # Land the archive on disk first: a `curl | tar` pipe can neither be verified
-    # nor detect truncation, and a partial stream leaves a half-extracted tree.
-    require_release_manifest
-    SRC_ARCHIVE="$VERIFY_DIR/topo-src.tar.gz"
-    # `--ref main` asks for the branch tip, which no release signs: the archive
-    # under releases/latest is a *different* revision, so downloading it would
-    # answer "install main" with the last tag. Only tags take the verified path.
-    if [ "$TARGET_REF" != "main" ] &&
-        curl -fsSL "$RELEASE_URL/topo-src.tar.gz" -o "$SRC_ARCHIVE" 2>/dev/null; then
-        verify_release_file "$SRC_ARCHIVE" "topo-src.tar.gz"
-        if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓ source archive checksum verified${NC}"; fi
-    elif [ "${TOPO_ALLOW_UNVERIFIED_SOURCE:-0}" = "1" ]; then
-        # The branch tip, and releases published before signed source archives existed.
-        echo -e "  ${YELLOW}⚠ No signed source archive exists for ${TARGET_REF};${NC}" >&2
-        echo -e "  ${YELLOW}  proceeding unverified because TOPO_ALLOW_UNVERIFIED_SOURCE=1.${NC}" >&2
-        curl -fsSL "$TARBALL_URL" -o "$SRC_ARCHIVE" ||
-            abort_verification "Could not download the Topo source archive."
-    else
-        echo -e "  ${RED}✗ No signed source archive (topo-src.tar.gz) exists for ${TARGET_REF}.${NC}" >&2
-        echo -e "  ${GRAY}Install git and re-run to use the verified git path:${NC}" >&2
-        echo -e "    ${BOLD}sudo apt install git${NC}  ${GRAY}(or dnf/pacman)${NC}" >&2
-        echo -e "  ${GRAY}To proceed without source verification anyway:${NC}" >&2
-        echo -e "    ${BOLD}TOPO_ALLOW_UNVERIFIED_SOURCE=1 bash install.sh${NC}" >&2
-        exit 1
-    fi
-    tar -xzC "$INSTALL_DIR" --strip-components=1 -f "$SRC_ARCHIVE"
-    rm -f "$SRC_ARCHIVE"
-    # Mark as non-git install for update logic
-    touch "$INSTALL_DIR/.non_git_install"
+if [ "$MINIMAL" = false ]; then echo -e "  ${GRAY}↓ Downloading signed source archive (${TARGET_REF})...${NC}"; fi
+require_release_manifest
+SRC_ARCHIVE="$VERIFY_DIR/topo-src.tar.gz"
+if [ "$TARGET_REF" = "main" ]; then
+    abort_verification "The moving main branch has no signed source archive; install a release tag."
 fi
+curl -fsSL "$RELEASE_URL/topo-src.tar.gz" -o "$SRC_ARCHIVE" ||
+    abort_verification "Could not download the signed Topo source archive."
+verify_release_file "$SRC_ARCHIVE" "topo-src.tar.gz"
+STAGED_INSTALL=$(mktemp -d "$HOME/.topo.install.XXXXXX")
+tar -xzC "$STAGED_INSTALL" --strip-components=1 -f "$SRC_ARCHIVE"
+touch "$STAGED_INSTALL/.non_git_install"
+INSTALL_DIR="$STAGED_INSTALL"
+if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓ source archive signature and checksum verified${NC}"; fi
 
 # 4. Clean up and provision binaries
 if [ "$MINIMAL" = false ]; then
@@ -351,6 +300,17 @@ rm -rf \
     topo-core/
 
 # 5. Run the linking script
+if [ -e "$FINAL_INSTALL" ]; then
+    BACKUP_INSTALL="$HOME/.topo.backup.$$"
+    mv "$FINAL_INSTALL" "$BACKUP_INSTALL"
+fi
+if ! mv "$STAGED_INSTALL" "$FINAL_INSTALL"; then
+    if [ -n "$BACKUP_INSTALL" ] && [ -d "$BACKUP_INSTALL" ]; then mv "$BACKUP_INSTALL" "$FINAL_INSTALL"; fi
+    abort_verification "Could not activate the verified installation."
+fi
+STAGED_INSTALL=""
+INSTALL_DIR="$FINAL_INSTALL"
+cd "$INSTALL_DIR"
 if [ "$MINIMAL" = false ]; then
     echo -e "\n${CYAN}☉ Configuring system...${NC}"
 fi
@@ -361,6 +321,12 @@ if [ "$WAS_INSTALLED" = true ]; then
     ./topo link --silent
 else
     ./topo link
+fi
+
+# Activation is only committed after the new executable has linked correctly.
+if [ -n "$BACKUP_INSTALL" ] && [ -d "$BACKUP_INSTALL" ]; then
+    rm -rf "$BACKUP_INSTALL"
+    BACKUP_INSTALL=""
 fi
 
 # OOTB PATH Fix: Offer immediate access via /usr/local/bin if not in PATH
