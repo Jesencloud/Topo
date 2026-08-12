@@ -289,7 +289,7 @@ def add_to_whitelist(path_str: str) -> bool:
         try:
             with open(get_whitelist_file(), "w") as f:
                 json.dump(current, f, indent=4)
-            get_hard_protection_reason_cached.cache_clear()
+            _clear_protection_caches()
             return True
         except OSError:
             return False
@@ -305,7 +305,7 @@ def remove_from_whitelist(path_str: str) -> bool:
         try:
             with open(get_whitelist_file(), "w") as f:
                 json.dump(current, f, indent=4)
-            get_hard_protection_reason_cached.cache_clear()
+            _clear_protection_caches()
             return True
         except OSError:
             return False
@@ -323,6 +323,31 @@ def _resolve_path_str(path_str: str) -> Path:
 
 def _resolve_path(path) -> Path:
     return _resolve_path_str(str(path))
+
+
+@functools.lru_cache(maxsize=8)
+def _compiled_home_protection_paths(
+    home_str: str,
+) -> tuple[frozenset[Path], tuple[Path, ...], tuple[Path, ...]]:
+    home = Path(home_str)
+    user_data = frozenset(_resolve_path(home / rel) for rel in LINUX_USER_DATA_DIRS)
+    hard_paths = tuple(_resolve_path(home / rel) for rel in LINUX_HARD_PROTECTED_HOME_PATHS)
+    sensitive_paths = tuple(
+        _resolve_path(home / rel) for rel in LINUX_PROTECTED_HOME_PATHS
+    ) + tuple(
+        _resolve_path(home / ".var/app" / app_id) for app_id in LINUX_PROTECTED_FLATPAK_APP_IDS
+    )
+    return user_data, hard_paths, sensitive_paths
+
+
+@functools.lru_cache(maxsize=1)
+def _compiled_whitelist_paths() -> tuple[Path, ...]:
+    return tuple(_resolve_path(path) for path in get_whitelist())
+
+
+def _clear_protection_caches() -> None:
+    _compiled_whitelist_paths.cache_clear()
+    get_hard_protection_reason_cached.cache_clear()
 
 
 def is_system_cleanable_content(path: Path) -> bool:
@@ -391,41 +416,25 @@ def get_hard_protection_reason_cached(path_str: str) -> str | None:
     # Protect standard XDG user-data directories themselves (exact match) from
     # every deletion context, including uninstall residue removal. Files *inside*
     # them remain deletable via Analyze, so this only blocks wiping the whole dir.
-    for rel in LINUX_USER_DATA_DIRS:
-        try:
-            user_dir = (home / rel).resolve()
-        except PATH_RESOLVE_ERRORS:
-            user_dir = (home / rel).absolute()
-        if path == user_dir:
-            return "user data directory"
+    user_data_dirs, protected_home_paths, _ = _compiled_home_protection_paths(str(home))
+    if path in user_data_dirs:
+        return "user data directory"
 
-    protected_home_paths = [home / rel for rel in LINUX_HARD_PROTECTED_HOME_PATHS]
-    for protected in protected_home_paths:
-        try:
-            prot_path = protected.expanduser().resolve()
-        except PATH_RESOLVE_ERRORS:
-            prot_path = protected.expanduser().absolute()
+    for prot_path in protected_home_paths:
         if path == prot_path or prot_path in path.parents:
             return "credential or identity data"
 
-    try:
-        topo_config = get_config_dir().resolve()
-        if path == topo_config or topo_config in path.parents:
-            return "Topo configuration"
+    topo_config = _resolve_path(get_config_dir())
+    if path == topo_config or topo_config in path.parents:
+        return "Topo configuration"
 
-        topo_root = get_install_root().resolve()
-        if path == topo_root or topo_root in path.parents:
-            return "Topo installation"
-    except PATH_RESOLVE_ERRORS:
-        pass
+    topo_root = _resolve_path(get_install_root())
+    if path == topo_root or topo_root in path.parents:
+        return "Topo installation"
 
-    for prot_str in get_whitelist():
-        try:
-            prot_path = Path(prot_str).expanduser().resolve()
-            if path == prot_path or prot_path in path.parents:
-                return "user whitelist"
-        except PATH_RESOLVE_ERRORS:
-            continue
+    for prot_path in _compiled_whitelist_paths():
+        if path == prot_path or prot_path in path.parents:
+            return "user whitelist"
     return None
 
 
@@ -478,14 +487,5 @@ def is_sensitive_linux_app_data(path: Path) -> bool:
     if home not in path.parents and path != home:
         return False
 
-    protected_paths = [home / rel for rel in LINUX_PROTECTED_HOME_PATHS]
-    protected_paths.extend(home / ".var/app" / app_id for app_id in LINUX_PROTECTED_FLATPAK_APP_IDS)
-
-    for protected in protected_paths:
-        try:
-            prot_path = protected.expanduser().resolve()
-        except PATH_RESOLVE_ERRORS:
-            prot_path = protected.expanduser().absolute()
-        if path == prot_path or prot_path in path.parents:
-            return True
-    return False
+    _, _, protected_paths = _compiled_home_protection_paths(str(home))
+    return any(path == prot_path or prot_path in path.parents for prot_path in protected_paths)

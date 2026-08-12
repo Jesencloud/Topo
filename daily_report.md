@@ -2,7 +2,7 @@
 
 ## Project: topo (Topo) - 高风险性能问题重构与磁盘 I/O 极速降频 (High-Risk & Medium-High Performance Fixes)
 
-针对 `docs/PERFORMANCE_EFFICIENCY_AUDIT_2026-08-12.md` 性能审查报告中指出的中高风险问题（§2.1 Analyze 重叠扫描、§2.2 应用残留重复遍历、§2.3 按年龄清理双重树遍历高风险、§2.4 ScanCache 无界内存改 LRU+64MiB 限制、§2.5 Rust `--tree` 模式效率与数据透传）完成了全量重构与优化。彻底消除了重叠目录二次扫描、应用残留搜索重复磁盘遍历、按年龄清理时的双重树读取以及 ScanCache LRU 缓存挤爆隐患，显著降低了系统 CPU 占用与磁盘 I/O 开销。单元测试增加至 382 项（Rust 测试 9 项），全量门控 `./check.sh` 100% 绿色过关。详情参见 `docs/PERFORMANCE_HIGH_RISK_FIXES_2026-08-12.md`。
+针对 `docs/PERFORMANCE_EFFICIENCY_AUDIT_2026-08-12.md` 性能审查报告中指出的中高风险问题（§2.1 Analyze 重叠扫描、§2.2 应用残留重复遍历、§2.3 按年龄清理双重树遍历高风险、§2.4 ScanCache 无界内存改 LRU+64MiB 限制、§2.5 Rust `--tree` 模式效率与数据透传）完成了全量重构与优化。彻底消除了重叠目录二次扫描、应用残留搜索重复磁盘遍历、按年龄清理时的双重树读取以及 ScanCache LRU 缓存挤爆隐患，显著降低了系统 CPU 占用与磁盘 I/O 开销。单元测试增加至 386 项（Rust 测试 9 项），全量门控 `./check.sh` 100% 绿色过关。详情参见 `docs/PERFORMANCE_HIGH_RISK_FIXES_2026-08-12.md`。
 
 ### 1. Analyze 重叠扫描与并发控制 (Analyze Overlapping Scan Deduplication)
 * **`analyze.py` & Rust Engine `--tree` 预热复用**：
@@ -30,7 +30,12 @@
   - 补齐根节点返回、MRU 缓存、超大根节点不缓存仍可返回、路径解析失败 fallback 以及 `test_parallel_scan_sizes_matches_symlinked_input_to_resolved_cache_key` 符号链接回归测试。
 
 ### 5. 自动化测试与质量门控
-* 单元测试增加至 382 项（Rust 测试 9 项），全面覆盖父子路径归并、`ScanCache` 复用、超大目录根结果独立返回与 MRU 刷新、符号链接 key 对齐、路径规范化 fallback、残余索引内存查找及 Rust `--stats` 单遍统计，`./check.sh` 门控全绿 Pass。
+* 单元测试增加至 386 项（Rust 测试 9 项），全面覆盖父子路径归并、`ScanCache` 复用、超大目录根结果独立返回与 MRU 刷新、符号链接 key 对齐、路径规范化 fallback、残余索引内存查找及 Rust `--stats` 单遍统计，`./check.sh` 门控全绿 Pass。
+
+### 6. 性能审查 2.6-2.9 修复
+* Project Purge 改为流式发现项目与消费大小结果，artifact 在扫描前完成去重和父子归并，磁盘扫描 worker 从 8 限制为 2；项目目录枚举不再物化完整 entries 列表。
+* System Optimization worker 全局限制为 4，单项任务失败会报告任务名和异常类型，不再静默吞掉。
+* 白名单、Home 静态保护规则和桌面应用缓存根改为按上下文编译缓存；whitelist 修改时统一清理相关缓存。
 
 ---
 

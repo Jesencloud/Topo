@@ -1,4 +1,6 @@
-from src.clean.project import Scanner
+from unittest.mock import patch
+
+from src.clean.project import PurgeManager, Scanner
 
 
 def test_scan_artifacts(test_env):
@@ -57,3 +59,26 @@ def test_scan_artifacts_bin_requires_dotnet_project(test_env):
     (dotnet / "bin").mkdir()
     dotnet_names = [p.name for p in scanner.scan_artifacts(dotnet)]
     assert "bin" in dotnet_names
+
+
+def test_run_scan_limits_size_workers_and_drops_nested_artifacts(test_env):
+    parent = test_env / "project/node_modules"
+    child = parent / "nested/target"
+    child.mkdir(parents=True)
+    manager = PurgeManager()
+    manager.scanner.scan_for_projects = lambda: iter([test_env / "project"])
+    manager.scanner.scan_artifacts = lambda _project: [child, parent]
+
+    with (
+        patch("src.clean.project.get_size_fast", return_value=10),
+        patch(
+            "src.clean.project.ThreadPoolExecutor",
+            wraps=__import__(
+                "concurrent.futures", fromlist=["ThreadPoolExecutor"]
+            ).ThreadPoolExecutor,
+        ) as executor,
+    ):
+        results = manager.run_scan()
+
+    executor.assert_called_once_with(max_workers=2)
+    assert [item["path"] for item in results] == [parent.resolve()]

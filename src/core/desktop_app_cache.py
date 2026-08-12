@@ -1,5 +1,6 @@
 """Shared desktop application cache definitions."""
 
+import functools
 from pathlib import Path
 
 DESKTOP_APP_DEFS: dict[str, dict[str, tuple[str, ...]]] = {
@@ -88,18 +89,23 @@ def get_desktop_app_cleanup_defs() -> dict[str, dict[str, tuple[Path, ...] | tup
     }
 
 
-def iter_desktop_app_cache_paths() -> tuple[Path, ...]:
+@functools.lru_cache(maxsize=8)
+def _resolved_desktop_app_cache_paths(home_str: str) -> tuple[Path, ...]:
+    home = Path(home_str)
     return tuple(
-        path
+        _resolve(home / path)
         for info in DESKTOP_APP_DEFS.values()
-        for path in _home_paths(info.get("cache_paths", ()))
+        for path in info.get("cache_paths", ())
     )
+
+
+def iter_desktop_app_cache_paths() -> tuple[Path, ...]:
+    return _resolved_desktop_app_cache_paths(str(_resolve(Path.home())))
 
 
 def is_desktop_app_cache_path(path: str | Path) -> bool:
     resolved_path = _resolve(path)
-    for cache_path in iter_desktop_app_cache_paths():
-        resolved_cache_path = _resolve(cache_path)
+    for resolved_cache_path in iter_desktop_app_cache_paths():
         if resolved_path == resolved_cache_path or resolved_cache_path in resolved_path.parents:
             return True
     return False

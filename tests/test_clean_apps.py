@@ -225,6 +225,17 @@ def test_desktop_app_cache_defs_resolve_home_dynamically(test_env):
     assert is_desktop_app_cache_path(test_env / "Documents/WeChat Files") is False
 
 
+def test_desktop_app_cache_paths_reuse_resolved_definitions(test_env):
+    from src.core.desktop_app_cache import _resolved_desktop_app_cache_paths
+
+    _resolved_desktop_app_cache_paths.cache_clear()
+    assert is_desktop_app_cache_path(test_env / ".cache/spotify/Data") is True
+    assert is_desktop_app_cache_path(test_env / ".config/discord/Cache/data") is True
+    info = _resolved_desktop_app_cache_paths.cache_info()
+    assert info.misses == 1
+    assert info.hits == 1
+
+
 def test_clean_apps_deep_keeps_wechat_user_data(test_env):
     wechat_cache = test_env / ".var/app/com.tencent.WeChat/cache"
     wechat_cache.mkdir(parents=True)

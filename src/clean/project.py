@@ -44,42 +44,53 @@ class Scanner:
 
             try:
                 with os.scandir(curr_path) as it:
-                    entries = list(it)
+                    is_root = False
+                    child_dirs: list[Path] = []
+                    for entry in it:
+                        if entry.name in MONOREPO_INDICATORS or entry.name in PROJECT_INDICATORS:
+                            is_root = True
+                        if curr_depth < max_depth and not entry.name.startswith("."):
+                            try:
+                                if entry.is_dir(follow_symlinks=False):
+                                    child_dirs.append(Path(entry.path))
+                            except OSError:
+                                continue
             except OSError:
                 continue
 
-            is_root = any(
-                entry.name in MONOREPO_INDICATORS or entry.name in PROJECT_INDICATORS
-                for entry in entries
-            )
             if is_root:
                 yield curr_path
 
             if curr_depth < max_depth:
-                for entry in reversed(entries):
-                    if entry.is_dir(follow_symlinks=False) and not entry.name.startswith("."):
-                        stack.append((Path(entry.path), curr_depth + 1))
+                for child in reversed(child_dirs):
+                    stack.append((child, curr_depth + 1))
 
     def scan_artifacts(self, project_path: Path) -> list[Path]:
         """Finds heavy artifacts within a discovered project root."""
         artifacts: list[Path] = []
         try:
             with os.scandir(project_path) as it:
-                entries = list(it)
+                has_dotnet_project = False
+                bin_artifact: Path | None = None
+                for entry in it:
+                    if entry.name.endswith((".csproj", ".sln", ".fsproj", ".vbproj")):
+                        has_dotnet_project = True
+                    if entry.name not in PURGE_TARGETS:
+                        continue
+                    try:
+                        if not entry.is_dir(follow_symlinks=False):
+                            continue
+                    except OSError:
+                        continue
+                    artifact = Path(entry.path)
+                    if entry.name == "bin":
+                        bin_artifact = artifact
+                    else:
+                        artifacts.append(artifact)
         except OSError:
             return artifacts
-        # "bin" is a build-output directory only for .NET projects; without this
-        # guard any project's bin/ (shell scripts, vendored binaries) would be
-        # treated as purgeable. Require a .NET project file alongside it.
-        has_dotnet_project = any(
-            entry.name.endswith((".csproj", ".sln", ".fsproj", ".vbproj")) for entry in entries
-        )
-        for entry in entries:
-            if not (entry.is_dir() and entry.name in PURGE_TARGETS):
-                continue
-            if entry.name == "bin" and not has_dotnet_project:
-                continue
-            artifacts.append(Path(entry.path))
+        if has_dotnet_project and bin_artifact is not None:
+            artifacts.append(bin_artifact)
         return artifacts
 
 
@@ -92,29 +103,30 @@ class PurgeManager:
         """Orchestrates the scanning process."""
         print("🔍 Scanning for projects and heavy artifacts...")
 
-        # 1. Discover projects
-        projects = list(self.scanner.scan_for_projects())
-
-        # 2. Find artifacts in projects
-        all_artifacts = []
-        seen_artifacts: set[str] = set()
-        for project in projects:
+        # Discover projects and retain only unique, non-overlapping artifacts.
+        all_artifacts: list[Path] = []
+        seen_artifacts: set[Path] = set()
+        for project in self.scanner.scan_for_projects():
             artifacts = self.scanner.scan_artifacts(project)
             for artifact in artifacts:
                 try:
-                    key = str(artifact.resolve())
-                except OSError:
-                    key = str(artifact)
-                if key not in seen_artifacts:
-                    seen_artifacts.add(key)
-                    all_artifacts.append(artifact)
+                    key = artifact.resolve()
+                except (OSError, RuntimeError):
+                    key = artifact.absolute()
+                if key in seen_artifacts or any(parent in seen_artifacts for parent in key.parents):
+                    continue
+                nested = {existing for existing in seen_artifacts if key in existing.parents}
+                if nested:
+                    seen_artifacts.difference_update(nested)
+                    all_artifacts = [item for item in all_artifacts if item not in nested]
+                seen_artifacts.add(key)
+                all_artifacts.append(key)
 
         if not all_artifacts:
             return []
 
         # 3. Calculate sizes in parallel
         print(f"📊 Found {len(all_artifacts)} potential targets. Calculating sizes...")
-        results = []
 
         def get_item_info(p):
             size = get_size_fast(p)
@@ -127,10 +139,11 @@ class PurgeManager:
                 }
             return None
 
-        with ThreadPoolExecutor(max_workers=8) as executor:
-            infos = list(executor.map(get_item_info, all_artifacts))
-
-        results = [i for i in infos if i]
+        results = []
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            for info in executor.map(get_item_info, all_artifacts):
+                if info:
+                    results.append(info)
         self.results = sorted(results, key=lambda x: x["size"], reverse=True)
         return self.results
 

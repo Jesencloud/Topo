@@ -41,6 +41,7 @@ SQLITE_MIN_FREE_RATIO = 0.10
 SQLITE_VACUUM_TIMEOUT = 20
 COREDUMP_DIR = Path("/var/lib/systemd/coredump")
 _MIN_RAM_SWAP_RATIO = 2
+OPTIMIZATION_MAX_WORKERS = 4
 
 
 def opt_log(message, success=True, skipped=False):
@@ -724,7 +725,8 @@ def optimize_system(dry_run: bool = False) -> bool | None:
     start_time = time.time()
     registered_tasks = OptimizationRegistry.tasks
 
-    with ThreadPoolExecutor(max_workers=max(len(registered_tasks), 1)) as executor:
+    worker_count = min(max(len(registered_tasks), 1), OPTIMIZATION_MAX_WORKERS)
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
         futures = {executor.submit(task, dry_run=dry_run): task for task in registered_tasks}
 
         for future in as_completed(futures):
@@ -732,10 +734,11 @@ def optimize_system(dry_run: bool = False) -> bool | None:
                 result = future.result()
                 if result:
                     opt_log(result, skipped=dry_run)
-            except Exception:
+            except Exception as exc:
                 # Optimization runs independent maintenance tasks concurrently; one
                 # task failure should not abort the rest of the batch.
-                pass
+                task = futures[future]
+                opt_log(f"{task.__name__} failed ({type(exc).__name__})", success=False)
 
     duration = time.time() - start_time
     print(f"\n{GREEN}{BOLD}✨ All tasks completed in {duration:.1f}s.{RESET}")

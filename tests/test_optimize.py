@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 from src.clean.optimize import (
     OptimizationRegistry,
     _points_at_transient_mount,
+    optimize_system,
     run_autostart_cleanup,
     run_broken_symlink_cleanup,
     run_coredump_cleanup,
@@ -35,6 +36,28 @@ def test_registered_optimization_tasks_are_runnable_entry_points():
     for task in tasks:
         assert task.__name__.startswith("run_"), task.__name__
         assert "dry_run" in inspect.signature(task).parameters, task.__name__
+
+
+def test_optimize_system_caps_worker_pool_and_reports_task_failures(capsys):
+    def failing_task(dry_run=False):
+        raise RuntimeError("failed")
+
+    tasks = [failing_task] * 6
+    with (
+        patch.object(OptimizationRegistry, "tasks", tasks),
+        patch("src.clean.optimize._authenticate_sudo_session", return_value=True),
+        patch(
+            "src.clean.optimize.ThreadPoolExecutor",
+            wraps=__import__(
+                "concurrent.futures", fromlist=["ThreadPoolExecutor"]
+            ).ThreadPoolExecutor,
+        ) as executor,
+    ):
+        optimize_system(dry_run=True)
+
+    executor.assert_called_once_with(max_workers=4)
+    output = capsys.readouterr().out
+    assert "failing_task failed (RuntimeError)" in output
 
 
 def test_run_systemd_user_service_cleanup_removes_broken_unit(test_env):

@@ -1,6 +1,8 @@
 import json
 
 from src.core.whitelist import (
+    _compiled_home_protection_paths,
+    _compiled_whitelist_paths,
     add_to_whitelist,
     get_whitelist,
     get_whitelist_file,
@@ -28,6 +30,22 @@ def test_whitelist_persistence(test_env):
     assert remove_from_whitelist(str(my_secure_folder)) is True
     assert is_protected(my_secure_folder) is False
     assert is_protected(child_file) is False
+
+
+def test_protection_rules_are_compiled_once_and_whitelist_changes_invalidate(test_env):
+    _compiled_home_protection_paths.cache_clear()
+    _compiled_whitelist_paths.cache_clear()
+
+    is_protected(test_env / ".ssh/key")
+    is_protected(test_env / ".gnupg/key")
+    assert _compiled_home_protection_paths.cache_info().misses == 1
+    assert _compiled_home_protection_paths.cache_info().hits >= 1
+
+    protected = test_env / "protected"
+    protected.mkdir()
+    assert add_to_whitelist(str(protected)) is True
+    assert _compiled_whitelist_paths.cache_info().currsize == 0
+    assert is_protected(protected / "child") is True
 
 
 def test_whitelist_normalization(test_env):
