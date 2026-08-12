@@ -5,6 +5,7 @@ use std::collections::{BinaryHeap, HashMap};
 use std::env;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+use std::time::UNIX_EPOCH;
 
 const DEFAULT_TREE_MIN_BYTES: u64 = 1_048_576; // 1 MiB
 const TOP_FILE_MIN_BYTES: u64 = 1_048_576; // 1 MiB; min size to enter the top-files list
@@ -32,6 +33,15 @@ struct DirAgg {
     total_size_bytes: u64,
     file_count: u64,
     subdirs: HashMap<String, u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    top_files: Vec<FileInfo>,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+struct PathStats {
+    total_size_bytes: u64,
+    file_count: u64,
+    newest_activity_secs: u64,
 }
 
 // Implement custom ordering to make BinaryHeap a Min-Heap for size_bytes
@@ -138,6 +148,7 @@ fn compute_single(root_path: &Path) -> ScanResult {
 /// no rescan.
 fn compute_tree(root_path: &Path) -> HashMap<String, DirAgg> {
     let mut dirs: HashMap<String, DirAgg> = HashMap::new();
+    let mut top_files_heap: BinaryHeap<FileInfo> = BinaryHeap::with_capacity(101);
     dirs.entry(".".to_string()).or_default(); // root always present
 
     walk_files(root_path, |path, size| {
@@ -153,6 +164,16 @@ fn compute_tree(root_path: &Path) -> HashMap<String, DirAgg> {
             return;
         }
         let n = comps.len();
+
+        if size > TOP_FILE_MIN_BYTES {
+            top_files_heap.push(FileInfo {
+                path: path.to_string_lossy().into_owned(),
+                size_bytes: size,
+            });
+            if top_files_heap.len() > 100 {
+                top_files_heap.pop();
+            }
+        }
 
         // Root "." gets the file's size/count, with comps[0] as its child.
         let root_agg = dirs.entry(".".to_string()).or_default();
@@ -179,6 +200,12 @@ fn compute_tree(root_path: &Path) -> HashMap<String, DirAgg> {
             *child = child.saturating_add(size);
         }
     });
+
+    let mut top_files = top_files_heap.into_sorted_vec();
+    top_files.reverse();
+    if let Some(root) = dirs.get_mut(".") {
+        root.top_files = top_files;
+    }
 
     dirs
 }
@@ -207,6 +234,47 @@ fn run_tree(root_path: &Path, min_bytes: u64) {
     }
 }
 
+fn compute_stats(root_path: &Path) -> PathStats {
+    let mut stats = PathStats::default();
+    let walker = WalkDir::new(root_path)
+        .skip_hidden(false)
+        .follow_links(false);
+    for entry in walker.into_iter().filter_map(|e| e.ok()) {
+        if entry.path() == root_path {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        for activity in [metadata.accessed(), metadata.modified()] {
+            if let Ok(secs) = activity
+                .and_then(|time| {
+                    time.duration_since(UNIX_EPOCH)
+                        .map_err(std::io::Error::other)
+                })
+                .map(|duration| duration.as_secs())
+            {
+                stats.newest_activity_secs = stats.newest_activity_secs.max(secs);
+            }
+        }
+        if entry.file_type.is_file() {
+            let size = metadata.len();
+            if size > 0 {
+                stats.total_size_bytes = stats.total_size_bytes.saturating_add(size);
+                stats.file_count = stats.file_count.saturating_add(1);
+            }
+        }
+    }
+    stats
+}
+
+fn run_stats(root_path: &Path) {
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    let _ = serde_json::to_writer(&mut out, &compute_stats(root_path));
+    println!();
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
@@ -215,7 +283,8 @@ fn main() {
     }
 
     let tree_mode = args[1] == "--tree";
-    let raw_root = if tree_mode {
+    let stats_mode = args[1] == "--stats";
+    let raw_root = if tree_mode || stats_mode {
         match args.get(2) {
             Some(p) => p,
             None => {
@@ -249,6 +318,8 @@ fn main() {
 
     if tree_mode {
         run_tree(&root_path, min_bytes);
+    } else if stats_mode {
+        run_stats(&root_path);
     } else {
         run_single(&root_path);
     }
@@ -384,5 +455,16 @@ mod tests {
         assert_eq!(r.file_count, 2);
         assert_eq!(r.subdirs["a"], 100);
         assert_eq!(r.subdirs["c.bin"], 50);
+    }
+
+    #[test]
+    fn stats_reports_size_and_activity() {
+        let dir = tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        write_file(&root.join("a/b.bin"), 100);
+        let stats = compute_stats(&root);
+        assert_eq!(stats.total_size_bytes, 100);
+        assert_eq!(stats.file_count, 1);
+        assert!(stats.newest_activity_secs > 0);
     }
 }

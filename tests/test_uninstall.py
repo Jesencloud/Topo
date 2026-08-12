@@ -125,6 +125,35 @@ def test_find_residue_paths(test_env):
         assert any("myapp" in str(p).lower() for p in paths)
 
 
+def test_residue_shared_indexes_are_scanned_once(test_env):
+    mgr = UninstallManager()
+    icon = test_env / ".local/share/icons/theme/myapp.png"
+    service = test_env / ".config/systemd/user/myapp.service"
+    hidden = test_env / ".myapp"
+    icon.parent.mkdir(parents=True)
+    service.parent.mkdir(parents=True)
+    hidden.mkdir()
+    icon.write_text("icon")
+    service.write_text("[Service]")
+
+    with patch("pathlib.Path.home", return_value=test_env):
+        index = mgr._pre_scan_search_roots()
+        with (
+            patch("pathlib.Path.rglob", side_effect=AssertionError("rescanned icons")),
+            patch("pathlib.Path.glob", side_effect=AssertionError("rescanned services")),
+            patch(
+                "src.clean.app_manager.os.scandir", side_effect=AssertionError("rescanned roots")
+            ),
+        ):
+            paths = mgr.find_residue_paths(
+                "com.example.myapp", "MyApp", "Flatpak", pre_scanned_entries=index
+            )
+
+    assert icon in paths
+    assert service in paths
+    assert hidden in paths
+
+
 def test_find_residue_paths_ignores_generic_short_tail_tokens(test_env):
     mgr = UninstallManager()
 

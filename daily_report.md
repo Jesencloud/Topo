@@ -1,5 +1,30 @@
 # Daily Modification Report - 2026-08-12
 
+## Project: topo (Topo) - 高风险性能问题重构与磁盘 I/O 极速降频 (High-Risk Performance Fixes)
+
+针对 `docs/PERFORMANCE_EFFICIENCY_AUDIT_2026-08-12.md` 性能审查报告中指出的 3 项高风险磁盘 I/O 与并发死角（发现 2.1、2.2、2.3）完成了全量重构与优化。彻底消除了重叠目录二次扫描、应用残留搜索重复磁盘遍历以及按年龄清理时的双重树读取，显著降低了系统 CPU 占用与磁盘 I/O 开销。单元测试增加至 374 项（Rust 测试 8 项），全量门控 `./check.sh` 100% 绿色过关。详情参见 `docs/PERFORMANCE_HIGH_RISK_FIXES_2026-08-12.md`。
+
+### 1. Analyze 重叠扫描与并发控制 (Analyze Overlapping Scan Deduplication)
+* **`analyze.py` & Rust Engine `--tree` 预热复用**：
+  - 根视图使用 Rust `--tree` 模式对 Home 进行一次性遍历，将大型后代目录（如 `~/.cache/*`、模型/容器等）及尺寸预热播种进 `ScanCache`。
+  - 引入五阶去重调度（路径去重、父路径已调度则归并子路径、已在 `ScanCache` 命中直接复用大小、未覆盖的大目录调度独立 tree 扫描、未覆盖的小目录按需补扫），彻底消除嵌套目录（如 `~` 与 `~/.cache/huggingface/hub`）的二次重复扫描。
+  - 完整磁盘扫描并发上限由 8 降为 2，避免极高并发导致磁盘 I/O 阻塞与 CPU 抖动。
+
+### 2. 应用残留共享索引 (App Residue Search Root Pre-indexing)
+* **`app_manager.py` 共享只读内存索引**：
+  - 在全量应用扫描开启前（`_pre_scan_search_roots()`），一次性预建立 XDG 根目录、`icons`、`pixmaps`、`systemd user services` 及 Home 顶层隐藏目录的内存索引。
+  - 应用残留匹配在内存中高速匹配，复杂度由“应用数 × 共享目录文件数”降为 O(1) 内存查找；同时保留未传入索引时的磁盘扫描 fallback 兼容。
+
+### 3. 按年龄清理单遍统计 (Single-Pass Age Cleanup Stats)
+* **`file_ops.py` & Rust Engine `--stats` 模式**：
+  - 扩展 Rust 引擎支持 `--stats` 模式，一次性返回总大小、非零文件数及后代条目最大活动时间。
+  - `clean_path_by_age()` 只需一次磁盘遍历，全陈旧目录直接复用返回的大小并交给 `safe_remove(known_size_bytes=...)`，消除了先前“先活动性检查、再完整算大小”的双重遍历开销。
+
+### 4. 自动化测试与质量门控
+* 单元测试由 366 项扩展至 374 项（Rust 测试 8 项），全面覆盖父子路径归并、`ScanCache` 复用、残余索引内存查找与 Rust `--stats` 单遍统计，`./check.sh` 门控全绿 Pass。
+
+---
+
 ## Project: topo (Topo) - 供应链完整信任闭环与提权面路径防御落地 (Supply Chain & Ancestor Guard Closure)
 
 针对供应链信任链脱节与 `_sudo_remove` 提权面路径检查漏洞进行了第 10 轮硬核修复与实证闭环。删除了未签名的 Git 路径及未校验引擎二进制的跳过漏洞，实现了从更新器下载到脚本执行、再到引擎二进制匹配的 100% 签名与摘要强制校验。单元测试增加至 365 项，全量 pre-commit 审计门控全绿过关。

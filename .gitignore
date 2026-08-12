@@ -53,5 +53,6 @@ settings.local.json
 # tach module graph
 tach_module_graph.dot
 tach.toml
-docs/SECURITY_*.md
+docs/Security_audit*
+docs/PERFORMANCE_*
 proxy.mjs

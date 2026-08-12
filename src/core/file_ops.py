@@ -463,6 +463,25 @@ def _has_recent_content(path: Path, cutoff: float) -> bool:
     return False
 
 
+def _get_path_stats(path: Path) -> dict[str, Any] | None:
+    """Return size and newest activity from one Rust traversal."""
+    from .analyze import _get_core_binary
+
+    binary = _get_core_binary()
+    if binary is None:
+        return None
+    result = run_command([str(binary), "--stats", str(path)], capture=True, timeout=300)
+    if not result.ok:
+        return None
+    try:
+        import json
+
+        data = json.loads(result.stdout)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def clean_path_by_age(path: str | Path, days: int, dry_run: bool = False) -> tuple[int, int]:
     """Cleans items within a path that haven't been touched in 'days' days."""
     path = Path(path).expanduser()
@@ -491,10 +510,18 @@ def clean_path_by_age(path: str | Path, days: int, dry_run: bool = False) -> tup
         if st.st_atime >= cutoff or st.st_mtime >= cutoff:
             continue
         item = Path(entry.path)
-        # For directories, verify no nested file is still active before removal.
-        if entry.is_dir(follow_symlinks=False) and _has_recent_content(item, cutoff):
-            continue
-        size = get_size_fast(item)
+        if entry.is_dir(follow_symlinks=False):
+            stats = _get_path_stats(item)
+            if stats is not None:
+                if float(stats.get("newest_activity_secs", 0)) >= cutoff:
+                    continue
+                size = _coerce_non_negative_size(stats.get("total_size_bytes")) or 0
+            else:
+                if _has_recent_content(item, cutoff):
+                    continue
+                size = get_size_fast(item)
+        else:
+            size = st.st_size
         if dry_run:
             safe_remove(item, use_trash=False, dry_run=True, known_size_bytes=size)
             total_size += size

@@ -966,6 +966,32 @@ class UninstallManager:
                     pre_scanned_entries[root] = entries
                 except OSError:
                     pass
+        for icon_root in (
+            home_path / ".local/share/icons",
+            home_path / ".local/share/pixmaps",
+        ):
+            if not icon_root.exists():
+                continue
+            entries = []
+            with contextlib.suppress(OSError):
+                for icon_file in icon_root.rglob("*"):
+                    if icon_file.is_file():
+                        entries.append((icon_file.name.lower(), icon_file))
+            pre_scanned_entries[icon_root] = entries
+
+        service_root = home_path / ".config/systemd/user"
+        if service_root.exists():
+            with contextlib.suppress(OSError):
+                pre_scanned_entries[service_root] = [
+                    (service.name.lower(), service) for service in service_root.glob("*.service")
+                ]
+
+        with contextlib.suppress(OSError), os.scandir(home_path) as home_entries:
+            pre_scanned_entries[home_path] = [
+                (entry.name.lower(), Path(entry.path))
+                for entry in home_entries
+                if entry.is_dir(follow_symlinks=False) and entry.name.startswith(".")
+            ]
         return pre_scanned_entries
 
     def _calculate_app_sizes_and_residues(
@@ -978,11 +1004,11 @@ class UninstallManager:
                 app["id"], app["name"], app["type"], pre_scanned_entries=pre_scanned_entries
             )
             inst_dir_val = app.get("install_dir")
-            target_inst_dir: Path | None = Path(inst_dir_val) if inst_dir_val else None
+            target_inst_dir: Path | None = Path(inst_dir_val).resolve() if inst_dir_val else None
             filtered_residue_paths = [
                 p
                 for p in residue_paths
-                if target_inst_dir is None or Path(p).resolve() != target_inst_dir.resolve()
+                if target_inst_dir is None or Path(p).resolve() != target_inst_dir
             ]
 
             residue_size = sum(get_size_fast(p) for p in filtered_residue_paths)
@@ -1127,30 +1153,39 @@ class UninstallManager:
         for icon_root in icon_roots:
             if not icon_root.exists():
                 continue
-            with contextlib.suppress(OSError):
-                for icon_file in icon_root.rglob("*"):
-                    if not icon_file.is_file():
-                        continue
-                    file_lower = icon_file.name.lower()
-                    if (
-                        any(self._name_matches(file_lower, t) for t in targets)
-                        and str(icon_file) not in seen
-                    ):
-                        paths.append(icon_file)
-                        seen.add(str(icon_file))
+            indexed_icons = pre_scanned_entries.get(icon_root) if pre_scanned_entries else None
+            if indexed_icons is None:
+                with contextlib.suppress(OSError):
+                    indexed_icons = [
+                        (icon.name.lower(), icon) for icon in icon_root.rglob("*") if icon.is_file()
+                    ]
+            for file_lower, icon_file in indexed_icons or []:
+                if (
+                    any(self._name_matches(file_lower, t) for t in targets)
+                    and str(icon_file) not in seen
+                ):
+                    paths.append(icon_file)
+                    seen.add(str(icon_file))
 
         # 6. Systemd User Services (~/.config/systemd/user/)
         systemd_user_dir = home_path / ".config/systemd/user"
         if systemd_user_dir.exists():
-            with contextlib.suppress(OSError):
-                for service_file in systemd_user_dir.glob("*.service"):
-                    file_lower = service_file.name.lower()
-                    if (
-                        any(self._name_matches(file_lower, t) for t in targets)
-                        and str(service_file) not in seen
-                    ):
-                        paths.append(service_file)
-                        seen.add(str(service_file))
+            indexed_services = (
+                pre_scanned_entries.get(systemd_user_dir) if pre_scanned_entries else None
+            )
+            if indexed_services is None:
+                with contextlib.suppress(OSError):
+                    indexed_services = [
+                        (service.name.lower(), service)
+                        for service in systemd_user_dir.glob("*.service")
+                    ]
+            for file_lower, service_file in indexed_services or []:
+                if (
+                    any(self._name_matches(file_lower, t) for t in targets)
+                    and str(service_file) not in seen
+                ):
+                    paths.append(service_file)
+                    seen.add(str(service_file))
 
         # 7. Wine prefix check (optional, if wechat/etc)
         if "wechat" in app_name.lower():
@@ -1168,24 +1203,27 @@ class UninstallManager:
         # dirs are excluded too (defence in depth; they are visible anyway).
         if len(app_name) > 3:
             protected_dir_names = {d.lower() for d in LINUX_USER_DATA_DIRS}
-            try:
-                # Only scan top-level dirs in home for speed/safety
-                with os.scandir(home_path) as it:
-                    for entry in it:
-                        if not entry.is_dir() or not entry.name.startswith("."):
-                            continue
-                        entry_lower = entry.name.lower()
-                        if entry_lower in protected_dir_names:
-                            continue
-                        if (
-                            self._name_matches(entry_lower, app_name.lower())
-                            and str(entry.path) not in seen
-                            and home_path in Path(entry.path).parents
-                        ):
-                            paths.append(Path(entry.path))
-                            seen.add(str(entry.path))
-            except OSError:
-                pass
+            indexed_home = pre_scanned_entries.get(home_path) if pre_scanned_entries else None
+            if indexed_home is None:
+                try:
+                    with os.scandir(home_path) as it:
+                        indexed_home = [
+                            (entry.name.lower(), Path(entry.path))
+                            for entry in it
+                            if entry.is_dir(follow_symlinks=False) and entry.name.startswith(".")
+                        ]
+                except OSError:
+                    indexed_home = []
+            for entry_lower, entry_path in indexed_home:
+                if entry_lower in protected_dir_names:
+                    continue
+                if (
+                    self._name_matches(entry_lower, app_name.lower())
+                    and str(entry_path) not in seen
+                    and home_path in entry_path.parents
+                ):
+                    paths.append(entry_path)
+                    seen.add(str(entry_path))
 
         return paths
 

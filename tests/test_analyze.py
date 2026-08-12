@@ -9,6 +9,7 @@ from src.core.analyze import (
     _direct_child_count_exceeds,
     _explore_notice,
     _needs_admin_for_deletion,
+    _parallel_scan_sizes,
     _permanent_fallback_consent,
     _render_scan_header,
     _scan_status_message,
@@ -19,6 +20,7 @@ from src.core.analyze import (
     build_linux_insights,
     get_fast_explore_data,
     get_rust_scan_data,
+    get_rust_tree_data,
     run_deep_analysis,
 )
 from src.core.file_ops import CACHEDIR_TAG_SIGNATURE, has_valid_cachedir_tag
@@ -57,6 +59,71 @@ def test_get_rust_scan_data_success(mock_run):
         assert result == mock_data
         # Verify it was cached
         assert ScanCache.get(Path("/home/user")) == mock_data
+
+
+def test_get_rust_tree_data_seeds_descendant_cache():
+    root = Path("/home/user")
+    payload = {
+        ".": {"total_size_bytes": 30, "file_count": 2, "subdirs": {"cache": 20}},
+        "cache": {"total_size_bytes": 20, "file_count": 1, "subdirs": {"x": 20}},
+    }
+    ScanCache.clear()
+    with (
+        patch("src.core.analyze._get_core_binary", return_value=Path("/tmp/topo-core")),
+        patch(
+            "src.core.analyze.run_command",
+            return_value=MagicMock(ok=True, stdout=json.dumps(payload)),
+        ),
+    ):
+        data = get_rust_tree_data(root)
+
+    assert data["total_size_bytes"] == 30
+    assert ScanCache.get(root / "cache")["total_size_bytes"] == 20
+
+
+def test_parallel_scan_sizes_collapses_nested_roots_and_limits_workers():
+    ScanCache.clear()
+    root = Path("/home/user")
+    child = root / ".cache/models"
+    other = Path("/usr")
+    scanned = []
+
+    def fake_tree(path):
+        scanned.append(path)
+        ScanCache.set(path, {"total_size_bytes": 100})
+        if path == root:
+            ScanCache.set(child, {"total_size_bytes": 25})
+
+    with patch("src.core.analyze.get_rust_tree_data", side_effect=fake_tree):
+        sizes = _parallel_scan_sizes([root, child, other, child])
+
+    assert scanned == [root, other]
+    assert sizes == {root: 100, child: 25, other: 100}
+
+
+def test_parallel_scan_sizes_reuses_pre_seeded_descendants():
+    """Descendants already seeded in ScanCache (e.g. by the root-view Home tree
+    scan) must not be tree-scanned a second time here."""
+    home = Path("/home/user")
+    hub = home / ".cache/huggingface/hub"
+    models = home / ".ollama/models"
+    other = Path("/usr")
+    # Simulate the root-view Home tree scan having already seeded large descendants.
+    ScanCache.clear()
+    ScanCache.set(hub, {"total_size_bytes": 500})
+    ScanCache.set(models, {"total_size_bytes": 300})
+    scanned = []
+
+    def fake_tree(path):
+        scanned.append(path)
+        ScanCache.set(path, {"total_size_bytes": 100})
+
+    with patch("src.core.analyze.get_rust_tree_data", side_effect=fake_tree):
+        sizes = _parallel_scan_sizes([other, hub, models])
+
+    # hub and models are cache hits -> only /usr is scanned.
+    assert scanned == [other]
+    assert sizes == {other: 100, hub: 500, models: 300}
 
 
 def test_has_valid_cachedir_tag(test_env):
@@ -250,16 +317,16 @@ def test_wide_cache_directory_uses_fast_explore_not_rust(
 
 @patch("src.core.analyze.AnalyzeSelector")
 @patch("src.core.analyze._parallel_scan_sizes")
-@patch("src.core.analyze._get_rust_scan_data_with_spinner")
-def test_root_view_still_uses_single_scan(mock_single, mock_parallel, mock_selector, test_env):
+@patch("src.core.analyze.get_rust_tree_data")
+def test_root_view_uses_tree_scan(mock_tree, mock_parallel, mock_selector, test_env):
     ScanCache.clear()
-    mock_single.return_value = {"total_size_bytes": 1000, "subdirs": {}, "top_files": []}
+    mock_tree.return_value = {"total_size_bytes": 1000, "subdirs": {}, "top_files": []}
     mock_parallel.return_value = {}
     mock_selector.return_value.run.side_effect = [("QUIT", None)]
 
     run_deep_analysis()  # no target_path -> root view (current_target is None)
 
-    mock_single.assert_called_once()
+    mock_tree.assert_called_once_with(test_env)
 
 
 @patch("src.core.analyze.SCAN_SPINNER_DELAY", 5.0)

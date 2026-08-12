@@ -617,6 +617,32 @@ def test_clean_path_by_age(test_env):
         assert items == 0
 
 
+def test_clean_path_by_age_uses_single_stats_scan_for_old_directory(test_env):
+    cache_dir = test_env / "cache-stats"
+    old_dir = cache_dir / "old"
+    old_dir.mkdir(parents=True)
+    (old_dir / "payload").write_bytes(b"data")
+    old_time = time.time() - 20 * 86400
+    os.utime(old_dir, (old_time, old_time))
+
+    with (
+        patch(
+            "src.core.file_ops._get_path_stats",
+            return_value={"total_size_bytes": 4, "newest_activity_secs": old_time},
+        ) as stats,
+        patch("src.core.file_ops._has_recent_content") as recent,
+        patch("src.core.file_ops.get_size_fast") as size_scan,
+        patch("src.core.file_ops.safe_remove", return_value=(True, "ok")) as remove,
+    ):
+        size, count = clean_path_by_age(cache_dir, days=10)
+
+    assert (size, count) == (4, 1)
+    stats.assert_called_once_with(old_dir)
+    recent.assert_not_called()
+    size_scan.assert_not_called()
+    assert remove.call_args.kwargs["known_size_bytes"] == 4
+
+
 def test_record_deletion_audit_escapes_control_chars(test_env):
     """Regression (L1/N-4): a rejected path carrying newlines, tabs, ANSI escapes,
     Unicode line separators or BiDi overrides must not forge extra audit records,

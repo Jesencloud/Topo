@@ -56,4 +56,4 @@ pytest -q
 cargo test --manifest-path topo-core/Cargo.toml
 echo -e "${GREEN}✓ All tests passed.${NC}\n"
 
-echo -e "${GREEN}✅ All checks passed successfully! You are ready to git add & commit.${NC}"
+echo -e "${GREEN}✅ All checks passed successfully! 🎉 ${NC}"

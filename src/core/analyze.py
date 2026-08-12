@@ -70,7 +70,7 @@ def _get_core_binary() -> Path | None:
     return None
 
 
-def get_rust_scan_data(path: Path) -> dict[str, Any] | None:
+def get_rust_scan_data(path: Path, *, use_cache: bool = True) -> dict[str, Any] | None:
     """Calls the architecture-specific topo-core binary and returns parsed JSON."""
     binary = _get_core_binary()
     if binary is None:
@@ -78,7 +78,7 @@ def get_rust_scan_data(path: Path) -> dict[str, Any] | None:
 
     # Check cache first
     cached = ScanCache.get(path)
-    if cached:
+    if use_cache and cached:
         return cached
 
     res = run_command([str(binary), str(path)], capture=True, timeout=_ANALYZE_COMMAND_TIMEOUT)
@@ -90,6 +90,32 @@ def get_rust_scan_data(path: Path) -> dict[str, Any] | None:
         ScanCache.set(path, data)
         return data
     return None
+
+
+def get_rust_tree_data(path: Path) -> dict[str, Any] | None:
+    """Scan once and seed ScanCache for every significant descendant."""
+    binary = _get_core_binary()
+    if binary is None:
+        return None
+    res = run_command(
+        [str(binary), "--tree", str(path)],
+        capture=True,
+        timeout=_ANALYZE_COMMAND_TIMEOUT,
+    )
+    if not res.ok:
+        return None
+    try:
+        tree = json.loads(res.stdout)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(tree, dict) or not isinstance(tree.get("."), dict):
+        return None
+    for relative, aggregate in tree.items():
+        if not isinstance(aggregate, dict):
+            continue
+        node = path if relative == "." else path / relative
+        ScanCache.set(node, {"path": str(node), "top_files": [], **aggregate})
+    return ScanCache.get(path)
 
 
 def _direct_child_count_exceeds(path: Path, limit: int = FAST_EXPLORE_ENTRY_LIMIT) -> bool:
@@ -191,13 +217,26 @@ def _parallel_scan_sizes(paths: list[Path]) -> dict[Path, int]:
     if not paths:
         return sizes
 
-    def scan_one(p: Path) -> tuple[Path, int]:
-        data = get_rust_scan_data(p)
-        return p, (data.get("total_size_bytes", 0) if data else 0)
+    unique = list(dict.fromkeys(paths))
+    roots = [p for p in unique if not any(parent in unique for parent in p.parents)]
+    # Drop roots already seeded by an earlier scan — e.g. the root-view Home tree
+    # scan seeds its large descendants (~/.cache/*, model dirs). Without this those
+    # insight subtrees would be walked a second time here, defeating the merge.
+    roots = [p for p in roots if ScanCache.get(p) is None]
 
-    with ThreadPoolExecutor(max_workers=min(8, len(paths))) as executor:
-        for p, size in executor.map(scan_one, paths):
-            sizes[p] = size
+    def scan_one(p: Path) -> None:
+        get_rust_tree_data(p)
+
+    if roots:
+        with ThreadPoolExecutor(max_workers=min(2, len(roots))) as executor:
+            list(executor.map(scan_one, roots))
+    missing = [path for path in unique if ScanCache.get(path) is None]
+    if missing:
+        with ThreadPoolExecutor(max_workers=min(2, len(missing))) as executor:
+            list(executor.map(get_rust_scan_data, missing))
+    for path in unique:
+        data = ScanCache.get(path)
+        sizes[path] = data.get("total_size_bytes", 0) if data else 0
     return sizes
 
 
@@ -613,9 +652,11 @@ def run_deep_analysis(target_path: Path | None = None):
                     # so the view doesn't blank/flash and shift vertically.
                     data = cached
                 else:
-                    # Root view (categories): a single-level scan is all it needs.
-                    data = _get_rust_scan_data_with_spinner(
-                        target_to_scan, scan_reason, target_label, view_title
+                    data = _scan_with_spinner(
+                        lambda path=target_to_scan: get_rust_tree_data(path),
+                        scan_reason,
+                        target_label,
+                        view_title,
                     )
             if not data:
                 print("\n   ❌ Engine scan failed.")
