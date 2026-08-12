@@ -1,9 +1,13 @@
 import os
+import stat
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from lock_helpers import RECORD_LOCK_HOLDER, external_holder
+
 from src.core.file_ops import (
+    _AUDIT_WARNINGS_EMITTED,
     CLEANED_PATHS,
     bytes_to_human,
     clean_path_by_age,
@@ -12,15 +16,22 @@ from src.core.file_ops import (
     is_app_running,
     parse_size_from_text,
     parse_size_to_bytes,
+    record_deletion_audit,
     register_cleaned_path,
     safe_remove,
 )
+from src.core.lock import is_file_locked
 from src.core.whitelist import (
     add_to_whitelist,
     get_config_dir,
     get_hard_protection_reason,
     is_protected,
 )
+
+
+def _reset_audit_warnings() -> None:
+    """The warn-once dedup set is module state shared by every test in the run."""
+    _AUDIT_WARNINGS_EMITTED.clear()
 
 
 def test_register_cleaned_path():
@@ -195,6 +206,147 @@ def test_safe_remove_writes_deletion_audit(test_env, monkeypatch):
     line = log_path.read_text().strip()
     fields = line.split("\t")
     assert fields[1:] == ["permanent", "5", "deleted", str(test_file)]
+
+
+def test_audit_log_dir_and_file_permissions_are_reclaimed(test_env, monkeypatch, capsys):
+    """mkdir/open modes only apply at creation, so loose legacy modes must be fixed (L-7)."""
+    monkeypatch.delenv("TOPO_DELETE_LOG", raising=False)
+    monkeypatch.setenv("XDG_STATE_HOME", str(test_env / "state"))
+    log_dir = test_env / "state" / "topo"
+    log_dir.mkdir(parents=True)
+    log_dir.chmod(0o755)
+    log_path = log_dir / "deletions.log"
+    log_path.write_text("")
+    log_path.chmod(0o644)
+
+    record_deletion_audit(test_env / "x", "permanent", "deleted", 1)
+
+    assert stat.S_IMODE(log_dir.stat().st_mode) == 0o700
+    assert stat.S_IMODE(log_path.stat().st_mode) == 0o600
+    assert "deleted" in log_path.read_text()
+    assert capsys.readouterr().err == ""
+
+
+def test_audit_log_override_directory_mode_is_left_alone(test_env, monkeypatch):
+    """A TOPO_DELETE_LOG directory shared with other users must not be chmod'ed.
+
+    Under sudo the ownership gate is skipped, so tightening an arbitrary override
+    directory (/tmp, /var/log) to 0700 would lock everyone else out of it.
+    """
+    shared = test_env / "shared"
+    shared.mkdir()
+    shared.chmod(0o1777)
+    log_path = shared / "deletions.log"
+    monkeypatch.setenv("TOPO_DELETE_LOG", str(log_path))
+    monkeypatch.setattr("src.core.file_ops.os.getuid", lambda: 0)
+
+    record_deletion_audit(test_env / "x", "permanent", "deleted", 1)
+
+    assert stat.S_IMODE(shared.stat().st_mode) == 0o1777
+    assert "deleted" in log_path.read_text()
+    assert stat.S_IMODE(log_path.stat().st_mode) == 0o600
+
+
+def test_audit_log_symlink_is_refused_with_a_warning(test_env, monkeypatch, capsys):
+    """A symlinked log used to be dropped in complete silence (L-7)."""
+    _reset_audit_warnings()
+    real_target = test_env / "elsewhere.log"
+    real_target.write_text("")
+    log_path = test_env / "state" / "topo" / "deletions.log"
+    log_path.parent.mkdir(parents=True)
+    log_path.symlink_to(real_target)
+    monkeypatch.setenv("TOPO_DELETE_LOG", str(log_path))
+
+    record_deletion_audit(test_env / "x", "permanent", "deleted", 1)
+
+    assert real_target.read_text() == ""
+    err = capsys.readouterr().err
+    assert "audit record dropped" in err
+    assert "is a symlink" in err
+
+
+def test_audit_log_owned_by_another_user_is_refused(test_env, monkeypatch, capsys):
+    _reset_audit_warnings()
+    log_path = test_env / "state" / "topo" / "deletions.log"
+    log_path.parent.mkdir(parents=True)
+    log_path.write_text("")
+    monkeypatch.setenv("TOPO_DELETE_LOG", str(log_path))
+
+    real_lstat = Path.lstat
+    foreign_uid = os.getuid() + 1
+
+    def fake_lstat(self):
+        st = real_lstat(self)
+        if self == log_path:
+            values = list(st)
+            values[4] = foreign_uid
+            return os.stat_result(values)
+        return st
+
+    monkeypatch.setattr(Path, "lstat", fake_lstat)
+    record_deletion_audit(test_env / "x", "permanent", "deleted", 1)
+
+    assert log_path.read_text() == ""
+    assert f"owned by uid {foreign_uid}" in capsys.readouterr().err
+
+
+def test_audit_log_warning_is_emitted_once_per_reason(test_env, monkeypatch, capsys):
+    _reset_audit_warnings()
+    log_path = test_env / "state" / "topo" / "deletions.log"
+    log_path.parent.mkdir(parents=True)
+    log_path.symlink_to(test_env / "elsewhere.log")
+    monkeypatch.setenv("TOPO_DELETE_LOG", str(log_path))
+
+    for _ in range(3):
+        record_deletion_audit(test_env / "x", "permanent", "deleted", 1)
+
+    assert capsys.readouterr().err.count("audit record dropped") == 1
+
+
+def test_audit_log_non_regular_file_is_refused(test_env, monkeypatch, capsys):
+    _reset_audit_warnings()
+    log_path = test_env / "state" / "topo" / "deletions.log"
+    log_path.parent.mkdir(parents=True)
+    os.mkfifo(log_path)
+    monkeypatch.setenv("TOPO_DELETE_LOG", str(log_path))
+
+    record_deletion_audit(test_env / "x", "permanent", "deleted", 1)
+
+    assert "is not a regular file" in capsys.readouterr().err
+
+
+def test_safe_remove_deletes_readonly_file(test_env):
+    """A 0444 file is removable: unlink() needs write permission on the parent only.
+
+    The old occupancy gate treated "cannot open for writing" as "in use" and made
+    read-only files permanently undeletable (L-4).
+    """
+    test_file = test_env / "readonly_artifact.log"
+    test_file.write_text("immutable payload")
+    test_file.chmod(0o444)
+
+    success, message = safe_remove(test_file, use_trash=False)
+
+    assert success is True, message
+    assert not test_file.exists()
+
+
+def test_safe_remove_deletes_file_held_open_by_another_process(test_env):
+    """An open descriptor or a POSIX write lock must not block deletion.
+
+    On Linux the inode outlives the name, so unlink() is safe while a writer is
+    still attached; refusing here only ever produced false failures (M-6).
+    """
+    test_file = test_env / "held_open.log"
+    test_file.write_text("busy payload")
+
+    with external_holder(RECORD_LOCK_HOLDER, test_file):
+        assert is_file_locked(test_file) is True
+
+        success, message = safe_remove(test_file, use_trash=False)
+
+        assert success is True, message
+        assert not test_file.exists()
 
 
 def test_safe_remove_dry_run_audit_keeps_file(test_env, monkeypatch):
@@ -413,7 +565,6 @@ def test_record_deletion_audit_escapes_control_chars(test_env):
     """Regression (L1/N-4): a rejected path carrying newlines, tabs, ANSI escapes,
     Unicode line separators or BiDi overrides must not forge extra audit records,
     shift the tab-separated column layout, or reach the log raw."""
-    from src.core.file_ops import record_deletion_audit
     from src.core.history import parse_deletion_history
 
     log_path = test_env / "state" / "topo" / "deletions.log"
@@ -434,5 +585,31 @@ def test_record_deletion_audit_escapes_control_chars(test_env):
     assert "\N{RIGHT-TO-LEFT OVERRIDE}" not in content
     assert len(content.splitlines()) == 1
     # The parser sees a single event, never a forged second one.
+    sessions = parse_deletion_history(log_path)
+    assert sum(len(s.events) for s in sessions) == 1
+
+
+def test_history_refuses_to_read_a_symlinked_audit_log(test_env, capsys):
+    """Rendering a log somebody else can redirect would show fabricated history (L-7)."""
+    from src.core.history import parse_deletion_history
+
+    _reset_audit_warnings()
+    planted = test_env / "planted.log"
+    planted.write_text("2026-08-12T00:00:00+08:00\tpermanent\t1\tdeleted\t/etc/passwd\n")
+    log_path = test_env / "state" / "topo" / "deletions.log"
+    log_path.parent.mkdir(parents=True)
+    log_path.symlink_to(planted)
+
+    assert parse_deletion_history(log_path) == []
+    assert "not reading history from it" in capsys.readouterr().err
+
+
+def test_history_reads_a_regular_owned_audit_log(test_env):
+    from src.core.history import parse_deletion_history
+
+    log_path = test_env / "state" / "topo" / "deletions.log"
+    with patch.dict("os.environ", {"TOPO_DELETE_LOG": str(log_path)}):
+        record_deletion_audit(test_env / "gone", "permanent", "deleted", 7)
+
     sessions = parse_deletion_history(log_path)
     assert sum(len(s.events) for s in sessions) == 1

@@ -1,6 +1,9 @@
+import os
 from pathlib import Path
+from unittest.mock import patch
 
 from src.core.file_ops import validate_path_for_deletion
+from src.core.whitelist import SYSTEM_CLEANABLE_ROOTS, is_system_cleanable_content
 
 CORPUS = Path(__file__).parent / "fuzz_corpus" / "dangerous_paths.txt"
 
@@ -50,6 +53,50 @@ def test_system_cache_and_temp_contents_are_allowed_but_roots_are_rejected():
         ok, reason = validate_path_for_deletion(child)
         assert ok is True
         assert reason == ""
+
+
+def test_non_allowlisted_var_cache_content_stays_protected():
+    """The carve-out is an allowlist of package caches, not all of /var/cache (M-3)."""
+    for path in [
+        "/var/cache/ldconfig/aux-cache",
+        "/var/cache/private/secret",
+        "/var/cache/unattended-upgrades/log",
+    ]:
+        ok, reason = validate_path_for_deletion(path)
+        assert ok is False, path
+        assert reason in {"Path is whitelisted", "Refusing to delete critical system path"}
+
+
+def test_allowlisted_package_cache_content_is_still_cleanable():
+    for path in [
+        "/var/cache/apt/archives/foo.deb",
+        "/var/cache/pacman/pkg/foo.pkg.tar.zst",
+        "/var/cache/libdnf5/repo",
+    ]:
+        ok, reason = validate_path_for_deletion(path)
+        assert ok is True, path
+        assert reason == ""
+
+
+def test_var_tmp_content_owned_by_another_user_is_protected(monkeypatch):
+    """Only the current user's own /var/tmp entries are cleanable (M-3)."""
+    entry = Path("/var/tmp") / "topo-owned-by-someone-else"  # nosec B108 - test path only
+    fake_stat = os.stat_result((0o100644, 1, 1, 1, os.getuid() + 1, 0, 0, 0, 0, 0))
+    monkeypatch.setattr(Path, "lstat", lambda self: fake_stat)
+
+    assert is_system_cleanable_content(entry) is False
+
+
+def test_var_tmp_content_owned_by_current_user_is_cleanable():
+    entry = Path("/var/tmp") / "topo-mine"  # nosec B108 - test path only
+    fake_stat = os.stat_result((0o100644, 1, 1, 1, os.getuid(), 0, 0, 0, 0, 0))
+    with patch.object(Path, "lstat", lambda self: fake_stat):
+        assert is_system_cleanable_content(entry) is True
+
+
+def test_system_cleanable_roots_themselves_are_never_content():
+    for root in SYSTEM_CLEANABLE_ROOTS:
+        assert is_system_cleanable_content(root) is False
 
 
 def test_redundant_prefix_guard_still_blocks_system_children():

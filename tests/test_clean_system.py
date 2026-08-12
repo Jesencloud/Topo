@@ -64,6 +64,29 @@ def test_clean_zombies(mock_run):
     assert c == 1
 
 
+@patch("src.clean.system.run_command")
+def test_clean_zombies_never_signals_init_or_pid_zero(mock_run):
+    """Numeric comparison, not string membership: "01"/"０１" must not reach init (L-2)."""
+    mock_run.return_value = MagicMock(
+        returncode=0,
+        ok=True,
+        stdout=(
+            "Z   1234  1 a\n"
+            "Z   1235  0 b\n"
+            "Z   1236  01 c\n"
+            "Z   1237  001 d\n"
+            "Z   1238  ０１ e\n"
+            "Z   1239  4321 f\n"
+        ),
+    )
+
+    s, i, c = clean_zombies(dry_run=False)
+
+    assert i == 6
+    signalled = [call.args[0][2] for call in mock_run.call_args_list if call.args[0][0] == "kill"]
+    assert signalled == ["4321"]
+
+
 @patch("shutil.which")
 @patch("src.clean.system.run_command")
 def test_clean_snaps(mock_run, mock_which):

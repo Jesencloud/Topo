@@ -4,12 +4,14 @@ import os
 import platform
 import shutil
 import stat
+import sys
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from ..ui.navigator import AnalyzeSelector, Navigator, TopFilesSelector
+from ..ui.navigator import AnalyzeSelector, ConfirmSelector, Navigator, TopFilesSelector
 from . import system
 from .app_cache import find_cleanable_cache_dirs, get_cache_cleanable_reason
 from .constants import (
@@ -438,14 +440,51 @@ def _sudo_remove(path: Path) -> bool:
     return False
 
 
-def _safe_remove_analyze_path(path: Path) -> bool:
+def _permanent_fallback_consent() -> Callable[[Path], bool]:
+    """Build a one-shot gate for turning a recoverable delete into a permanent one.
+
+    Choosing "delete" in Analyze consents to a *recoverable* delete. On a system
+    with no trash backend (containers, servers, minimal WMs) that promise cannot
+    be kept, so the downgrade needs its own answer instead of being substituted
+    silently. The question is asked at most once per batch, and anything
+    non-interactive answers "no" — skipping is always the recoverable choice.
+    """
+    granted: bool | None = None
+
+    def consent(path: Path) -> bool:
+        nonlocal granted
+        if granted is not None:
+            return granted
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            granted = False
+            print(
+                f" {YELLOW}⚠{RESET} No trash backend available and no terminal to ask; "
+                "skipping instead of deleting permanently."
+            )
+            return granted
+        granted = ConfirmSelector(
+            "No trash backend (gio / trash-put) found. Delete permanently? This cannot be undone."
+        ).run()
+        return granted
+
+    return consent
+
+
+def _safe_remove_analyze_path(
+    path: Path,
+    permanent_consent: Callable[[Path], bool] | None = None,
+) -> bool:
     removed, reason = safe_remove(path, use_trash=True)
     if removed:
         return True
 
-    # Trash unavailable: this is an explicit user-initiated delete, so fall
-    # back to permanent removal rather than silently skipping.
-    if reason == TRASH_UNAVAILABLE_REASON:
+    # Trash unavailable: permanent removal happens only with the user's explicit
+    # consent for this batch, never as a library-level substitution.
+    if (
+        reason == TRASH_UNAVAILABLE_REASON
+        and permanent_consent is not None
+        and permanent_consent(path)
+    ):
         removed, reason = safe_remove(path, use_trash=False)
         if removed:
             return True
@@ -454,8 +493,12 @@ def _safe_remove_analyze_path(path: Path) -> bool:
     if reason == "Path is whitelisted":
         for child in find_cleanable_cache_dirs(path, require_sensitive_app_data_root=True):
             child_removed, child_reason = safe_remove(child, use_trash=True)
-            # Fallback for children too
-            if not child_removed and child_reason == TRASH_UNAVAILABLE_REASON:
+            if (
+                not child_removed
+                and child_reason == TRASH_UNAVAILABLE_REASON
+                and permanent_consent is not None
+                and permanent_consent(child)
+            ):
                 child_removed, child_reason = safe_remove(child, use_trash=False)
             if child_removed:
                 cleaned_child = True
@@ -498,8 +541,13 @@ def _delete_analyze_paths(paths: list[Path]) -> bool:
 
     admin_paths = [p for p in paths if _needs_admin_for_deletion(p)]
     changed = False
+    consent = _permanent_fallback_consent()
     for p in paths:
-        removed = _sudo_remove(p) if p in admin_paths else _safe_remove_analyze_path(p)
+        removed = (
+            _sudo_remove(p)
+            if p in admin_paths
+            else _safe_remove_analyze_path(p, permanent_consent=consent)
+        )
         if removed:
             changed = True
     if changed:

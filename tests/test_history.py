@@ -47,6 +47,36 @@ def test_parse_legacy_ungrouped_history(tmp_path):
     assert sessions[0].skipped == 1
 
 
+def test_every_rejected_status_counts_as_skipped(tmp_path):
+    """A new rejection reason must be tallied the day it is introduced.
+
+    analyze._sudo_remove and file_ops.safe_remove each emit their own
+    ``rejected-*`` status; enumerating them one by one in SKIPPED_STATUSES let
+    rejected-toctou and the ancestor checks silently fall out of every count.
+    They are matched by the ``rejected-`` prefix instead.
+    """
+    statuses = [
+        "rejected-validation",
+        "rejected-toctou",
+        "rejected-unreadable-ancestor",
+        "rejected-ancestor-symlink",
+        "rejected-unsafe-ancestor",
+    ]
+    log = tmp_path / "deletions.log"
+    log.write_text(
+        "\n".join(
+            f"2026-05-31T12:00:0{i}+08:00\tsudo-permanent\t0\t{status}\t/etc/target{i}"
+            for i, status in enumerate(statuses)
+        )
+    )
+
+    sessions = parse_deletion_history(log)
+
+    assert len(sessions) == 1
+    assert sessions[0].skipped == len(statuses)
+    assert sessions[0].failed == 0
+
+
 def test_render_history_summary(tmp_path):
     log = tmp_path / "deletions.log"
     log.write_text(

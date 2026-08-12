@@ -117,6 +117,89 @@ PY
 fi
 if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓ target release ${TARGET_REF}${NC}"; fi
 
+# --- Release verification infrastructure (fail-closed) ---------------------
+# Trust anchor: the release key fingerprint is pinned here, so a tampered
+# SHA256SUMS is rejected even when the attacker also controls the manifest and
+# the transport. Mirrors src/manage/update.py's TOPO_RELEASE_KEY_FINGERPRINT.
+TOPO_KEY_FPR="4B35C17CF8E663732726A99F50086DB998B4D883"
+
+if [ "$TARGET_REF" = "main" ]; then
+    RELEASE_URL="https://github.com/Jesencloud/Topo/releases/latest/download"
+else
+    RELEASE_URL="https://github.com/Jesencloud/Topo/releases/download/${TARGET_REF}"
+fi
+
+VERIFY_DIR=""
+SUMS_FILE=""
+cleanup_verify_dir() {
+    if [ -n "$VERIFY_DIR" ]; then rm -rf "$VERIFY_DIR"; fi
+}
+trap cleanup_verify_dir EXIT
+
+abort_verification() {
+    echo -e "  ${RED}✗ ${1}${NC}" >&2
+    echo -e "  ${GRAY}Refusing to install unverified files. Nothing was executed.${NC}" >&2
+    exit 1
+}
+
+# Downloads and signature-verifies SHA256SUMS exactly once. Every failure path
+# aborts: an attacker who suppresses the manifest must not be able to disable
+# verification (the previous '|| true' made that a one-request bypass).
+require_release_manifest() {
+    if [ -n "$SUMS_FILE" ]; then return 0; fi
+    if ! command -v gpg >/dev/null 2>&1; then
+        echo -e "  ${RED}✗ gpg is required to verify release signatures but was not found.${NC}" >&2
+        echo -e "  ${GRAY}Install it with one of:${NC}" >&2
+        echo -e "    ${BOLD}sudo apt install gnupg${NC}     ${GRAY}# Debian/Ubuntu${NC}" >&2
+        echo -e "    ${BOLD}sudo dnf install gnupg2${NC}    ${GRAY}# Fedora/RHEL${NC}" >&2
+        echo -e "    ${BOLD}sudo pacman -S gnupg${NC}       ${GRAY}# Arch/Manjaro${NC}" >&2
+        exit 1
+    fi
+    VERIFY_DIR=$(mktemp -d)
+    curl -fsSL "$RELEASE_URL/SHA256SUMS" -o "$VERIFY_DIR/SHA256SUMS" ||
+        abort_verification "Could not download the SHA256SUMS manifest."
+    curl -fsSL "$RELEASE_URL/SHA256SUMS.asc" -o "$VERIFY_DIR/SHA256SUMS.asc" ||
+        abort_verification "Could not download the SHA256SUMS signature."
+    curl -fsSL "$RELEASE_URL/topo-release-public.asc" -o "$VERIFY_DIR/key.asc" ||
+        abort_verification "Could not download the Topo release public key."
+    mkdir -p "$VERIFY_DIR/gnupg"
+    chmod 700 "$VERIFY_DIR/gnupg"
+    gpg --batch --homedir "$VERIFY_DIR/gnupg" --import "$VERIFY_DIR/key.asc" >/dev/null 2>&1 ||
+        abort_verification "Could not import the Topo release public key."
+    # The signing key must be the pinned one; gpg's exit code alone would accept
+    # any key the attacker shipped alongside a re-signed manifest.
+    gpg --batch --homedir "$VERIFY_DIR/gnupg" --status-fd=1 \
+        --verify "$VERIFY_DIR/SHA256SUMS.asc" "$VERIFY_DIR/SHA256SUMS" 2>/dev/null |
+        awk -v fpr="$TOPO_KEY_FPR" '
+            $2 == "VALIDSIG" && (toupper($3) == fpr || toupper($NF) == fpr) { found = 1 }
+            END { exit(found ? 0 : 1) }
+        ' || abort_verification "SHA256SUMS signature is not from the pinned Topo release key."
+    SUMS_FILE="$VERIFY_DIR/SHA256SUMS"
+    if [ "$MINIMAL" = false ]; then
+        echo -e "  ${GREEN}✓ release manifest signature verified${NC}"
+    fi
+}
+
+# Verifies $1 against the manifest entry named $2. A missing entry aborts
+# (fail-closed) instead of silently skipping the check.
+verify_release_file() {
+    local file_path="$1"
+    local entry_name="$2"
+    require_release_manifest
+    local expected_sha
+    expected_sha=$(awk -v n="$entry_name" '$2 == n || $2 == "*" n {print $1; exit}' "$SUMS_FILE")
+    if [ -z "$expected_sha" ]; then
+        rm -f "$file_path"
+        abort_verification "No SHA256SUMS entry for ${entry_name}."
+    fi
+    local actual_sha
+    actual_sha=$(sha256sum "$file_path" 2>/dev/null | awk '{print $1}')
+    if [ "$actual_sha" != "$expected_sha" ]; then
+        rm -f "$file_path"
+        abort_verification "SHA256 checksum mismatch for ${entry_name}."
+    fi
+}
+
 checkout_target_ref() {
     if [ "$TARGET_REF" = "main" ]; then
         git fetch --quiet --depth 1 origin main
@@ -170,8 +253,33 @@ if [ "$HAS_GIT" = true ]; then
 else
     if [ "$MINIMAL" = false ]; then echo -e "  ${GRAY}↓ Downloading Topo archive (${TARGET_REF})...${NC}"; fi
     mkdir -p "$INSTALL_DIR"
-    # Download and extract, stripping the top-level directory (Topo-main)
-    curl -fsSL "$TARBALL_URL" | tar -xzC "$INSTALL_DIR" --strip-components=1
+    # Land the archive on disk first: a `curl | tar` pipe can neither be verified
+    # nor detect truncation, and a partial stream leaves a half-extracted tree.
+    require_release_manifest
+    SRC_ARCHIVE="$VERIFY_DIR/topo-src.tar.gz"
+    # `--ref main` asks for the branch tip, which no release signs: the archive
+    # under releases/latest is a *different* revision, so downloading it would
+    # answer "install main" with the last tag. Only tags take the verified path.
+    if [ "$TARGET_REF" != "main" ] &&
+        curl -fsSL "$RELEASE_URL/topo-src.tar.gz" -o "$SRC_ARCHIVE" 2>/dev/null; then
+        verify_release_file "$SRC_ARCHIVE" "topo-src.tar.gz"
+        if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓ source archive checksum verified${NC}"; fi
+    elif [ "${TOPO_ALLOW_UNVERIFIED_SOURCE:-0}" = "1" ]; then
+        # The branch tip, and releases published before signed source archives existed.
+        echo -e "  ${YELLOW}⚠ No signed source archive exists for ${TARGET_REF};${NC}" >&2
+        echo -e "  ${YELLOW}  proceeding unverified because TOPO_ALLOW_UNVERIFIED_SOURCE=1.${NC}" >&2
+        curl -fsSL "$TARBALL_URL" -o "$SRC_ARCHIVE" ||
+            abort_verification "Could not download the Topo source archive."
+    else
+        echo -e "  ${RED}✗ No signed source archive (topo-src.tar.gz) exists for ${TARGET_REF}.${NC}" >&2
+        echo -e "  ${GRAY}Install git and re-run to use the verified git path:${NC}" >&2
+        echo -e "    ${BOLD}sudo apt install git${NC}  ${GRAY}(or dnf/pacman)${NC}" >&2
+        echo -e "  ${GRAY}To proceed without source verification anyway:${NC}" >&2
+        echo -e "    ${BOLD}TOPO_ALLOW_UNVERIFIED_SOURCE=1 bash install.sh${NC}" >&2
+        exit 1
+    fi
+    tar -xzC "$INSTALL_DIR" --strip-components=1 -f "$SRC_ARCHIVE"
+    rm -f "$SRC_ARCHIVE"
     # Mark as non-git install for update logic
     touch "$INSTALL_DIR/.non_git_install"
 fi
@@ -185,33 +293,49 @@ printf 'script\n' > .topo-install-source
 
 ARCH=$(uname -m)
 BIN_DIR="src/core/bin"
-if [ "$TARGET_REF" = "main" ]; then
-    RELEASE_URL="https://github.com/Jesencloud/Topo/releases/latest/download"
-else
-    RELEASE_URL="https://github.com/Jesencloud/Topo/releases/download/${TARGET_REF}"
-fi
 
 # Ensure binary directory exists
 mkdir -p "$BIN_DIR"
 
+# Fetch and verify one engine binary. Any failure aborts: leaving a truncated
+# or unverified file behind and then chmod +x'ing it is exactly what M-5 warned
+# about, since Python invokes this binary as a subprocess afterwards.
+fetch_engine_binary() {
+    local bin_name="$1"
+    # Stage inside VERIFY_DIR (removed by the EXIT trap) so an aborted install
+    # never leaves an unverified file in BIN_DIR — the next run would otherwise
+    # mistake that residue for a bundled engine and chmod +x it.
+    require_release_manifest
+    local staged="$VERIFY_DIR/$bin_name"
+    curl -fsSL "$RELEASE_URL/$bin_name" -o "$staged" ||
+        abort_verification "Could not download the ${bin_name} engine."
+    verify_release_file "$staged" "$bin_name"
+    chmod +x "$staged"
+    mv -f "$staged" "$BIN_DIR/$bin_name"
+    if [ "$MINIMAL" = false ]; then
+        echo -e "  ${GREEN}✓ ${bin_name} checksum verified${NC}"
+    fi
+}
+
 if [[ "$ARCH" == "x86_64" ]]; then
     if [ ! -f "$BIN_DIR/topo-core-x86_64" ]; then
         if [ "$MINIMAL" = false ]; then echo -e "  ${GRAY}↓ Fetching x86_64 engine from ${TARGET_REF}...${NC}"; fi
-        curl -fsSL "$RELEASE_URL/topo-core-x86_64" -o "$BIN_DIR/topo-core-x86_64" || echo -e "  ${RED}⚠ Warning: Could not download x86_64 engine.${NC}"
+        fetch_engine_binary "topo-core-x86_64"
     else
         if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓${NC} ${GRAY}Using bundled x86_64 engine.${NC}"; fi
+        chmod +x "$BIN_DIR/topo-core-x86_64" 2>/dev/null || true
     fi
     rm -f "$BIN_DIR/topo-core-aarch64"
 elif [[ "$ARCH" == "aarch64" ]] || [[ "$ARCH" == "arm64" ]]; then
     if [ ! -f "$BIN_DIR/topo-core-aarch64" ]; then
         if [ "$MINIMAL" = false ]; then echo -e "  ${YELLOW}↓ ARM64 detected. Fetching optimized engine from ${TARGET_REF}...${NC}"; fi
-        curl -fsSL "$RELEASE_URL/topo-core-aarch64" -o "$BIN_DIR/topo-core-aarch64" || echo -e "  ${RED}⚠ Warning: Could not download ARM64 engine.${NC}"
+        fetch_engine_binary "topo-core-aarch64"
     else
         if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓${NC} ${GRAY}Using bundled ARM64 engine.${NC}"; fi
+        chmod +x "$BIN_DIR/topo-core-aarch64" 2>/dev/null || true
     fi
     rm -f "$BIN_DIR/topo-core-x86_64"
 fi
-chmod +x $BIN_DIR/topo-core-* 2>/dev/null || true
 
 # Keep LICENSE for compliance, but remove everything else non-essential
 rm -f assets/*.png 2>/dev/null || true

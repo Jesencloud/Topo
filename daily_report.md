@@ -1,3 +1,108 @@
+# Daily Modification Report - 2026-08-12
+
+## Project: topo (Topo) - 基线遗留漏洞实质闭合（第 6～7 轮复核后的修复轮）
+
+第 7 轮复核逐条实测了 2026-08-11 自述的"附录 C 全面闭合"，确认 M-1、M-3、M-5、M-6、M-8、M-11、L-1、L-2、L-7 当时均只做到名义或局部处理。本轮按实测结论逐项重做，并为每个改动的符号补齐跨进程/跨用户的回归测试；随后的第 8 轮自查复核又发现并修复了本轮修复自身引入的 4 处缺陷与 2 处冗余（见第 5 节），第 9 轮复核已提交基线 `25afceb` 时再发现并修复 1 处正确性缺陷与 1 处冗余（见第 6 节）。单元测试 319 → 364，`ruff check`、`ruff format --check`、`mypy --check-untyped-defs src`、`tach check`、`shellcheck`、`pytest`、`./check.sh`（含 Rust `cargo test` 7 项）全绿。
+
+### 1. 供应链与提权面
+
+* **M-5 首次安装验签 fail-closed**：`install.sh` 现在在校验和文件缺失、下载失败或摘要不匹配时一律终止安装（而非跳过校验继续）；`gpg` 从"可选"改为必需，缺失即中止并给出各发行版安装命令，`SHA256SUMS.asc` 的签名必须来自内置钉死的发布密钥指纹（只看 `gpg` 退出码会接受攻击者随包附带的任意密钥，因此改为解析 `--status-fd=1` 的 `VALIDSIG`）；引擎二进制与 tarball 均落盘后再比对摘要，杜绝"先解包后校验"的时间窗。
+* **M-11 打包脚本不再以 root 写用户路径**：`after-install.sh` 通过 `runuser -u "$target_user" -- sh -c "$write_launcher" sh "$bin_dir"` 降权写入，root 全程不再创建用户家目录下的任何文件（所有 `chown` / `install -d` 已删除）；暂存文件在 `set -C`（noclobber，等价 `O_EXCL`）下创建后 `mv -f` 原子替换；符号链接回收条件收紧为 `readlink -f` 归一化后等于 `/usr/bin/topo` 或 `$HOME/.topo/topo` 两个 canonical 目标；`$bin_dir` 本身是符号链接或非目录时直接放弃并 `exit 0`；缺少 `runuser` 时同样放弃而不是回退到 root 写入。
+* **L-2 僵尸父进程信号数值化**：`src/clean/system.py` 的父进程过滤由字符串成员判断 `ppid in ("0", "1")` 改为 `ppid.isascii() and ppid.isdigit()` 后取 `int(ppid) <= 1` 跳过，零填充的 `"01"` / `"001"` 与全角数字 `"０１"` 再也无法把 `SIGCHLD` 送到 init。
+
+### 2. 删除安全与可恢复性
+
+* **M-1 取消隐式永久删除降级**：`analyze.py` 新增 `_permanent_fallback_consent()`，把"回收站不可用 → 永久删除"变成一次性显式授权（整批最多问一次，非交互环境直接跳过并打印原因）；`_safe_remove_analyze_path` 仅在拿到授权后才二次调用 `safe_remove(use_trash=False)`；`optimize.py` 的 `run_autostart_cleanup` 在无回收站后端时改为保留条目并在结果中报告 `Kept N …`，不再在无人值守的工作线程里做不可恢复删除。
+* **M-3 /var 豁免收敛为单一判据**：`file_ops.py` 中重复的 `_SYSTEM_CLEANABLE_CONTENT_DIRS` / `_is_system_cleanable_content` 已删除，唯一实现落在 `whitelist.is_system_cleanable_content()`。判据按"什么才让路径真正安全"拆开：`/var/cache` 走 11 条包管理器缓存显式白名单（`apt/archives`、`dnf`、`libdnf5`、`pacman/pkg`、`zypp` 等），`/var/cache/ldconfig`、`/var/cache/private`、`/var/cache/unattended-upgrades` 等非缓存状态目录重新受保护；`/var/tmp` 走 `lstat().st_uid == os.getuid()` 属主校验，与 `clean_system_temp()` 既有规则一致，其他用户的私有数据不再被 root 一并清掉；两个根目录自身永不可删。
+* **L-1 断链清理不再误删与不可恢复**：`_points_at_transient_mount()` 先用 `os.path.join(link.parent, target)` + `normpath` 归一化再比对前缀（相对目标 `../../../media/usb/x` 不再绕过守卫），覆盖面从 `/media`、`/mnt`、`/run/media` 扩展到 `/run/user/*`（含 gvfs 与 flatpak 文档门户）与 `~/.gvfs`，`readlink()` 失败时按"暂不可判"保留；删除改为 `use_trash=True`，无后端时保留并报告；默认只扫 `~/.local/bin`，`~/Desktop` / `~/Documents` 需 `TOPO_SYMLINK_SCAN_USER_DIRS=1` 显式开启。
+* **M-6 / L-4 占用探测与删除解耦**：`safe_remove` 的永久删除分支不再做"是否被占用"探测——Linux 上 `unlink()` 对持有的文件描述符是安全的（inode 生命周期长于名字），旧探测只会产生误拒，`0444` 只读文件此前根本无法删除；占用探测收归到数据库维护路径，且 `is_file_locked()` 改用 POSIX 记录锁（`fcntl.lockf` 共享探测），与 SQLite / 浏览器真正使用的锁空间一致，同时因只需读权限而能在只读文件与只读挂载上工作。
+
+### 3. 单实例锁与审计日志
+
+* **M-8 锁失败原因不再一律误报**：`SingleInstanceLock.__init__` 不再触碰文件系统；`__enter__` 把 `mkdir`、`os.open`、`open(fd)`、`flock` 四个失败点拆成四条独立提示（"Cannot create the lock directory" / "Cannot open the lock file"（含符号链接被拒的说明）/ "Cannot use the lock file" / "Cannot acquire the instance lock"），只有真正的 `BlockingIOError` 才报 "Another topo instance (PID N) is already running" 并带上持有者 PID；`flags` 追加 `O_CLOEXEC`，锁 fd 不再泄漏给子进程。
+* **L-7 审计日志权限回收与静默终止**：新增 `_prepare_audit_log()`，在每次写入前校验日志目录/文件是真实目录与常规文件、非符号链接、非交互式运行时属主为当前用户；`mkdir` / `open` 的 mode 只在创建时生效，因此旧版本遗留的宽松权限现在会被 `os.chmod` 回收为 `0700` / `0600`；日志为符号链接、属主不符或写入失败时不再静默丢弃记录，而是通过 `_warn_audit_dropped()` 在 stderr 按原因去重提示一次。读侧同样收口：`audit_log_is_trusted()` 让 `parse_deletion_history()` 拒绝读取被重定向或属主不符的日志，避免 `topo history` 把他人植入的内容当成本机删除记录展示。实测：`0755`/`0644` 的既存日志写入一次后变为 `0700`/`0600` 且记录落盘；指向他处的符号链接日志连写三次只产生一条 stderr 告警，目标文件保持 0 字节。
+
+### 4. 回归测试（新增 45 项，319 → 364）
+
+* **跨进程锁语义**：`tests/test_lock.py` 重写为 16 项，用真实子进程持锁（同进程探测永远看不到自己持有的锁），覆盖 0700 懒创建、持有者 PID 提示、符号链接锁文件、不可创建目录、`FD_CLOEXEC`、外部记录锁探测、`0444` / `0o000` 文件、`is_sqlite_busy` 与 `safe_vacuum_sqlite` 的跳过与恢复。
+* **删除与审计**：`tests/test_file_ops.py` 新增 0444 可删、外部进程持锁仍可删（并断言 `is_file_locked` 为 True）、日志目录/文件宽松权限被回收为 0700/0600、符号链接日志被拒且有告警、属主不符被拒、告警按原因只出现一次、FIFO 等非常规文件被拒、`topo history` 拒读符号链接日志而正常日志照读。
+* **M-3 / L-1 / L-2 边界**：`tests/test_path_validation.py` 补齐非白名单 `/var/cache` 受保护、白名单包缓存仍可清、`/var/tmp` 他人文件受保护而本人文件可清、豁免根自身不可删；`tests/test_optimize.py` 补齐无回收站后端时保留断链、相对目标指向可移动介质被跳过、gvfs / `/run/user` 判定、用户目录默认不扫描；`tests/test_clean_system.py` 补齐 `"01"` / `"０１"` 不得触及 init。
+* **打包脚本**：`tests/test_packaging_scripts.py` 扩到 10 项，覆盖降权写入（断言 `runuser` 调用参数以 `-u alice --` 开头且产物是 0755 真实文件）、外部用户符号链接保留、`$bin_dir` 为符号链接/非目录时放弃、`runuser` 失败或缺失时放弃。
+* **本机实证**：除单测外，另在真实 `/var/tmp` 上核对了属主门控（`abrt`(uid 173) 与 root 的 `systemd-private-*` 全部判为受保护），并在真实文件系统上核对了审计日志的权限回收与符号链接告警去重。
+
+### 5. 第 8 轮自查复核：修复本轮修复自身引入的缺陷（R8）
+
+对本轮全部改动（19 个文件 `+1523 / −126`）做正确性与冗余复核，发现 4 处正确性缺陷与 2 处冗余，均已修复并补齐回归测试（详见 `docs/SECURITY_FIX_REVIEW_R8_2026-08-12.md`）：
+
+* **装饰器错位使断链清理被静默注销（高）**：L-1 改动中 `@register_optimization_task` 落到了新增辅助函数 `_broken_symlink_search_dirs()` 上，`run_broken_symlink_cleanup` 因此从注册表消失；`optimize_system()` 又以 `task(dry_run=…)` 提交辅助函数，`TypeError` 被线程池的 `except Exception: pass` 吞掉，形成双重静默。已复位装饰器，并新增护栏测试断言注册表每一项都以 `run_` 开头且签名含 `dry_run`。
+* **审计日志权限回收爆炸半径过大（中）**：`_prepare_audit_log()` 原先无条件 `chmod 0700` 日志父目录，配合 `TOPO_DELETE_LOG` 重定向与 root 下跳过属主校验，`sudo TOPO_DELETE_LOG=/tmp/x.log topo …` 会把 `/tmp` 由 `1777` 改成 `drwx------`（已实测复现）。现抽出 `_default_log_dir()`，目录权限回收仅作用于 Topo 自己的状态目录，日志文件仍无条件回收为 `0600`。
+* **`--ref main` 被静默替换为上一个 tag（中）**：无 git 环境下的源码路径会去下载 `releases/latest/download/topo-src.tar.gz`，而该归档是另一个修订版，导致"安装 main"实际拿到最后一个 tag 且无提示。现只有 tag 才走验签归档，`main` 要求 git 或 `TOPO_ALLOW_UNVERIFIED_SOURCE=1` 显式知情同意。
+* **死代码（低）**：`_points_at_transient_mount()` 归一化后原 gvfs 判断已不可达，改为结尾补斜杠的可达判断，使标记同时匹配挂载根自身与其下路径。
+* **冗余清理**：两个测试文件各自约 37 行的跨进程持锁 `Popen` 脚手架抽出为 `tests/lock_helpers.py`（`external_holder` 上下文管理器带 `kill` 兜底）；`tests/test_analyze.py` 的 patch 目标由 `shutil.which` 改为被 `functools.cache` 缓存的 `_which_cached`，消除隐性顺序依赖（6 文件子集运行时曾因此失败）。
+* **导入稳定性**：`pytest.ini` 的 `pythonpath = .` 改为 `pythonpath = . tests`，让共享脚手架 `lock_helpers` 由配置显式声明导入，而非依赖 pytest prepend 模式的副作用，换 `--import-mode=importlib` 亦成立。
+
+### 6. 第 9 轮复核：审查已提交基线 25afceb（R9）
+
+对已提交 commit `25afceb`（19 文件 `+317 / −100`）做正确性与冗余复核。已提交代码是打包验签流水线实际发布的基线，其缺陷不因本地尚有未提交改动而消失，故与第 8 轮（针对未提交工作区）互补。发现并修复 1 处正确性缺陷与 1 处冗余（详见 `docs/SECURITY_FIX_REVIEW_R9_2026-08-12.md`）：
+
+* **新增的祖先拒绝状态未计入会话计数（正确性）**：该提交在 `analyze._sudo_remove` 新增了 `rejected-unreadable-ancestor` / `rejected-ancestor-symlink` / `rejected-unsafe-ancestor` 三个状态，但 `history.py` 的 `SKIPPED_STATUSES` 仍是手工枚举集合，未同步；这三个 + 早先的 `rejected-toctou` 从 `topo history` 的 skipped/failed/removed 计数中全部消失。改为前缀判据 `SKIPPED_PREFIXES = ("rejected-",)` 一次覆盖全部现有与未来的 `rejected-*`，删除已不再产出的枚举项，并新增 `test_every_rejected_status_counts_as_skipped` 断言 5 个状态全部计入。
+* **不安全显示字符集在两处重复定义（冗余）**：显示净化 `text._UNSAFE_DISPLAY_RE` 与审计转义 `file_ops._sanitize_audit_field` 各自手写了同一份危险字符范围（C0/C1、BiDi、行分隔符），两者必须永远一致却物理分离。抽出唯一事实源 `text.UNSAFE_DISPLAY_RANGES` 与 `is_unsafe_display_char()`，`_UNSAFE_DISPLAY_RE` 由其生成、`_sanitize_audit_field` 改为调用它；两个消费方共享字符集、仅输出策略不同（显示替换 `�`、日志转义 `\xNN` / `\uNNNN`）。已实测新旧正则在 U+0000~U+21FF 全码位判定一致。
+
+
+---
+
+# Daily Modification Report - 2026-08-11
+
+## Project: topo (Topo) - 全量安全审计与五轮深度攻防复核闭环 (Security Audit & Multi-Round Review)
+
+针对 Topo 项目进行了五轮极其严密的攻防视角安全审查与复核，所有 3 项高危漏洞（H-1, H-2, H-3）、5 项中危漏洞（M-2, M-4, M-7, M-9, M-10）以及修复过程中识别的 N-1..N-4、L-6 漏洞全部实现了 100% 的实质闭合。
+
+### 1. 高危漏洞彻底收口 (Critical/High Vulnerabilities)
+* **H-1 路径穿越与祖先节点 TOCTOU (Path Traversal & Ancestor Protection)**：
+  - 在 `analyze.py` 中对 root `rm -rf --one-file-system` 实施严格的祖先节点属主/权限复验；`OSError` 强行 `fail-closed` (`return False`)，彻底截断通过 `chmod 000` 制造 `EACCES` 绕过符号链接判定的攻击路线；`get_size_fast` 耗时测算前置移出竞态窗口。
+* **H-2 供应链更新验签真闭环 (Supply Chain Integrity)**：
+  - 重构 `update.py` 脚本更新链路，`expected_sha is None` 时强行 `fail-closed` 终止；废弃 `/tmp` 可预测路径，全面改用安全的 `TemporaryDirectory`（防御符号链接覆写与 `gpg.conf` 注入）；在 `.github/workflows/build-engine.yml` 流水线中将 `install.sh` 纳为 `SHA256SUMS` / `SHA256SUMS.asc` 签名校验对象。
+* **H-3 免密提权参数边界限定 (Privilege Escalation Prevention)**：
+  - 在 `system.py` 中恢复用户名与路径合法性校验；引入严格白名单正则 `_SAFE_SUDOERS_PATH_RE`；将推荐的 sudoers 规则限定为精确参数指令（`/usr/sbin/fstrim -a` 与 `/usr/bin/journalctl --vacuum-time=3d`），彻底切断 Pager 提权路径。
+* **N-1 临时目录注入防御 (Temp Dir Safety)**：
+  - 消除 PID 枚举与硬编码临时目录，统一使用 `tempfile.TemporaryDirectory`。
+
+### 2. 中危漏洞与防护补强 (Medium Vulnerabilities)
+* **M-2 Autostart 审计与护栏恢复 (Audit Bypass)**：
+  - 彻底删除 `optimize.py` 中的裸 `unlink()` 降级代码，采用标准二段式 `safe_remove(use_trash=True)` -> `safe_remove(use_trash=False)`，确保白名单/硬保护校验与删除审计日志 100% 触发。
+* **M-4 / M-7 / M-9 基础硬保护与并发互斥**：
+  - 全面扩展 `whitelist.py` 凭据与加密钱包保护路径；在 `main.py` 的 `LOCK_REQUIRED_COMMANDS` 中挂载 `"analyze"` 互斥锁；在 `file_ops.py` 的 `use_trash` 分支前补齐二次 TOCTOU 路径校验。
+
+### 3. 控制字符注入与 ANSI 攻击面防御 (ANSI & Control Character Sanitization)
+* **M-10 TUI 渲染点净化**：
+  - 新建 `src/core/text.py` 解耦架构分级（消除 `core` 依赖 `ui` 的反向依赖）；在 10 处 TUI 渲染点（包含卸载确认清单、分析主列表等）强制施加 `sanitize_for_display`，替换 ANSI CSI 光标控制符与转义码。
+* **N-4 & BiDi/行分隔符中和**：
+  - 将 `_UNSAFE_DISPLAY_RE` 扩充包含 Unicode 行/段分隔符（`U+2028` / `U+2029`）与 BiDi 双向控制符（`U+202a`~`U+202e`, `U+2066`~`U+2069`，防范 `Trojan Source / CVE-2021-42574`）。
+* **N-2 非 TUI 路径防护**：
+  - 在 `analyze.py`, `lock.py`, `apps.py`, `app_manager.py` 等 15 处非 TUI 的 `print()` 输出点包装显示副本净化，不影响底层真实的磁盘路径操作。
+* **L-6 审计日志转义**：
+  - 在 `_sanitize_audit_field` 中将所有 C0/C1 控制符与 Unicode 行分隔符统一转义为 `\xNN` / `\uNNNN` 文本形式，保证直接 `cat` / `less -r` 查看日志时绝对安全。
+
+### 4. 附录 C 基线遗留漏洞：本轮仅部分收口（2026-08-12 更正）
+
+> 更正说明：本节原先自述"全面终极闭合"，与实测不符。第 7 轮复核逐条验证后确认，下列条目在 2026-08-11 当天只做了名义上或局部的处理，实质闭合是在 2026-08-12 完成的（详见 2026-08-12 报告）。此处按实测结果重写。
+
+* **M-5 首次安装脚本验签（部分）**：`install.sh` 增加了 `SHA256SUMS` 比对，但缺少校验和文件本身不可用时的 fail-closed 分支，也未验 `SHA256SUMS.asc` 签名，实为 fail-open。
+* **M-1 回收站降级防护（未闭合）**：`_safe_remove_analyze_path` 虽引入 `allow_permanent_fallback` 形参，但调用方硬编码传入 `True`，永久删除的降级依旧无感知发生。
+* **M-3 /var 豁免边界收紧（未闭合）**：`whitelist.py` 与 `file_ops.py` 各自保留了一份 `/var` 豁免判据（整子树前缀匹配），既未收敛为单一实现，也未限制到具体包管理器缓存条目。
+* **M-6 & M-8 锁文件竞态与软链接防护（部分）**：`lock.py` 已加 `O_NOFOLLOW`，但打开失败与加锁冲突共用同一个 `except`，所有失败都被报成"另一个实例正在运行"；`is_file_locked` 仍用 `flock` 探测，与 SQLite 实际使用的 POSIX 记录锁不在同一锁空间。
+* **M-11 软件包安装脚本防护（部分）**：`after-install.sh` 增加了符号链接判断，但仍以 root 身份直接写入用户可控路径，且未做 canonical 路径比较。
+* **L-1 / L-2 / L-7（部分）**：
+  - `optimize.py` 断链清理跳过 `/media`, `/mnt`, `/run/media`，但只比对原始 `readlink()` 字符串（相对目标未归一化），未覆盖 gvfs，且删除走 `use_trash=False`；
+  - `system.py` 僵尸父进程校验为字符串成员判断 `ppid in ("0", "1")`，零填充的 `"01"` 可绕过；
+  - `file_ops.py` 的 `0o600` / `0o700` 仅在创建时生效，既存的宽松权限不会被回收，且日志为符号链接时静默丢弃审计记录。
+
+### 5. 架构边界与测试门控
+* 在 `./check.sh` 预提交门控中挂载 `tach check`，自动化防护架构依赖边界。
+* 适配 `pytest` 全套 319 项单元测试与 Ruff/MyPy/ShellCheck/Clippy 静态检查，全部绿色 pass 过关。
+
+---
+
 # Daily Modification Report - 2026-08-10
 
 ## Project: topo (Topo) - 死代码清理、Tach 模块边界配置、安全与性能增强及通用进程自动发现

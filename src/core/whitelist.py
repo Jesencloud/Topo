@@ -1,5 +1,6 @@
 import functools
 import json
+import os
 from pathlib import Path
 
 from .browser_cache import (
@@ -47,6 +48,32 @@ DELETION_CRITICAL_EXACT_PATHS = (
     Path("/") / "var",
     Path("/") / "tmp",
     Path("/") / "boot",
+)
+
+# The /var carve-out: which content inside otherwise-protected system roots Topo
+# is allowed to remove. Kept here as the single source of truth so file_ops and
+# the whitelist can never drift apart on the same question.
+SYSTEM_TEMP_ROOT = Path("/var/tmp")  # nosec B108 - cleanup root, not a temp file
+SYSTEM_CLEANABLE_ROOTS = (
+    SYSTEM_TEMP_ROOT,
+    Path("/var/cache"),
+)
+# Package-manager and regenerable-index caches only. Anything else under
+# /var/cache (ldconfig, private, unattended-upgrades state, …) stays protected.
+SYSTEM_CLEANABLE_ALLOWLIST = frozenset(
+    {
+        "/var/cache/apk",
+        "/var/cache/apt/archives",
+        "/var/cache/dnf",
+        "/var/cache/dnf5daemon-server",
+        "/var/cache/fontconfig",
+        "/var/cache/libdnf5",
+        "/var/cache/man",
+        "/var/cache/pacman/pkg",
+        "/var/cache/PackageKit",
+        "/var/cache/yum",
+        "/var/cache/zypp",
+    }
 )
 
 LINUX_PROTECTED_HOME_PATHS = [
@@ -298,9 +325,39 @@ def _resolve_path(path) -> Path:
     return _resolve_path_str(str(path))
 
 
-def _is_system_carve_out(path: Path) -> bool:
-    path_str = str(path)
-    return path_str.startswith((str(Path("/") / "var" / "tmp") + "/", "/var/cache/"))
+def is_system_cleanable_content(path: Path) -> bool:
+    """Return True when *path* is content inside a system cache/temp root that
+    Topo may remove — the single source of truth for the /var carve-out.
+
+    The carve-out used to be a whole-subtree prefix match, which handed root
+    everything under /var/cache (including non-package state such as
+    /var/cache/ldconfig or /var/cache/private) and every other user's private
+    data under /var/tmp. It is now split by what actually makes a path safe:
+
+    * /var/cache — membership in an explicit package-manager cache allowlist.
+    * /var/tmp   — ownership by the current user, matching the same rule
+      clean_system_temp() already applies to its entries.
+
+    The roots themselves are never cleanable, only their contents.
+    """
+    if not any(root in path.parents for root in SYSTEM_CLEANABLE_ROOTS):
+        return False
+
+    for entry in SYSTEM_CLEANABLE_ALLOWLIST:
+        entry_path = Path(entry)
+        if path == entry_path or entry_path in path.parents:
+            return True
+
+    if SYSTEM_TEMP_ROOT not in path.parents:
+        return False
+    try:
+        return path.lstat().st_uid == os.getuid()
+    except FileNotFoundError:
+        # Nothing there to protect, and the deletion path reports the absence
+        # itself; refusing here would only mislabel the reason.
+        return True
+    except OSError:
+        return False
 
 
 def _is_critical_system_path(path: Path) -> bool:
@@ -313,7 +370,9 @@ def _is_critical_system_path(path: Path) -> bool:
         except PATH_RESOLVE_ERRORS:
             prefix_res = prefix.absolute()
 
-        if (path == prefix_res or prefix_res in path.parents) and not _is_system_carve_out(path):
+        if (path == prefix_res or prefix_res in path.parents) and not is_system_cleanable_content(
+            path
+        ):
             return True
     return False
 

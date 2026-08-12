@@ -227,9 +227,15 @@ def clean_zombies(dry_run: bool = False) -> tuple[int, int, int]:
     parents = set(z["ppid"] for z in zombies)
     reaped = 0
     for ppid in parents:
-        if ppid == "1":
+        # Compare numerically, and only accept ASCII digits: a zero-padded "01"
+        # or a Unicode digit form would slip past a string membership test and
+        # send SIGCHLD to init (PID 1) or to the kernel's PID 0 placeholder.
+        if not (ppid.isascii() and ppid.isdigit()):
             continue
-        run_command(["kill", "-SIGCHLD", ppid], use_sudo=True, capture=True)
+        parent_pid = int(ppid)
+        if parent_pid <= 1:
+            continue
+        run_command(["kill", "-SIGCHLD", str(parent_pid)], use_sudo=True, capture=True)
         reaped += 1
 
     print(f"  {OK} Signaled parents of {count} zombie processes")

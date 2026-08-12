@@ -1,18 +1,25 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .file_ops import bytes_to_human, get_deletion_log_path, record_deletion_audit
+from .file_ops import (
+    audit_log_is_trusted,
+    bytes_to_human,
+    get_deletion_log_path,
+    record_deletion_audit,
+)
 from .text import sanitize_for_display
 
 REMOVED_STATUSES = {"deleted", "removed"}
 TRASHED_PREFIXES = ("trashed",)
 FAILED_STATUSES = {"failed"}
+# Anything Topo refused to delete is a skip. Matched by prefix so that a new
+# rejection reason (the ancestor checks in analyze._sudo_remove each added one)
+# is counted the day it is introduced instead of silently falling out of every
+# tally — which is what happened to rejected-toctou and the ancestor statuses.
+SKIPPED_PREFIXES = ("rejected-",)
 SKIPPED_STATUSES = {
     "dry-run",
     "missing",
-    "rejected-critical",
-    "rejected-validation",
-    "rejected-whitelist",
     "trash-failed",
 }
 
@@ -47,7 +54,11 @@ class HistorySession:
 
     @property
     def skipped(self) -> int:
-        return sum(1 for event in self.events if event.status in SKIPPED_STATUSES)
+        return sum(
+            1
+            for event in self.events
+            if event.status in SKIPPED_STATUSES or event.status.startswith(SKIPPED_PREFIXES)
+        )
 
     @property
     def total_size(self) -> int:
@@ -67,7 +78,7 @@ def record_history_session(command: str, status: str) -> None:
 
 def parse_deletion_history(log_path: Path | None = None) -> list[HistorySession]:
     path = log_path or get_deletion_log_path()
-    if not path.exists():
+    if not path.exists() or not audit_log_is_trusted(path):
         return []
 
     sessions: list[HistorySession] = []

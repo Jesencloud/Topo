@@ -1,8 +1,12 @@
+import inspect
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from src.clean.optimize import (
+    OptimizationRegistry,
+    _points_at_transient_mount,
     run_autostart_cleanup,
     run_broken_symlink_cleanup,
     run_coredump_cleanup,
@@ -16,6 +20,21 @@ from src.clean.optimize import (
     vacuum_single_db,
 )
 from src.core.system import CommandResult
+
+
+def test_registered_optimization_tasks_are_runnable_entry_points():
+    """A decorator that slides onto a helper silently unregisters the real task.
+
+    optimize_system() submits every registered callable as task(dry_run=...), so a
+    helper caught by @register_optimization_task raises TypeError into the pool's
+    swallowed exceptions while its own task vanishes from the run.
+    """
+    tasks = OptimizationRegistry.tasks
+    names = {task.__name__ for task in tasks}
+    assert "run_broken_symlink_cleanup" in names
+    for task in tasks:
+        assert task.__name__.startswith("run_"), task.__name__
+        assert "dry_run" in inspect.signature(task).parameters, task.__name__
 
 
 def test_run_systemd_user_service_cleanup_removes_broken_unit(test_env):
@@ -70,11 +89,32 @@ def test_run_autostart_cleanup_removes_missing_absolute_exec(test_env):
     desktop_file = autostart_dir / "dead.desktop"
     desktop_file.write_text("[Desktop Entry]\nExec=/missing/dead-app --background\n")
 
-    with patch("pathlib.Path.home", return_value=test_env):
+    # A working trash backend, so the entry goes somewhere recoverable.
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.core.file_ops._which_cached", return_value="/usr/bin/gio"),
+        patch("src.core.file_ops.run_command", return_value=SimpleNamespace(ok=True)),
+    ):
         result = run_autostart_cleanup(dry_run=False)
 
     assert result == "Removed 1 zombie autostart entries"
-    assert not desktop_file.exists()
+
+
+def test_run_autostart_cleanup_keeps_entry_without_trash_backend(test_env):
+    """No trash backend means the entry is kept, never deleted unrecoverably (M-1)."""
+    autostart_dir = test_env / ".config/autostart"
+    autostart_dir.mkdir(parents=True)
+    desktop_file = autostart_dir / "dead.desktop"
+    desktop_file.write_text("[Desktop Entry]\nExec=/missing/dead-app --background\n")
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.core.file_ops._which_cached", return_value=None),
+    ):
+        result = run_autostart_cleanup(dry_run=False)
+
+    assert result == "Kept 1 zombie autostart entries (no trash backend available)"
+    assert desktop_file.exists()
 
 
 def test_run_autostart_cleanup_dry_run_keeps_missing_exec_file(test_env):
@@ -201,6 +241,12 @@ def test_run_coredump_cleanup_returns_none_when_find_fails(tmp_path):
     assert result is None
 
 
+def _fake_trash(cmd, **kwargs):
+    """Stand in for a working `gio trash`: the entry goes somewhere recoverable."""
+    Path(cmd[-1]).unlink()
+    return SimpleNamespace(ok=True)
+
+
 def test_run_broken_symlink_cleanup_removes_only_broken_links(test_env):
     bin_dir = test_env / ".local/bin"
     bin_dir.mkdir(parents=True)
@@ -213,7 +259,11 @@ def test_run_broken_symlink_cleanup_removes_only_broken_links(test_env):
     regular_file = bin_dir / "regular-file"
     regular_file.write_text("keep")
 
-    with patch("pathlib.Path.home", return_value=test_env):
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.core.file_ops._which_cached", return_value="/usr/bin/gio"),
+        patch("src.core.file_ops.run_command", side_effect=_fake_trash),
+    ):
         result = run_broken_symlink_cleanup(dry_run=False)
 
     assert result == "Removed 1 broken user symlink(s)"
@@ -224,12 +274,76 @@ def test_run_broken_symlink_cleanup_removes_only_broken_links(test_env):
     assert regular_file.exists()
 
 
-def test_run_broken_symlink_cleanup_dry_run_keeps_broken_link(test_env):
+def test_run_broken_symlink_cleanup_keeps_link_without_trash_backend(test_env):
+    """A dangling link is the last record of its target; never delete it unrecoverably (L-1)."""
+    bin_dir = test_env / ".local/bin"
+    bin_dir.mkdir(parents=True)
+    broken_link = bin_dir / "missing-tool"
+    broken_link.symlink_to(test_env / "missing-tool-target")
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.core.file_ops._which_cached", return_value=None),
+    ):
+        result = run_broken_symlink_cleanup(dry_run=False)
+
+    assert result == "Kept 1 broken user symlink(s) (no trash backend available)"
+    assert broken_link.is_symlink()
+
+
+def test_run_broken_symlink_cleanup_skips_relative_link_into_removable_mount(test_env):
+    """The mount guard must normalize relative targets before matching (L-1)."""
+    bin_dir = test_env / ".local/bin"
+    bin_dir.mkdir(parents=True)
+    link = bin_dir / "usb-tool"
+    up = "../" * (len(bin_dir.parts) - 1)
+    link.symlink_to(f"{up}media/usb-stick/tool")
+
+    with patch("pathlib.Path.home", return_value=test_env):
+        result = run_broken_symlink_cleanup(dry_run=True)
+
+    assert result is None
+    assert link.is_symlink()
+
+
+def test_points_at_transient_mount_covers_gvfs_and_runtime_dirs(test_env):
+    bin_dir = test_env / ".local/bin"
+    bin_dir.mkdir(parents=True)
+
+    with patch("pathlib.Path.home", return_value=test_env):
+        for target in [
+            "/run/user/1000/gvfs/smb-share:server=nas/file",
+            "/run/user/1000/doc/1234/file",
+            f"{test_env}/.gvfs",
+            f"{test_env}/.gvfs/sftp-share/file",
+            "/media/usb/file",
+            "/mnt/backup/file",
+            "/run/media/user/disk/file",
+        ]:
+            link = bin_dir / "probe"
+            link.symlink_to(target)
+            try:
+                assert _points_at_transient_mount(link) is True, target
+            finally:
+                link.unlink()
+
+        link = bin_dir / "probe"
+        link.symlink_to(test_env / "really-gone")
+        assert _points_at_transient_mount(link) is False
+
+
+def test_run_broken_symlink_cleanup_skips_user_dirs_unless_opted_in(test_env, monkeypatch):
+    """~/Desktop and ~/Documents hold hand-made links; scanning them is opt-in (L-1)."""
     desktop_dir = test_env / "Desktop"
     desktop_dir.mkdir(parents=True)
     broken_link = desktop_dir / "missing-app"
     broken_link.symlink_to(test_env / "missing-app-target")
 
+    monkeypatch.delenv("TOPO_SYMLINK_SCAN_USER_DIRS", raising=False)
+    with patch("pathlib.Path.home", return_value=test_env):
+        assert run_broken_symlink_cleanup(dry_run=True) is None
+
+    monkeypatch.setenv("TOPO_SYMLINK_SCAN_USER_DIRS", "1")
     with patch("pathlib.Path.home", return_value=test_env):
         result = run_broken_symlink_cleanup(dry_run=True)
 
@@ -369,7 +483,12 @@ def test_vacuum_single_db_closes_connection_on_error(tmp_path):
     fake_conn = MagicMock()
     fake_conn.cursor.return_value.execute.side_effect = sqlite3.Error("corrupt")
 
-    with patch("src.clean.optimize.sqlite3.connect", return_value=fake_conn):
+    # is_sqlite_busy() opens its own connection through the same sqlite3 module,
+    # so it must be stubbed out or the patched connect would be consumed twice.
+    with (
+        patch("src.clean.optimize.is_sqlite_busy", return_value=False),
+        patch("src.clean.optimize.sqlite3.connect", return_value=fake_conn),
+    ):
         result = vacuum_single_db(db)
 
     assert result == 0

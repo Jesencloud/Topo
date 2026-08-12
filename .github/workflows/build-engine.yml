@@ -212,6 +212,10 @@ jobs:
           cp dist/packages/*.deb release-assets/
           cp dist/packages/*.rpm release-assets/
           cp install.sh release-assets/
+          # Signed source archive: install.sh's no-git path verifies this instead
+          # of piping GitHub's unsigned auto-generated tarball straight into tar.
+          git archive --format=tar.gz --prefix="topo-src/" \
+            -o release-assets/topo-src.tar.gz HEAD
 
       - name: Generate Release Checksums
         shell: bash
@@ -223,6 +227,7 @@ jobs:
             topo-core-x86_64 \
             topo-core-aarch64 \
             install.sh \
+            topo-src.tar.gz \
             *.deb \
             *.rpm \
             > SHA256SUMS
@@ -249,6 +254,7 @@ jobs:
           files: |
             release-assets/topo-core-x86_64
             release-assets/topo-core-aarch64
+            release-assets/topo-src.tar.gz
             release-assets/*.deb
             release-assets/*.rpm
             release-assets/SHA256SUMS

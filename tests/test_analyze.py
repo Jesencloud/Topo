@@ -8,6 +8,7 @@ from src.core.analyze import (
     _direct_child_count_exceeds,
     _explore_notice,
     _needs_admin_for_deletion,
+    _permanent_fallback_consent,
     _render_scan_header,
     _scan_status_message,
     _scan_with_spinner,
@@ -402,7 +403,11 @@ def test_analyze_delete_browser_profile_root_cleans_cache_children(test_env):
 
     with (
         patch("src.core.analyze._ensure_admin_for_delete", return_value=True),
-        patch("src.core.file_ops.shutil.which", return_value=None),
+        # _which_cached() memoizes, so patching shutil.which alone is order-dependent.
+        patch("src.core.file_ops._which_cached", return_value=None),
+        # No trash backend here, so the permanent downgrade needs consent; this
+        # stands in for the user answering "yes" once for the batch.
+        patch("src.core.analyze._permanent_fallback_consent", return_value=lambda _p: True),
         patch("src.core.analyze.Navigator.play_delete") as mock_play_delete,
     ):
         assert _delete_analyze_paths([chrome_root, firefox_root]) is True
@@ -418,6 +423,61 @@ def test_analyze_delete_browser_profile_root_cleans_cache_children(test_env):
     assert not firefox_cache_dir.exists()
     assert not firefox_startup_cache_dir.exists()
     mock_play_delete.assert_called_once()
+
+
+def test_analyze_delete_keeps_data_when_permanent_fallback_is_declined(test_env, capsys):
+    """Without a trash backend and without consent, nothing is deleted (M-1)."""
+    target = test_env / "Downloads" / "big-blob"
+    target.mkdir(parents=True)
+    (target / "payload.bin").write_text("data")
+
+    with (
+        patch("src.core.analyze._ensure_admin_for_delete", return_value=True),
+        # _which_cached() memoizes, so patching shutil.which alone is order-dependent.
+        patch("src.core.file_ops._which_cached", return_value=None),
+        patch("src.core.analyze.Navigator.play_delete") as mock_play_delete,
+    ):
+        assert _delete_analyze_paths([target]) is False
+
+    assert (target / "payload.bin").exists()
+    mock_play_delete.assert_not_called()
+    assert "No trash utility available" in capsys.readouterr().out
+
+
+def test_permanent_fallback_consent_declines_without_a_terminal(capsys):
+    """A non-interactive run answers "no" instead of deleting unrecoverably."""
+    consent = _permanent_fallback_consent()
+    with patch("src.core.analyze.sys.stdin.isatty", return_value=False):
+        assert consent(Path("/tmp/whatever")) is False
+    assert "skipping instead of deleting permanently" in capsys.readouterr().out
+
+
+def test_permanent_fallback_consent_asks_once_per_batch():
+    """The confirmation is asked at most once and then reused for the batch."""
+    consent = _permanent_fallback_consent()
+    with (
+        patch("src.core.analyze.sys.stdin.isatty", return_value=True),
+        patch("src.core.analyze.sys.stdout.isatty", return_value=True),
+        patch("src.core.analyze.ConfirmSelector") as mock_confirm,
+    ):
+        mock_confirm.return_value.run.return_value = True
+        assert consent(Path("/tmp/one")) is True
+        assert consent(Path("/tmp/two")) is True
+    assert mock_confirm.call_count == 1
+
+
+def test_permanent_fallback_consent_remembers_a_refusal():
+    """A refusal is also remembered, so the user is not asked repeatedly."""
+    consent = _permanent_fallback_consent()
+    with (
+        patch("src.core.analyze.sys.stdin.isatty", return_value=True),
+        patch("src.core.analyze.sys.stdout.isatty", return_value=True),
+        patch("src.core.analyze.ConfirmSelector") as mock_confirm,
+    ):
+        mock_confirm.return_value.run.return_value = False
+        assert consent(Path("/tmp/one")) is False
+        assert consent(Path("/tmp/two")) is False
+    assert mock_confirm.call_count == 1
 
 
 def test_analyze_delete_system_path_requires_admin():

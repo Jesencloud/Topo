@@ -30,7 +30,7 @@ from ..core.file_ops import (
     parse_size_from_text,
     safe_remove,
 )
-from ..core.lock import is_file_locked
+from ..core.lock import is_file_locked, is_sqlite_busy
 from ..core.system import has_sudo, run_command
 
 # Lock to ensure parallel tasks don't corrupt the terminal output
@@ -103,7 +103,7 @@ def vacuum_single_db(db_file):
         return 0
     if not _is_sqlite_database(db_path):
         return 0
-    if is_file_locked(db_path):
+    if is_file_locked(db_path) or is_sqlite_busy(db_path):
         return 0
     try:
         if db_path.stat().st_size > SQLITE_MAX_OPTIMIZE_SIZE:
@@ -285,6 +285,7 @@ def run_autostart_cleanup(dry_run=False):
     if not autostart_dir.exists():
         return None
     zombies = 0
+    kept_no_trash = 0
     for desktop_file in autostart_dir.glob("*.desktop"):
         try:
             cmd = get_desktop_exec_command(desktop_file)
@@ -300,9 +301,12 @@ def run_autostart_cleanup(dry_run=False):
             if is_zombie:
                 if not dry_run:
                     ok, reason = safe_remove(desktop_file, use_trash=True)
-                    if not ok and reason == TRASH_UNAVAILABLE_REASON:
-                        ok, _ = safe_remove(desktop_file, use_trash=False)
                     if not ok:
+                        # No silent downgrade to a permanent delete: this task
+                        # runs unattended in a worker thread, so there is nobody
+                        # to consent to an unrecoverable removal.
+                        if reason == TRASH_UNAVAILABLE_REASON:
+                            kept_no_trash += 1
                         continue
                 zombies += 1
         except OSError:
@@ -310,7 +314,12 @@ def run_autostart_cleanup(dry_run=False):
     if zombies > 0:
         if dry_run:
             return f"Found {zombies} zombie autostart entries"
-        return f"Removed {zombies} zombie autostart entries"
+        message = f"Removed {zombies} zombie autostart entries"
+        if kept_no_trash:
+            message += f" ({kept_no_trash} kept: no trash backend available)"
+        return message
+    if kept_no_trash:
+        return f"Kept {kept_no_trash} zombie autostart entries (no trash backend available)"
     return None
 
 
@@ -484,22 +493,59 @@ def run_coredump_cleanup(dry_run=False):
     return "System coredumps cleared"
 
 
+def _broken_symlink_search_dirs() -> list[Path]:
+    """Directories swept for dangling symlinks.
+
+    Only ~/.local/bin is swept by default: it holds launcher links whose targets
+    are package-managed, so a dangling entry there is genuinely dead. ~/Desktop
+    and ~/Documents hold links the user placed by hand — often to removable or
+    network storage that is simply not mounted right now — so they are opt-in
+    via TOPO_SYMLINK_SCAN_USER_DIRS=1.
+    """
+    dirs = [Path.home() / ".local/bin"]
+    if os.environ.get("TOPO_SYMLINK_SCAN_USER_DIRS") == "1":
+        dirs.extend([Path.home() / "Desktop", Path.home() / "Documents"])
+    return dirs
+
+
+# Prefixes whose absence means "not mounted", not "target deleted". Removing a
+# link into them would destroy the only pointer to data that comes back on the
+# next mount.
+_TRANSIENT_MOUNT_PREFIXES = ("/media/", "/mnt/", "/run/media/", "/run/user/")
+_GVFS_PATH_MARKERS = ("/gvfs/", "/.gvfs/")
+
+
+def _points_at_transient_mount(link: Path) -> bool:
+    """True when a dangling link's target only looks missing because of a mount."""
+    try:
+        target = os.fspath(link.readlink())
+    except OSError:
+        # Unreadable link: treat as transient and keep it rather than guess.
+        return True
+
+    # A relative target resolves against the link's own directory, so it must be
+    # joined before any prefix test — otherwise "../../../media/usb/x" reads as
+    # a harmless relative name and slips past the guard.
+    absolute = os.path.normpath(os.path.join(os.fspath(link.parent), target))
+    if absolute.startswith(_TRANSIENT_MOUNT_PREFIXES):
+        return True
+    # The trailing slash makes the marker match the mount root itself (~/.gvfs)
+    # as well as anything under it.
+    return any(marker in f"{absolute}/" for marker in _GVFS_PATH_MARKERS)
+
+
 @register_optimization_task
 def run_broken_symlink_cleanup(dry_run=False):
     """Remove broken symlinks in common user directories."""
-    search_dirs = [
-        Path.home() / ".local/bin",
-        Path.home() / "Desktop",
-        Path.home() / "Documents",
-    ]
-
     broken = []
-    for d in search_dirs:
+    for d in _broken_symlink_search_dirs():
         if not d.exists():
             continue
         try:
             for item in d.iterdir():
                 if item.is_symlink() and not item.exists():
+                    if _points_at_transient_mount(item):
+                        continue
                     broken.append(item)
         except OSError:
             continue
@@ -511,16 +557,27 @@ def run_broken_symlink_cleanup(dry_run=False):
         return f"Found {len(broken)} broken user symlinks"
 
     removed = 0
+    kept_no_trash = 0
     for link in broken:
         try:
-            removed_ok, _ = safe_remove(link, use_trash=False)
+            # Recoverable by default: a dangling link is still the only record of
+            # what it once pointed at, and this task runs unattended in a worker
+            # thread where nobody can consent to an unrecoverable delete.
+            removed_ok, reason = safe_remove(link, use_trash=True)
             if removed_ok:
                 removed += 1
+            elif reason == TRASH_UNAVAILABLE_REASON:
+                kept_no_trash += 1
         except OSError:
             continue
 
     if removed > 0:
-        return f"Removed {removed} broken user symlink(s)"
+        message = f"Removed {removed} broken user symlink(s)"
+        if kept_no_trash:
+            message += f" ({kept_no_trash} kept: no trash backend available)"
+        return message
+    if kept_no_trash:
+        return f"Kept {kept_no_trash} broken user symlink(s) (no trash backend available)"
     return None
 
 

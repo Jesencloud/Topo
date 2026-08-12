@@ -1,7 +1,10 @@
+import contextlib
 import functools
 import os
 import re
 import shutil
+import stat
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -9,11 +12,13 @@ from typing import Any
 
 from .constants import SECONDS_PER_DAY
 from .system import run_command
+from .text import is_unsafe_display_char
 from .whitelist import (
     CRITICAL_PREFIX_PATHS,
     DELETION_CRITICAL_EXACT_PATHS,
     get_hard_protection_reason,
     is_protected,
+    is_system_cleanable_content,
 )
 
 # Global registry to track handled paths across modules
@@ -23,11 +28,6 @@ CACHEDIR_TAG_SIGNATURE = "Signature: 8a477f597d28d172789f06886806bc55"
 TRASH_UNAVAILABLE_REASON = "No trash utility available; refusing to permanently delete"
 
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
-_SYSTEM_CLEANABLE_CONTENT_DIRS = (
-    # Intentional system temp cleanup root, not temp file creation.
-    Path("/var/tmp"),  # nosec B108
-    Path("/var/cache"),
-)
 
 
 @functools.cache
@@ -35,39 +35,132 @@ def _which_cached(name: str) -> str | None:
     return shutil.which(name)
 
 
-def _is_system_cleanable_content(path: Path) -> bool:
-    """Allow contents of known system cache/temp roots without allowing the roots."""
-    return any(root in path.parents for root in _SYSTEM_CLEANABLE_CONTENT_DIRS)
+def _default_log_dir() -> Path:
+    """Topo's own state directory — the only log directory whose mode Topo may change."""
+    state_home = Path(os.environ.get("XDG_STATE_HOME", "~/.local/state")).expanduser()
+    return state_home / "topo"
 
 
 def get_deletion_log_path() -> Path:
     """Return the audit log path for destructive file operations."""
     if override := os.environ.get("TOPO_DELETE_LOG"):
         return Path(override).expanduser()
-    state_home = Path(os.environ.get("XDG_STATE_HOME", "~/.local/state")).expanduser()
-    return state_home / "topo" / "deletions.log"
+    return _default_log_dir() / "deletions.log"
 
 
 def _sanitize_audit_field(value: str) -> str:
-    """Escape control characters that could forge log lines or trigger ANSI injection when cat/less-ed."""
+    """Escape control characters that could forge log lines or trigger ANSI injection when cat/less-ed.
+
+    The character *set* is shared with sanitize_for_display() so display and log
+    can never disagree about what is unsafe; only the output differs — the log
+    escapes (recoverable, greppable) where the UI replaces.
+    """
     out = []
     for ch in value:
         code = ord(ch)
         if ch == "\\":
             out.append("\\\\")
-        elif (
-            code < 0x20
-            or code == 0x7F
-            or 0x80 <= code <= 0x9F
-            # U+2028/U+2029 are line breaks for str.splitlines(), so an unescaped
-            # one would split a single audit record across two parsed lines.
-            or 0x2028 <= code <= 0x202E
-            or 0x2066 <= code <= 0x2069
-        ):
+        elif is_unsafe_display_char(code):
             out.append(f"\\x{code:02x}" if code <= 0xFF else f"\\u{code:04x}")
         else:
             out.append(ch)
     return "".join(out)
+
+
+_AUDIT_WARNINGS_EMITTED: set[str] = set()
+
+
+def _warn_audit_dropped(reason: str) -> None:
+    """Say once, on stderr, that an audit record was dropped.
+
+    Silence used to be the whole failure mode here: a symlinked or foreign-owned
+    log made every deletion go unrecorded with nothing to notice it by. The
+    reason is deduplicated so a long cleanup run cannot spam the screen.
+    """
+    if reason in _AUDIT_WARNINGS_EMITTED:
+        return
+    _AUDIT_WARNINGS_EMITTED.add(reason)
+    print(f"⚠ topo: deletion audit record dropped: {reason}", file=sys.stderr)
+
+
+def _prepare_audit_log(log_path: Path) -> bool:
+    """Return True when *log_path* is safe to append to, tightening it if needed.
+
+    The audit trail records what Topo deleted, so it must not be redirectable by
+    anyone else: a symlink, a non-regular file, or an entry owned by another user
+    is refused instead of followed. Because mkdir/open modes only apply at
+    creation time, a log left group- or world-readable by an older release is
+    also reclaimed to 0600 here, as is Topo's own state directory to 0700.
+    """
+    parent = log_path.parent
+    try:
+        parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    except OSError as exc:
+        _warn_audit_dropped(f"cannot create {parent} ({exc})")
+        return False
+
+    uid = os.getuid()
+    try:
+        dir_st = parent.lstat()
+    except OSError as exc:
+        _warn_audit_dropped(f"cannot inspect {parent} ({exc})")
+        return False
+    if stat.S_ISLNK(dir_st.st_mode) or not stat.S_ISDIR(dir_st.st_mode):
+        _warn_audit_dropped(f"{parent} is not a real directory")
+        return False
+    # Running as root (sudo topo) legitimately sees a log owned by the invoking
+    # user, so ownership is only enforced for unprivileged runs — where a foreign
+    # owner really does mean somebody else planted the file.
+    if uid != 0 and dir_st.st_uid != uid:
+        _warn_audit_dropped(f"{parent} is owned by uid {dir_st.st_uid}, not by this user")
+        return False
+    if stat.S_IMODE(dir_st.st_mode) & 0o077 and parent == _default_log_dir():
+        # Only Topo's own state directory is tightened. TOPO_DELETE_LOG may point
+        # into a directory shared with other users (/tmp, /var/log), and under
+        # sudo a blind chmod 0700 there would lock everyone else out of it.
+        with contextlib.suppress(OSError):
+            os.chmod(parent, 0o700)
+
+    try:
+        file_st = log_path.lstat()
+    except FileNotFoundError:
+        return True
+    except OSError as exc:
+        _warn_audit_dropped(f"cannot inspect {log_path} ({exc})")
+        return False
+    if stat.S_ISLNK(file_st.st_mode):
+        _warn_audit_dropped(f"{log_path} is a symlink; refusing to follow it")
+        return False
+    if not stat.S_ISREG(file_st.st_mode):
+        _warn_audit_dropped(f"{log_path} is not a regular file")
+        return False
+    if uid != 0 and file_st.st_uid != uid:
+        _warn_audit_dropped(f"{log_path} is owned by uid {file_st.st_uid}, not by this user")
+        return False
+    if stat.S_IMODE(file_st.st_mode) & 0o177:
+        with contextlib.suppress(OSError):
+            os.chmod(log_path, 0o600)
+    return True
+
+
+def audit_log_is_trusted(log_path: Path) -> bool:
+    """Read-side counterpart of _prepare_audit_log().
+
+    History rendering shows the log back to the user, so a log that somebody else
+    can redirect or rewrite must not be read at all — otherwise a planted symlink
+    turns into fabricated deletion history.
+    """
+    try:
+        st = log_path.lstat()
+    except OSError:
+        return False
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+        _warn_audit_dropped(f"{log_path} is not a regular file; not reading history from it")
+        return False
+    if os.getuid() != 0 and st.st_uid != os.getuid():
+        _warn_audit_dropped(f"{log_path} is owned by uid {st.st_uid}; not reading history from it")
+        return False
+    return True
 
 
 def record_deletion_audit(
@@ -83,13 +176,18 @@ def record_deletion_audit(
     except (TypeError, ValueError):
         size = "unknown"
     timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
+    if not _prepare_audit_log(log_path):
+        return
     try:
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        with log_path.open("a", encoding="utf-8") as f:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(log_path, flags, 0o600)
+        with open(fd, "a", encoding="utf-8", closefd=True) as f:
             safe_path = _sanitize_audit_field(str(Path(path).expanduser()))
             f.write(f"{timestamp}\t{mode}\t{size}\t{status}\t{safe_path}\n")
-    except OSError:
-        pass
+    except OSError as exc:
+        _warn_audit_dropped(f"cannot write {log_path} ({exc})")
 
 
 def validate_path_for_deletion(
@@ -123,7 +221,7 @@ def validate_path_for_deletion(
     for critical in CRITICAL_PREFIX_PATHS:
         if (
             resolved_path == critical or critical in resolved_path.parents
-        ) and not _is_system_cleanable_content(resolved_path):
+        ) and not is_system_cleanable_content(resolved_path):
             return False, "Refusing to delete critical system path"
     return True, ""
 
@@ -325,11 +423,11 @@ def safe_remove(
         if raw_path.is_dir() and not raw_path.is_symlink():
             shutil.rmtree(raw_path)
         else:
-            from .lock import is_file_locked
-
-            if is_file_locked(raw_path):
-                record_deletion_audit(raw_path, mode, "file-locked", size_bytes)
-                return False, f"File is currently locked by an active process: {raw_path.name}"
+            # No "is it in use?" gate here on purpose: unlink() is safe against
+            # open file descriptors on Linux (the inode outlives the name), so
+            # probing for locks only ever produced false refusals — a read-only
+            # 0444 file could never be deleted at all. Lock probing belongs to
+            # database maintenance, where a writer really must not be disturbed.
             raw_path.unlink()
         record_deletion_audit(raw_path, "permanent", "deleted", size_bytes)
         return True, "Permanently deleted"
