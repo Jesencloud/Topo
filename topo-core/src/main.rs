@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
 use std::env;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use std::time::UNIX_EPOCH;
@@ -156,14 +157,11 @@ fn compute_tree(root_path: &Path) -> HashMap<String, DirAgg> {
             Ok(r) => r,
             Err(_) => return,
         };
-        let comps: Vec<String> = rel
-            .components()
-            .map(|c| c.as_os_str().to_string_lossy().into_owned())
-            .collect();
-        if comps.is_empty() {
+        let mut components = rel.components();
+        let Some(first) = components.next() else {
             return;
-        }
-        let n = comps.len();
+        };
+        let first_name = first.as_os_str().to_string_lossy().into_owned();
 
         if size > TOP_FILE_MIN_BYTES {
             top_files_heap.push(FileInfo {
@@ -175,29 +173,28 @@ fn compute_tree(root_path: &Path) -> HashMap<String, DirAgg> {
             }
         }
 
-        // Root "." gets the file's size/count, with comps[0] as its child.
+        // Root "." gets the file's size/count, with the first component as its child.
         let root_agg = dirs.entry(".".to_string()).or_default();
         root_agg.total_size_bytes = root_agg.total_size_bytes.saturating_add(size);
         root_agg.file_count = root_agg.file_count.saturating_add(1);
-        let root_child = root_agg.subdirs.entry(comps[0].clone()).or_insert(0);
+        let root_child = root_agg.subdirs.entry(first_name).or_insert(0);
         *root_child = root_child.saturating_add(size);
 
         // Descend through each intermediate directory: comps[0], comps[0]/comps[1],
         // ... comps[0]/.../comps[n-2]. Each gets the size and a child entry toward
         // the file (the last such child is the filename itself).
-        let mut prefix = String::new();
-        for i in 0..(n - 1) {
-            if prefix.is_empty() {
-                prefix = comps[i].clone();
-            } else {
-                prefix.push('/');
-                prefix.push_str(&comps[i]);
-            }
-            let agg = dirs.entry(prefix.clone()).or_default();
+        let mut prefix = PathBuf::from(first.as_os_str());
+        for component in components {
+            let key = prefix.to_string_lossy().into_owned();
+            let agg = dirs.entry(key).or_default();
             agg.total_size_bytes = agg.total_size_bytes.saturating_add(size);
             agg.file_count = agg.file_count.saturating_add(1);
-            let child = agg.subdirs.entry(comps[i + 1].clone()).or_insert(0);
+            let child = agg
+                .subdirs
+                .entry(component.as_os_str().to_string_lossy().into_owned())
+                .or_insert(0);
             *child = child.saturating_add(size);
+            prefix.push(component.as_os_str());
         }
     });
 
@@ -212,9 +209,10 @@ fn compute_tree(root_path: &Path) -> HashMap<String, DirAgg> {
 
 fn run_single(root_path: &Path) {
     let result = compute_single(root_path);
-    if let Ok(json) = serde_json::to_string(&result) {
-        println!("{}", json);
-    }
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    let _ = serde_json::to_writer(&mut out, &result);
+    let _ = writeln!(out);
 }
 
 fn run_tree(root_path: &Path, min_bytes: u64) {
@@ -229,9 +227,10 @@ fn run_tree(root_path: &Path, min_bytes: u64) {
         .filter(|(k, v)| k.as_str() == "." || v.total_size_bytes >= min_bytes)
         .map(|(k, v)| (k.clone(), v))
         .collect();
-    if let Ok(json) = serde_json::to_string(&out) {
-        println!("{}", json);
-    }
+    let stdout = std::io::stdout();
+    let mut writer = stdout.lock();
+    let _ = serde_json::to_writer(&mut writer, &out);
+    let _ = writeln!(writer);
 }
 
 fn compute_stats(root_path: &Path) -> PathStats {
@@ -272,7 +271,7 @@ fn run_stats(root_path: &Path) {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     let _ = serde_json::to_writer(&mut out, &compute_stats(root_path));
-    println!();
+    let _ = writeln!(out);
 }
 
 fn main() {
@@ -368,6 +367,16 @@ mod tests {
         // Deepest dir lists the file as its child.
         assert_eq!(t["a/b"].total_size_bytes, 1500);
         assert_eq!(t["a/b"].subdirs["c.bin"], 1500);
+    }
+
+    #[test]
+    fn tree_tracks_top_files_without_extra_scan() {
+        let dir = tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        write_file(&root.join("large.bin"), (TOP_FILE_MIN_BYTES + 1) as usize);
+        let t = compute_tree(&root);
+        assert_eq!(t["."].top_files.len(), 1);
+        assert!(t["."].top_files[0].path.ends_with("large.bin"));
     }
 
     #[test]

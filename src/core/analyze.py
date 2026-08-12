@@ -70,12 +70,22 @@ def _get_core_binary() -> Path | None:
     return None
 
 
+def _normalize_scan_path(path: str | Path) -> Path:
+    """Return one stable absolute cache/process key without leaking resolve errors."""
+    raw = Path(path).expanduser()
+    try:
+        return raw.resolve(strict=False)
+    except (OSError, RuntimeError):
+        return raw.absolute()
+
+
 def get_rust_scan_data(path: Path, *, use_cache: bool = True) -> dict[str, Any] | None:
     """Calls the architecture-specific topo-core binary and returns parsed JSON."""
     binary = _get_core_binary()
     if binary is None:
         return None
 
+    path = _normalize_scan_path(path)
     # Check cache first
     cached = ScanCache.get(path)
     if use_cache and cached:
@@ -97,6 +107,8 @@ def get_rust_tree_data(path: Path) -> dict[str, Any] | None:
     binary = _get_core_binary()
     if binary is None:
         return None
+
+    path = _normalize_scan_path(path)
     res = run_command(
         [str(binary), "--tree", str(path)],
         capture=True,
@@ -110,12 +122,19 @@ def get_rust_tree_data(path: Path) -> dict[str, Any] | None:
         return None
     if not isinstance(tree, dict) or not isinstance(tree.get("."), dict):
         return None
+    root_data = None
     for relative, aggregate in tree.items():
         if not isinstance(aggregate, dict):
             continue
         node = path if relative == "." else path / relative
-        ScanCache.set(node, {"path": str(node), "top_files": [], **aggregate})
-    return ScanCache.get(path)
+        data_item = {"path": str(node), "top_files": [], **aggregate}
+        if relative == ".":
+            root_data = data_item
+            continue
+        ScanCache.set(node, data_item)
+    if root_data:
+        ScanCache.set(path, root_data)
+    return root_data or ScanCache.get(path)
 
 
 def _direct_child_count_exceeds(path: Path, limit: int = FAST_EXPLORE_ENTRY_LIMIT) -> bool:
@@ -218,11 +237,17 @@ def _parallel_scan_sizes(paths: list[Path]) -> dict[Path, int]:
         return sizes
 
     unique = list(dict.fromkeys(paths))
+    # get_rust_tree_data/get_rust_scan_data key the cache by the normalized
+    # (symlink-resolved) path, so every probe here must use the same key —
+    # otherwise a symlinked input (e.g. ~/.cache moved to another partition)
+    # is seeded under its resolved key but read under the raw key, silently
+    # reporting size 0. The returned dict stays keyed by the caller's path.
+    norm = {p: _normalize_scan_path(p) for p in unique}
     roots = [p for p in unique if not any(parent in unique for parent in p.parents)]
     # Drop roots already seeded by an earlier scan — e.g. the root-view Home tree
     # scan seeds its large descendants (~/.cache/*, model dirs). Without this those
     # insight subtrees would be walked a second time here, defeating the merge.
-    roots = [p for p in roots if ScanCache.get(p) is None]
+    roots = [p for p in roots if ScanCache.get(norm[p]) is None]
 
     def scan_one(p: Path) -> None:
         get_rust_tree_data(p)
@@ -230,12 +255,12 @@ def _parallel_scan_sizes(paths: list[Path]) -> dict[Path, int]:
     if roots:
         with ThreadPoolExecutor(max_workers=min(2, len(roots))) as executor:
             list(executor.map(scan_one, roots))
-    missing = [path for path in unique if ScanCache.get(path) is None]
+    missing = [path for path in unique if ScanCache.get(norm[path]) is None]
     if missing:
         with ThreadPoolExecutor(max_workers=min(2, len(missing))) as executor:
             list(executor.map(get_rust_scan_data, missing))
     for path in unique:
-        data = ScanCache.get(path)
+        data = ScanCache.get(norm[path])
         sizes[path] = data.get("total_size_bytes", 0) if data else 0
     return sizes
 
@@ -620,7 +645,7 @@ def run_deep_analysis(target_path: Path | None = None):
     state_stack: list[dict[str, Any]] = []
 
     # Current active state
-    current_target: Path | None = target_path
+    current_target: Path | None = _normalize_scan_path(target_path) if target_path else None
     results: list[dict[str, Any]] = []
     data: dict[str, Any] | None = None
     total_scan_size = 0
@@ -628,7 +653,7 @@ def run_deep_analysis(target_path: Path | None = None):
     scan_reason = "scan"
 
     while True:
-        target_to_scan = current_target or Path.home()
+        target_to_scan = current_target or _normalize_scan_path(Path.home())
         view_title = "Analyze Disk" if current_target is None else f"Exploring: {current_target}"
 
         if needs_scan:
@@ -658,6 +683,8 @@ def run_deep_analysis(target_path: Path | None = None):
                         target_label,
                         view_title,
                     )
+            if not data:
+                data = get_fast_explore_data(target_to_scan)
             if not data:
                 print("\n   ❌ Engine scan failed.")
                 time.sleep(1.5)

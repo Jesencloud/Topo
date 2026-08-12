@@ -1,8 +1,8 @@
 # Daily Modification Report - 2026-08-12
 
-## Project: topo (Topo) - 高风险性能问题重构与磁盘 I/O 极速降频 (High-Risk Performance Fixes)
+## Project: topo (Topo) - 高风险性能问题重构与磁盘 I/O 极速降频 (High-Risk & Medium-High Performance Fixes)
 
-针对 `docs/PERFORMANCE_EFFICIENCY_AUDIT_2026-08-12.md` 性能审查报告中指出的 3 项高风险磁盘 I/O 与并发死角（发现 2.1、2.2、2.3）完成了全量重构与优化。彻底消除了重叠目录二次扫描、应用残留搜索重复磁盘遍历以及按年龄清理时的双重树读取，显著降低了系统 CPU 占用与磁盘 I/O 开销。单元测试增加至 374 项（Rust 测试 8 项），全量门控 `./check.sh` 100% 绿色过关。详情参见 `docs/PERFORMANCE_HIGH_RISK_FIXES_2026-08-12.md`。
+针对 `docs/PERFORMANCE_EFFICIENCY_AUDIT_2026-08-12.md` 性能审查报告中指出的中高风险问题（§2.1 Analyze 重叠扫描、§2.2 应用残留重复遍历、§2.3 按年龄清理双重树遍历高风险、§2.4 ScanCache 无界内存改 LRU+64MiB 限制、§2.5 Rust `--tree` 模式效率与数据透传）完成了全量重构与优化。彻底消除了重叠目录二次扫描、应用残留搜索重复磁盘遍历、按年龄清理时的双重树读取以及 ScanCache LRU 缓存挤爆隐患，显著降低了系统 CPU 占用与磁盘 I/O 开销。单元测试增加至 382 项（Rust 测试 9 项），全量门控 `./check.sh` 100% 绿色过关。详情参见 `docs/PERFORMANCE_HIGH_RISK_FIXES_2026-08-12.md`。
 
 ### 1. Analyze 重叠扫描与并发控制 (Analyze Overlapping Scan Deduplication)
 * **`analyze.py` & Rust Engine `--tree` 预热复用**：
@@ -20,8 +20,17 @@
   - 扩展 Rust 引擎支持 `--stats` 模式，一次性返回总大小、非零文件数及后代条目最大活动时间。
   - `clean_path_by_age()` 只需一次磁盘遍历，全陈旧目录直接复用返回的大小并交给 `safe_remove(known_size_bytes=...)`，消除了先前“先活动性检查、再完整算大小”的双重遍历开销。
 
-### 4. 自动化测试与质量门控
-* 单元测试由 366 项扩展至 374 项（Rust 测试 8 项），全面覆盖父子路径归并、`ScanCache` 复用、残余索引内存查找与 Rust `--stats` 单遍统计，`./check.sh` 门控全绿 Pass。
+### 4. `Engine scan fail` 根节点返回与缓存稳定性修复 (`analyze.py` & `scan_cache.py`)
+* **根节点返回保障与 `ScanCache` 扩容**：
+  - 修复 `get_rust_tree_data()` 对节点巨多（如子节点数 > 128）的大型目录（如用户 Home 目录）执行 `--tree` 遍历时，因 `ScanCache` LRU 超过 `MAX_ENTRIES` 限制而误将最先存入的根节点 `.` 挤爆淘汰，导致 `ScanCache.get(path)` 返回 `None` 触发 `Engine scan fail` 的隐蔽 Bug。
+  - `get_rust_tree_data()` 直接保留并返回解析出的 `root_data`，使本次扫描结果不再依赖根节点是否仍存活于缓存；随后尽力将根节点刷新为 MRU，提高后续命中率，但不把缓存描述为永久 pin。
+  - 将 `ScanCache` 容量 `MAX_ENTRIES` 从 128 扩容至 1024，64 MiB 总内存上限保持不变。
+  - 统一使用异常安全的绝对路径规范化 `_normalize_scan_path` 作为引擎参数和缓存 key；Rust 失败时仅在 Python 仍可读取目录的情况下回退到 direct-entry preview。
+  - **`_parallel_scan_sizes` 符号链接 key 对齐**：修复由 `_normalize_scan_path` 引入的 key 不一致问题——`_parallel_scan_sizes` 统一使用 `norm = {p: _normalize_scan_path(p) for p in unique}` 进行 `ScanCache.get()` 探测（与 `get_rust_tree_data` / `get_rust_scan_data` 的写缓存 key 严格对齐），解决符号链接输入（如 `~/.cache` 软链接至其它分区）因 key 未规范化导致静默误报为 0 的 Bug，同时返回字典保持调用方的原始 `path` 键名。
+  - 补齐根节点返回、MRU 缓存、超大根节点不缓存仍可返回、路径解析失败 fallback 以及 `test_parallel_scan_sizes_matches_symlinked_input_to_resolved_cache_key` 符号链接回归测试。
+
+### 5. 自动化测试与质量门控
+* 单元测试增加至 382 项（Rust 测试 9 项），全面覆盖父子路径归并、`ScanCache` 复用、超大目录根结果独立返回与 MRU 刷新、符号链接 key 对齐、路径规范化 fallback、残余索引内存查找及 Rust `--stats` 单遍统计，`./check.sh` 门控全绿 Pass。
 
 ---
 

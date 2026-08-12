@@ -1,5 +1,7 @@
 import json
 import stat
+import sys
+import threading
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -9,6 +11,7 @@ from src.core.analyze import (
     _direct_child_count_exceeds,
     _explore_notice,
     _needs_admin_for_deletion,
+    _normalize_scan_path,
     _parallel_scan_sizes,
     _permanent_fallback_consent,
     _render_scan_header,
@@ -37,6 +40,99 @@ def test_scan_cache():
 
     # Check that a different path returns None
     assert ScanCache.get(Path("/tmp/other")) is None
+
+
+def test_scan_cache_evicts_least_recently_used_entry(monkeypatch, tmp_path):
+    monkeypatch.setattr(ScanCache, "MAX_ENTRIES", 2)
+    first, second, third = (tmp_path / name for name in ("first", "second", "third"))
+    for path in (first, second, third):
+        path.mkdir()
+
+    ScanCache.clear()
+    ScanCache.set(first, {"total_size_bytes": 1})
+    ScanCache.set(second, {"total_size_bytes": 2})
+    assert ScanCache.get(first) is not None  # first is now most recently used
+    ScanCache.set(third, {"total_size_bytes": 3})
+
+    assert ScanCache.get(second) is None
+    assert ScanCache.get(first) is not None
+    assert ScanCache.get(third) is not None
+
+
+def test_scan_cache_invalidates_changed_directory(tmp_path):
+    directory = tmp_path / "cached"
+    directory.mkdir()
+    ScanCache.clear()
+    ScanCache.set(directory, {"total_size_bytes": 1})
+
+    (directory / "new-file").write_text("changed")
+
+    assert ScanCache.get(directory) is None
+
+
+def test_scan_cache_rejects_single_entry_over_memory_limit(monkeypatch, tmp_path):
+    directory = tmp_path / "huge"
+    directory.mkdir()
+    monkeypatch.setattr(ScanCache, "MAX_ESTIMATED_BYTES", 100)
+    ScanCache.clear()
+
+    ScanCache.set(directory, {"subdirs": {"x" * 200: 1}})
+
+    assert ScanCache.get(directory) is None
+
+
+def test_scan_cache_byte_accounting_stays_consistent_under_concurrency(monkeypatch, tmp_path):
+    """Concurrent set/get from many threads must not corrupt the cache.
+
+    ``_parallel_scan_sizes`` seeds the cache from a ThreadPoolExecutor (several
+    workers each calling ``set`` many times). The byte counter and LRU order are
+    read-modify-write state; without the class-level lock, concurrent eviction
+    both drifts ``_estimated_bytes`` and races ``move_to_end`` into a KeyError.
+    A tiny switch interval forces the preemption that makes the regression
+    deterministic; a low entry cap keeps eviction firing throughout.
+    """
+    monkeypatch.setattr(ScanCache, "MAX_ENTRIES", 8)
+    ScanCache.clear()
+
+    dirs = []
+    for i in range(24):
+        directory = tmp_path / f"d{i}"
+        directory.mkdir()
+        dirs.append(directory)
+
+    barrier = threading.Barrier(6)
+    errors: list[Exception] = []
+
+    def worker() -> None:
+        try:
+            barrier.wait()
+            for _ in range(150):
+                for directory in dirs:
+                    ScanCache.set(directory, {"total_size_bytes": 1, "subdirs": {"a": 1, "b": 2}})
+                    ScanCache.get(directory)
+        except Exception as exc:  # noqa: BLE001 - surface any thread failure to the assertion
+            errors.append(exc)
+
+    previous_interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)  # force frequent preemption to expose any missing lock
+    try:
+        threads = [threading.Thread(target=worker) for _ in range(6)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+    finally:
+        sys.setswitchinterval(previous_interval)
+
+    assert not errors
+    # The running counter must exactly equal the live entries' total; a lost
+    # +=/-= update under a race would break this equality.
+    assert ScanCache._estimated_bytes == sum(
+        entry.estimated_bytes for entry in ScanCache._data.values()
+    )
+    assert len(ScanCache._data) <= ScanCache.MAX_ENTRIES
+    assert ScanCache._estimated_bytes >= 0
+    ScanCache.clear()
 
 
 @patch("subprocess.run")
@@ -124,6 +220,81 @@ def test_parallel_scan_sizes_reuses_pre_seeded_descendants():
     # hub and models are cache hits -> only /usr is scanned.
     assert scanned == [other]
     assert sizes == {other: 100, hub: 500, models: 300}
+
+
+def test_parallel_scan_sizes_matches_symlinked_input_to_resolved_cache_key(tmp_path):
+    """The scan functions key the cache by the normalized (symlink-resolved)
+    path, so _parallel_scan_sizes must probe under the same key. A symlinked
+    input (e.g. ~/.cache moved to another partition) would otherwise be seeded
+    under its resolved key but read under the raw key, silently reporting 0."""
+    ScanCache.clear()
+    real = tmp_path / "real_cache"
+    real.mkdir()
+    link = tmp_path / "linked_cache"
+    link.symlink_to(real, target_is_directory=True)
+    assert _normalize_scan_path(link) != link  # guard: the symlink must resolve
+
+    def fake_tree(path):
+        # Mimic get_rust_tree_data: cache under the normalized (resolved) key.
+        ScanCache.set(_normalize_scan_path(path), {"total_size_bytes": 4096})
+
+    with patch("src.core.analyze.get_rust_tree_data", side_effect=fake_tree):
+        sizes = _parallel_scan_sizes([link])
+
+    # Keyed by the caller's original path, with the size found via the resolved key.
+    assert sizes == {link: 4096}
+
+
+def test_get_rust_tree_data_survives_lru_eviction(test_env):
+    """The tree result must return its root even if cache capacity is exceeded."""
+    from src.core.analyze import get_rust_tree_data
+
+    large_tree = {
+        ".": {"total_size_bytes": 1000, "file_count": 10, "subdirs": {}},
+    }
+    for i in range(12):
+        large_tree[f"sub_{i}"] = {"total_size_bytes": 1, "file_count": 1, "subdirs": {}}
+
+    fake_res = MagicMock()
+    fake_res.ok = True
+    fake_res.stdout = json.dumps(large_tree)
+
+    with (
+        patch("src.core.analyze.run_command", return_value=fake_res),
+        patch.object(ScanCache, "MAX_ENTRIES", 4),
+    ):
+        result = get_rust_tree_data(test_env)
+
+    assert result is not None
+    assert result["total_size_bytes"] == 1000
+    assert ScanCache.get(test_env.resolve()) is result
+    assert next(reversed(ScanCache._data)) == str(test_env.resolve())
+
+
+def test_get_rust_tree_data_returns_root_even_when_root_is_too_large_to_cache(test_env):
+    root_data = {
+        "total_size_bytes": 1000,
+        "file_count": 10,
+        "subdirs": {"oversized-name": 1000},
+    }
+    fake_res = MagicMock(ok=True, stdout=json.dumps({".": root_data}))
+    with (
+        patch("src.core.analyze.run_command", return_value=fake_res),
+        patch.object(ScanCache, "MAX_ESTIMATED_BYTES", 1),
+    ):
+        result = get_rust_tree_data(test_env)
+
+    assert result is not None
+    assert result["total_size_bytes"] == 1000
+    assert ScanCache.get(test_env.resolve()) is None
+
+
+def test_normalize_scan_path_falls_back_when_resolve_fails(tmp_path):
+    relative = Path("relative-target")
+    with patch.object(Path, "resolve", side_effect=OSError("unavailable")):
+        normalized = _normalize_scan_path(relative)
+
+    assert normalized == relative.absolute()
 
 
 def test_has_valid_cachedir_tag(test_env):

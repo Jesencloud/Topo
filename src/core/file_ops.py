@@ -1,5 +1,6 @@
 import contextlib
 import functools
+import json
 import os
 import re
 import shutil
@@ -474,8 +475,6 @@ def _get_path_stats(path: Path) -> dict[str, Any] | None:
     if not result.ok:
         return None
     try:
-        import json
-
         data = json.loads(result.stdout)
     except (json.JSONDecodeError, TypeError):
         return None
@@ -493,42 +492,39 @@ def clean_path_by_age(path: str | Path, days: int, dry_run: bool = False) -> tup
     cutoff = time.time() - (days * SECONDS_PER_DAY)
 
     try:
-        with os.scandir(path) as it:
-            entries = list(it)
+        with os.scandir(path) as entries:
+            for entry in entries:
+                try:
+                    # lstat() judges the entry itself and never follows a symlink to its
+                    # target. Consider both atime and mtime so that 'noatime'/'relatime'
+                    # mounts (where atime barely updates) don't make active data look stale.
+                    st = entry.stat(follow_symlinks=False)
+                except OSError:
+                    continue
+                if st.st_atime >= cutoff or st.st_mtime >= cutoff:
+                    continue
+                item = Path(entry.path)
+                if entry.is_dir(follow_symlinks=False):
+                    stats = _get_path_stats(item)
+                    if stats is not None:
+                        if float(stats.get("newest_activity_secs", 0)) >= cutoff:
+                            continue
+                        size = _coerce_non_negative_size(stats.get("total_size_bytes")) or 0
+                    else:
+                        if _has_recent_content(item, cutoff):
+                            continue
+                        size = get_size_fast(item)
+                else:
+                    size = st.st_size
+                if dry_run:
+                    safe_remove(item, use_trash=False, dry_run=True, known_size_bytes=size)
+                    total_size += size
+                    items_count += 1
+                elif safe_remove(item, use_trash=False, known_size_bytes=size)[0]:
+                    total_size += size
+                    items_count += 1
     except OSError:
         return total_size, items_count
-
-    for entry in entries:
-        try:
-            # lstat() judges the entry itself and never follows a symlink to its
-            # target. Consider both atime and mtime so that 'noatime'/'relatime'
-            # mounts (where atime barely updates) don't make active data look stale.
-            st = entry.stat(follow_symlinks=False)
-        except OSError:
-            # A single vanished/broken entry must not abort the whole sweep.
-            continue
-        if st.st_atime >= cutoff or st.st_mtime >= cutoff:
-            continue
-        item = Path(entry.path)
-        if entry.is_dir(follow_symlinks=False):
-            stats = _get_path_stats(item)
-            if stats is not None:
-                if float(stats.get("newest_activity_secs", 0)) >= cutoff:
-                    continue
-                size = _coerce_non_negative_size(stats.get("total_size_bytes")) or 0
-            else:
-                if _has_recent_content(item, cutoff):
-                    continue
-                size = get_size_fast(item)
-        else:
-            size = st.st_size
-        if dry_run:
-            safe_remove(item, use_trash=False, dry_run=True, known_size_bytes=size)
-            total_size += size
-            items_count += 1
-        elif safe_remove(item, use_trash=False, known_size_bytes=size)[0]:
-            total_size += size
-            items_count += 1
     return total_size, items_count
 
 
