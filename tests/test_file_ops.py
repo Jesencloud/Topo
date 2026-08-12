@@ -173,6 +173,62 @@ def test_safe_remove_bypass_keeps_topo_config(test_env):
     assert marker.exists()
 
 
+def test_safe_remove_self_removal_does_not_bypass_sensitive_data(test_env):
+    for relative in (".ssh", ".gnupg", "Documents"):
+        protected = test_env / relative
+        protected.mkdir(parents=True)
+        marker = protected / "secret.txt"
+        marker.write_text("secret")
+
+        success, message = safe_remove(
+            protected,
+            use_trash=False,
+            allow_app_data_removal=True,
+            allow_self_removal=True,
+        )
+
+        assert success is False
+        assert "hard-protected" in message
+        assert marker.exists()
+
+
+def test_safe_remove_self_removal_does_not_bypass_whitelist(test_env):
+    protected = test_env / "user-whitelist"
+    protected.mkdir()
+    add_to_whitelist(str(protected))
+
+    success, message = safe_remove(
+        protected,
+        use_trash=False,
+        allow_app_data_removal=True,
+        allow_self_removal=True,
+    )
+
+    assert success is False
+    assert message == "Path is hard-protected: user whitelist"
+    assert protected.exists()
+
+
+def test_safe_remove_self_removal_flag_reaches_toctou_validation(test_env):
+    target = test_env / ".topo"
+    target.mkdir()
+    with patch(
+        "src.core.file_ops.validate_path_for_deletion",
+        side_effect=[(True, ""), (False, "Path is hard-protected: Topo installation")],
+    ) as validate:
+        success, message = safe_remove(
+            target,
+            use_trash=False,
+            allow_app_data_removal=True,
+            allow_self_removal=True,
+        )
+
+    assert success is False
+    assert "TOCTOU check failed" in message
+    assert validate.call_args_list[0].kwargs["allow_self_removal"] is True
+    assert validate.call_args_list[1].kwargs["allow_self_removal"] is True
+
+
 def test_hard_protection_reason_is_specific(test_env):
     assert get_hard_protection_reason(Path("/etc/passwd")) == "critical system path"
     assert get_hard_protection_reason(Path.home()) == "home directory"

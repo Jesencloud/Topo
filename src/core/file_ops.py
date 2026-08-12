@@ -193,6 +193,7 @@ def record_deletion_audit(
 def validate_path_for_deletion(
     path: str | Path,
     allow_app_data_removal: bool = False,
+    allow_self_removal: bool = False,
 ) -> tuple[bool, str]:
     """Validate a raw deletion target before size checks or unlink attempts."""
     raw_text = os.fspath(path)
@@ -212,7 +213,9 @@ def validate_path_for_deletion(
         resolved_path = raw_path.absolute()
 
     if allow_app_data_removal:
-        if reason := get_hard_protection_reason(resolved_path):
+        if (reason := get_hard_protection_reason(resolved_path)) and not (
+            allow_self_removal and reason in ("Topo installation", "Topo configuration")
+        ):
             return False, f"Path is hard-protected: {reason}"
     elif is_protected(resolved_path):
         return False, "Path is whitelisted"
@@ -361,6 +364,7 @@ def safe_remove(
     use_trash: bool = True,
     dry_run: bool = False,
     allow_app_data_removal: bool = False,
+    allow_self_removal: bool = False,
     known_size_bytes: int | None = None,
 ) -> tuple[bool, str]:
     """Safe removal with trash support and protection checks."""
@@ -370,6 +374,7 @@ def safe_remove(
     valid, reason = validate_path_for_deletion(
         path,
         allow_app_data_removal=allow_app_data_removal,
+        allow_self_removal=allow_self_removal,
     )
     if not valid:
         record_deletion_audit(raw_path, mode, "rejected-validation")
@@ -399,6 +404,7 @@ def safe_remove(
         re_valid, re_reason = validate_path_for_deletion(
             re_resolved,
             allow_app_data_removal=allow_app_data_removal,
+            allow_self_removal=allow_self_removal,
         )
         if not re_valid:
             record_deletion_audit(raw_path, mode, "rejected-toctou")

@@ -18,12 +18,17 @@
     - 兼容 Linux 系统规范的 Sticky Bit 共享目录（如 `/tmp`，直接父目录带 `stat.S_ISVTX`），既保证了在 `/tmp` 下创建的分析目标的提权删除，又严密切断了通过可写中间层目录替换符号链接进行提权攻击的路径。
   - 补齐了 `test_sudo_remove_rejects_user_writable_ancestor` 回归测试。
 
-### 3. 代码精简与 DRY 重构
+### 3. Topo 自身卸载护栏修正 (`topo remove` Fix)
+* **`file_ops.py` & `remove.py` 卸载自身授权**：
+  - 修复 `topo remove` 卸载清理时误被 `get_hard_protection_reason` 的 `Topo installation` 与 `Topo configuration` 硬保护规则拦截的 Bug。
+  - 为 `validate_path_for_deletion` 和 `safe_remove` 增加 `allow_self_removal: bool = False` 参数，仅在用户显式触发 `topo remove` 自身卸载命令时安全解封 Topo 自身安装与配置目录的卸载，同时依然对 `~/.ssh`、`~/.gnupg`、`~/Documents` 等凭据与数据实施 100% 绝对死保护。
+
+### 4. 代码精简与 DRY 重构
 * **`update.py` 解析逻辑复用**：
   - 删除 `run_update()` 中手动切分 `sums_text` 的重复解析逻辑，统一复用内部已有的 `_expected_sha256()` 提取函数；清理冗余的 `import hmac`。
 
-### 4. 全量自动化门控
-* 单元测试由 364 项扩充至 365 项，`./check.sh` 门控检查（Ruff, MyPy, ShellCheck, Rust Clippy, Pytest）全量 Pass 过关。
+### 5. 全量自动化门控
+* 单元测试由 364 项扩充至 366 项，`./check.sh` 门控检查（Ruff, MyPy, ShellCheck, Rust Clippy, Pytest）全量 Pass 过关。
 
 ---
 

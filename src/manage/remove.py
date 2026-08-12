@@ -93,7 +93,12 @@ def _launcher_points_to_package(launcher_path: Path) -> bool:
 
 
 def _remove_path(path: Path) -> bool:
-    ok, _ = safe_remove(path, use_trash=False, allow_app_data_removal=True)
+    ok, _ = safe_remove(
+        path,
+        use_trash=False,
+        allow_app_data_removal=True,
+        allow_self_removal=True,
+    )
     return ok
 
 
@@ -255,7 +260,12 @@ def run_remove(dry_run=False):
     had_errors = False
     for item in to_remove:
         p: Path = item["path"]
-        ok, reason = safe_remove(p, use_trash=False, allow_app_data_removal=True)
+        ok, reason = safe_remove(
+            p,
+            use_trash=False,
+            allow_app_data_removal=True,
+            allow_self_removal=True,
+        )
         if ok:
             print(f"  {GREEN}✓{RESET} Removed {item['desc']}")
         else:

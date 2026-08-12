@@ -1,5 +1,7 @@
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from src.core.file_ops import validate_path_for_deletion
 from src.manage.remove import (
     _launcher_points_to_package,
     _launcher_points_to_topo,
@@ -10,7 +12,6 @@ from src.manage.remove import (
 
 def _do_remove(path):
     import shutil
-    from pathlib import Path
 
     p = Path(path)
     if p.is_dir() and not p.is_symlink():
@@ -124,3 +125,44 @@ def test_launcher_points_to_package_ignores_binary_user_file(test_env):
     launcher.write_bytes(b"\xff\xfe\x00custom")
 
     assert _launcher_points_to_package(launcher) is False
+
+
+def test_validate_path_for_deletion_allows_self_removal(test_env):
+    config_dir = test_env / ".config/topo"
+    install_dir = test_env / ".topo"
+    config_dir.mkdir(parents=True)
+    install_dir.mkdir(parents=True)
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.core.whitelist.get_config_dir", return_value=config_dir),
+        patch("src.core.whitelist.get_install_root", return_value=install_dir),
+    ):
+        from src.core.whitelist import get_hard_protection_reason_cached
+
+        get_hard_protection_reason_cached.cache_clear()
+
+        # Default app data removal blocks hard-protected Topo installation/configuration
+        ok_config, reason_config = validate_path_for_deletion(
+            config_dir, allow_app_data_removal=True
+        )
+        assert ok_config is False
+        assert "Topo configuration" in reason_config
+
+        ok_install, reason_install = validate_path_for_deletion(
+            install_dir, allow_app_data_removal=True
+        )
+        assert ok_install is False
+        assert "Topo installation" in reason_install
+
+        # With allow_self_removal=True, Topo installation and configuration paths are unblocked
+        ok_config_self, _ = validate_path_for_deletion(
+            config_dir, allow_app_data_removal=True, allow_self_removal=True
+        )
+        assert ok_config_self is True
+
+        ok_install_self, _ = validate_path_for_deletion(
+            install_dir, allow_app_data_removal=True, allow_self_removal=True
+        )
+        assert ok_install_self is True
+        get_hard_protection_reason_cached.cache_clear()
