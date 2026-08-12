@@ -287,7 +287,7 @@ elif [[ "$ARCH" == "aarch64" ]] || [[ "$ARCH" == "arm64" ]]; then
 fi
 
 # Keep LICENSE for compliance, but remove everything else non-essential
-rm -f assets/*.png 2>/dev/null || true
+rm -f assets/*.png assets/*.asc 2>/dev/null || true
 rm -rf \
     .github/ \
     docs/ \
@@ -297,6 +297,11 @@ rm -rf \
     topo.py \
     .gitignore \
     README.md \
+    README.zh-CN.md \
+    check.sh \
+    pyproject.toml \
+    packaging/ \
+    install.sh \
     topo-core/
 
 # 5. Run the linking script

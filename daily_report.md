@@ -10,6 +10,7 @@
   - **100% 签名归档校验**：所有安装统一通过从 Release 下载 `topo-src.tar.gz` 源码包，且在解压前必须使用钉死的发布密钥与 `SHA256SUMS.asc` 校验其签名及摘要。
   - **引擎二进制全路径强制验签**：移除了只要本地/仓库存在 `topo-core-*` 就跳过校验的漏洞；所有架构的原生引擎二进制在解压或下载后必须严格核对 `SHA256SUMS`，匹配失败立即强行终止。
   - **事务性暂存与降级恢复 (Staged Install)**：安装与更新过程全程在 `mktemp -d "$HOME/.topo.install.XXXXXX"` 临时目录中准备，配置完成后通过原子性 `mv` 替换 `~/.topo`；若配置或替换失败，自动安全恢复旧版备份目录。
+  - **安装产物极限精简**：更新 `install.sh` 中的文件清理逻辑，在安装完成后自动清理 `install.sh`, `check.sh`, `packaging/`, `pyproject.toml`, `README.zh-CN.md`, `assets/*.asc` 等非必要引导与构建残余，安装后 `~/.topo` 下只保留 `topo`, `src/`, `VERSION`, `LICENSE` 及必要的 `.wav` 提示音效。
 
 ### 2. 提权面路径保护与共享目录支持 (Ancestor Path Guard Hardening)
 * **`analyze.py` 精确化祖先路径判据 (H-1)**：
