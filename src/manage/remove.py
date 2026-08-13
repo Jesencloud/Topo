@@ -5,13 +5,20 @@ from pathlib import Path
 from typing import TypedDict
 
 from ..core import terminal_state
-from ..core.constants import BLUE, BOLD, GRAY, GREEN, MAGENTA, RED, RESET
+from ..core.constants import BOLD, GRAY, GREEN, MAGENTA, PURPLE, RED, RESET, YELLOW
 from ..core.file_ops import bytes_to_human, get_size_fast, safe_remove
 from ..core.install_source import (
     PACKAGE_INSTALL,
     get_install_source,
     get_package_remove_argv,
 )
+
+
+class _RemoveItem(TypedDict, total=False):
+    path: Path
+    desc: str
+    type: str
+    size: int
 
 
 def _resolve_launcher_symlink(launcher: Path) -> Path | None:
@@ -166,14 +173,6 @@ def run_remove(dry_run=False):
             print(f"\n {RED}✗ Package removal failed with exit code {process.returncode}.{RESET}")
         return
 
-    print(f"\n {MAGENTA}☉ Removing topo from your system...{RESET}\n")
-
-    class _RemoveItem(TypedDict, total=False):
-        path: Path
-        desc: str
-        type: str
-        size: int
-
     # 1. Identify files to remove
     to_remove: list[_RemoveItem] = []
 
@@ -218,22 +217,23 @@ def run_remove(dry_run=False):
         item["size"] = get_size_fast(item["path"])
     total_size: int = sum(item["size"] for item in to_remove)
 
-    # 2. Preview
-    print(f" {BOLD}The following items will be removed:{RESET}")
+    # 2. Preview (Compact Header)
+    print(f"\n {PURPLE}☉ Topo Uninstall{RESET} {GRAY}- The following items will be removed:{RESET}")
     for item in to_remove:
         size_str = bytes_to_human(int(item["size"]))
-        print(
-            f"  {GREEN}✓{RESET} {str(item['path']).replace(str(Path.home()), '~'):<40} {GRAY}({item['desc']}, {size_str}){RESET}"
-        )
+        disp_path = str(item["path"]).replace(str(Path.home()), "~")
+        print(f"  {GREEN}✓{RESET} {GRAY}{disp_path:<40} ({item['desc']}, {size_str}){RESET}")
 
     if dry_run:
-        print(f"\n {GREEN}✓{RESET} Dry run complete. Total to free: {bytes_to_human(total_size)}")
-        print(f" {GRAY}(Shell PATH entries added by topo would also be removed.){RESET}")
+        print(
+            f"\n {GREEN}✓{RESET} {GRAY}Dry run complete. Total to free: {bytes_to_human(total_size)}{RESET}"
+        )
+        print(f"  {GRAY}(Shell PATH entries added by topo would also be removed.){RESET}")
         return
 
     # 3. Confirmation (Mole-style)
     print(
-        f"\n {MAGENTA}→{RESET} Remove topo, {bytes_to_human(total_size)}  {GREEN}Enter{RESET} confirm, {GRAY}ESC{RESET} cancel: ",
+        f"\n {PURPLE}●{RESET} Remove topo ({bytes_to_human(total_size)})? {GREEN}Enter{RESET} confirm, {GRAY}ESC{RESET} cancel: ",
         end="",
         flush=True,
     )
@@ -267,17 +267,17 @@ def run_remove(dry_run=False):
             allow_self_removal=True,
         )
         if ok:
-            print(f"  {GREEN}✓{RESET} Removed {item['desc']}")
+            print(f"  {GREEN}✓{RESET} {GRAY}Removed {item['desc']}{RESET}")
         else:
             had_errors = True
             print(f"  {RED}✗{RESET} Failed to remove {p}: {reason}")
 
     if _strip_topo_path_lines():
-        print(f"  {GREEN}✓{RESET} Removed PATH entry from shell config")
+        print(f"  {GREEN}✓{RESET} {GRAY}Removed PATH entry from shell config{RESET}")
 
-    print("\n" + "=" * 70)
+    print("\n" + "=" * 65)
     if had_errors:
-        print(f" {BLUE}topo removal completed with errors (see above).{RESET}")
+        print(f" {YELLOW}⚠{RESET} {GRAY}topo removal completed with errors (see above).{RESET}")
     else:
-        print(f" {BLUE}topo has been removed from your system.{RESET}")
-    print("=" * 70 + "\n")
+        print(f" {GREEN}✓{RESET} {GRAY}topo has been successfully removed from your system.{RESET}")
+    print("=" * 65 + "\n")

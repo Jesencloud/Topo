@@ -2,14 +2,38 @@
 
 set -e
 
-# ANSI colors
-CYAN='\033[1;36m'
-GREEN='\033[1;32m'
-YELLOW='\033[1;33m'
-RED='\033[1;31m'
-GRAY='\033[1;90m'
-NC='\033[0m' # No Color
-BOLD='\033[1m'
+# ANSI High-Contrast Professional Palette (Matching Topo Core)
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+    PURPLE='\033[1;95m'
+    CYAN='\033[1;36m'
+    GREEN='\033[0;32m'
+    YELLOW='\033[1;33m'
+    RED='\033[1;31m'
+    GRAY='\033[38;5;244m'
+    BOLD='\033[1m'
+    NC='\033[0m' # No Color
+else
+    PURPLE=''
+    CYAN=''
+    GREEN=''
+    YELLOW=''
+    RED=''
+    GRAY=''
+    BOLD=''
+    NC=''
+fi
+
+start_action() {
+    if [ "$MINIMAL" = false ] && [ -t 1 ]; then
+        printf "  ${GRAY}%s %s...${NC}" "$1" "$2"
+    fi
+}
+
+end_action() {
+    if [ "$MINIMAL" = false ] && [ -t 1 ]; then
+        printf "\r\033[K"
+    fi
+}
 
 MINIMAL=false
 TARGET_REF=""
@@ -36,17 +60,17 @@ done
 
 # 1. Check prerequisites
 if [ "$MINIMAL" = false ]; then
-    echo -e "${CYAN}☉ Checking prerequisites...${NC}"
+    echo -e "${PURPLE}☉ Checking prerequisites...${NC}"
 fi
 
 if command -v git >/dev/null 2>&1; then
-    if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓ git installed${NC}"; fi
+    if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓${NC} ${GRAY}git installed${NC}"; fi
 else
-    if [ "$MINIMAL" = false ]; then echo -e "  ${YELLOW}ℹ git not found (signed release installation is unaffected)${NC}"; fi
+    if [ "$MINIMAL" = false ]; then echo -e "  ${YELLOW}ℹ${NC} ${GRAY}git not found (signed release installation is unaffected)${NC}"; fi
 fi
 
 command -v python3 >/dev/null 2>&1 || { echo -e "  ${RED}✗ Error: python3 is required but not installed.${NC}"; exit 1; }
-if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓ python3 installed${NC}"; fi
+if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓${NC} ${GRAY}python3 installed${NC}"; fi
 if ! python3 -c "import packaging" >/dev/null 2>&1; then
     echo -e "  ${RED}✗ Error: Python package 'packaging' is required but not installed.${NC}"
     echo -e "  ${GRAY}Install it with one of:${NC}"
@@ -55,7 +79,7 @@ if ! python3 -c "import packaging" >/dev/null 2>&1; then
     echo -e "    ${BOLD}sudo pacman -S python-packaging${NC}           ${GRAY}# Arch/Manjaro${NC}"
     exit 1
 fi
-if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓ python packaging installed${NC}"; fi
+if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓${NC} ${GRAY}python packaging installed${NC}"; fi
 
 if [ "$MINIMAL" = false ]; then
     PACKAGE_REMOVE_COMMAND=""
@@ -75,7 +99,7 @@ if [ "$MINIMAL" = false ]; then
 fi
 
 if [ -z "$TARGET_REF" ]; then
-    if [ "$MINIMAL" = false ]; then echo -e "  ${GRAY}↺ Resolving latest stable release...${NC}"; fi
+    start_action "↺" "Resolving latest stable release"
     TARGET_REF=$(
         curl -fsSLI -o /dev/null -w '%{url_effective}' \
             "https://github.com/Jesencloud/Topo/releases/latest" |
@@ -106,6 +130,7 @@ print(tag.strip())
 PY
         ) || true
     fi
+    end_action
     if [ -z "$TARGET_REF" ] || [ "$TARGET_REF" = "latest" ]; then
         echo -e "  ${RED}✗ Error: failed to resolve the latest Topo release.${NC}"
         echo -e "  ${GRAY}Install a specific version with:${NC} ${BOLD}bash install.sh --version v0.6.0${NC}"
@@ -113,7 +138,7 @@ PY
         exit 1
     fi
 fi
-if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓ target release ${TARGET_REF}${NC}"; fi
+if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓${NC} ${GRAY}target release ${TARGET_REF}${NC}"; fi
 
 # --- Release verification infrastructure (fail-closed) ---------------------
 # Trust anchor: the release key fingerprint is pinned here, so a tampered
@@ -133,8 +158,9 @@ cleanup_verify_dir() {
     if [ -n "$VERIFY_DIR" ]; then rm -rf "$VERIFY_DIR"; fi
 }
 abort_verification() {
+    end_action
     echo -e "  ${RED}✗ ${1}${NC}" >&2
-    echo -e "  ${GRAY}Refusing to install unverified files. Nothing was executed.${NC}" >&2
+    echo -e "  ${GRAY}Installation was not committed; temporary files were cleaned up and any previous installation and shell configuration were restored.${NC}" >&2
     exit 1
 }
 
@@ -152,11 +178,12 @@ require_release_manifest() {
         exit 1
     fi
     VERIFY_DIR=$(mktemp -d)
-    curl -fsSL "$RELEASE_URL/SHA256SUMS" -o "$VERIFY_DIR/SHA256SUMS" ||
+    start_action "↓" "Downloading and verifying GPG release manifest"
+    curl -fsSL --connect-timeout 10 --retry 3 --retry-delay 2 --retry-connrefused "$RELEASE_URL/SHA256SUMS" -o "$VERIFY_DIR/SHA256SUMS" ||
         abort_verification "Could not download the SHA256SUMS manifest."
-    curl -fsSL "$RELEASE_URL/SHA256SUMS.asc" -o "$VERIFY_DIR/SHA256SUMS.asc" ||
+    curl -fsSL --connect-timeout 10 --retry 3 --retry-delay 2 --retry-connrefused "$RELEASE_URL/SHA256SUMS.asc" -o "$VERIFY_DIR/SHA256SUMS.asc" ||
         abort_verification "Could not download the SHA256SUMS signature."
-    curl -fsSL "$RELEASE_URL/topo-release-public.asc" -o "$VERIFY_DIR/key.asc" ||
+    curl -fsSL --connect-timeout 10 --retry 3 --retry-delay 2 --retry-connrefused "$RELEASE_URL/topo-release-public.asc" -o "$VERIFY_DIR/key.asc" ||
         abort_verification "Could not download the Topo release public key."
     mkdir -p "$VERIFY_DIR/gnupg"
     chmod 700 "$VERIFY_DIR/gnupg"
@@ -171,8 +198,9 @@ require_release_manifest() {
             END { exit(found ? 0 : 1) }
         ' || abort_verification "SHA256SUMS signature is not from the pinned Topo release key."
     SUMS_FILE="$VERIFY_DIR/SHA256SUMS"
+    end_action
     if [ "$MINIMAL" = false ]; then
-        echo -e "  ${GREEN}✓ release manifest signature verified${NC}"
+        echo -e "  ${GREEN}✓${NC} ${GRAY}release manifest signature verified${NC}"
     fi
 }
 
@@ -203,40 +231,80 @@ WAS_INSTALLED=false
 if [ -e "$INSTALL_DIR" ]; then WAS_INSTALLED=true; fi
 STAGED_INSTALL=""
 BACKUP_INSTALL=""
+INSTALL_ACTIVATED=false
+LAUNCHER_PATH=""
+SHELL_CONFIG_SNAPSHOT_DIR=""
+
+snapshot_shell_configs() {
+    SHELL_CONFIG_SNAPSHOT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/topo-shell-config.XXXXXX")
+    for config_name in .bashrc .zshrc; do
+        config_path="$HOME/$config_name"
+        if [ -e "$config_path" ]; then
+            cp -p "$config_path" "$SHELL_CONFIG_SNAPSHOT_DIR/$config_name"
+        else
+            : > "$SHELL_CONFIG_SNAPSHOT_DIR/$config_name.missing"
+        fi
+    done
+}
+
+restore_shell_configs() {
+    if [ -z "$SHELL_CONFIG_SNAPSHOT_DIR" ] || [ ! -d "$SHELL_CONFIG_SNAPSHOT_DIR" ]; then
+        return
+    fi
+    for config_name in .bashrc .zshrc; do
+        config_path="$HOME/$config_name"
+        if [ -f "$SHELL_CONFIG_SNAPSHOT_DIR/$config_name.missing" ]; then
+            rm -f "$config_path"
+        elif [ -f "$SHELL_CONFIG_SNAPSHOT_DIR/$config_name" ]; then
+            cp -p "$SHELL_CONFIG_SNAPSHOT_DIR/$config_name" "$config_path"
+        fi
+    done
+}
 
 cleanup_install_staging() {
     if [ -n "$STAGED_INSTALL" ] && [ -d "$STAGED_INSTALL" ]; then rm -rf "$STAGED_INSTALL"; fi
-    if [ -n "$BACKUP_INSTALL" ] && [ -d "$BACKUP_INSTALL" ]; then
+    if [ "$INSTALL_ACTIVATED" = true ]; then
+        if [ "$WAS_INSTALLED" = false ] && [ -n "$LAUNCHER_PATH" ] && [ -L "$LAUNCHER_PATH" ]; then
+            launcher_target=$(readlink -f "$LAUNCHER_PATH" 2>/dev/null || true)
+            expected_target=$(readlink -f "$FINAL_INSTALL/topo" 2>/dev/null || true)
+            if [ -n "$launcher_target" ] && [ "$launcher_target" = "$expected_target" ]; then
+                rm -f "$LAUNCHER_PATH"
+            fi
+        fi
         if [ -e "$FINAL_INSTALL" ]; then rm -rf "$FINAL_INSTALL"; fi
+        restore_shell_configs
+    fi
+    if [ -n "$BACKUP_INSTALL" ] && [ -d "$BACKUP_INSTALL" ]; then
         mv "$BACKUP_INSTALL" "$FINAL_INSTALL"
+    fi
+    if [ -n "$SHELL_CONFIG_SNAPSHOT_DIR" ] && [ -d "$SHELL_CONFIG_SNAPSHOT_DIR" ]; then
+        rm -rf "$SHELL_CONFIG_SNAPSHOT_DIR"
     fi
 }
 trap 'cleanup_install_staging; cleanup_verify_dir' EXIT
 
 # 3. Clone or download source
 if [ "$MINIMAL" = false ]; then
-    echo -e "\n${CYAN}☉ Fetching Topo...${NC}"
+    echo -e "\n${PURPLE}☉ Fetching Topo...${NC}"
 fi
 
-if [ "$MINIMAL" = false ]; then echo -e "  ${GRAY}↓ Downloading signed source archive (${TARGET_REF})...${NC}"; fi
 require_release_manifest
 SRC_ARCHIVE="$VERIFY_DIR/topo-src.tar.gz"
 if [ "$TARGET_REF" = "main" ]; then
     abort_verification "The moving main branch has no signed source archive; install a release tag."
 fi
-curl -fsSL "$RELEASE_URL/topo-src.tar.gz" -o "$SRC_ARCHIVE" ||
+start_action "↓" "Downloading signed source archive (${TARGET_REF})"
+curl -fsSL --connect-timeout 10 --retry 3 --retry-delay 2 --retry-connrefused "$RELEASE_URL/topo-src.tar.gz" -o "$SRC_ARCHIVE" ||
     abort_verification "Could not download the signed Topo source archive."
 verify_release_file "$SRC_ARCHIVE" "topo-src.tar.gz"
 STAGED_INSTALL=$(mktemp -d "$HOME/.topo.install.XXXXXX")
 tar -xzC "$STAGED_INSTALL" --strip-components=1 -f "$SRC_ARCHIVE"
 touch "$STAGED_INSTALL/.non_git_install"
 INSTALL_DIR="$STAGED_INSTALL"
-if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓ source archive signature and checksum verified${NC}"; fi
+end_action
+if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓${NC} ${GRAY}source archive signature and checksum verified${NC}"; fi
 
 # 4. Clean up and provision binaries
-if [ "$MINIMAL" = false ]; then
-    echo -e "  ${GRAY}🧹 Refining installation directory...${NC}"
-fi
 cd "$INSTALL_DIR"
 printf 'script\n' > .topo-install-source
 
@@ -256,19 +324,20 @@ fetch_engine_binary() {
     # mistake that residue for a bundled engine and chmod +x it.
     require_release_manifest
     local staged="$VERIFY_DIR/$bin_name"
-    curl -fsSL "$RELEASE_URL/$bin_name" -o "$staged" ||
+    start_action "↓" "Fetching ${bin_name} engine"
+    curl -fsSL --connect-timeout 10 --retry 3 --retry-delay 2 --retry-connrefused "$RELEASE_URL/$bin_name" -o "$staged" ||
         abort_verification "Could not download the ${bin_name} engine."
     verify_release_file "$staged" "$bin_name"
     chmod +x "$staged"
     mv -f "$staged" "$BIN_DIR/$bin_name"
+    end_action
     if [ "$MINIMAL" = false ]; then
-        echo -e "  ${GREEN}✓ ${bin_name} checksum verified${NC}"
+        echo -e "  ${GREEN}✓${NC} ${GRAY}${bin_name} checksum verified${NC}"
     fi
 }
 
 if [[ "$ARCH" == "x86_64" ]]; then
     if [ ! -f "$BIN_DIR/topo-core-x86_64" ]; then
-        if [ "$MINIMAL" = false ]; then echo -e "  ${GRAY}↓ Fetching x86_64 engine from ${TARGET_REF}...${NC}"; fi
         fetch_engine_binary "topo-core-x86_64"
     else
         if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓${NC} ${GRAY}Using bundled x86_64 engine.${NC}"; fi
@@ -277,7 +346,6 @@ if [[ "$ARCH" == "x86_64" ]]; then
     rm -f "$BIN_DIR/topo-core-aarch64"
 elif [[ "$ARCH" == "aarch64" ]] || [[ "$ARCH" == "arm64" ]]; then
     if [ ! -f "$BIN_DIR/topo-core-aarch64" ]; then
-        if [ "$MINIMAL" = false ]; then echo -e "  ${YELLOW}↓ ARM64 detected. Fetching optimized engine from ${TARGET_REF}...${NC}"; fi
         fetch_engine_binary "topo-core-aarch64"
     else
         if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓${NC} ${GRAY}Using bundled ARM64 engine.${NC}"; fi
@@ -314,18 +382,38 @@ if ! mv "$STAGED_INSTALL" "$FINAL_INSTALL"; then
     abort_verification "Could not activate the verified installation."
 fi
 STAGED_INSTALL=""
+INSTALL_ACTIVATED=true
 INSTALL_DIR="$FINAL_INSTALL"
 cd "$INSTALL_DIR"
 if [ "$MINIMAL" = false ]; then
-    echo -e "\n${CYAN}☉ Configuring system...${NC}"
+    echo -e "\n${PURPLE}☉ Configuring system...${NC}"
 fi
 chmod +x topo
+snapshot_shell_configs
 
-# Pass --silent if this was an update to avoid redundant success banners
-if [ "$WAS_INSTALLED" = true ]; then
-    ./topo link --silent
+# Resolve the same target directory used by run_install_link(), including root
+# installs and TOPO_LINK_DIR overrides. Resolve it before creating the link so
+# failure cleanup always knows which first-install launcher belongs to us.
+LAUNCHER_PATH=$(python3 -c 'from src.manage.install import _get_link_target_dir; print(_get_link_target_dir() / "topo")') ||
+    abort_verification "Could not resolve the launcher path before running topo link."
+
+# Updates and minimal installs suppress presentation while still performing the
+# PATH repair inside run_install_link().
+if [ "$WAS_INSTALLED" = true ] || [ "$MINIMAL" = true ]; then
+    ./topo link --silent || abort_verification "Failed to create or update launcher symbolic link."
 else
-    ./topo link
+    ./topo link || abort_verification "Failed to create launcher symbolic link."
+fi
+
+# Verify the link points to this transaction's activated launcher rather than
+# merely checking that a file exists.
+if [ ! -L "$LAUNCHER_PATH" ] || [ "$(readlink -f "$LAUNCHER_PATH" 2>/dev/null || true)" != "$(readlink -f "$FINAL_INSTALL/topo" 2>/dev/null || true)" ]; then
+    abort_verification "Symbolic link verification failed after running topo link."
+fi
+
+if [ "$MINIMAL" = false ] && [ "$WAS_INSTALLED" = true ]; then
+    DISP_LAUNCHER="${LAUNCHER_PATH/#"$HOME"/~}"
+    echo -e "  ${GREEN}✓${NC} ${GRAY}Executable linked to ${BOLD}${DISP_LAUNCHER}${NC}"
 fi
 
 # Activation is only committed after the new executable has linked correctly.
@@ -333,10 +421,12 @@ if [ -n "$BACKUP_INSTALL" ] && [ -d "$BACKUP_INSTALL" ]; then
     rm -rf "$BACKUP_INSTALL"
     BACKUP_INSTALL=""
 fi
+INSTALL_ACTIVATED=false
+rm -rf "$SHELL_CONFIG_SNAPSHOT_DIR"
+SHELL_CONFIG_SNAPSHOT_DIR=""
 
 # OOTB PATH Fix: Offer immediate access via /usr/local/bin if not in PATH
 if [ "$MINIMAL" = false ] && ! command -v topo >/dev/null 2>&1; then
-    # Use /dev/tty to allow reading input even when piped from curl
     if [ -c /dev/tty ]; then
         echo -e "\n  ${YELLOW}⚠ 'topo' is not yet in your PATH.${NC}"
         echo -e "  ${CYAN}Would you like to link it to ${BOLD}/usr/local/bin${NC}${CYAN} for immediate access? (requires sudo)${NC}"
@@ -358,18 +448,20 @@ fi
 
 # 6. Display final banner and version
 if [ "$MINIMAL" = false ]; then
-    # Extract version
     TOPO_VER="unknown"
     if [ -f "VERSION" ]; then
         TOPO_VER=$(cat VERSION)
     fi
 
-    echo -e "${CYAN}"
-    echo "  ⠶⣶⠶  ⢰⠶⡆ ⢰⠶⡆ ⢰⠶⡆ "
-    echo "   ⠿   ⠸⠤⠇ ⢸⠉⠁ ⠸⠤⠇ "
-    echo -e "${NC}"
-    echo -e " ${CYAN}●${NC} ${BOLD}Topo v${TOPO_VER}${NC} ${GRAY}is digging deeper 🦡${NC}\n"
+    if [ "$WAS_INSTALLED" = true ]; then
+        echo -e "  ${GREEN}✓${NC} ${GRAY}Topo updated to ${BOLD}v${TOPO_VER}${NC}${GRAY} successfully!${NC}"
+    else
+        echo -e "  ${GREEN}✓${NC} ${GRAY}Topo ${BOLD}v${TOPO_VER}${NC}${GRAY} installed successfully!${NC}"
+    fi
+
+    echo -e "\n${GREEN} ⠶⣶⠶  ⢰⠶⡆ ⢰⠶⡆ ⢰⠶⡆ ${NC}"
+    echo -e "${GREEN}  ⠿   ⠸⠤⠇ ⢸⠉⠁ ⠸⠤⠇ ${NC}  ${PURPLE}●${NC} ${GRAY}v${TOPO_VER} is digging deeper 🦡${NC}\n"
     
-    echo -e "${GRAY}Type '${NC}topo${GRAY}' to start the interactive TUI, or '${NC}topo --help${GRAY}' to explore all commands.${NC}"
+    echo -e "${GRAY}Type '${NC}${BOLD}topo${NC}${GRAY}' in your terminal to get started, or '${NC}${BOLD}topo --help${NC}${GRAY}' to explore all commands.${NC}"
     echo -e "${GRAY}If your shell still tries an old '${NC}/usr/bin/topo${GRAY}' path, run '${NC}hash -r${GRAY}' or reopen the terminal.${NC}"
 fi

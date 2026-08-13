@@ -388,8 +388,8 @@ def _execute_main_router(args, dry_run, wl_parser):
     if args.command == "optimize":
         optimize_system(dry_run)
 
-    if args.command == "link":
-        run_install_link(silent=args.silent)
+    if args.command == "link" and not run_install_link(silent=args.silent):
+        sys.exit(1)
 
     if args.command == "update":
         run_update()

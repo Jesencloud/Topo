@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-from ..core.constants import BLUE, BOLD, CYAN, GRAY, GREEN, RESET, YELLOW
+from ..core.constants import BOLD, GRAY, GREEN, PURPLE, RED, RESET, YELLOW
 
 
 def _get_link_target_dir() -> Path:
@@ -16,7 +16,7 @@ def run_install_link(silent=False):
     """Creates a symbolic link for the topo launcher in a PATH-friendly bin dir."""
 
     if not silent:
-        print(f"\n {CYAN}☉ Setting up system-wide 'topo' command...{RESET}\n")
+        print(f"\n{PURPLE}☉ Setting up system-wide 'topo' command...{RESET}")
 
     # 1. Paths
     repo_root = Path(__file__).parent.parent.parent
@@ -26,7 +26,7 @@ def run_install_link(silent=False):
 
     if not source_script.exists():
         if not silent:
-            print(f" {YELLOW}✗{RESET} Error: Could not find launcher script at {source_script}")
+            print(f"  {RED}✗{RESET} Error: Could not find launcher script at {source_script}")
         return False
 
     # 2. Ensure target dir exists
@@ -34,10 +34,11 @@ def run_install_link(silent=False):
         try:
             target_dir.mkdir(parents=True, exist_ok=True)
             if not silent:
-                print(f"  {GREEN}✓{RESET} Created directory: {GRAY}{target_dir}{RESET}")
+                disp_dir = str(target_dir).replace(str(Path.home()), "~")
+                print(f"  {GREEN}✓{RESET} {GRAY}Created directory {BOLD}{disp_dir}{RESET}")
         except OSError as e:
             if not silent:
-                print(f" {YELLOW}✗{RESET} Error creating directory {target_dir}: {e}")
+                print(f"  {RED}✗{RESET} Error creating directory {target_dir}: {e}")
             return False
 
     # 3. Create/Update link atomically (temp symlink + os.replace), so an
@@ -49,26 +50,24 @@ def run_install_link(silent=False):
         tmp_link.symlink_to(source_script.absolute())
         os.replace(tmp_link, target_link)
         if not silent:
-            print(f"  {GREEN}✓{RESET} Created symbolic link: {BOLD}{target_link}{RESET}")
+            disp_link = str(target_link).replace(str(Path.home()), "~")
+            print(f"  {GREEN}✓{RESET} {GRAY}Executable linked to {BOLD}{disp_link}{RESET}")
     except OSError as e:
         if not silent:
-            print(f" {YELLOW}✗{RESET} Error creating symbolic link: {e}")
-            print(f" {YELLOW}ℹ{RESET} You can still run topo directly with:")
-            print(f" {GRAY}{source_script}{RESET}")
+            print(f"  {RED}✗{RESET} Error creating symbolic link: {e}")
+            print(f"  {GRAY}You can still run topo directly with: {BOLD}{source_script}{RESET}")
         return False
 
-    # 4. Success message & Path check
-    if silent:
-        return True
-
-    print(f" {BLUE}🎉 Success! 'topo' is now available.{RESET}")
-
+    # 4. Path check (PATH auto-fix runs even in silent mode)
     path_env = os.environ.get("PATH", "")
-    if str(target_dir) not in path_env.split(os.pathsep):
-        print(f"\n {YELLOW}ℹ  {target_dir} is not in your PATH. Attempting auto-fix...{RESET}")
+    in_path = str(target_dir) in path_env.split(os.pathsep)
+    added = False
+    configured = False
 
-        added = False
-        # Potential shell config files
+    if not in_path:
+        if not silent:
+            print(f"\n {YELLOW}ℹ  {target_dir} is not in your PATH. Attempting auto-fix...{RESET}")
+
         shell_configs = [Path.home() / ".bashrc", Path.home() / ".zshrc"]
         if target_dir == Path.home() / ".local" / "bin":
             export_line = 'export PATH="$HOME/.local/bin:$PATH"'
@@ -81,25 +80,33 @@ def run_install_link(silent=False):
             try:
                 content = config.read_text()
                 if export_line in content:
+                    configured = True
                     continue
                 with open(config, "a") as f:
                     f.write(f"\n# Added by topo\n{export_line}\n")
-                print(f"  {GREEN}✓{RESET} Added to {GRAY}{config.name}{RESET}")
+                if not silent:
+                    print(f"  {GREEN}✓{RESET} Added to {GRAY}{config.name}{RESET}")
                 added = True
+                configured = True
             except OSError:
                 pass
 
-        if added:
-            print(f"\n {BOLD}Please restart your terminal or run:{RESET}")
-            print(f" {GRAY}source ~/.bashrc{RESET} (or your shell config)")
-        else:
-            print(f"\n {YELLOW}⚠️  Manual action required:{RESET}")
-            print(" Add this line to your .bashrc or .zshrc:")
-            print(f" {GRAY}{export_line}{RESET}")
-    else:
-        print(f" You can now run {BOLD}topo{RESET} from any directory.")
+        if not silent:
+            if added:
+                print(f"\n {BOLD}Please restart your terminal or run:{RESET}")
+                print(f" {GRAY}source ~/.bashrc{RESET} (or your shell config)")
+            elif configured:
+                print(f"\n {GRAY}PATH configuration already exists in your shell config.{RESET}")
+                print(f" {BOLD}Please restart your terminal or run:{RESET}")
+                print(f" {GRAY}source ~/.bashrc{RESET} (or your shell config)")
+            else:
+                print(f"\n {YELLOW}⚠️  Manual action required:{RESET}")
+                print(" Add this line to your .bashrc or .zshrc:")
+                print(f" {GRAY}{export_line}{RESET}")
+
+    if not silent and (in_path or configured):
         print(
-            f" If your shell still tries an old system path, run {BOLD}hash -r{RESET} "
-            "or reopen the terminal."
+            f"\n  {GREEN}✓{RESET} {GRAY}System setup complete. '{BOLD}topo{RESET}{GRAY}' is ready to use!{RESET}"
         )
+
     return True

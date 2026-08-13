@@ -59,9 +59,10 @@
   - `Cargo.toml` 开启 `opt-level = "z"`、`lto = true`、`codegen-units = 1`、`panic = "abort"`、`strip = true` 极致尺寸压缩。
 * **ELF 依赖与架构硬核断言**：
   - CI 构建步新增 `Verify ELF Static Binary Properties` 阶段：通过 `readelf -h` 精确断言 ELF Machine 架构，通过 `readelf -l` 强行校验无 `PT_INTERP` 解释器，通过 `readelf -d` 强行校验无 `DT_NEEDED` 动态库依赖，凡非纯静态 ELF 一律直接报 Error 阻断构建。
-* **GPG Fail-Closed 供应链全链路闭环**：
-  - 完整保留 GitHub Release 的 `SHA256SUMS` / `SHA256SUMS.asc` / `topo-release-public.asc` / `install.sh` 及独立原生引擎产物 `topo-core-x86_64` / `topo-core-aarch64`。
-  - 还原 GPG 密钥缺失时的 Fail-Closed（默认拒绝阻断）铁律；恢复 Release Notes 规范 `test -f "docs/releases/${github.ref_name}.md"` 文件校验。
+* **原子级安装事务与 Shell 配置快照回滚 (`install.sh` & `src/manage/install.py`)**：
+  - **安装状态与路径恢复**：`install.sh` 区分首次安装与覆盖更新，首次安装与 `--minimal` 模式下均能静默完成 PATH 环境变量检测与 `.bashrc`/`.zshrc` 自动修复；`abort_verification` 精确报告“安装未激活，已清理临时文件并还原既有安装及 Shell 配置”。
+  - **Shell 配置文件事务快照**：在执行链接与配置前对 `.bashrc` 及 `.zshrc` 建立精确的物理快照；安装过程中发生任何中断或失败时，精确还原原始文件或彻底删除新创建文件。
+  - **准确的 Launcher 校验与回滚防护**：在创建链接前通过 `_get_link_target_dir()` 精确解析 `LAUNCHER_PATH`（支持 `TOPO_LINK_DIR`、Root 及普通用户目录），并用 `readlink -f` 强行校验实际指向；升级失败时完整恢复 `BACKUP_INSTALL` 备份并保留稳定 Launcher。
 
 ---
 
