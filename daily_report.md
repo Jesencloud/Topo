@@ -37,6 +37,21 @@
 * System Optimization worker 全局限制为 4，单项任务失败会报告任务名和异常类型，不再静默吞掉。
 * 白名单、Home 静态保护规则和桌面应用缓存根改为按上下文编译缓存；whitelist 修改时统一清理相关缓存。
 
+### 7. 全量死代码清理与 Vulture 门控闭环 (Dead Code Cleanup & Vulture Gate Integration)
+* **死代码全量清洗**：
+  - 清理 `src/clean/project.py` 中的 `found_projects` 和 `found_artifacts` 废弃属性。
+  - 清理 `src/clean/runner.py` 中的 `requires_sudo` 废弃字段及各处传参。
+  - 清理 `src/clean/system.py` 中的 `reaped` 未使用变量。
+  - 清理 `src/core/lock.py` 中的 `safe_vacuum_sqlite` 废弃函数及 `tests/test_lock.py` 关联测试。
+  - 清理 `src/core/constants.py` 中的 `EARTH` / `FAIL` / `CLEAN_ORPHAN_AGE_DAYS` 未使用常量。
+  - 清理 `src/core/status.py` 中的 `bat_pct_str` 未使用解构变量。
+  - 清理 `src/ui/navigator.py` 中的 `CleanSelector` 废弃类及 `tests/test_navigator.py` 关联测试。
+* **白名单精准收紧 (`.vulture_whitelist.py`)**：
+  - 将白名单严格收紧至仅保留由 `OptimizationRegistry` 动态装饰器调度的 20 个系统优化任务函数与 `__exit__` 协议标准签名，彻底消除了白名单掩盖真实死代码的隐患，文件已通过 Git 正式纳管。
+* **`check.sh` 门控与 GitHub CI 双重闭环**：
+  - `check.sh` 先行强制校验 `.vulture_whitelist.py` 存在性，前台同步执行命令并捕获输出，成功时优雅树状打印 `✓`，报错时完整保留 Raw Error Traceback 日志。
+  - GitHub Actions `.github/workflows/ci.yml` Python Lint 阶段加入 `vulture src/ .vulture_whitelist.py` 步，实现死代码检测 100% 自动化强制约束。
+
 ---
 
 ## Project: topo (Topo) - 供应链完整信任闭环与提权面路径防御落地 (Supply Chain & Ancestor Guard Closure)

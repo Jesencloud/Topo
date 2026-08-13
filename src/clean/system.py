@@ -225,7 +225,6 @@ def clean_zombies(dry_run: bool = False) -> tuple[int, int, int]:
         return 0, 0, 1
 
     parents = set(z["ppid"] for z in zombies)
-    reaped = 0
     for ppid in parents:
         # Compare numerically, and only accept ASCII digits: a zero-padded "01"
         # or a Unicode digit form would slip past a string membership test and
@@ -236,7 +235,6 @@ def clean_zombies(dry_run: bool = False) -> tuple[int, int, int]:
         if parent_pid <= 1:
             continue
         run_command(["kill", "-SIGCHLD", str(parent_pid)], use_sudo=True, capture=True)
-        reaped += 1
 
     print(f"  {OK} Signaled parents of {count} zombie processes")
     return 0, count, 1

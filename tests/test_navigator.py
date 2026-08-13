@@ -13,7 +13,6 @@ from unittest.mock import patch
 from src.ui.navigator import (
     ANSI_CSI_RE,
     AnalyzeSelector,
-    CleanSelector,
     ConfirmSelector,
     InteractiveMenu,
     MouseEvent,
@@ -480,109 +479,7 @@ def test_paginated_enter_defaults_to_hover():
     assert drive(PaginatedSelector("t", items), ["\r"]) == [0]
 
 
-def test_short_terminal_render_draws_right_edge_scrollbar():
-    items = [{"name": f"task{i}", "size": 100 + i, "desc": "cleanup target"} for i in range(8)]
-    selector = CleanSelector("t", items)
-    selector.selected_index = 7
-
-    with (
-        patch("src.ui.navigator.shutil.get_terminal_size", return_value=os.terminal_size((40, 5))),
-        patch("src.ui.navigator.get_show_scrollbar", return_value=True),
-        patch("sys.stdout.write") as write,
-        patch("sys.stdout.flush"),
-    ):
-        selector.render()
-
-    output = write.call_args.args[0]
-    assert "\033[1;40H" in output
-    assert "\033[5;40H" in output
-    assert "\033[5;40H\033[J" in output
-    assert "▐" in output
-    assert "┃" not in output
-    assert selector._frame_state.scrollable is True
-    assert selector._frame_state.scrollbar_visible is True
-    assert "\033[1;37m" not in output
-    assert "task7" in output
-    assert "task0" not in output
-
-
-def test_short_terminal_render_can_hide_right_edge_scrollbar():
-    items = [{"name": f"task{i}", "size": 100 + i, "desc": "cleanup target"} for i in range(8)]
-    selector = CleanSelector("t", items)
-    selector.selected_index = 7
-
-    with (
-        patch("src.ui.navigator.shutil.get_terminal_size", return_value=os.terminal_size((40, 5))),
-        patch("src.ui.navigator.get_show_scrollbar", return_value=False),
-        patch("sys.stdout.write") as write,
-        patch("sys.stdout.flush"),
-    ):
-        selector.render()
-
-    output = write.call_args.args[0]
-    assert "▐" not in output
-    assert "┃" not in output
-    assert selector._frame_state.scrollable is True
-    assert selector._frame_state.scrollbar_visible is False
-    assert "task7" in output
-
-
 def test_sgr_mouse_drag_sequence_is_parsed():
     assert Navigator._parse_sgr_mouse("\x1b[<0;40;2M") == MouseEvent("press", 0, 40, 2)
     assert Navigator._parse_sgr_mouse("\x1b[<32;40;5M") == MouseEvent("drag", 0, 40, 5)
     assert Navigator._parse_sgr_mouse("\x1b[<0;40;5m") == MouseEvent("release", 0, 40, 5)
-
-
-def test_scrollbar_drag_scrolls_short_terminal_view():
-    items = [{"name": f"task{i}", "size": 100 + i, "desc": "cleanup target"} for i in range(10)]
-    selector = CleanSelector("t", items)
-    keys = [
-        MouseEvent("press", 0, 40, 1),
-        MouseEvent("drag", 0, 40, 5),
-        MouseEvent("release", 0, 40, 5),
-        Navigator.ESC,
-    ]
-
-    with (
-        patch(
-            "src.ui.navigator.shutil.get_terminal_size",
-            return_value=os.terminal_size((40, 5)),
-        ),
-        patch("src.ui.navigator.get_show_scrollbar", return_value=True),
-    ):
-        result, writes = drive_with_writes(selector, keys)
-
-    output = "".join(call.args[0] for call in writes)
-    assert result == []
-    assert "task9" in output
-
-
-def test_mouse_wheel_moves_cursor_when_right_edge_scrollbar_is_hidden():
-    items = [{"name": f"task{i}", "size": 100 + i, "desc": "cleanup target"} for i in range(10)]
-    selector = CleanSelector("t", items)
-    keys = [
-        MouseEvent("wheel_down", 1, 20, 3),
-        MouseEvent("wheel_down", 1, 20, 3),
-        MouseEvent("wheel_down", 1, 20, 3),
-        Navigator.ESC,
-    ]
-
-    with (
-        patch(
-            "src.ui.navigator.shutil.get_terminal_size",
-            return_value=os.terminal_size((40, 5)),
-        ),
-        patch("src.ui.navigator.get_show_scrollbar", return_value=False),
-    ):
-        result, writes = drive_with_writes(selector, keys)
-
-    output = "".join(call.args[0] for call in writes)
-    assert result == []
-    assert selector.selected_index == 3
-    assert "▐" not in output
-    assert "task3" in output
-
-
-def test_clean_selector_empty_items_returns_without_error():
-    # Empty items must not raise ZeroDivisionError on cursor movement; run() exits.
-    assert CleanSelector("t", []).run() == []

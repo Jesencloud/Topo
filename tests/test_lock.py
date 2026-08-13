@@ -11,7 +11,6 @@ from src.core.lock import (
     SingleInstanceLock,
     is_file_locked,
     is_sqlite_busy,
-    safe_vacuum_sqlite,
 )
 
 _SQLITE_WRITER = """
@@ -191,24 +190,3 @@ def test_is_sqlite_busy_detects_external_writer(tmp_path):
 def test_is_sqlite_busy_on_unopenable_database(tmp_path):
     """A database that cannot be opened read-write is treated as busy."""
     assert is_sqlite_busy(tmp_path / "does-not-exist.db")
-
-
-def test_safe_vacuum_sqlite(tmp_path):
-    """Test safe SQLite VACUUM on unlocked and externally locked databases."""
-    db_file = tmp_path / "test.db"
-    _make_db(db_file)
-
-    # Unlocked VACUUM should succeed
-    assert safe_vacuum_sqlite(db_file)
-
-    # An active external writer must be skipped, not crashed into
-    with external_holder(_SQLITE_WRITER, db_file):
-        assert not safe_vacuum_sqlite(db_file)
-
-    # Once the writer is gone the database is maintainable again
-    assert safe_vacuum_sqlite(db_file)
-
-
-def test_safe_vacuum_sqlite_missing_file(tmp_path):
-    """A non-existent database is not vacuumed."""
-    assert not safe_vacuum_sqlite(tmp_path / "nope.db")

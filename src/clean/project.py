@@ -23,8 +23,6 @@ from ..ui.navigator import Navigator, PaginatedSelector
 class Scanner:
     def __init__(self, search_paths: list[str]):
         self.search_paths = [Path(p).expanduser().resolve() for p in search_paths]
-        self.found_projects: set[Path] = set()
-        self.found_artifacts: list[Path] = []
 
     def scan_for_projects(self, max_depth: int = 4) -> Iterator[Path]:
         """Discovers project roots within search paths."""

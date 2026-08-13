@@ -105,40 +105,24 @@ GRAY: str = ""
 RESET: str = ""
 BOLD: str = ""
 PURPLE: str = ""
-EARTH: str = ""
 THEME_TITLE: str = ""
 GREEN_NB: str = ""
 GRAY_NB: str = ""
 OK: str = ""
 SKIP: str = ""
-FAIL: str = ""
 
 
 def _init_colors(disable: bool = False):
-    global \
-        BLUE, \
-        CYAN, \
-        MAGENTA, \
-        YELLOW, \
-        GREEN, \
-        RED, \
-        WHITE, \
-        GRAY, \
-        RESET, \
-        BOLD, \
-        PURPLE, \
-        EARTH, \
-        THEME_TITLE
-    global GREEN_NB, GRAY_NB, OK, SKIP, FAIL
+    global BLUE, CYAN, MAGENTA, YELLOW, GREEN, RED, WHITE, GRAY, RESET, BOLD, PURPLE, THEME_TITLE
+    global GREEN_NB, GRAY_NB, OK, SKIP
 
     if disable:
         BLUE = CYAN = MAGENTA = YELLOW = GREEN = RED = WHITE = GRAY = RESET = BOLD = PURPLE = (
-            EARTH
-        ) = THEME_TITLE = ""
+            THEME_TITLE
+        ) = ""
         GREEN_NB = GRAY_NB = ""
         OK = "✓"
         SKIP = "◎"
-        FAIL = "✗"
     else:
         BLUE = "\033[1;34m"
         CYAN = "\033[1;36m"
@@ -153,7 +137,6 @@ def _init_colors(disable: bool = False):
         RESET = "\033[0m"
         BOLD = "\033[1m"
         PURPLE = "\033[1;95m"
-        EARTH = "\033[38;5;100m"
         THEME_TITLE = PURPLE
 
         GREEN_NB = "\033[0;32m"
@@ -161,7 +144,6 @@ def _init_colors(disable: bool = False):
 
         OK = f"{GREEN_NB}✓{RESET}"
         SKIP = f"{GRAY_NB}◎{RESET}"
-        FAIL = f"{RED}✗{RESET}"
 
 
 def setup_color_mode(no_color: bool = False) -> None:
@@ -181,7 +163,6 @@ ERASE_BELOW = "\033[J"
 
 # Age-based cleanup thresholds (days)
 CLEAN_CACHE_AGE_DAYS = 30
-CLEAN_ORPHAN_AGE_DAYS = 60
 CLEAN_CARGO_AGE_DAYS = 7
 CLEAN_TEMP_AGE_DAYS = 3
 

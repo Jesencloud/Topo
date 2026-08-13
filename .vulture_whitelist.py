@@ -1,0 +1,25 @@
+# Vulture whitelist for dynamically registered optimization tasks and protocol context managers
+run_vacuum_all
+run_fstrim
+run_fccache
+run_sysctl_optimize
+run_tmpfiles_cleanup
+run_ldconfig
+run_locale_gen
+run_man_db_refresh
+run_autostart_cleanup
+run_systemd_user_service_cleanup
+run_user_systemd_reset_failed
+run_swap_management
+run_journal_optimization
+run_coredump_cleanup
+run_broken_symlink_cleanup
+run_desktop_database_refresh
+run_mime_database_refresh
+run_flatpak_repair
+run_tracker_miner_reset
+run_package_repo_refresh
+exc_tb
+exc_type
+exc_val
+DEL

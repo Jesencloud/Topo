@@ -163,38 +163,3 @@ def is_sqlite_busy(db_path: Path) -> bool:
     finally:
         with contextlib.suppress(Exception):
             conn.close()
-
-
-def safe_vacuum_sqlite(db_path: Path, timeout: float = 3.0) -> bool:
-    """Safely executes VACUUM on an SQLite database without corrupting active DB files.
-
-    If the database is currently opened/locked by an external application (e.g. Chrome, Firefox),
-    it safely catches the lock contention and skips instead of crashing or corrupting data.
-    """
-    if not db_path.is_file():
-        return False
-
-    # The file name comes from disk and may carry ANSI/BiDi payloads.
-    safe_name = sanitize_for_display(db_path.name)
-
-    if is_file_locked(db_path) or is_sqlite_busy(db_path):
-        print(f"  {YELLOW}◎ Skipping active/locked database: {safe_name}{RESET}")
-        return False
-
-    try:
-        conn = sqlite3.connect(str(db_path), timeout=timeout)
-        try:
-            conn.execute("VACUUM;")
-            conn.close()
-            return True
-        except (sqlite3.OperationalError, sqlite3.DatabaseError) as err:
-            # Handles "database is locked", "disk I/O error", etc.
-            # sqlite messages can embed the path, so sanitize them as well.
-            safe_err = sanitize_for_display(str(err))
-            print(f"  {YELLOW}◎ Skipped locked DB ({safe_name}): {safe_err}{RESET}")
-            return False
-        finally:
-            with contextlib.suppress(Exception):
-                conn.close()
-    except Exception:
-        return False

@@ -22,7 +22,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install Python Linter
-        run: pip install ruff mypy packaging
+        run: pip install ruff mypy packaging vulture
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -40,6 +40,9 @@ jobs:
 
       - name: Run Mypy (Python)
         run: mypy src/
+
+      - name: Run Vulture Dead Code Check (Python)
+        run: vulture src/ .vulture_whitelist.py
 
       - name: Run Cargo Clippy (Rust)
         working-directory: topo-core

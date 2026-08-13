@@ -15,7 +15,6 @@ def test_no_color_env_variable(monkeypatch):
         assert constants.GREEN == ""
         assert constants.RED == ""
         assert constants.OK == "✓"
-        assert constants.FAIL == "✗"
 
     # Restore
     monkeypatch.delenv("NO_COLOR", raising=False)

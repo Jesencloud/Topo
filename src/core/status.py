@@ -439,7 +439,7 @@ def show_status():
 
     # 3. Hardware & Network (Battery, Network)
     if battery_data:
-        bat_val, bat_pct_str, bat_details = battery_data
+        bat_val, _bat_pct_str, bat_details = battery_data
         bat_color = GREEN if bat_val >= 50 else (YELLOW if bat_val >= 20 else RED)
         bat_bar = draw_bar(bat_val, width=20, force_color=bat_color)
         details_fmt = f"  ({bat_details.strip()})" if bat_details.strip() else ""

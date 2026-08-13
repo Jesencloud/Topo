@@ -39,7 +39,6 @@ _read_sudo_choice = terminal_state.read_sudo_choice
 class CleanupTask:
     name: str
     action: Callable[..., tuple[int, int, int]]
-    requires_sudo: bool = False
 
 
 class TaskRegistry:
@@ -53,12 +52,12 @@ class TaskRegistry:
             (
                 f"{THEME_TITLE}➤ System & Package Manager{RESET}",
                 [
-                    CleanupTask("Package Manager Cache", clean_package_manager, requires_sudo=True),
-                    CleanupTask("Orphaned Packages", clean_orphaned_packages, requires_sudo=True),
-                    CleanupTask("Old Kernels", clean_old_kernels, requires_sudo=True),
-                    CleanupTask("System Journal Logs", clean_journal, requires_sudo=True),
-                    CleanupTask("Rotated Log Files", clean_rotated_logs, requires_sudo=True),
-                    CleanupTask("Zombie Processes", clean_zombies, requires_sudo=True),
+                    CleanupTask("Package Manager Cache", clean_package_manager),
+                    CleanupTask("Orphaned Packages", clean_orphaned_packages),
+                    CleanupTask("Old Kernels", clean_old_kernels),
+                    CleanupTask("System Journal Logs", clean_journal),
+                    CleanupTask("Rotated Log Files", clean_rotated_logs),
+                    CleanupTask("Zombie Processes", clean_zombies),
                 ],
             ),
             (
