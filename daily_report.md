@@ -52,6 +52,17 @@
   - `check.sh` 先行强制校验 `.vulture_whitelist.py` 存在性，前台同步执行命令并捕获输出，成功时优雅树状打印 `✓`，报错时完整保留 Raw Error Traceback 日志。
   - GitHub Actions `.github/workflows/ci.yml` Python Lint 阶段加入 `vulture src/ .vulture_whitelist.py` 步，实现死代码检测 100% 自动化强制约束。
 
+### 8. Musl 纯静态二进制与 GPG 零信任供应链闭环 (Musl Static Binary & Supply Chain Assurance)
+* **Musl 纯静态编译 (`build-engine.yml` & `Cargo.toml`)**：
+  - 核心 Rust 引擎构建目标全量升级为 `x86_64-unknown-linux-musl` 与 `aarch64-unknown-linux-musl`，引入社区标准 `houseabsolute/actions-rust-cross@v0` 交叉编译工具链，彻底消除了对手写 `aarch64-linux-gnu-gcc` 错误 GNU 链接器的依赖。
+  - 编译出的 `topo-core` 原生二进制做到 100% 零依赖宿主 `glibc` / `libc.so.6`，完美兼容 Alpine Linux、CentOS 7/8/9、Fedora、Debian、Ubuntu 等所有新老 Linux 发行版。
+  - `Cargo.toml` 开启 `opt-level = "z"`、`lto = true`、`codegen-units = 1`、`panic = "abort"`、`strip = true` 极致尺寸压缩。
+* **ELF 依赖与架构硬核断言**：
+  - CI 构建步新增 `Verify ELF Static Binary Properties` 阶段：通过 `readelf -h` 精确断言 ELF Machine 架构，通过 `readelf -l` 强行校验无 `PT_INTERP` 解释器，通过 `readelf -d` 强行校验无 `DT_NEEDED` 动态库依赖，凡非纯静态 ELF 一律直接报 Error 阻断构建。
+* **GPG Fail-Closed 供应链全链路闭环**：
+  - 完整保留 GitHub Release 的 `SHA256SUMS` / `SHA256SUMS.asc` / `topo-release-public.asc` / `install.sh` 及独立原生引擎产物 `topo-core-x86_64` / `topo-core-aarch64`。
+  - 还原 GPG 密钥缺失时的 Fail-Closed（默认拒绝阻断）铁律；恢复 Release Notes 规范 `test -f "docs/releases/${github.ref_name}.md"` 文件校验。
+
 ---
 
 ## Project: topo (Topo) - 供应链完整信任闭环与提权面路径防御落地 (Supply Chain & Ancestor Guard Closure)

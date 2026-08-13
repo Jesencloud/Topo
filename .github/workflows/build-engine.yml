@@ -16,33 +16,51 @@ jobs:
     strategy:
       matrix:
         include:
-          - target: x86_64-unknown-linux-gnu
+          - target: x86_64-unknown-linux-musl
             arch: x86_64
-          - target: aarch64-unknown-linux-gnu
+          - target: aarch64-unknown-linux-musl
             arch: aarch64
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Build Musl Static Binary with Rust Cross
+        uses: houseabsolute/actions-rust-cross@v0
         with:
-          targets: ${{ matrix.target }}
+          command: build
+          target: ${{ matrix.target }}
+          args: "--release --manifest-path topo-core/Cargo.toml"
 
-      - name: Install Cross-Compilation Tools
-        if: matrix.arch == 'aarch64'
+      - name: Verify ELF Static Binary Properties
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
+          BIN="topo-core/target/${{ matrix.target }}/release/topo-core"
+          echo "=== Verifying Binary Properties for ${{ matrix.target }} ==="
+          file "$BIN"
 
-      - name: Build (Release)
-        working-directory: topo-core
-        run: |
-          if [ "${{ matrix.arch }}" = "aarch64" ]; then
-            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+          # Verify ELF Machine Architecture match
+          case "${{ matrix.arch }}" in
+            x86_64)
+              readelf -h "$BIN" | grep -q 'Machine:.*X86-64'
+              ;;
+            aarch64)
+              readelf -h "$BIN" | grep -q 'Machine:.*AArch64'
+              ;;
+          esac
+
+          # Check 1: Must NOT have PT_INTERP dynamic linker requested
+          if readelf -l "$BIN" | grep -i INTERP; then
+            echo "❌ ERROR: Binary has PT_INTERP interpreter! It is NOT statically linked."
+            exit 1
           fi
-          cargo build --release --target ${{ matrix.target }}
-          mv target/${{ matrix.target }}/release/topo-core ../topo-core-${{ matrix.arch }}
+
+          # Check 2: Must NOT have DT_NEEDED dynamic library dependencies
+          if readelf -d "$BIN" | grep -i NEEDED; then
+            echo "❌ ERROR: Binary has DT_NEEDED dynamic dependencies! It is NOT statically linked."
+            exit 1
+          fi
+
+          echo "✅ VERIFIED: Binary $BIN is a 100% pure static ELF executable!"
+          cp "$BIN" "topo-core-${{ matrix.arch }}"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
