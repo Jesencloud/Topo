@@ -270,9 +270,12 @@ def _main():
     parser.add_argument("--version", action="version", version=f"topo {TOPO_VERSION}")
     # The wording is deliberately narrow: setup_color_mode() blanks every color
     # that flows through core.constants, which covers all report/status output.
-    # The interactive selectors still carry ~36 inline SGR literals for cursors
-    # and hover rows; those are purely decorative (selection is also marked by
-    # ▶ / ✓ / > glyphs), so the menus stay usable, but they are not blanked.
+    # The interactive selectors still carry inline SGR literals for cursors and
+    # hover rows; those are not blanked, but every one of them is redundant with
+    # a glyph (▶ / ✓ / > / ▸ Yes ◂), so a colorless terminal loses decoration and
+    # not information. Keep it that way: if you add a state that only color
+    # distinguishes, give it a glyph too (tests/test_navigator.py enforces this
+    # for the confirmation dialog).
     parser.add_argument(
         "--no-color",
         action="store_true",

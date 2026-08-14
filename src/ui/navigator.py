@@ -7,7 +7,6 @@ import sys
 import termios
 import time
 import tty
-import unicodedata
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +18,7 @@ from ..core.constants import (
     CYAN,
     GRAY,
     GREEN,
+    HIGHLIGHT,
     PURPLE,
     RED,
     RESET,
@@ -27,7 +27,7 @@ from ..core.constants import (
     YELLOW,
 )
 from ..core.file_ops import bytes_to_human
-from ..core.text import sanitize_for_display
+from ..core.text import char_width, display_width, sanitize_for_display
 
 ANSI_CSI_RE = re.compile("\x1b\\[[0-?]*[ -/]*[@-~]")
 SGR_MOUSE_RE = re.compile("\x1b\\[<(?P<button>\\d+);(?P<x>\\d+);(?P<y>\\d+)(?P<final>[mM])")
@@ -54,11 +54,9 @@ class FrameState:
 
 
 def _char_width(char):
-    if unicodedata.combining(char):
-        return 0
-    if unicodedata.east_asian_width(char) in ("W", "F"):
-        return 2
-    return 1
+    # Kept as a thin alias so the width model lives in exactly one place
+    # (core.text) and cannot drift between the selectors and the status report.
+    return char_width(char)
 
 
 def _strip_frame_controls(text):
@@ -289,25 +287,50 @@ def _consume_mouse(owner, key):
     return key == "MOUSE_EVENT"
 
 
+_ELLIPSIS = "..."
+
+
 def pad_and_truncate(text, width):
     """Pads or truncates text to fit a specific width, accounting for CJK characters."""
-    actual_w = 0
-    for char in text:
-        actual_w += _char_width(char)
+    if width <= 0:
+        return ""
 
-    if actual_w > width:
-        curr_w = 0
-        res = ""
-        for char in text:
-            char_w = _char_width(char)
-            if curr_w + char_w + 3 > width:
-                res += "..."
-                break
-            res += char
-            curr_w += char_w
-        return res + " " * (width - curr_w - 3 if width > curr_w + 3 else 0)
-    else:
+    actual_w = display_width(text)
+    if actual_w <= width:
         return text + " " * (width - actual_w)
+
+    # Too narrow to hold even the ellipsis: a bare "..." would overflow the
+    # column and break the surrounding layout, so clip the marker itself.
+    if width <= len(_ELLIPSIS):
+        return _ELLIPSIS[:width]
+
+    curr_w = 0
+    res = ""
+    for char in text:
+        char_w = char_width(char)
+        if curr_w + char_w + len(_ELLIPSIS) > width:
+            break
+        res += char
+        curr_w += char_w
+    res += _ELLIPSIS
+    return res + " " * (width - curr_w - len(_ELLIPSIS))
+
+
+# Width of the column the row icons are drawn in. Two cells, because most of the
+# icons in use are East-Asian Wide; the folder icon (U+1F5C2 + U+FE0F) and the
+# other variation-selector ones measure one and need a cell of padding so the
+# names after them still line up.
+_ICON_SLOT = 2
+
+
+def icon_gap(icon: str) -> str:
+    """Spacing between a row icon and the text after it.
+
+    Pads the icon out to _ICON_SLOT cells and adds the single separating space,
+    replacing the hardcoded ``"  " if icon is the folder icon else " "`` special
+    case that only happened to be right for the two icons it was written for.
+    """
+    return " " * max(0, _ICON_SLOT - display_width(icon)) + " "
 
 
 BAR_FILLED = "▬"
@@ -828,11 +851,11 @@ class AnalyzeSelector(_PagedSelector):
                 style = "\033[1;35m" if is_hover else ""
                 name_padded = pad_and_truncate(sanitize_for_display(item["name"]), name_w)
                 icon = item.get("icon", "🗂️")
-                icon_gap = "  " if icon == "🗂️" else " "
+                gap = icon_gap(icon)
                 if is_hover:
                     focus_line = _frame_line_count(buf)
                 buf.append(
-                    f"{cursor} {checkbox_str}{RESET}{bar_str}{percent_str}  {icon}{icon_gap}{style}{name_padded}{RESET} | {style}{size_str:>10}{RESET}\033[K\n"
+                    f"{cursor} {checkbox_str}{RESET}{bar_str}{percent_str}  {icon}{gap}{style}{name_padded}{RESET} | {style}{size_str:>10}{RESET}\033[K\n"
                 )
 
         order_icon = "↓" if self.sort_reverse else "↑"
@@ -862,9 +885,8 @@ class AnalyzeSelector(_PagedSelector):
                 for idx in pair:
                     item = self.items[idx]
                     icon = item.get("icon", "🗂️")
-                    icon_gap = "  " if icon == "🗂️" else " "
                     name_padded = pad_and_truncate(sanitize_for_display(item["name"]), 35)
-                    line += f"   {THEME_TITLE}•{RESET} {icon}{icon_gap}{name_padded}"
+                    line += f"   {THEME_TITLE}•{RESET} {icon}{icon_gap(icon)}{name_padded}"
                 buf.append(line + "\033[K\n")
 
         if self.confirming_delete:
@@ -1405,18 +1427,28 @@ class TopFilesSelector:
 
 
 class ConfirmSelector:
+    # The selected chip is marked by *shape*, not by color alone. HIGHLIGHT is
+    # empty whenever colors are off (--no-color, NO_COLOR, or any non-TTY), and
+    # the previous background-only highlight then left "Yes" and "No" differing
+    # by a single leading space -- in a deletion confirmation dialog, where
+    # misreading which button is armed is the expensive mistake. Both chip forms
+    # are the same cell count, so toggling never shifts the row.
+    _CHIP_SELECTED = "▸ {} ◂"
+    _CHIP_PLAIN = "  {}  "
+
     def __init__(self, message):
         self.message, self.selected_index = message, 1
+
+    def _chip(self, label, selected):
+        if selected:
+            return f"{HIGHLIGHT}{self._CHIP_SELECTED.format(label)}{RESET}"
+        return f"{GRAY}{self._CHIP_PLAIN.format(label)}{RESET}"
 
     def render(self):
         buf = ["\033[H"]
         buf.append(f"\n  {BOLD}{self.message}{RESET}\033[K\n")
-        y = (
-            "\033[1;37m\033[45m Yes \033[0m"
-            if self.selected_index == 0
-            else f"  {GRAY}Yes{RESET}  "
-        )
-        n = "\033[1;37m\033[45m No \033[0m" if self.selected_index == 1 else f"  {GRAY}No{RESET}  "
+        y = self._chip("Yes", self.selected_index == 0)
+        n = self._chip("No", self.selected_index == 1)
         focus_line = _frame_line_count(buf)
         buf.append(f"  {y}   {n}\033[K\n\n")
         buf.append("\033[J")

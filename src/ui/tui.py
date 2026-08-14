@@ -8,25 +8,18 @@ ANALYZE_ACTION = "analyze"
 STATUS_ACTION = "status"
 QUIT_ACTION = "quit"
 
-STATUS_PULSE_COLORS = [
-    "\033[1;36m",  # High-contrast Cyan
-    "\033[1;32m",  # Active Green
-    "\033[1;35m",  # Pulse Purple
-]
-
-_pulse_step = 0
-
 
 def render_banner():
     """Renders professional industrial monochrome TUI header for TOPO."""
-    global _pulse_step
-    _pulse_step = (_pulse_step + 1) % len(STATUS_PULSE_COLORS)
-    pulse = STATUS_PULSE_COLORS[_pulse_step]
-
-    # Professional clean monochrome ASCII typography with single active status dot pulse
+    # The dot used to cycle cyan -> green -> purple once per render_banner() call.
+    # render_banner() runs on every full redraw, i.e. on every keystroke, so the
+    # color tracked how fast the user was typing rather than any state of the
+    # program -- and because the palette lived in a module-level list of inline
+    # SGR literals, constants._propagate_colors() could not reach it and the dot
+    # stayed colored under --no-color. One color, from constants, fixes both.
     return f"""
  {GREEN}⠶⣶⠶  ⢰⠶⡆ ⢰⠶⡆ ⢰⠶⡆{RESET}
-  {GREEN}⠿   ⠸⠤⠇ ⢸⠉⠁ ⠸⠤⠇{RESET}   {pulse}●{RESET}{WHITE} v{TOPO_VERSION} is digging deeper 🦡{RESET}"""
+  {GREEN}⠿   ⠸⠤⠇ ⢸⠉⠁ ⠸⠤⠇{RESET}   {GREEN}●{RESET}{WHITE} v{TOPO_VERSION} is digging deeper 🦡{RESET}"""
 
 
 def main_menu():

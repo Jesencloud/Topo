@@ -108,8 +108,13 @@ PURPLE: str = ""
 THEME_TITLE: str = ""
 GREEN_NB: str = ""
 GRAY_NB: str = ""
+HIGHLIGHT: str = ""
 OK: str = ""
 SKIP: str = ""
+
+# One place to retune the dimmed-text color. WHITE / GRAY / GRAY_NB all resolve
+# to this; see the comment in _init_colors() for why they stay three names.
+_NEUTRAL_GRAY = "\033[38;5;244m"
 
 # Every name _init_colors() rebinds. Consumers do `from .constants import GREEN`,
 # which copies the *value* into their own module namespace, so rebinding these
@@ -129,6 +134,7 @@ _COLOR_NAMES: tuple[str, ...] = (
     "THEME_TITLE",
     "GREEN_NB",
     "GRAY_NB",
+    "HIGHLIGHT",
     "OK",
     "SKIP",
 )
@@ -157,13 +163,13 @@ def _propagate_colors() -> None:
 
 def _init_colors(disable: bool = False):
     global BLUE, CYAN, MAGENTA, YELLOW, GREEN, RED, WHITE, GRAY, RESET, BOLD, PURPLE, THEME_TITLE
-    global GREEN_NB, GRAY_NB, OK, SKIP
+    global GREEN_NB, GRAY_NB, HIGHLIGHT, OK, SKIP
 
     if disable:
         BLUE = CYAN = MAGENTA = YELLOW = GREEN = RED = WHITE = GRAY = RESET = BOLD = PURPLE = (
             THEME_TITLE
         ) = ""
-        GREEN_NB = GRAY_NB = ""
+        GREEN_NB = GRAY_NB = HIGHLIGHT = ""
         OK = "✓"
         SKIP = "◎"
     else:
@@ -173,17 +179,23 @@ def _init_colors(disable: bool = False):
         YELLOW = "\033[1;33m"
         GREEN = "\033[1;32m"
         RED = "\033[1;31m"
-        WHITE = (
-            "\033[38;5;244m"  # Neutral mid-gray (high contrast on both dark and light backgrounds)
-        )
-        GRAY = "\033[38;5;244m"  # High-contrast neutral gray for multi-theme support
+        # WHITE, GRAY and GRAY_NB are deliberately the same neutral mid-gray:
+        # high contrast on both dark and light backgrounds. They are kept as
+        # three names because they mark three different intents -- WHITE dims a
+        # value or an empty bar track, GRAY dims secondary text, GRAY_NB is the
+        # non-bold twin of GREEN_NB used by the SKIP glyph -- so any one of them
+        # can be retuned later without disturbing the other two. If you are
+        # comparing them expecting different escapes, they are not different yet.
+        WHITE = GRAY = GRAY_NB = _NEUTRAL_GRAY
         RESET = "\033[0m"
         BOLD = "\033[1m"
         PURPLE = "\033[1;95m"
         THEME_TITLE = PURPLE
 
         GREEN_NB = "\033[0;32m"
-        GRAY_NB = "\033[38;5;244m"
+
+        # Selected chip in confirmation dialogs: bright text on a magenta field.
+        HIGHLIGHT = "\033[1;37m\033[45m"
 
         OK = f"{GREEN_NB}✓{RESET}"
         SKIP = f"{GRAY_NB}◎{RESET}"

@@ -10,9 +10,24 @@ from ..ui.navigator import draw_bar, get_color_for_percent
 from .constants import GREEN, PURPLE, RED, RESET, YELLOW
 from .file_ops import bytes_to_human
 from .system import run_command
+from .text import display_width
 
 DEFAULT_ROUTE_PATH = Path("/proc/net/route")
 SIOCGIFADDR = 0x8915
+
+# Every status row renders as "<icon><pad> <label><pad> <value>". Both pads are
+# measured rather than hand-typed: the icons are not all the same width (U+1F4CA
+# and friends take two cells, while U+23F1 / U+1F321 are a narrow base plus
+# U+FE0F and take one), and the label field is sized to the longest label so all
+# values start in the same column no matter which rows a machine actually shows.
+_ICON_SLOT = 2
+_LABEL_SLOT = len("Top Processes:")
+
+
+def _status_row(icon: str, label: str, value: str) -> str:
+    icon_pad = " " * max(0, _ICON_SLOT - display_width(icon))
+    label_pad = " " * max(0, _LABEL_SLOT - display_width(label))
+    return f"{icon}{icon_pad} {label}{label_pad} {value}"
 
 
 def get_mem_info():
@@ -392,27 +407,31 @@ def show_status():
     disk_percent = (home_stats.used / home_stats.total) * 100
 
     # 1. Overview & Compute (Uptime, CPU, GPU, Fans)
-    print(f"⏱️  Uptime:       {uptime}")
-    print(f"📊 CPU Load:     {cpu_load}")
+    print(_status_row("⏱️", "Uptime:", uptime))
+    print(_status_row("📊", "CPU Load:", cpu_load))
 
     temp_color = GREEN
     if temp_val > 80:
         temp_color = RED
     elif temp_val > 60:
         temp_color = YELLOW
-    print(f"🌡️  CPU Temp:     {temp_color}{cpu_temp_str}{RESET}")
+    print(_status_row("🌡️", "CPU Temp:", f"{temp_color}{cpu_temp_str}{RESET}"))
 
     if gpu:
-        print(f"🎮 GPU Status:   {gpu}")
+        print(_status_row("🎮", "GPU Status:", gpu))
 
     if fans:
-        print(f"⚙️  Fan Speed:    {fans}")
+        print(_status_row("⚙️", "Fan Speed:", fans))
 
     # 2. Memory & Storage (RAM, Swap, ZRAM, Disk)
     mem_bar = draw_bar(mem_percent, width=20)
     mem_color = get_color_for_percent(mem_percent)
     print(
-        f"🧠 Memory:       {mem_bar}  {mem_color}{mem_percent:>5.1f}%{RESET}  ({used_mem_str} / {total_mem_str})"
+        _status_row(
+            "🧠",
+            "Memory:",
+            f"{mem_bar}  {mem_color}{mem_percent:>5.1f}%{RESET}  ({used_mem_str} / {total_mem_str})",
+        )
     )
 
     swap_data = get_swap_info()
@@ -421,7 +440,12 @@ def show_status():
         swap_bar = draw_bar(swap_pct, width=20)
         swap_color = get_color_for_percent(swap_pct)
         print(
-            f"🔄 Swap:         {swap_bar}  {swap_color}{swap_pct:>5.1f}%{RESET}  ({swap_used_str} / {swap_total_str})"
+            _status_row(
+                "🔄",
+                "Swap:",
+                f"{swap_bar}  {swap_color}{swap_pct:>5.1f}%{RESET}  "
+                f"({swap_used_str} / {swap_total_str})",
+            )
         )
 
     zram_data = get_zram_info()
@@ -430,13 +454,23 @@ def show_status():
         zram_bar = draw_bar(zram_pct, width=20)
         zram_color = get_color_for_percent(zram_pct)
         print(
-            f"⚡ ZRAM RAM:     {zram_bar}  {zram_color}{zram_pct:>5.1f}%{RESET}  ({comp_str} compressed from {orig_str}, {ratio_str} ratio)"
+            _status_row(
+                "⚡",
+                "ZRAM RAM:",
+                f"{zram_bar}  {zram_color}{zram_pct:>5.1f}%{RESET}  "
+                f"({comp_str} compressed from {orig_str}, {ratio_str} ratio)",
+            )
         )
 
     disk_bar = draw_bar(disk_percent, width=20)
     disk_color = get_color_for_percent(disk_percent)
     print(
-        f"💾 Disk:         {disk_bar}  {disk_color}{disk_percent:>5.1f}%{RESET}  ({bytes_to_human(home_stats.used)} / {bytes_to_human(home_stats.total)})"
+        _status_row(
+            "💾",
+            "Disk:",
+            f"{disk_bar}  {disk_color}{disk_percent:>5.1f}%{RESET}  "
+            f"({bytes_to_human(home_stats.used)} / {bytes_to_human(home_stats.total)})",
+        )
     )
 
     # 3. Hardware & Network (Battery, Network)
@@ -445,12 +479,18 @@ def show_status():
         bat_color = GREEN if bat_val >= 50 else (YELLOW if bat_val >= 20 else RED)
         bat_bar = draw_bar(bat_val, width=20, force_color=bat_color)
         details_fmt = f"  ({bat_details.strip()})" if bat_details.strip() else ""
-        print(f"🔋 Battery:      {bat_bar}  {bat_color}{float(bat_val):>5.1f}%{RESET}{details_fmt}")
+        print(
+            _status_row(
+                "🔋",
+                "Battery:",
+                f"{bat_bar}  {bat_color}{float(bat_val):>5.1f}%{RESET}{details_fmt}",
+            )
+        )
 
-    print(f"🌐 Network:      ↓ {rx} / ↑ {tx} | {local_ip}{RESET}")
+    print(_status_row("🌐", "Network:", f"↓ {rx} / ↑ {tx} | {local_ip}"))
 
     # 4. Workload (Top Processes)
     if top_procs:
-        print(f"🔝 Top Processes: {', '.join(top_procs)}")
+        print(_status_row("🔝", "Top Processes:", ", ".join(top_procs)))
 
     print()

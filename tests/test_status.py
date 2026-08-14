@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, mock_open, patch
 
 from src.core.status import (
     _get_default_route_interface,
+    _status_row,
     get_battery_info,
     get_cpu_load_summary,
     get_cpu_temp,
@@ -11,6 +12,42 @@ from src.core.status import (
     get_mem_info,
     get_uptime,
 )
+from src.core.text import display_width
+
+# Every row show_status() can print, as (icon, label). Kept here rather than
+# imported so that adding a row to the report without checking its alignment
+# makes this list -- and the reviewer -- notice.
+STATUS_ROWS = [
+    ("⏱️", "Uptime:"),
+    ("\U0001f4ca", "CPU Load:"),
+    ("\U0001f321️", "CPU Temp:"),
+    ("\U0001f3ae", "GPU Status:"),
+    ("⚙️", "Fan Speed:"),
+    ("\U0001f9e0", "Memory:"),
+    ("\U0001f504", "Swap:"),
+    ("⚡", "ZRAM RAM:"),
+    ("\U0001f4be", "Disk:"),
+    ("\U0001f50b", "Battery:"),
+    ("\U0001f310", "Network:"),
+    ("\U0001f51d", "Top Processes:"),
+]
+
+
+def test_status_rows_share_one_value_column():
+    """All labels and icons are padded by measurement, so values line up.
+
+    The icons are not all the same width -- the ones carrying U+FE0F take a
+    single cell -- which is why the rows used to be hand-spaced and why three of
+    them sat one column off from the other eight.
+    """
+    columns = {display_width(_status_row(icon, label, "")) for icon, label in STATUS_ROWS}
+    assert columns == {display_width("\U0001f4ca ") + len("Top Processes: ")}, columns
+
+
+def test_status_row_keeps_the_value_untouched():
+    row = _status_row("\U0001f4be", "Disk:", "50.0%  (1 GB / 2 GB)")
+    assert row.endswith("50.0%  (1 GB / 2 GB)")
+    assert row.startswith("\U0001f4be Disk:")
 
 
 def test_get_mem_info():

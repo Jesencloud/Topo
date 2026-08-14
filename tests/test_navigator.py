@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
+from src.core.text import display_width
 from src.ui.navigator import (
     ANSI_CSI_RE,
     AnalyzeSelector,
@@ -21,6 +22,8 @@ from src.ui.navigator import (
     UninstallPreviewSelector,
     UninstallSelector,
     draw_bar,
+    icon_gap,
+    pad_and_truncate,
 )
 
 
@@ -114,6 +117,59 @@ def test_confirm_left_then_enter_selects_yes():
 
 def test_confirm_esc_is_false():
     assert drive(ConfirmSelector("ok?"), [Navigator.ESC]) is False
+
+
+def _confirm_button_line(selected_index):
+    selector = ConfirmSelector("Delete 3 items?")
+    selector.selected_index = selected_index
+
+    with patch("sys.stdout.write") as write, patch("sys.stdout.flush"):
+        selector.render()
+
+    rendered = "".join(call.args[0] for call in write.call_args_list)
+    visible = ANSI_CSI_RE.sub("", rendered)
+    return next(line for line in visible.split("\n") if "Yes" in line and "No" in line)
+
+
+def test_confirm_selection_is_visible_without_color():
+    """The armed button must differ in *characters*, not only in background color.
+
+    Colors are blanked under pytest (non-TTY), which is the same state a user gets
+    from --no-color, NO_COLOR or a piped run. The dialog gates deletions, so
+    "which button is armed" cannot be a color-only distinction: it used to render
+    as a one-space shift, indistinguishable in practice.
+    """
+    yes_armed = _confirm_button_line(0)
+    no_armed = _confirm_button_line(1)
+
+    assert yes_armed.strip() != no_armed.strip()
+    # Same total width either way, so toggling never nudges the row sideways.
+    assert display_width(yes_armed) == display_width(no_armed)
+    assert "▸ Yes ◂" in yes_armed and "▸ No ◂" not in yes_armed
+    assert "▸ No ◂" in no_armed and "▸ Yes ◂" not in no_armed
+
+
+# --- pad_and_truncate / icon_gap ---
+def test_pad_and_truncate_never_exceeds_requested_width():
+    # Widths under len("...") used to return a bare "..." and overflow the column,
+    # breaking every row drawn after it.
+    for width in range(0, 8):
+        for text in ("", "a", "abcdefghij", "中文测试字符"):
+            assert display_width(pad_and_truncate(text, width)) == width, (text, width)
+
+
+def test_pad_and_truncate_pads_and_truncates():
+    assert pad_and_truncate("abc", 10) == "abc       "
+    assert pad_and_truncate("中文测试", 10) == "中文测试  "
+    assert pad_and_truncate("verylongfilename", 12) == "verylongf..."
+
+
+def test_icon_gap_aligns_names_after_icons_of_different_widths():
+    narrow = "\U0001f5c2️"  # card index dividers + VS16: one cell
+    wide = "\U0001f4c4"  # page facing up: two cells
+    assert display_width(narrow + icon_gap(narrow)) == display_width(wide + icon_gap(wide))
+    assert icon_gap(narrow) == "  "
+    assert icon_gap(wide) == " "
 
 
 # --- InteractiveMenu ---

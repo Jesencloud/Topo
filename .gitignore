@@ -56,3 +56,4 @@ tach.toml
 docs/Security_audit*
 docs/PERFORMANCE_*
 proxy.mjs
+docs/releases/v1.0.7.md
