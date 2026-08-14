@@ -140,7 +140,9 @@ def get_battery_info():
             with open(bat_path / "energy_full") as f:
                 full = int(f.read().strip())
             health = min(100.0, (full / design) * 100)
-            health_str = f" (Health: {health:.1f}%)"
+            # No parens here: show_status() already wraps the whole details string
+            # in one pair, so adding our own produced "((Health: ...) | Cycles: N)".
+            health_str = f" Health: {health:.1f}%"
         except (OSError, ValueError, ZeroDivisionError):
             health_str = ""
 

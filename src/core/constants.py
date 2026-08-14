@@ -111,6 +111,49 @@ GRAY_NB: str = ""
 OK: str = ""
 SKIP: str = ""
 
+# Every name _init_colors() rebinds. Consumers do `from .constants import GREEN`,
+# which copies the *value* into their own module namespace, so rebinding these
+# globals alone is invisible to them (see _propagate_colors).
+_COLOR_NAMES: tuple[str, ...] = (
+    "BLUE",
+    "CYAN",
+    "MAGENTA",
+    "YELLOW",
+    "GREEN",
+    "RED",
+    "WHITE",
+    "GRAY",
+    "RESET",
+    "BOLD",
+    "PURPLE",
+    "THEME_TITLE",
+    "GREEN_NB",
+    "GRAY_NB",
+    "OK",
+    "SKIP",
+)
+
+
+def _propagate_colors() -> None:
+    """Push the current color values into modules that from-imported them.
+
+    ``setup_color_mode()`` runs after argparse, i.e. long after every UI module
+    has already bound its own copy of GREEN/RESET/... at import time. Without
+    this rebind, ``--no-color`` would silently do nothing: only NO_COLOR and the
+    non-TTY case work by accident, because those are decided during this
+    module's own import, before the from-imports happen.
+    """
+    root = __name__.split(".")[0]
+    values = {name: globals()[name] for name in _COLOR_NAMES}
+    for mod_name, module in list(sys.modules.items()):
+        if module is None or mod_name == __name__:
+            continue
+        if mod_name != root and not mod_name.startswith(f"{root}."):
+            continue
+        for name, value in values.items():
+            if hasattr(module, name):
+                setattr(module, name, value)
+
 
 def _init_colors(disable: bool = False):
     global BLUE, CYAN, MAGENTA, YELLOW, GREEN, RED, WHITE, GRAY, RESET, BOLD, PURPLE, THEME_TITLE
@@ -151,6 +194,7 @@ def setup_color_mode(no_color: bool = False) -> None:
     env_no_color = bool(os.environ.get("NO_COLOR", "").strip())
     disable = no_color or env_no_color or not sys.stdout.isatty()
     _init_colors(disable=disable)
+    _propagate_colors()
 
 
 # Auto-initialize based on NO_COLOR environment specification at module import

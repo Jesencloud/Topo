@@ -141,6 +141,33 @@ def test_get_battery_health_capped_at_100():
     assert "Health: 100.0%" in details
 
 
+def test_battery_details_are_not_pre_parenthesized():
+    """show_status() wraps the details in parens, so they must not carry their own.
+
+    Otherwise the row renders as "🔋 Battery: ... ((Health: 100.0%) | Cycles: N)".
+    """
+
+    def battery_mock_open(path):
+        if "capacity" in str(path):
+            return mock_open(read_data="80\n")()
+        if "energy_full_design" in str(path):
+            return mock_open(read_data="5000\n")()
+        if "energy_full" in str(path):
+            return mock_open(read_data="4500\n")()
+        if "cycle_count" in str(path):
+            return mock_open(read_data="244\n")()
+        return mock_open()()
+
+    with (
+        patch("pathlib.Path.exists", return_value=True),
+        patch("builtins.open", side_effect=battery_mock_open),
+    ):
+        _, _, details = get_battery_info()
+
+    assert "(" not in details and ")" not in details, details
+    assert details.strip() == "Health: 90.0% | Cycles: 244"
+
+
 def test_get_gpu_info_multi_gpu_uses_first_line():
     out = "10, 1024, 8192, 55\n20, 2048, 8192, 60\n"
     with (

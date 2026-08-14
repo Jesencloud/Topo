@@ -268,10 +268,19 @@ def _main():
 
     # --- Global Options ---
     parser.add_argument("--version", action="version", version=f"topo {TOPO_VERSION}")
+    # The wording is deliberately narrow: setup_color_mode() blanks every color
+    # that flows through core.constants, which covers all report/status output.
+    # The interactive selectors still carry ~36 inline SGR literals for cursors
+    # and hover rows; those are purely decorative (selection is also marked by
+    # ▶ / ✓ / > glyphs), so the menus stay usable, but they are not blanked.
     parser.add_argument(
         "--no-color",
         action="store_true",
-        help="Disable colored output (respects NO_COLOR specification https://no-color.org/)",
+        help=(
+            "Disable colored output in reports and status views "
+            "(respects NO_COLOR, https://no-color.org/); "
+            "interactive menus keep some decorative highlighting"
+        ),
     )
 
     args = parser.parse_args()

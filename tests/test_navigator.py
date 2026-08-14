@@ -20,6 +20,7 @@ from src.ui.navigator import (
     PaginatedSelector,
     UninstallPreviewSelector,
     UninstallSelector,
+    draw_bar,
 )
 
 
@@ -172,6 +173,70 @@ def test_interactive_menu_uses_returned_banner_text():
     output = "".join(call.args[0] for call in writes)
     assert result is None
     assert "BANNER" in output
+
+
+def test_interactive_menu_digit_selects_and_activates():
+    # Labels are numbered ("1. Clean"), so pressing the digit must pick that row.
+    options = [(f"{i + 1}. Option", "menu item") for i in range(5)]
+    menu = InteractiveMenu("Main Menu", options)
+
+    assert drive(menu, ["3"]) == 2
+    assert menu.selected_index == 2
+
+
+def test_interactive_menu_digit_out_of_range_is_ignored():
+    menu = InteractiveMenu("Main Menu", [("1. Clean", "d"), ("2. Status", "d")])
+
+    assert drive(menu, ["9", Navigator.ESC]) is None
+    assert menu.selected_index == 0
+
+
+def test_interactive_menu_zero_is_not_a_selection():
+    menu = InteractiveMenu("Main Menu", [("1. Clean", "d")])
+
+    assert drive(menu, ["0", Navigator.ESC]) is None
+
+
+# --- draw_bar ---
+def test_draw_bar_levels_differ_without_color():
+    # Colors are blanked under pytest (non-TTY), so this asserts the glyphs alone
+    # carry the fill level: without that fallback every bar would look full.
+    bars = [draw_bar(percent, width=10) for percent in (0, 25, 50, 75, 100)]
+    assert len(set(bars)) == len(bars)
+    assert bars[0] == "─" * 10
+    assert bars[-1] == "▬" * 10
+
+
+def test_draw_bar_keeps_the_original_glyph_for_both_segments_when_colored():
+    with patch.multiple(
+        "src.ui.navigator", RESET="\033[0m", WHITE="\033[38;5;244m", GREEN="\033[1;32m"
+    ):
+        bar = draw_bar(50, width=10)
+    assert ANSI_CSI_RE.sub("", bar) == "▬" * 10
+
+
+def test_draw_bar_keeps_requested_width():
+    for percent in (-5, 0, 1, 37, 99.9, 100, 250):
+        assert len(draw_bar(percent, width=20)) == 20, percent
+
+
+def test_draw_bar_zero_width_is_empty():
+    assert draw_bar(50, width=0) == ""
+
+
+def test_draw_bar_zero_percent_honors_force_color():
+    # A battery at 0% passes force_color=RED; falling back to the neutral gray
+    # track would drop the warning exactly when it matters most.
+    # Only RESET and WHITE are read on this path (RESET picks the glyph and
+    # terminates the run, WHITE is the default track color), so patching a RED
+    # that draw_bar never looks at would just be noise.
+    with patch.multiple("src.ui.navigator", RESET="\033[0m", WHITE="\033[38;5;244m"):
+        forced = draw_bar(0, width=10, force_color="\033[1;31m")
+        default = draw_bar(0, width=10)
+
+    assert forced.startswith("\033[1;31m")
+    assert default.startswith("\033[38;5;244m")
+    assert ANSI_CSI_RE.sub("", forced) == ANSI_CSI_RE.sub("", default)
 
 
 # --- AnalyzeSelector ---

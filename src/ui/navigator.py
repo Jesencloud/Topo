@@ -310,6 +310,13 @@ def pad_and_truncate(text, width):
         return text + " " * (width - actual_w)
 
 
+BAR_FILLED = "▬"
+BAR_EMPTY = "▬"
+# Only when colors are off does the bar's *shape* have to carry the level:
+# identical glyphs would make 0% and 100% render as the same solid bar.
+BAR_EMPTY_NO_COLOR = "─"
+
+
 def get_color_for_percent(percent):
     """Returns the ANSI color code for a given percentage."""
     if percent > 80:
@@ -320,23 +327,34 @@ def get_color_for_percent(percent):
 
 
 def draw_bar(percent, width=20, force_color=None):
-    """Draws a sleek progress bar using the '▬' character."""
+    """Draws a sleek progress bar using the '▬' character.
+
+    Filled and empty segments share the glyph and are told apart by color. When
+    colors are disabled (--no-color / NO_COLOR / non-TTY) there is nothing left
+    to tell them apart, so the empty track falls back to a lighter glyph instead
+    of rendering every bar as full.
+    """
     if width <= 0:
         return ""
     # Ensure even small percentages show at least one block to distinguish from 0%
     filled = int((percent / 100) * width)
     if percent > 0 and filled == 0:
         filled = 1
+    filled = max(0, min(width, filled))
     empty = width - filled
 
     color = force_color or get_color_for_percent(percent)
+    empty_glyph = BAR_EMPTY if RESET else BAR_EMPTY_NO_COLOR
 
-    if percent <= 0:
-        # For 0%, show a high-contrast neutral empty bar visible on both dark and light terminal backgrounds
-        return f"{WHITE}{'▬' * width}{RESET}"
+    if filled == 0:
+        # Empty track: neutral gray by default (high-contrast on dark and light
+        # terminals), but an explicit force_color wins — a battery at 0% still
+        # needs its red warning, and gray would read as "nothing to see here".
+        return f"{force_color or WHITE}{empty_glyph * width}{RESET}"
+    if empty == 0:
+        return f"{color}{BAR_FILLED * width}{RESET}"
 
-    # For >0%, show colored filled part and neutral white/gray empty part
-    return f"{color}{'▬' * filled}{RESET}{WHITE}{'▬' * empty}{RESET}"
+    return f"{color}{BAR_FILLED * filled}{RESET}{WHITE}{empty_glyph * empty}{RESET}"
 
 
 class Navigator:
@@ -693,6 +711,14 @@ class InteractiveMenu:
                 elif key in (Navigator.DOWN, "\x1bOB"):
                     self.selected_index = (self.selected_index + 1) % len(self.options)
                     Navigator.play_click()
+                elif len(key) == 1 and key.isdigit() and key != "0":
+                    # Menu labels are numbered ("1. Clean"), so a digit selects
+                    # and activates that entry directly.
+                    idx = int(key) - 1
+                    if idx < len(self.options):
+                        self.selected_index = idx
+                        Navigator.play_click()
+                        return idx
                 elif len(key) == 1 and key.lower() == "m":
                     Navigator.is_muted = not Navigator.is_muted
                 elif key in (Navigator.LEFT, Navigator.RIGHT, "\x1bOC", "\x1bOD"):
