@@ -1,6 +1,39 @@
 from unittest.mock import patch
 
-from src.clean.project import PurgeManager, Scanner
+from src.clean.project import PurgeManager, Scanner, _merge_artifact_roots
+
+
+def test_merge_artifact_roots_deduplicates_and_removes_nested_paths(test_env):
+    parent = (test_env / "project/node_modules").resolve()
+    child = (parent / "nested/target").resolve()
+    sibling_prefix = (test_env / "project/node_modules-extra").resolve()
+
+    merged = _merge_artifact_roots([child, parent, child, sibling_prefix])
+
+    assert merged == [parent, sibling_prefix]
+
+
+def test_merge_artifact_roots_handles_child_before_parent(test_env):
+    parent = (test_env / "z/project/target").resolve()
+    child = (parent / "nested/build").resolve()
+
+    assert _merge_artifact_roots([child, parent]) == [parent]
+
+
+def test_merge_artifact_roots_collapses_a_multi_level_chain(test_env):
+    """Three nesting levels at once, so an intermediate root must be dropped.
+
+    Only the outermost path survives, which pins the ancestor test to "any
+    retained ancestor" rather than "the immediate parent": the deepest entry's
+    parent is the intermediate one, not the root that ends up being kept.
+    Passing them deepest-first also proves discovery order is irrelevant.
+    """
+    outer = (test_env / "repo/node_modules").resolve()
+    middle = (outer / "pkg/target").resolve()
+    inner = (middle / "debug/build").resolve()
+    unrelated = (test_env / "repo/dist").resolve()
+
+    assert _merge_artifact_roots([inner, middle, outer, unrelated]) == [unrelated, outer]
 
 
 def test_scan_artifacts(test_env):

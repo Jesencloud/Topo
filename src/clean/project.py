@@ -1,6 +1,6 @@
 import os
 import sys
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -18,6 +18,31 @@ from ..core.constants import (
 from ..core.file_ops import bytes_to_human, get_size_fast, safe_remove
 from ..core.scan_cache import ScanCache
 from ..ui.navigator import Navigator, PaginatedSelector
+
+
+def _merge_artifact_roots(candidates: Iterable[Path]) -> list[Path]:
+    """Deduplicate artifacts and remove nested paths in ``O(K log K)`` time.
+
+    Sorting canonical paths by their components puts a parent immediately before
+    its descendants. Consequently the last retained root is the only ancestor
+    that needs checking for each candidate; no quadratic scan of all prior roots
+    or repeated list filtering is required.
+
+    The ancestor test compares component tuples rather than using
+    ``root in path.parents``: ``Path.parents`` has no ``__contains__``, so ``in``
+    degrades to iterating it and allocating one ``Path`` per level. A prefix
+    slice of the already-computed ``parts`` allocates nothing and covers the
+    equality case too, since identical paths share the whole tuple.
+    """
+    roots: list[Path] = []
+    retained_parts: list[tuple[str, ...]] = []
+    for path in sorted(set(candidates), key=lambda path: path.parts):
+        parts = path.parts
+        if retained_parts and parts[: len(retained_parts[-1])] == retained_parts[-1]:
+            continue
+        roots.append(path)
+        retained_parts.append(parts)
+    return roots
 
 
 class Scanner:
@@ -101,9 +126,9 @@ class PurgeManager:
         """Orchestrates the scanning process."""
         print("🔍 Scanning for projects and heavy artifacts...")
 
-        # Discover projects and retain only unique, non-overlapping artifacts.
-        all_artifacts: list[Path] = []
-        seen_artifacts: set[Path] = set()
+        # Discover projects first; canonicalize once, then merge in sorted order
+        # so nested artifact checks stay O(K log K) instead of O(K^2).
+        candidates: list[Path] = []
         for project in self.scanner.scan_for_projects():
             artifacts = self.scanner.scan_artifacts(project)
             for artifact in artifacts:
@@ -111,14 +136,9 @@ class PurgeManager:
                     key = artifact.resolve()
                 except (OSError, RuntimeError):
                     key = artifact.absolute()
-                if key in seen_artifacts or any(parent in seen_artifacts for parent in key.parents):
-                    continue
-                nested = {existing for existing in seen_artifacts if key in existing.parents}
-                if nested:
-                    seen_artifacts.difference_update(nested)
-                    all_artifacts = [item for item in all_artifacts if item not in nested]
-                seen_artifacts.add(key)
-                all_artifacts.append(key)
+                candidates.append(key)
+
+        all_artifacts = _merge_artifact_roots(candidates)
 
         if not all_artifacts:
             return []
