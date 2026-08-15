@@ -1,7 +1,8 @@
+use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
 use tempfile::tempdir;
-use topo_core::{TOP_FILE_MIN_BYTES, compute_single, compute_stats, compute_tree};
+use topo_core::{DirAgg, TOP_FILE_MIN_BYTES, compute_single, compute_stats, compute_tree};
 
 fn write_file(path: &Path, bytes: usize) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -141,6 +142,112 @@ fn single_mode_basic() {
     assert_eq!(result.file_count, 2);
     assert_eq!(result.subdirs["a"], 100);
     assert_eq!(result.subdirs["c.bin"], 50);
+    assert!(result.cache_estimated_bytes > 0);
+}
+
+#[test]
+fn tree_exports_cache_estimates_for_every_node() {
+    let dir = tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    write_file(&root.join("a/b.bin"), 100);
+
+    let tree = compute_tree(&root);
+
+    assert!(
+        tree.values()
+            .all(|aggregate| aggregate.cache_estimated_bytes > 0)
+    );
+}
+
+/// Independent reimplementation of `ScanCache._estimate` (src/core/scan_cache.py)
+/// over the JSON the Python side actually parses. Kept deliberately naive and
+/// separate from the exported constants so the two models are compared, not
+/// shared: a drift in either one shows up as a failure here.
+fn python_estimate(value: &Value) -> u64 {
+    match value {
+        Value::Null => 0,
+        Value::String(text) => 49 + text.len() as u64,
+        Value::Number(_) | Value::Bool(_) => 28,
+        Value::Array(items) => 64 + items.iter().map(python_estimate).sum::<u64>(),
+        Value::Object(entries) => {
+            64 + entries
+                .iter()
+                .map(|(key, nested)| 49 + key.len() as u64 + python_estimate(nested))
+                .sum::<u64>()
+        }
+    }
+}
+
+/// The dict `analyze.get_rust_tree_data` caches for one `--tree` node: the
+/// aggregate plus the absolute `path` it rejoins and a `top_files` default.
+fn cached_tree_node(root: &Path, relative: &str, aggregate: &DirAgg) -> Value {
+    let node = if relative == "." {
+        root.to_path_buf()
+    } else {
+        root.join(relative)
+    };
+    let mut cached = serde_json::Map::new();
+    cached.insert("path".into(), json!(node.to_string_lossy()));
+    cached.insert("top_files".into(), json!([]));
+    let Value::Object(fields) = serde_json::to_value(aggregate).unwrap() else {
+        panic!("DirAgg must serialize to an object");
+    };
+    cached.extend(fields);
+    Value::Object(cached)
+}
+
+#[test]
+fn cache_estimate_matches_the_python_model_for_ascii_paths() {
+    let dir = tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    write_file(&root.join("large.bin"), (TOP_FILE_MIN_BYTES + 1) as usize);
+    for index in 0..40 {
+        write_file(
+            &root.join(format!("child-{index:03}-longish-name/inner/f.bin")),
+            64,
+        );
+    }
+
+    let single = compute_single(&root);
+    let single_json = serde_json::to_value(&single).unwrap();
+    assert_eq!(
+        single.cache_estimated_bytes,
+        python_estimate(&single_json),
+        "--single hint must equal what ScanCache._estimate would compute"
+    );
+
+    let tree = compute_tree(&root);
+    assert!(tree.len() > 40, "fixture should produce many nodes");
+    for (relative, aggregate) in &tree {
+        assert_eq!(
+            aggregate.cache_estimated_bytes,
+            python_estimate(&cached_tree_node(&root, relative, aggregate)),
+            "--tree hint mismatch at {relative:?}; the path Python rejoins is charged here"
+        );
+    }
+}
+
+#[test]
+fn cache_estimate_stays_conservative_for_non_ascii_paths() {
+    let dir = tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    for index in 0..20 {
+        write_file(&root.join(format!("目录-{index}-中文名称/f.bin")), 64);
+    }
+
+    // `_estimate` counts UTF-8 bytes while CPython stores up to 4 bytes per
+    // character, so here the exported hint must come out strictly higher.
+    let single = compute_single(&root);
+    assert!(
+        single.cache_estimated_bytes > python_estimate(&serde_json::to_value(&single).unwrap())
+    );
+    for (relative, aggregate) in &compute_tree(&root) {
+        assert!(
+            aggregate.cache_estimated_bytes
+                >= python_estimate(&cached_tree_node(&root, relative, aggregate)),
+            "non-ASCII node {relative:?} must never be under-charged"
+        );
+    }
 }
 
 #[test]

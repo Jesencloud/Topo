@@ -40,17 +40,35 @@ class ScanCache:
 
     @classmethod
     def _estimate(cls, value: Any) -> int:
-        if value is None:
-            return 0
-        if isinstance(value, str):
-            return len(value.encode("utf-8", errors="replace")) + 49
-        if isinstance(value, (int, float, bool)):
-            return 28
-        if isinstance(value, dict):
-            return 64 + sum(cls._estimate(k) + cls._estimate(v) for k, v in value.items())
-        if isinstance(value, (list, tuple)):
-            return 64 + sum(cls._estimate(item) for item in value)
-        return 64
+        """Estimate unknown data iteratively, avoiding recursive call overhead."""
+        total = 0
+        stack = [value]
+        while stack:
+            current = stack.pop()
+            if current is None:
+                continue
+            if isinstance(current, str):
+                total += len(current.encode("utf-8", errors="replace")) + 49
+            elif isinstance(current, (int, float, bool)):
+                total += 28
+            elif isinstance(current, dict):
+                total += 64
+                stack.extend(current.keys())
+                stack.extend(current.values())
+            elif isinstance(current, (list, tuple)):
+                total += 64
+                stack.extend(current)
+            else:
+                total += 64
+        return total
+
+    @classmethod
+    def _estimate_scan_data(cls, data: dict[str, Any]) -> int:
+        """Use the Rust engine's already-computed estimate when available."""
+        hint = data.get("_cache_estimated_bytes")
+        if type(hint) is int and hint > 0:
+            return hint
+        return cls._estimate(data)
 
     @classmethod
     def _discard_locked(cls, key: str) -> None:
@@ -76,7 +94,7 @@ class ScanCache:
     @classmethod
     def set(cls, path: Path, data: dict[str, Any]) -> None:
         key = os.fspath(path)
-        estimated = cls._estimate(data)
+        estimated = cls._estimate_scan_data(data)
         if estimated > cls.MAX_ESTIMATED_BYTES:
             # Oversized: never cache it, but still drop any stale entry for this key.
             with cls._lock:

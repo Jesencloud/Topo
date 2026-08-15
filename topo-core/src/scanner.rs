@@ -24,6 +24,8 @@ pub struct ScanResult {
     pub file_count: u64,
     pub top_files: Vec<FileInfo>,
     pub subdirs: HashMap<String, u64>,
+    #[serde(default, rename = "_cache_estimated_bytes")]
+    pub cache_estimated_bytes: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
@@ -42,6 +44,8 @@ pub struct DirAgg {
     pub subdirs: HashMap<String, u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub top_files: Vec<FileInfo>,
+    #[serde(default, rename = "_cache_estimated_bytes")]
+    pub cache_estimated_bytes: u64,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -66,6 +70,96 @@ impl PartialOrd for FileInfo {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
+}
+
+/// Byte model mirrored from `ScanCache._estimate` in `src/core/scan_cache.py`:
+/// a `dict` or `list` costs 64, an `int` costs 28, and a `str` costs its UTF-8
+/// length plus 49. Exporting a total built from the *same* model is what lets
+/// `ScanCache.set()` skip re-walking the parsed result: the hint is the number
+/// the generic estimator would have produced, so the 64 MiB budget keeps the
+/// accounting it was calibrated against instead of a second, looser one.
+const PY_CONTAINER_BYTES: u64 = 64;
+const PY_INT_BYTES: u64 = 28;
+const PY_STR_HEADER_BYTES: u64 = 49;
+
+/// Keys of the dict Python caches for one directory. `--single` emits all of
+/// these; for `--tree`, `analyze.get_rust_tree_data` adds `path` and a
+/// `top_files` default before caching, so the key set is identical either way.
+const CACHED_KEYS: [&str; 6] = [
+    "path",
+    "total_size_bytes",
+    "file_count",
+    "top_files",
+    "subdirs",
+    "_cache_estimated_bytes",
+];
+
+/// Everything in a cached directory dict except the path string, the `subdirs`
+/// entries and the `top_files` entries: the dict itself, the nested `top_files`
+/// list and `subdirs` dict, all six key strings, and the three integer values.
+const fn scan_dict_fixed_bytes() -> u64 {
+    let mut total = PY_CONTAINER_BYTES * 3 + PY_INT_BYTES * 3;
+    let mut index = 0;
+    while index < CACHED_KEYS.len() {
+        total += PY_STR_HEADER_BYTES + CACHED_KEYS[index].len() as u64;
+        index += 1;
+    }
+    total
+}
+
+/// A `FileInfo` becomes a two-key dict; its `path` string is charged separately.
+const fn file_dict_fixed_bytes() -> u64 {
+    PY_CONTAINER_BYTES
+        + PY_INT_BYTES
+        + (PY_STR_HEADER_BYTES + "path".len() as u64)
+        + (PY_STR_HEADER_BYTES + "size_bytes".len() as u64)
+}
+
+/// Python stores a `str` as a header plus one to four bytes per character.
+/// ASCII matches `_estimate` exactly, which is the overwhelmingly common case
+/// for paths; non-ASCII is charged the worst case, covering the one place
+/// `_estimate` is itself optimistic (it counts UTF-8 bytes, not code units).
+fn estimated_str_bytes(value: &str) -> u64 {
+    let payload = if value.is_ascii() {
+        value.len() as u64
+    } else {
+        (value.chars().count() as u64).saturating_mul(4)
+    };
+    PY_STR_HEADER_BYTES.saturating_add(payload)
+}
+
+/// Cost of the absolute path string Python rebuilds for a `--tree` node
+/// (`scan_root / relative`), charged without materializing the join.
+fn estimated_joined_path_bytes(root: &str, relative: &str) -> u64 {
+    if relative == "." {
+        return estimated_str_bytes(root);
+    }
+    estimated_str_bytes(root)
+        .saturating_add(estimated_str_bytes(relative))
+        .saturating_sub(PY_STR_HEADER_BYTES)
+        .saturating_add(1) // the path separator between the two halves
+}
+
+/// Total bytes the Python dict for one directory is expected to occupy.
+/// `path_bytes` is that directory's already-computed path-string cost, because
+/// `--single` owns the string while `--tree` only knows the two halves of it.
+fn estimated_scan_bytes(
+    path_bytes: u64,
+    subdirs: &HashMap<String, u64>,
+    top_files: &[FileInfo],
+) -> u64 {
+    let mut total = scan_dict_fixed_bytes().saturating_add(path_bytes);
+    for name in subdirs.keys() {
+        total = total
+            .saturating_add(estimated_str_bytes(name))
+            .saturating_add(PY_INT_BYTES);
+    }
+    for file in top_files {
+        total = total
+            .saturating_add(file_dict_fixed_bytes())
+            .saturating_add(estimated_str_bytes(&file.path));
+    }
+    total
 }
 
 /// Walker used by every mode that reports *sizes*, so `--single` and `--tree`
@@ -155,12 +249,16 @@ pub fn compute_single(root_path: &Path) -> ScanResult {
 
     let mut top_files = top_files_heap.into_sorted_vec();
     top_files.reverse();
+    let path = root_path.to_string_lossy().into_owned();
+    let cache_estimated_bytes =
+        estimated_scan_bytes(estimated_str_bytes(&path), &subdir_sizes, &top_files);
     ScanResult {
-        path: root_path.to_string_lossy().into_owned(),
+        path,
         total_size_bytes: total_size,
         file_count,
         top_files,
         subdirs: subdir_sizes,
+        cache_estimated_bytes,
     }
 }
 
@@ -265,6 +363,17 @@ pub fn compute_tree(root_path: &Path) -> HashMap<String, DirAgg> {
     top_files.reverse();
     if let Some(root) = dirs.get_mut(".") {
         root.top_files = top_files;
+    }
+    // Python rejoins each relative key onto the scan root and caches the result
+    // with that absolute `path` string, so charge it here -- the aggregate itself
+    // carries no path field to measure.
+    let root = root_path.to_string_lossy();
+    for (relative, aggregate) in &mut dirs {
+        aggregate.cache_estimated_bytes = estimated_scan_bytes(
+            estimated_joined_path_bytes(&root, relative),
+            &aggregate.subdirs,
+            &aggregate.top_files,
+        );
     }
     dirs
 }

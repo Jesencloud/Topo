@@ -1,10 +1,14 @@
 import json
 import stat
+import subprocess
 import sys
 import threading
 import time
+from functools import cache
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from src.core.analyze import (
     _delete_analyze_paths,
@@ -79,6 +83,96 @@ def test_scan_cache_rejects_single_entry_over_memory_limit(monkeypatch, tmp_path
     ScanCache.set(directory, {"subdirs": {"x" * 200: 1}})
 
     assert ScanCache.get(directory) is None
+
+
+def test_scan_cache_uses_rust_estimate_without_rewalking_data(tmp_path):
+    directory = tmp_path / "hinted"
+    directory.mkdir()
+    data = {
+        "total_size_bytes": 10,
+        "subdirs": {f"item-{index}": index for index in range(100)},
+        "_cache_estimated_bytes": 4096,
+    }
+
+    with patch.object(ScanCache, "_estimate", wraps=ScanCache._estimate) as estimate:
+        ScanCache.set(directory, data)
+
+    estimate.assert_not_called()
+    assert ScanCache._data[str(directory)].estimated_bytes == 4096
+
+
+@pytest.mark.parametrize("invalid_hint", ["invalid", 0, -1, None, True, False, 4096.0])
+def test_scan_cache_invalid_rust_estimate_falls_back(tmp_path, invalid_hint):
+    directory = tmp_path / "invalid-hint"
+    directory.mkdir()
+    data = {"total_size_bytes": 10, "_cache_estimated_bytes": invalid_hint}
+
+    with patch.object(ScanCache, "_estimate", wraps=ScanCache._estimate) as estimate:
+        ScanCache.set(directory, data)
+
+    estimate.assert_called_once_with(data)
+
+
+@cache
+def _dev_engine_binary() -> Path:
+    """Build and return the engine from the current checkout.
+
+    Deliberately not ``_get_core_binary()``: that returns the *packaged* binary
+    under ``src/core/bin``, which is a release artifact and can predate the
+    scanner source being tested here.
+    """
+    project_root = Path(__file__).resolve().parent.parent
+    manifest = project_root / "topo-core" / "Cargo.toml"
+    subprocess.run(
+        ["cargo", "build", "--quiet", "--manifest-path", str(manifest)],
+        cwd=project_root,
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=120,
+    )
+    binary = project_root / "topo-core" / "target" / "debug" / "topo-core"
+    assert binary.is_file(), f"cargo build did not produce {binary}"
+    return binary
+
+
+def test_rust_cache_hint_never_undercharges_the_generic_estimate(tmp_path):
+    """Pin the two estimators together across the language boundary.
+
+    The hint lets ``set()`` skip ``_estimate`` entirely, so the 64 MiB budget is
+    only as sound as the hint. Rust must therefore charge at least what the
+    generic estimator would for the very same dict -- including the absolute
+    ``path`` that ``get_rust_tree_data`` adds to every ``--tree`` node, which
+    the aggregate itself does not carry.
+    """
+    binary = _dev_engine_binary()
+    for index in range(30):
+        child = tmp_path / f"child-{index:03d}-with-a-longish-name" / "nested" / "deeper"
+        child.mkdir(parents=True)
+        (child / "f.bin").write_bytes(b"x" * 512)
+    (tmp_path / "目录-中文" / "inner").mkdir(parents=True)
+    (tmp_path / "目录-中文" / "inner" / "f.bin").write_bytes(b"y" * 512)
+
+    root = _normalize_scan_path(tmp_path)
+    single = json.loads(
+        subprocess.run([str(binary), str(root)], capture_output=True, text=True, check=True).stdout
+    )
+    assert single["_cache_estimated_bytes"] >= ScanCache._estimate(single)
+
+    tree = json.loads(
+        subprocess.run(
+            [str(binary), "--tree", str(root), "--min-bytes", "0"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    )
+    assert len(tree) > 30
+    for relative, aggregate in tree.items():
+        node = root if relative == "." else root / relative
+        cached = {"path": str(node), "top_files": [], **aggregate}
+        hint = aggregate["_cache_estimated_bytes"]
+        assert hint >= ScanCache._estimate(cached), f"{relative} undercharged by {hint}"
 
 
 def test_scan_cache_byte_accounting_stays_consistent_under_concurrency(monkeypatch, tmp_path):
