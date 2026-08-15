@@ -5,7 +5,10 @@ import shutil
 import subprocess
 import sys
 import time
+from array import array
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +42,95 @@ from ..core.scan_cache import ScanCache
 from ..core.text import sanitize_for_display
 from ..core.whitelist import LINUX_USER_DATA_DIRS
 from ..ui.navigator import Navigator, UninstallPreviewSelector, UninstallSelector
+
+
+@dataclass(frozen=True, eq=False)
+class _ResidueEntryIndex:
+    """One scanned root plus compact lookup tables for residue candidates.
+
+    ``candidates()`` narrows a root's entries down to the ones that could possibly
+    satisfy :meth:`UninstallManager._name_matches`; every survivor is still run
+    through that method, so the index can only ever cost extra work, never invent
+    a match. Each lookup table exists to cover exactly one ``_name_matches``
+    branch, and the coverage is what makes the narrowing safe:
+
+    * ``entry == token``               -> ``exact[token]``
+    * ``entry.startswith(token + sep)`` -> ``prefixes[token[:3]]``; the branch is
+      guarded by ``len(token) >= 3``, and an entry that starts with the token
+      shares its first three characters.
+    * ``token in entry`` (len >= 5)    -> the gram bucket of ``token[:5]``; a
+      contiguous substring's leading 5-gram is necessarily one of the entry's own.
+
+    ``eq=False`` keeps the dataclass from generating ``__eq__``/``__hash__``: this
+    is a per-run cache value compared by identity, and a generated ``__eq__``
+    would walk 2048 arrays while the paired ``__hash__`` would raise on the dicts.
+    """
+
+    entries: tuple[tuple[str, Path], ...]
+    exact: dict[str, tuple[int, ...]]
+    prefixes: dict[str, tuple[int, ...]]
+    gram_buckets: tuple[array, ...]
+    is_indexed: bool
+
+    _GRAM_BUCKET_COUNT = 2048
+    # Below this many entries the lookup tables cost more than the scan they
+    # replace: the gram table alone allocates _GRAM_BUCKET_COUNT arrays (~194 KiB)
+    # regardless of how many entries land in them, and roots like
+    # ~/.config/systemd/user or ~/snap hold a few dozen at most. Such roots are
+    # kept as a plain entry list and candidates() hands back all of them, which is
+    # still a valid superset -- just an unnarrowed one.
+    _MIN_ENTRIES_TO_INDEX = 512
+
+    @classmethod
+    def _gram_bucket(cls, gram: str) -> int:
+        # Deliberately str.__hash__, which is randomized per process (PYTHONHASHSEED).
+        # Build and query therefore have to happen in the same process: this index
+        # must never be pickled, persisted next to the ScanCache/heavy_cache data,
+        # or handed to a ProcessPoolExecutor. The current caller builds it in
+        # run_full_scan() and consumes it in the ThreadPoolExecutor right
+        # after, which shares the interpreter and so shares the hash seed.
+        return hash(gram) % cls._GRAM_BUCKET_COUNT
+
+    @classmethod
+    def build(cls, entries: list[tuple[str, Path]]) -> "_ResidueEntryIndex":
+        normalized = tuple(entries)
+        if len(normalized) < cls._MIN_ENTRIES_TO_INDEX:
+            return cls(entries=normalized, exact={}, prefixes={}, gram_buckets=(), is_indexed=False)
+
+        exact: dict[str, list[int]] = defaultdict(list)
+        prefixes: dict[str, list[int]] = defaultdict(list)
+        gram_buckets = tuple(array("I") for _ in range(cls._GRAM_BUCKET_COUNT))
+        bucket_of = cls._gram_bucket
+        for index, (name, _path) in enumerate(normalized):
+            exact[name].append(index)
+            if len(name) >= 3:
+                prefixes[name[:3]].append(index)
+            if len(name) >= 5:
+                buckets = {bucket_of(name[offset : offset + 5]) for offset in range(len(name) - 4)}
+                for bucket in buckets:
+                    gram_buckets[bucket].append(index)
+        return cls(
+            entries=normalized,
+            exact={key: tuple(value) for key, value in exact.items()},
+            prefixes={key: tuple(value) for key, value in prefixes.items()},
+            gram_buckets=gram_buckets,
+            is_indexed=True,
+        )
+
+    def candidates(self, targets: set[str]) -> list[tuple[str, Path]]:
+        if not self.is_indexed:
+            return list(self.entries)
+        candidate_ids: set[int] = set()
+        for raw_target in targets:
+            target = raw_target.strip().lower()
+            if not target or target in UninstallManager._GENERIC_TOKENS:
+                continue
+            candidate_ids.update(self.exact.get(target, ()))
+            if len(target) >= 3:
+                candidate_ids.update(self.prefixes.get(target[:3], ()))
+            if len(target) >= 5:
+                candidate_ids.update(self.gram_buckets[self._gram_bucket(target[:5])])
+        return [self.entries[index] for index in sorted(candidate_ids)]
 
 
 class UninstallManager:
@@ -944,8 +1036,8 @@ class UninstallManager:
 
         return apps
 
-    def _pre_scan_search_roots(self) -> dict[Path, list[tuple[str, Path]]]:
-        """Pre-scans search_roots ONCE to avoid O(N) redundant disk scandirs."""
+    def _pre_scan_search_roots(self) -> dict[Path, _ResidueEntryIndex]:
+        """Scan shared roots once and build reusable residue-candidate indexes."""
         home_path = Path.home()
         search_roots = [
             home_path / ".config",
@@ -955,7 +1047,7 @@ class UninstallManager:
             home_path / ".var/app",
             home_path / "snap",
         ]
-        pre_scanned_entries: dict[Path, list[tuple[str, Path]]] = {}
+        pre_scanned_entries: dict[Path, _ResidueEntryIndex] = {}
         for root in search_roots:
             if root.exists():
                 try:
@@ -963,7 +1055,7 @@ class UninstallManager:
                     with os.scandir(root) as it:
                         for item_entry in it:
                             entries.append((item_entry.name.lower(), Path(item_entry.path)))
-                    pre_scanned_entries[root] = entries
+                    pre_scanned_entries[root] = _ResidueEntryIndex.build(entries)
                 except OSError:
                     pass
         for icon_root in (
@@ -977,25 +1069,27 @@ class UninstallManager:
                 for icon_file in icon_root.rglob("*"):
                     if icon_file.is_file():
                         entries.append((icon_file.name.lower(), icon_file))
-            pre_scanned_entries[icon_root] = entries
+            pre_scanned_entries[icon_root] = _ResidueEntryIndex.build(entries)
 
         service_root = home_path / ".config/systemd/user"
         if service_root.exists():
             with contextlib.suppress(OSError):
-                pre_scanned_entries[service_root] = [
-                    (service.name.lower(), service) for service in service_root.glob("*.service")
-                ]
+                pre_scanned_entries[service_root] = _ResidueEntryIndex.build(
+                    [(service.name.lower(), service) for service in service_root.glob("*.service")]
+                )
 
         with contextlib.suppress(OSError), os.scandir(home_path) as home_entries:
-            pre_scanned_entries[home_path] = [
-                (entry.name.lower(), Path(entry.path))
-                for entry in home_entries
-                if entry.is_dir(follow_symlinks=False) and entry.name.startswith(".")
-            ]
+            pre_scanned_entries[home_path] = _ResidueEntryIndex.build(
+                [
+                    (entry.name.lower(), Path(entry.path))
+                    for entry in home_entries
+                    if entry.is_dir(follow_symlinks=False) and entry.name.startswith(".")
+                ]
+            )
         return pre_scanned_entries
 
     def _calculate_app_sizes_and_residues(
-        self, apps: list[dict[str, Any]], pre_scanned_entries: dict[Path, list[tuple[str, Path]]]
+        self, apps: list[dict[str, Any]], pre_scanned_entries: dict[Path, _ResidueEntryIndex]
     ) -> None:
         """Calculates total app sizes including user data and cache residues in parallel."""
 
@@ -1065,7 +1159,7 @@ class UninstallManager:
         app_id: str,
         app_name: str,
         app_type: str,
-        pre_scanned_entries: dict[Path, list[tuple[str, Path]]] | None = None,
+        pre_scanned_entries: dict[Path, _ResidueEntryIndex] | None = None,
     ) -> list[Path]:
         """Finds all data/config/cache paths associated with an app."""
         if self._requires_official_only_uninstall(app_id, app_name):
@@ -1121,11 +1215,14 @@ class UninstallManager:
             if not root.exists():
                 continue
             if pre_scanned_entries and root in pre_scanned_entries:
-                for entry_lower, p in pre_scanned_entries[root]:
-                    for t in targets:
-                        if self._name_matches(entry_lower, t) and str(p) not in seen:
-                            paths.append(p)
-                            seen.add(str(p))
+                indexed_entries = pre_scanned_entries[root].candidates(targets)
+                for entry_lower, p in indexed_entries:
+                    if (
+                        any(self._name_matches(entry_lower, t) for t in targets)
+                        and str(p) not in seen
+                    ):
+                        paths.append(p)
+                        seen.add(str(p))
             else:
                 try:
                     with os.scandir(root) as it:
@@ -1153,12 +1250,15 @@ class UninstallManager:
         for icon_root in icon_roots:
             if not icon_root.exists():
                 continue
-            indexed_icons = pre_scanned_entries.get(icon_root) if pre_scanned_entries else None
-            if indexed_icons is None:
+            icon_index = pre_scanned_entries.get(icon_root) if pre_scanned_entries else None
+            if icon_index is None:
+                indexed_icons = []
                 with contextlib.suppress(OSError):
                     indexed_icons = [
                         (icon.name.lower(), icon) for icon in icon_root.rglob("*") if icon.is_file()
                     ]
+            else:
+                indexed_icons = icon_index.candidates(targets)
             for file_lower, icon_file in indexed_icons or []:
                 if (
                     any(self._name_matches(file_lower, t) for t in targets)
@@ -1170,15 +1270,18 @@ class UninstallManager:
         # 6. Systemd User Services (~/.config/systemd/user/)
         systemd_user_dir = home_path / ".config/systemd/user"
         if systemd_user_dir.exists():
-            indexed_services = (
+            service_index = (
                 pre_scanned_entries.get(systemd_user_dir) if pre_scanned_entries else None
             )
-            if indexed_services is None:
+            if service_index is None:
+                indexed_services = []
                 with contextlib.suppress(OSError):
                     indexed_services = [
                         (service.name.lower(), service)
                         for service in systemd_user_dir.glob("*.service")
                     ]
+            else:
+                indexed_services = service_index.candidates(targets)
             for file_lower, service_file in indexed_services or []:
                 if (
                     any(self._name_matches(file_lower, t) for t in targets)
@@ -1203,8 +1306,8 @@ class UninstallManager:
         # dirs are excluded too (defence in depth; they are visible anyway).
         if len(app_name) > 3:
             protected_dir_names = {d.lower() for d in LINUX_USER_DATA_DIRS}
-            indexed_home = pre_scanned_entries.get(home_path) if pre_scanned_entries else None
-            if indexed_home is None:
+            home_index = pre_scanned_entries.get(home_path) if pre_scanned_entries else None
+            if home_index is None:
                 try:
                     with os.scandir(home_path) as it:
                         indexed_home = [
@@ -1214,6 +1317,8 @@ class UninstallManager:
                         ]
                 except OSError:
                     indexed_home = []
+            else:
+                indexed_home = home_index.candidates({app_name.lower()})
             for entry_lower, entry_path in indexed_home:
                 if entry_lower in protected_dir_names:
                     continue

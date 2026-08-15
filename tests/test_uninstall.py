@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.clean.app_manager import UninstallManager, run_uninstall
+from src.clean.app_manager import UninstallManager, _ResidueEntryIndex, run_uninstall
 from src.core.history import parse_deletion_history
 
 
@@ -152,6 +152,132 @@ def test_residue_shared_indexes_are_scanned_once(test_env):
     assert icon in paths
     assert service in paths
     assert hidden in paths
+
+
+def _index_matches(index, targets):
+    """What find_residue_paths() keeps: candidates that survive _name_matches()."""
+    return [
+        entry
+        for entry in index.candidates(targets)
+        if any(UninstallManager._name_matches(entry[0], target) for target in targets)
+    ]
+
+
+def _pad_to_indexed(entries, filler_name, test_env):
+    """Grow an entry list past _MIN_ENTRIES_TO_INDEX so the lookup tables get built.
+
+    Small roots deliberately stay unindexed, so a test that wants to exercise the
+    narrowing has to be large enough to earn an index.
+    """
+    needed = _ResidueEntryIndex._MIN_ENTRIES_TO_INDEX - len(entries)
+    padding = [(f"{filler_name}{i}", test_env / f"{filler_name}{i}") for i in range(max(0, needed))]
+    return entries + padding
+
+
+def test_residue_index_candidates_preserve_name_match_semantics(test_env):
+    """Narrowing must not change which entries match -- in both index regimes.
+
+    A dropped candidate would mean an uninstall silently leaves residue behind, so
+    the property is checked below the indexing threshold (where candidates() hands
+    back everything) and above it (where the lookup tables narrow).
+    """
+    entries = [
+        ("myapp", test_env / "myapp"),
+        ("myapp-config", test_env / "myapp-config"),
+        ("vendor-myapp-state", test_env / "vendor-myapp-state"),
+        ("unrelated", test_env / "unrelated"),
+        ("go", test_env / "go"),
+    ]
+    targets = {"myapp", "go"}
+    expected = [
+        entry
+        for entry in entries
+        if any(UninstallManager._name_matches(entry[0], target) for target in targets)
+    ]
+
+    small = _ResidueEntryIndex.build(entries)
+    assert not small.is_indexed
+    assert small.candidates(targets) == entries  # unnarrowed, still a valid superset
+    assert _index_matches(small, targets) == expected
+
+    large = _ResidueEntryIndex.build(_pad_to_indexed(entries, "filler-", test_env))
+    assert large.is_indexed
+    assert _index_matches(large, targets) == expected
+    assert ("unrelated", test_env / "unrelated") not in large.candidates(targets)
+
+
+def test_residue_index_reduces_full_index_matching(test_env):
+    entries = [(f"unrelated-{index}", test_env / str(index)) for index in range(1000)]
+    expected = ("vendor-myapp-state", test_env / "match")
+    entries.append(expected)
+    index = _ResidueEntryIndex.build(entries)
+
+    candidates = index.candidates({"myapp"})
+    matches = [entry for entry in candidates if UninstallManager._name_matches(entry[0], "myapp")]
+
+    assert expected in candidates
+    assert matches == [expected]
+    assert len(candidates) < len(entries) // 10
+
+
+def test_residue_index_narrows_when_noise_shares_the_target_prefix(test_env):
+    """Pins the selectivity limit: candidates() unions its three stages.
+
+    The candidate set is therefore only as small as the *least* selective stage.
+    Noise named "myapp-decoy-N" shares both the 3-char prefix bucket and the
+    leading 5-gram of "myappstudio", so neither stage narrows and every entry
+    becomes a candidate. That is the documented O(N) worst case, and the thing
+    that must still hold is the part that matters: _name_matches() is the final
+    authority, so the decoys are rejected and the result is unchanged.
+    """
+    entries = [(f"myapp-decoy-{i}", test_env / f"decoy-{i}") for i in range(1000)]
+    target_entry = ("prefs-myappstudio", test_env / "real")
+    entries.append(target_entry)
+    index = _ResidueEntryIndex.build(entries)
+    assert index.is_indexed
+
+    # Worst case acknowledged rather than asserted away: no narrowing happens here.
+    assert len(index.candidates({"myappstudio"})) == len(entries)
+    # ...and the semantics survive it, which is the invariant worth guarding.
+    assert _index_matches(index, {"myappstudio"}) == [target_entry]
+
+    # "myapp" legitimately matches every decoy at a word boundary, so a correct
+    # index keeps all of them -- narrowing must never drop a true match.
+    assert _index_matches(index, {"myapp"}) == [
+        entry for entry in entries if UninstallManager._name_matches(entry[0], "myapp")
+    ]
+
+
+def test_residue_index_narrows_when_noise_shares_neither_stage(test_env):
+    """The complement of the case above: distinct noise collapses the candidate set."""
+    entries = [(f"zeta-decoy-{i}", test_env / f"decoy-{i}") for i in range(1000)]
+    target_entry = ("prefs-myappstudio", test_env / "real")
+    entries.append(target_entry)
+    index = _ResidueEntryIndex.build(entries)
+
+    candidates = index.candidates({"myappstudio"})
+    assert target_entry in candidates
+    assert len(candidates) < len(entries) // 10, len(candidates)
+    assert _index_matches(index, {"myappstudio"}) == [target_entry]
+
+
+def test_residue_index_small_root_skips_the_gram_table(test_env):
+    """Roots with a handful of entries must not allocate 2048 gram arrays."""
+    tiny = _ResidueEntryIndex.build([("a.service", test_env / "a.service")])
+
+    assert not tiny.is_indexed
+    assert tiny.gram_buckets == ()
+    assert tiny.exact == {} and tiny.prefixes == {}
+
+
+def test_residue_index_is_compared_by_identity(test_env):
+    """eq=False: a generated __eq__ would walk 2048 arrays and __hash__ would raise."""
+    entries = _pad_to_indexed([], "entry-", test_env)
+    index = _ResidueEntryIndex.build(entries)
+
+    assert index == index
+    assert index != _ResidueEntryIndex.build(entries)
+    assert hash(index) == hash(index)  # identity hash, not a field-walking one
 
 
 def test_find_residue_paths_ignores_generic_short_tail_tokens(test_env):
