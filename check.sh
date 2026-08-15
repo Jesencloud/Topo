@@ -124,7 +124,17 @@ if ! OUT=$(cargo test --quiet --manifest-path topo-core/Cargo.toml 2>&1); then
     exit 1
 fi
 if [ -t 1 ]; then printf "\033[1A\033[K"; fi
-RS_COUNT=$(echo "$OUT" | grep -oE '[0-9]+ passed' | head -n 1)
+RS_COUNT=$(printf '%s\n' "$OUT" | awk '
+    /test result: ok/ {
+        for (i = 1; i <= NF; i++) {
+            if ($(i + 1) == "passed;") {
+                total += $i
+                found = 1
+            }
+        }
+    }
+    END { if (found) print total " passed" }
+')
 echo -e "  ${GREEN}✓${NC} ${GRAY}${RS_COUNT:-all passed} Rust core engine tests (cargo test)${NC}"
 echo -e "  ${GREEN}✓${NC} ${GRAY}All test suites passed successfully.${NC}\n"
 
