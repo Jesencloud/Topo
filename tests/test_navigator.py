@@ -6,6 +6,7 @@ observable behavior.
 """
 
 import os
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
@@ -497,6 +498,95 @@ def test_analyze_name_sort_keeps_directories_first_when_reversed():
 
 
 # --- UninstallSelector ---
+def test_uninstall_hint_renders_keyboard_controls_in_green():
+    selector = UninstallSelector("t", _uninstall_items()[:2])
+
+    with (
+        patch.multiple("src.ui.navigator", GREEN="<GREEN>", GRAY="<GRAY>", RESET="<RESET>"),
+        patch(
+            "src.ui.navigator.shutil.get_terminal_size", return_value=os.terminal_size((200, 24))
+        ),
+        patch("sys.stdout.write") as write,
+        patch("sys.stdout.flush"),
+    ):
+        selector.render()
+
+    output = "".join(call.args[0] for call in write.call_args_list)
+    for key in ("↑↓←→", "PgUp/PgDn", "A", "N", "S", "T", "Space"):
+        assert f"<GREEN>{key}<GRAY>" in output
+
+
+def test_uninstall_rows_reflow_as_terminal_narrows():
+    item = {
+        "id": "responsive",
+        "name": "A very long application name that needs truncation",
+        "size_bytes": 2048,
+        "size_str": "2.0 KiB",
+        "install_time": time.time() - 7200,
+    }
+    selector = UninstallSelector("t", [item])
+
+    def render_at(width):
+        frames = []
+        with (
+            patch(
+                "src.ui.navigator.shutil.get_terminal_size",
+                return_value=os.terminal_size((width, 24)),
+            ),
+            patch(
+                "src.ui.navigator._render_scrollable_frame",
+                side_effect=lambda _, parts, __, frames=frames: frames.append(parts),
+            ),
+        ):
+            selector.render()
+        visible = ANSI_CSI_RE.sub("", "".join(frames[0]))
+        return next(line for line in visible.splitlines() if "A very" in line)
+
+    wide = render_at(80)
+    medium = render_at(50)
+    narrow = render_at(35)
+
+    assert "2.0 KiB" in wide and "2h ago" in wide
+    assert "2.0 KiB" in medium and "2h ago" not in medium
+    assert "2.0 KiB" not in narrow and "2h ago" not in narrow
+    assert display_width(wide) <= 80
+    assert display_width(medium) <= 50
+    assert display_width(narrow) <= 35
+
+
+def test_uninstall_footer_stays_on_one_rendered_line_at_all_widths():
+    selector = UninstallSelector("t", _uninstall_items())
+    for width in (35, 80, 120):
+        frames = []
+        with (
+            patch(
+                "src.ui.navigator.shutil.get_terminal_size",
+                return_value=os.terminal_size((width, 24)),
+            ),
+            patch(
+                "src.ui.navigator._render_scrollable_frame",
+                side_effect=lambda _, parts, __, frames=frames: frames.append(parts),
+            ),
+        ):
+            selector.render()
+
+        visible = ANSI_CSI_RE.sub("", "".join(frames[0]))
+        footer_lines = [line for line in visible.splitlines() if "Page 1/" in line]
+
+        assert len(footer_lines) == 1
+        footer = footer_lines[0]
+        for hint in (
+            "↑↓←→",
+            "PgUp/PgDn",
+            "A: All",
+            "N: Name",
+            "S: Size",
+            "T: Time",
+            "Space: Select",
+        ):
+            assert hint in footer
+
+
 def test_uninstall_space_then_enter_returns_indices():
     sel = UninstallSelector("t", _uninstall_items())
     result = drive(sel, [Navigator.SPACE, "\r"])

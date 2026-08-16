@@ -863,11 +863,11 @@ class AnalyzeSelector(_PagedSelector):
 
         if self.can_select:
             prompts = [
-                f" {WHITE}{page_info}{RESET} {GREEN}↑↓←→{RESET} | {GREEN}PgUp/PgDn{RESET}: {WHITE}Page{RESET} | {GREEN}A{RESET}: {WHITE}All{RESET} | {GREEN}F{RESET}: {WHITE}Folder{RESET} | {GREEN}R{RESET}: {WHITE}Reload{RESET} | {GREEN}S{RESET}: {WHITE}Sort {order_icon}{RESET} | {GREEN}Space{RESET}: {WHITE}Select{RESET} | {CYAN}ESC{RESET}: {WHITE}Skip{RESET}"
+                f" {WHITE}{page_info}{RESET} {GREEN}↑↓←→{RESET} | {GREEN}PgUp/PgDn{RESET}: {WHITE}Page{RESET} | {GREEN}A{RESET}: {WHITE}All{RESET} | {GREEN}F{RESET}: {WHITE}Folder{RESET} | {GREEN}R{RESET}: {WHITE}Reload{RESET} | {GREEN}S{RESET}: {WHITE}Sort {order_icon}{RESET} | {GREEN}Space{RESET}: {WHITE}Select{RESET}"
             ]
         else:
             prompts = [
-                f" {WHITE}{page_info}{RESET} {GREEN}↑↓→{RESET} | {GREEN}F{RESET}: {WHITE}Folder{RESET} | {GREEN}R{RESET}: {WHITE}Reload{RESET} | {GREEN}S{RESET}: {WHITE}Sort {order_icon}{RESET} | {CYAN}ESC{RESET}: {WHITE}Skip{RESET}"
+                f" {WHITE}{page_info}{RESET} {GREEN}↑↓→{RESET} | {GREEN}F{RESET}: {WHITE}Folder{RESET} | {GREEN}R{RESET}: {WHITE}Reload{RESET} | {GREEN}S{RESET}: {WHITE}Sort {order_icon}{RESET}"
             ]
 
         buf.append("\n\033[K\n")
@@ -1108,6 +1108,7 @@ class UninstallSelector(_PagedSelector):
 
     def render(self):
         buf = ["\033[H"]
+        terminal_width = max(20, shutil.get_terminal_size(fallback=(80, 24)).columns)
         total_len = len(self.items)
         buf.append(
             f"\n {THEME_TITLE}Select Application to Remove{RESET} "
@@ -1138,28 +1139,40 @@ class UninstallSelector(_PagedSelector):
                 name_style = PURPLE if is_hover else "\033[1;35m" if is_selected else ""
                 time_style = name_style
                 clean_name = sanitize_for_display(item["name"])
-                name_padded = pad_and_truncate(clean_name, 35)
                 install_time = self._format_time_ago(item["install_time"])
+                # Responsive columns: preserve the actionable name first, then
+                # add size and time only when the terminal has room for them.
+                if terminal_width >= 60:
+                    name_width = max(8, min(35, terminal_width - 34))
+                    details = (
+                        f"  {name_style}{item['size_str']:>12}{RESET} | "
+                        f"{time_style}{install_time}{RESET}"
+                    )
+                elif terminal_width >= 42:
+                    name_width = max(8, terminal_width - 22)
+                    details = f"  {name_style}{item['size_str']:>12}{RESET}"
+                else:
+                    name_width = max(4, terminal_width - 8)
+                    details = ""
+                name_padded = pad_and_truncate(clean_name, name_width)
                 if is_hover:
                     focus_line = _frame_line_count(buf)
-                buf.append(
-                    f"{cursor} {checkbox} {name_style}{name_padded}{RESET}  "
-                    f"{name_style}{item['size_str']:>12}{RESET} | "
-                    f"{time_style}{install_time}{RESET}\033[K\n"
-                )
+                buf.append(f"{cursor} {checkbox} {name_style}{name_padded}{RESET}{details}\033[K\n")
             sort_dir = "↓" if self.sort_reverse else "↑"
             sort_labels = {
-                "name": f"N: Name {sort_dir}",
-                "size_bytes": f"S: Size {sort_dir}",
-                "install_time": f"T: Time {sort_dir}",
+                "name": f"{GREEN}N{GRAY}: Name {sort_dir}",
+                "size_bytes": f"{GREEN}S{GRAY}: Size {sort_dir}",
+                "install_time": f"{GREEN}T{GRAY}: Time {sort_dir}",
             }
             sort_hint = " | ".join(
                 sort_labels[key] if key == self.sort_key else sort_labels[key].rsplit(" ", 1)[0]
                 for key in ("name", "size_bytes", "install_time")
             )
+            page_info = f"Page {self.current_page + 1}/{total_pages}"
             buf.append(
-                f"\n Page {self.current_page + 1}/{total_pages} | "
-                f"{GRAY}↑↓←→ | PgUp/PgDn: Page | A: All | {sort_hint} | Space: Select{RESET}\033[K\n"
+                f"\n {page_info} | {GREEN}↑↓←→{GRAY} | "
+                f"{GREEN}PgUp/PgDn{GRAY}: Page | {GREEN}A{GRAY}: All | "
+                f"{sort_hint} | {GREEN}Space{GRAY}: Select{RESET}\033[K\n"
             )
 
         if self.selected_ids:
@@ -1168,12 +1181,18 @@ class UninstallSelector(_PagedSelector):
                 f"Press {GREEN}Enter{RESET} {WHITE}to Uninstall{RESET}, {CYAN}ESC{RESET} {WHITE}to Exit{RESET}\033[K\n"
             )
             selected_names = [i["name"] for i in self.items if i["id"] in self.selected_ids]
-            for i in range(0, len(selected_names), 2):
-                pair = selected_names[i : i + 2]
+            selected_columns = 2 if terminal_width >= 80 else 1
+            selected_name_width = (
+                35 if selected_columns == 2 else max(4, min(35, terminal_width - 7))
+            )
+            for i in range(0, len(selected_names), selected_columns):
+                pair = selected_names[i : i + selected_columns]
                 line = ""
                 for name in pair:
                     clean_n = sanitize_for_display(name)
-                    line += f"   {THEME_TITLE}•{RESET} {pad_and_truncate(clean_n, 35)}"
+                    line += (
+                        f"   {THEME_TITLE}•{RESET} {pad_and_truncate(clean_n, selected_name_width)}"
+                    )
                 buf.append(line + "\033[K\n")
 
         buf.append("\033[J")
