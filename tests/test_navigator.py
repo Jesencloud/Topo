@@ -6,6 +6,7 @@ observable behavior.
 """
 
 import os
+import re
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -23,6 +24,7 @@ from src.ui.navigator import (
     UninstallPreviewSelector,
     UninstallSelector,
     draw_bar,
+    format_percent,
     icon_gap,
     pad_and_truncate,
 )
@@ -296,6 +298,35 @@ def test_draw_bar_zero_percent_honors_force_color():
     assert ANSI_CSI_RE.sub("", forced) == ANSI_CSI_RE.sub("", default)
 
 
+# --- format_percent ---
+def test_format_percent_marks_only_the_shares_that_round_away():
+    # These all print as "0.0" at one decimal, which reads as "nothing here" for
+    # an entry that does occupy space, so they must read as a bound instead.
+    for percent in (1e-9, 0.004, 0.04, 0.0449, 0.049999):
+        assert format_percent(percent) == " <0.1%", percent
+
+
+def test_format_percent_keeps_a_share_that_rounds_up_to_a_tenth():
+    # From 0.05 upward the rounded number is "0.1", which is a real reading of
+    # the share, so it stays as it was before the bound was introduced.
+    for percent in (0.05, 0.06, 0.09, 0.0999, 0.1):
+        assert format_percent(percent) == "  0.1%", percent
+
+
+def test_format_percent_keeps_the_number_from_zero_upward():
+    # Exactly zero is the one share "0.0%" describes truthfully, so it stays.
+    assert format_percent(0) == "  0.0%"
+    assert format_percent(12.34) == " 12.3%"
+    assert format_percent(100) == "100.0%"
+
+
+def test_format_percent_holds_its_column_across_the_boundary():
+    # The bar/percent/name row is built by concatenation, so a field that changes
+    # width would shift every column to its right on just the small entries.
+    widths = {display_width(format_percent(percent)) for percent in (0, 0.04, 0.09, 7.5, 100)}
+    assert widths == {6}
+
+
 # --- AnalyzeSelector ---
 def test_analyze_space_then_enter_deletes_selected_batch():
     sel = AnalyzeSelector("t", _analyze_items(), can_select=True)
@@ -396,6 +427,78 @@ def test_analyze_render_keeps_space_between_icon_and_name():
     assert "🗂️  folder" in visible_output
     assert "📄 file.txt" in visible_output
     assert "📄  file.txt" not in visible_output
+
+
+def test_analyze_render_shows_a_bound_for_a_tiny_share():
+    """A file too small to reach 0.1% must not be presented as 0.0% of the disk.
+
+    Rendering both rows in one pass also pins the alignment: the name column can
+    only line up if the percent field kept its width for the small entry.
+    """
+    items = [
+        {"name": "big", "path": Path("/tmp/big"), "size": 10**9, "percent": 99.5, "icon": "🗂️"},
+        {"name": "tiny", "path": Path("/tmp/tiny"), "size": 512, "percent": 0.00005, "icon": "📄"},
+    ]
+    sel = AnalyzeSelector("t", items, can_select=True)
+
+    with (
+        patch(
+            "src.ui.navigator.shutil.get_terminal_size", return_value=os.terminal_size((100, 24))
+        ),
+        patch("sys.stdout.write") as write,
+        patch("sys.stdout.flush"),
+    ):
+        sel.render()
+
+    # render() places each row with a cursor-move escape instead of a newline.
+    rows = [ANSI_CSI_RE.sub("", row) for row in re.split(r"\x1b\[\d+;1H", write.call_args.args[0])]
+    big_row = next(row for row in rows if "big" in row)
+    tiny_row = next(row for row in rows if "tiny" in row)
+    assert "<0.1%" in tiny_row
+    assert "0.0%" not in tiny_row
+    assert big_row.index("🗂️") == tiny_row.index("📄")
+
+
+def test_analyze_render_aligns_a_row_whose_size_is_unknown():
+    """An unknown size must hold the percent column, not shift the row left.
+
+    Fast explore leaves every directory's size unknown and sorts directories
+    ahead of the files, so a one-column difference here does not read as a stray
+    row: it splits the frame into two blocks that do not line up.
+    """
+    items = [
+        {"name": "file", "path": Path("/tmp/file"), "size": 512, "percent": 62.4, "icon": "📄"},
+        {
+            "name": "dir",
+            "path": Path("/tmp/dir"),
+            "size": 0,
+            "percent": 0.0,
+            "icon": "📄",
+            "size_known": False,
+        },
+    ]
+    sel = AnalyzeSelector("t", items, can_select=True)
+
+    with (
+        patch(
+            "src.ui.navigator.shutil.get_terminal_size", return_value=os.terminal_size((100, 24))
+        ),
+        patch("sys.stdout.write") as write,
+        patch("sys.stdout.flush"),
+    ):
+        sel.render()
+
+    rows = [ANSI_CSI_RE.sub("", row) for row in re.split(r"\x1b\[\d+;1H", write.call_args.args[0])]
+    known_row = next(row for row in rows if "file" in row)
+    unknown_row = next(row for row in rows if "dir" in row)
+    assert "--" in unknown_row
+    # Both rows carry the same icon, so the columns are directly comparable: the
+    # icon, the name behind it and the size field past the '|' all follow the
+    # percent field by concatenation.
+    for column in ("📄", "|"):
+        assert display_width(known_row[: known_row.index(column)]) == display_width(
+            unknown_row[: unknown_row.index(column)]
+        ), column
 
 
 def test_analyze_render_shows_notice():

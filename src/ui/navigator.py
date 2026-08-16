@@ -349,6 +349,27 @@ def get_color_for_percent(percent):
     return GREEN
 
 
+def format_percent(percent, width=6):
+    """Right-align a percentage, marking only the shares that round away to zero.
+
+    A share that ``.1f`` would print as ``0.0%`` is rendered as ``<0.1%`` instead,
+    so a small-but-present entry stays distinguishable from an empty one -- the
+    same reason ``draw_bar`` keeps one block lit for any nonzero percentage.
+    Exactly zero still prints ``0.0%``, the one case where that reading is
+    literally true, and a share that rounds to ``0.1%`` keeps that number.
+
+    The bound is decided by the rounded text rather than by a literal 0.05 so it
+    cannot disagree with what the format itself does at the boundary.
+
+    ``width`` counts the '%' sign, so the result always occupies the same number
+    of columns as the ``100.0%`` it shares a field with.
+    """
+    rounded = f"{percent:.1f}"
+    if percent > 0 and float(rounded) == 0:
+        return f"{'<0.1%':>{width}}"
+    return f"{rounded:>{width - 1}}%"
+
+
 def draw_bar(percent, width=20, force_color=None):
     """Draws a sleek progress bar using the '▬' character.
 
@@ -839,11 +860,13 @@ class AnalyzeSelector(_PagedSelector):
                     pct_color = (
                         get_color_for_percent(item["percent"]) if item["percent"] > 0 else WHITE
                     )
-                    percent_str = f"{pct_color}{item['percent']:>5.1f}%{RESET}"
+                    percent_str = f"{pct_color}{format_percent(item['percent'])}{RESET}"
                     size_str = bytes_to_human(item["size"])
                 else:
                     bar = f"{WHITE}{' ' * bar_w}{RESET}" if bar_w > 0 else ""
-                    percent_str = f"{WHITE}   --{RESET}"
+                    # Same column count as format_percent, so an unknown size does
+                    # not shift the icon, name and size columns a step to the left.
+                    percent_str = f"{WHITE}{'--':>6}{RESET}"
                     size_str = "--"
                 bar_str = f"{bar}  " if bar_w > 0 else ""
                 style = "\033[1;36m" if is_hover else "\033[1;35m" if is_selected else ""
