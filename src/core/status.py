@@ -6,7 +6,7 @@ import struct
 from datetime import datetime
 from pathlib import Path
 
-from ..ui.navigator import draw_bar, get_color_for_percent
+from ..ui.navigator import draw_bar, format_percent, get_color_for_percent
 from .constants import GREEN, PURPLE, RED, RESET, YELLOW
 from .file_ops import bytes_to_human
 from .system import run_command
@@ -430,7 +430,8 @@ def show_status():
         _status_row(
             "🧠",
             "Memory:",
-            f"{mem_bar}  {mem_color}{mem_percent:>5.1f}%{RESET}  ({used_mem_str} / {total_mem_str})",
+            f"{mem_bar}  {mem_color}{format_percent(mem_percent)}{RESET}  "
+            f"({used_mem_str} / {total_mem_str})",
         )
     )
 
@@ -441,9 +442,9 @@ def show_status():
         swap_color = get_color_for_percent(swap_pct)
         print(
             _status_row(
-                "🔄",
+                "🔁",
                 "Swap:",
-                f"{swap_bar}  {swap_color}{swap_pct:>5.1f}%{RESET}  "
+                f"{swap_bar}  {swap_color}{format_percent(swap_pct)}{RESET}  "
                 f"({swap_used_str} / {swap_total_str})",
             )
         )
@@ -457,7 +458,7 @@ def show_status():
             _status_row(
                 "⚡",
                 "ZRAM RAM:",
-                f"{zram_bar}  {zram_color}{zram_pct:>5.1f}%{RESET}  "
+                f"{zram_bar}  {zram_color}{format_percent(zram_pct)}{RESET}  "
                 f"({comp_str} compressed from {orig_str}, {ratio_str} ratio)",
             )
         )
@@ -468,7 +469,7 @@ def show_status():
         _status_row(
             "💾",
             "Disk:",
-            f"{disk_bar}  {disk_color}{disk_percent:>5.1f}%{RESET}  "
+            f"{disk_bar}  {disk_color}{format_percent(disk_percent)}{RESET}  "
             f"({bytes_to_human(home_stats.used)} / {bytes_to_human(home_stats.total)})",
         )
     )
@@ -483,7 +484,7 @@ def show_status():
             _status_row(
                 "🔋",
                 "Battery:",
-                f"{bat_bar}  {bat_color}{float(bat_val):>5.1f}%{RESET}{details_fmt}",
+                f"{bat_bar}  {bat_color}{format_percent(float(bat_val))}{RESET}{details_fmt}",
             )
         )
 

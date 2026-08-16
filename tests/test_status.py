@@ -1,5 +1,8 @@
 import socket
+from contextlib import ExitStack
 from unittest.mock import MagicMock, mock_open, patch
+
+import pytest
 
 from src.core.status import (
     _get_default_route_interface,
@@ -11,8 +14,10 @@ from src.core.status import (
     get_ip_info,
     get_mem_info,
     get_uptime,
+    show_status,
 )
 from src.core.text import display_width
+from src.ui.navigator import ANSI_CSI_RE
 
 # Every row show_status() can print, as (icon, label). Kept here rather than
 # imported so that adding a row to the report without checking its alignment
@@ -216,3 +221,105 @@ def test_get_gpu_info_multi_gpu_uses_first_line():
     assert result is not None
     assert "NVIDIA: 10% util" in result
     assert "1.0GB" in result
+
+
+# --- percent rows ---
+# Every probe show_status() reads, pinned to something uninteresting. A test
+# overrides just the one row it is about, so a report always renders even on a
+# machine with no battery, no swap and no zram.
+QUIET_PROBES = {
+    "get_uptime": "1h",
+    "get_cpu_load_summary": "idle",
+    "get_cpu_temp": (40.0, "40.0°C"),
+    "get_fan_speed": None,
+    "get_mem_info": ("1.0 GiB", "8.0 GiB", 12.5),
+    "get_battery_info": None,
+    "get_network_traffic": ("0 B", "0 B"),
+    "get_ip_info": "127.0.0.1",
+    "get_gpu_info": None,
+    "get_top_processes": [],
+    "get_swap_info": None,
+    "get_zram_info": None,
+}
+
+
+def _render_status(capsys, label, disk=(1, 2), **overrides):
+    """Render one report and return the row carrying ``label``, colors stripped."""
+    probes = {**QUIET_PROBES, **overrides}
+    used, total = disk
+    with ExitStack() as stack:
+        for name, value in probes.items():
+            stack.enter_context(patch(f"src.core.status.{name}", return_value=value))
+        stack.enter_context(
+            patch(
+                "src.core.status.shutil.disk_usage",
+                return_value=MagicMock(used=used, total=total),
+            )
+        )
+        show_status()
+
+    plain = ANSI_CSI_RE.sub("", capsys.readouterr().out)
+    return next(line for line in plain.splitlines() if label in line)
+
+
+# One tiny-but-nonzero share per percent row. 4096 against 8 GiB is 4.77e-05%,
+# which '.1f' prints as "0.0" -- a freshly-armed zram or a barely-touched swap
+# really does sit here, and reading it as "nothing" contradicts the byte counts
+# printed on the same line.
+TINY = 4.76837158203125e-05
+TINY_SHARE_ROWS = [
+    ("Memory:", {"get_mem_info": ("4.0 KiB", "8.0 GiB", TINY)}),
+    ("Swap:", {"get_swap_info": ("4.0 KiB", "8.0 GiB", TINY)}),
+    ("ZRAM RAM:", {"get_zram_info": ("80 B", "4.0 KiB", TINY, "51.2x")}),
+    ("Disk:", {"disk": (4096, 8 * 1024**3)}),
+    ("Battery:", {"get_battery_info": (TINY, "0%", "")}),
+]
+
+# The same rows at a share that needs no bound, for the column comparison below.
+HALF_SHARE_ROWS = {
+    "Memory:": {"get_mem_info": ("4.0 GiB", "8.0 GiB", 50.0)},
+    "Swap:": {"get_swap_info": ("4.0 GiB", "8.0 GiB", 50.0)},
+    "ZRAM RAM:": {"get_zram_info": ("80 B", "4.0 KiB", 50.0, "51.2x")},
+    "Disk:": {},
+    "Battery:": {"get_battery_info": (50.0, "50%", "")},
+}
+
+ROW_IDS = [label.rstrip(":") for label, _ in TINY_SHARE_ROWS]
+
+
+@pytest.mark.parametrize(("label", "overrides"), TINY_SHARE_ROWS, ids=ROW_IDS)
+def test_status_rows_mark_a_share_that_rounds_away(capsys, label, overrides):
+    row = _render_status(capsys, label, **overrides)
+
+    assert "<0.1%" in row, row
+    assert "0.0%" not in row, row
+
+
+@pytest.mark.parametrize(("label", "overrides"), TINY_SHARE_ROWS, ids=ROW_IDS)
+def test_status_rows_hold_the_value_column_across_the_boundary(capsys, label, overrides):
+    # The rows are built by concatenation, so a percent field that changed width
+    # on small shares would step the text behind it out of line with the report.
+    # The first '%' in a row closes that field, whatever the detail text says.
+    tiny = _render_status(capsys, label, **overrides)
+    plain = _render_status(capsys, label, **HALF_SHARE_ROWS[label])
+
+    assert display_width(tiny[: tiny.index("%") + 1]) == display_width(
+        plain[: plain.index("%") + 1]
+    ), (tiny, plain)
+
+
+def test_status_row_keeps_a_share_that_rounds_to_a_tenth(capsys):
+    # From 0.05 up the rounded number is a real reading of the share, so the
+    # bound must not swallow it.
+    row = _render_status(capsys, "ZRAM RAM:", get_zram_info=("64 MiB", "128 MiB", 0.06, "2.0x"))
+
+    assert "0.1%" in row
+    assert "<" not in row
+
+
+def test_status_row_keeps_the_number_at_exactly_zero(capsys):
+    # An empty swap is the one case "0.0%" describes truthfully.
+    row = _render_status(capsys, "Swap:", get_swap_info=("0 B", "8.0 GiB", 0.0))
+
+    assert "0.0%" in row
+    assert "<" not in row
