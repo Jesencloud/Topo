@@ -712,9 +712,7 @@ class InteractiveMenu:
                 buf.append(f"{prefix}{label:<15} {desc}\033[K\n")
         buf.append("\033[K\n")
         mute_label = "Unmute" if Navigator.is_muted else "Mute"
-        buf.append(
-            f" {GREEN}↑/↓{RESET} | {GREEN}M{RESET}: {WHITE}{mute_label}{RESET} | {GREEN}Enter{RESET}: {WHITE}Select{RESET} | {CYAN}ESC{RESET}: {WHITE}Quit{RESET}\033[K\n"
-        )
+        buf.append(f" {GRAY}↑/↓ | M: {mute_label} | Enter: Select | ESC: Quit{RESET}\033[K\n")
         buf.append("\033[J")
         _render_scrollable_frame(self, buf, focus_line)
 
@@ -848,7 +846,7 @@ class AnalyzeSelector(_PagedSelector):
                     percent_str = f"{WHITE}   --{RESET}"
                     size_str = "--"
                 bar_str = f"{bar}  " if bar_w > 0 else ""
-                style = "\033[1;35m" if is_hover else ""
+                style = "\033[1;36m" if is_hover else "\033[1;35m" if is_selected else ""
                 name_padded = pad_and_truncate(sanitize_for_display(item["name"]), name_w)
                 icon = item.get("icon", "🗂️")
                 gap = icon_gap(icon)
@@ -863,11 +861,11 @@ class AnalyzeSelector(_PagedSelector):
 
         if self.can_select:
             prompts = [
-                f" {WHITE}{page_info}{RESET} {GREEN}↑↓←→{RESET} | {GREEN}PgUp/PgDn{RESET}: {WHITE}Page{RESET} | {GREEN}A{RESET}: {WHITE}All{RESET} | {GREEN}F{RESET}: {WHITE}Folder{RESET} | {GREEN}R{RESET}: {WHITE}Reload{RESET} | {GREEN}S{RESET}: {WHITE}Sort {order_icon}{RESET} | {GREEN}Space{RESET}: {WHITE}Select{RESET}"
+                f" {GRAY}{page_info} ↑↓←→ | PgUp/PgDn: Page | A: All | F: Folder | R: Reload | S: Sort {order_icon} | Space: Select{RESET}"
             ]
         else:
             prompts = [
-                f" {WHITE}{page_info}{RESET} {GREEN}↑↓→{RESET} | {GREEN}F{RESET}: {WHITE}Folder{RESET} | {GREEN}R{RESET}: {WHITE}Reload{RESET} | {GREEN}S{RESET}: {WHITE}Sort {order_icon}{RESET}"
+                f" {GRAY}{page_info} ↑↓→ | F: Folder | R: Reload | S: Sort {order_icon}{RESET}"
             ]
 
         buf.append("\n\033[K\n")
@@ -1130,13 +1128,13 @@ class UninstallSelector(_PagedSelector):
                 is_selected = item["id"] in self.selected_ids
                 num = (i - start) + 1
                 num_key = f" {num}" if num < 10 else str(num)
-                cursor = f"{PURPLE}▶{RESET}" if is_hover else " "
+                cursor = "\033[1;36m▶\033[0m" if is_hover else " "
                 checkbox = (
                     f"\033[1;32m✓ {num_key}.\033[0m"
                     if is_selected
                     else f"{GRAY}○{RESET} {num_key}."
                 )
-                name_style = PURPLE if is_hover else "\033[1;35m" if is_selected else ""
+                name_style = "\033[1;36m" if is_hover else "\033[1;35m" if is_selected else ""
                 time_style = name_style
                 clean_name = sanitize_for_display(item["name"])
                 install_time = self._format_time_ago(item["install_time"])
@@ -1160,9 +1158,9 @@ class UninstallSelector(_PagedSelector):
                 buf.append(f"{cursor} {checkbox} {name_style}{name_padded}{RESET}{details}\033[K\n")
             sort_dir = "↓" if self.sort_reverse else "↑"
             sort_labels = {
-                "name": f"{GREEN}N{GRAY}: Name {sort_dir}",
-                "size_bytes": f"{GREEN}S{GRAY}: Size {sort_dir}",
-                "install_time": f"{GREEN}T{GRAY}: Time {sort_dir}",
+                "name": f"N: Name {sort_dir}",
+                "size_bytes": f"S: Size {sort_dir}",
+                "install_time": f"T: Time {sort_dir}",
             }
             sort_hint = " | ".join(
                 sort_labels[key] if key == self.sort_key else sort_labels[key].rsplit(" ", 1)[0]
@@ -1170,9 +1168,8 @@ class UninstallSelector(_PagedSelector):
             )
             page_info = f"Page {self.current_page + 1}/{total_pages}"
             buf.append(
-                f"\n {page_info} | {GREEN}↑↓←→{GRAY} | "
-                f"{GREEN}PgUp/PgDn{GRAY}: Page | {GREEN}A{GRAY}: All | "
-                f"{sort_hint} | {GREEN}Space{GRAY}: Select{RESET}\033[K\n"
+                f"\n {GRAY}{page_info} | ↑↓←→ | PgUp/PgDn: Page | A: All | "
+                f"{sort_hint} | Space: Select{RESET}\033[K\n"
             )
 
         if self.selected_ids:

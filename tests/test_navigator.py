@@ -498,22 +498,28 @@ def test_analyze_name_sort_keeps_directories_first_when_reversed():
 
 
 # --- UninstallSelector ---
-def test_uninstall_hint_renders_keyboard_controls_in_green():
+def test_uninstall_hint_uses_gray():
     selector = UninstallSelector("t", _uninstall_items()[:2])
+    frames = []
 
     with (
         patch.multiple("src.ui.navigator", GREEN="<GREEN>", GRAY="<GRAY>", RESET="<RESET>"),
         patch(
             "src.ui.navigator.shutil.get_terminal_size", return_value=os.terminal_size((200, 24))
         ),
-        patch("sys.stdout.write") as write,
-        patch("sys.stdout.flush"),
+        patch(
+            "src.ui.navigator._render_scrollable_frame",
+            side_effect=lambda _, parts, __: frames.append(parts),
+        ),
     ):
         selector.render()
 
-    output = "".join(call.args[0] for call in write.call_args_list)
+    output = "".join(frames[0])
+    footer = next(line for line in output.splitlines() if "Page 1/" in line)
     for key in ("↑↓←→", "PgUp/PgDn", "A", "N", "S", "T", "Space"):
-        assert f"<GREEN>{key}<GRAY>" in output
+        assert key in footer
+    assert "<GREEN>" not in footer
+    assert footer.lstrip().startswith("<GRAY>")
 
 
 def test_uninstall_rows_reflow_as_terminal_narrows():
