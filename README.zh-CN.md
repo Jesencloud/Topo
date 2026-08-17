@@ -43,6 +43,23 @@ sudo dnf install ./topo-xxx-1.x86_64.rpm  # Fedora / RHEL
 
 ## 功能特性
 
+### 主界面 ( 在终端里输入 'Topo' 就可以开始使用 )
+
+```bash
+ ⠶⣶⠶  ⢰⠶⡆ ⢰⠶⡆ ⢰⠶⡆
+  ⠿   ⠸⠤⠇ ⢸⠉⠁ ⠸⠤⠇   ● v1.x.x is digging deeper 🦡
+
+ Main Menu
+
+ > 1. Clean        Free up disk space
+   2. Uninstall    Remove apps completely
+   3. Optimize     Check and maintain system
+   4. Analyze      Explore disk usage
+   5. Status       Monitor system health
+
+ ↑/↓ | M: Mute | Enter: Select | ESC: Quit
+```
+
 ### 1. 一键深度清理 (`topo clean`)
 安全清除包管理器缓存、journal 系统日志、开发构建产物和系统缓存。
 ```bash

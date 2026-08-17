@@ -43,6 +43,23 @@ sudo dnf install ./topo-xxx-1.x86_64.rpm  # Fedora / RHEL
 
 ## Features
 
+### Main UI ( Type 'Topo' in your terminal to get started )
+
+```bash
+ ⠶⣶⠶  ⢰⠶⡆ ⢰⠶⡆ ⢰⠶⡆
+  ⠿   ⠸⠤⠇ ⢸⠉⠁ ⠸⠤⠇   ● v1.x.x is digging deeper 🦡
+
+ Main Menu
+
+ > 1. Clean        Free up disk space
+   2. Uninstall    Remove apps completely
+   3. Optimize     Check and maintain system
+   4. Analyze      Explore disk usage
+   5. Status       Monitor system health
+
+ ↑/↓ | M: Mute | Enter: Select | ESC: Quit
+```
+
 ### 1. One-Key Deep Cleanup (`topo clean`)
 Safely remove package manager caches, journal logs, developer build artifacts, and system caches.
 ```bash
