@@ -131,18 +131,62 @@ def get_battery_info():
 
 
 def get_network_traffic():
-    """Get total network traffic since boot."""
+    """Get traffic since boot, preferring hardware-backed network interfaces."""
+    # Virtual interface prefix blacklist for environments where /sys/class/net is restricted
+    virtual_prefixes = (
+        "docker",
+        "br-",
+        "veth",
+        "virbr",
+        "vnet",
+        "vmnet",
+        "vboxnet",
+        "tailscale",
+        "wg",
+        "tun",
+        "tap",
+        "flannel",
+        "cni",
+        "cali",
+        "dummy",
+    )
     try:
         with open("/proc/net/dev") as f:
             lines = f.readlines()[2:]  # Skip headers
-            rx = 0
-            tx = 0
+            eligible = {}
+            physical = {}
             for line in lines:
                 parts = line.split()
-                if parts[0] == "lo:":
+                if not parts:
                     continue
-                rx += int(parts[1])
-                tx += int(parts[9])
+                iface = parts[0].rstrip(":")
+
+                # 1. Skip virtual prefixes
+                if iface == "lo" or iface.startswith(virtual_prefixes):
+                    continue
+
+                counters = (int(parts[1]), int(parts[9]))
+                eligible[iface] = counters
+
+                # A direct device link identifies a PCI, USB, or platform
+                # network device. Software-only interfaces do not have one.
+                if Path(f"/sys/class/net/{iface}/device").exists():
+                    physical[iface] = counters
+
+            selected = physical
+            if not selected and eligible:
+                # Containers and PPP-style uplinks may expose only a logical
+                # default-route interface with no device link. Use that single
+                # interface rather than reporting a misleading zero total.
+                default_iface = _get_default_route_interface()
+                if default_iface in eligible:
+                    selected = {default_iface: eligible[default_iface]}
+
+            if not selected and eligible:
+                return "N/A", "N/A"
+
+            rx = sum(counters[0] for counters in selected.values())
+            tx = sum(counters[1] for counters in selected.values())
             return bytes_to_human(rx), bytes_to_human(tx)
     except (OSError, ValueError, IndexError):
         return "N/A", "N/A"

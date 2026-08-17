@@ -16,6 +16,7 @@ from src.core.status import (
     get_gpu_info,
     get_ip_info,
     get_mem_info,
+    get_network_traffic,
     get_system_health_assessment,
     get_temp_color,
     get_uptime,
@@ -181,6 +182,69 @@ def test_get_ip_info_reads_local_interface_without_external_connect():
     assert local_ip == "192.168.1.10"
     mock_socket.assert_called_once_with(socket.AF_INET, socket.SOCK_DGRAM)
     sock.connect.assert_not_called()
+
+
+def test_get_network_traffic_filters_virtual_interfaces():
+    # eth0: physical (1000 bytes rx, 2000 bytes tx)
+    # docker0: virtual (5000 bytes rx, 5000 bytes tx) -> ignored
+    # veth123: virtual (3000 bytes rx, 3000 bytes tx) -> ignored
+    # lo: loopback -> ignored
+    net_dev_content = (
+        "Inter-|   Receive                                                |  Transmit\n"
+        " face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n"
+        "    lo: 1000000       0    0    0    0     0          0         0  1000000       0    0    0    0     0       0          0\n"
+        "  eth0:    1024       1    0    0    0     0          0         0     2048       1    0    0    0     0       0          0\n"
+        "docker0: 500000       0    0    0    0     0          0         0   500000       0    0    0    0     0       0          0\n"
+        "veth123: 300000       0    0    0    0     0          0         0   300000       0    0    0    0     0       0          0\n"
+    )
+
+    with (
+        patch("builtins.open", mock_open(read_data=net_dev_content)),
+        patch("pathlib.Path.exists", return_value=True),
+    ):
+        rx, tx = get_network_traffic()
+
+    assert rx == "1.0 KiB"
+    assert tx == "2.0 KiB"
+
+
+def test_get_network_traffic_falls_back_to_container_default_route():
+    net_dev_content = (
+        "Inter-|   Receive |  Transmit\n"
+        " face |bytes packets errs drop fifo frame compressed multicast|bytes packets errs drop fifo colls carrier compressed\n"
+        "  eth0:    3072 0 0 0 0 0 0 0     4096 0 0 0 0 0 0 0\n"
+    )
+
+    with (
+        patch("builtins.open", mock_open(read_data=net_dev_content)),
+        patch("pathlib.Path.exists", return_value=False),
+        patch("src.core.status._get_default_route_interface", return_value="eth0"),
+    ):
+        rx, tx = get_network_traffic()
+
+    assert rx == "3.0 KiB"
+    assert tx == "4.0 KiB"
+
+
+def test_get_network_traffic_keeps_lowpan_and_filters_unbacked_interface():
+    net_dev_content = (
+        "Inter-|   Receive |  Transmit\n"
+        " face |bytes packets errs drop fifo frame compressed multicast|bytes packets errs drop fifo colls carrier compressed\n"
+        "lowpan0:    1024 0 0 0 0 0 0 0     2048 0 0 0 0 0 0 0\n"
+        "custom0:    8192 0 0 0 0 0 0 0     8192 0 0 0 0 0 0 0\n"
+    )
+
+    def mock_exists(path):
+        return str(path).endswith("/lowpan0/device")
+
+    with (
+        patch("builtins.open", mock_open(read_data=net_dev_content)),
+        patch("pathlib.Path.exists", mock_exists),
+    ):
+        rx, tx = get_network_traffic()
+
+    assert rx == "1.0 KiB"
+    assert tx == "2.0 KiB"
 
 
 def test_get_battery_info():
