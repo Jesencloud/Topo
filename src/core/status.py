@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 from ..ui.navigator import draw_bar, format_percent, get_color_for_percent
-from .constants import GREEN, PURPLE, RED, RESET, YELLOW
+from .constants import GREEN, PURPLE, RED, RESET, WHITE, YELLOW
 from .file_ops import bytes_to_human
 from .system import run_command
 from .text import display_width
@@ -16,18 +16,40 @@ DEFAULT_ROUTE_PATH = Path("/proc/net/route")
 SIOCGIFADDR = 0x8915
 
 # Every status row renders as "<icon><pad> <label><pad> <value>". Both pads are
-# measured rather than hand-typed: the icons are not all the same width (U+1F4CA
-# and friends take two cells, while U+23F1 / U+1F321 are a narrow base plus
+# measured rather than hand-typed: the icons are not all the same width (U+1F4DF
+# and friends take two cells, while U+23F1 / U+2699 are a narrow base plus
 # U+FE0F and take one), and the label field is sized to the longest label so all
 # values start in the same column no matter which rows a machine actually shows.
 _ICON_SLOT = 2
 _LABEL_SLOT = len("Top Processes:")
+
+# Shared by every temperature this module prints -- the CPU row and both GPU
+# probes -- so a retune lands on all of them at once. They used to carry three
+# copies of the thresholds in two spellings (`<= 60` and `> 60`).
+TEMP_WARN_C = 60.0
+TEMP_HOT_C = 80.0
 
 
 def _status_row(icon: str, label: str, value: str) -> str:
     icon_pad = " " * max(0, _ICON_SLOT - display_width(icon))
     label_pad = " " * max(0, _LABEL_SLOT - display_width(label))
     return f"{icon}{icon_pad} {label}{label_pad} {value}"
+
+
+def get_temp_color(temp_c: float | None) -> str:
+    """Color a temperature reading: green to 60C, yellow to 80C, red above.
+
+    ``None`` means the sensor could not be read, which is not a temperature and
+    must not borrow green -- green claims "this reading is healthy", and there is
+    no reading. It gets WHITE, the same dimming an unknown size gets elsewhere.
+    """
+    if temp_c is None:
+        return WHITE
+    if temp_c > TEMP_HOT_C:
+        return RED
+    if temp_c > TEMP_WARN_C:
+        return YELLOW
+    return GREEN
 
 
 def get_mem_info():
@@ -49,62 +71,6 @@ def get_mem_info():
         return "Unknown", "Unknown", 0
 
 
-def get_swap_info():
-    """Read Swap info from /proc/meminfo."""
-    try:
-        with open("/proc/meminfo") as f:
-            lines = f.readlines()
-            total = 0
-            free = 0
-            for line in lines:
-                if line.startswith("SwapTotal:"):
-                    total = int(line.split()[1]) * 1024
-                elif line.startswith("SwapFree:"):
-                    free = int(line.split()[1]) * 1024
-            if total == 0:
-                return None
-            used = total - free
-            percent = (used / total) * 100 if total > 0 else 0
-            return bytes_to_human(used), bytes_to_human(total), percent
-    except (OSError, ValueError, IndexError):
-        return None
-
-
-def get_zram_info():
-    """Read ZRAM compressed RAM stats from /sys/block/zram0 if active."""
-    try:
-        zram_path = Path("/sys/block/zram0")
-        if not zram_path.exists():
-            return None
-        disksize_file = zram_path / "disksize"
-        orig_data_file = zram_path / "mm_stat"
-        if not disksize_file.exists():
-            return None
-
-        with open(disksize_file) as f:
-            total_size = int(f.read().strip())
-        if total_size == 0:
-            return None
-
-        used_size = 0
-        comp_size = 0
-        if orig_data_file.exists():
-            with open(orig_data_file) as f:
-                parts = f.read().split()
-                if len(parts) >= 2:
-                    used_size = int(parts[0])
-                    comp_size = int(parts[1])
-
-        if used_size == 0:
-            return None
-
-        ratio = (used_size / comp_size) if comp_size > 0 else 1.0
-        percent = (used_size / total_size) * 100
-        return bytes_to_human(comp_size), bytes_to_human(used_size), percent, f"{ratio:.1f}x"
-    except (OSError, ValueError, IndexError, ZeroDivisionError):
-        return None
-
-
 def get_uptime():
     try:
         with open("/proc/uptime") as f:
@@ -116,25 +82,12 @@ def get_uptime():
         return "Unknown"
 
 
-def get_cpu_load_summary():
-    """Return CPU load average with a user-readable saturation label."""
-    load_1m, load_5m, load_15m = os.getloadavg()
+def get_cpu_load_summary() -> str:
+    """Return CPU load percentage formatted with unit e.g. 'load 3%'."""
+    load_1m, *_ = os.getloadavg()
     cores = os.cpu_count() or 1
     load_percent = (load_1m / cores) * 100
-
-    if load_percent < 50:
-        label = "Low"
-    elif load_percent < 80:
-        label = "Moderate"
-    elif load_percent < 100:
-        label = "High"
-    else:
-        label = "Overloaded"
-
-    return (
-        f"{label} ({load_percent:.0f}% of {cores} cores; "
-        f"1m {load_1m:.2f}, 5m {load_5m:.2f}, 15m {load_15m:.2f})"
-    )
+    return f"load {load_percent:.0f}%"
 
 
 def get_battery_info():
@@ -242,18 +195,23 @@ def get_ip_info():
     return local_ip or "N/A"
 
 
-def get_cpu_temp():
-    """Try to read CPU temperature from /sys/class/thermal."""
+def get_cpu_temp() -> tuple[float | None, str]:
+    """Read CPU temperature from /sys/class/thermal.
+
+    Returns ``(None, "N/A")`` when there is no readable sensor. The value used to
+    be ``0``, which is indistinguishable from a genuinely cold CPU and so came
+    out colored green -- see :func:`get_temp_color`.
+    """
     try:
         temp_path = Path("/sys/class/thermal/thermal_zone0/temp")
         if temp_path.exists():
             with open(temp_path) as f:
                 temp_mc = int(f.read().strip())
                 temp_c = temp_mc / 1000
-                return temp_c, f"{temp_c:.1f}°C"
+                return temp_c, f"{temp_c:.0f}°C"
     except (OSError, ValueError):
         pass
-    return 0, "N/A"
+    return None, "N/A"
 
 
 def get_fan_speed():
@@ -288,62 +246,61 @@ def get_fan_speed():
     return ", ".join(fans) if fans else None
 
 
-def get_gpu_info():
-    """Detect and get GPU status (NVIDIA/AMD/Intel)."""
-    # 1. Check NVIDIA (Most common for AI)
+def get_gpu_info() -> str | None:
+    """Detect and get GPU status (NVIDIA/AMD/Intel). Returns formatted 'Temp | Util' string."""
+    # 1. Check NVIDIA (Most common for AI / Dedicated)
     if shutil.which("nvidia-smi"):
         try:
             res = run_command(
                 [
                     "nvidia-smi",
-                    "--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu",
+                    "--query-gpu=temperature.gpu,utilization.gpu",
                     "--format=csv,noheader,nounits",
                 ],
                 capture=True,
                 timeout=10,
             )
             if res.ok and res.stdout.strip():
-                # Multiple GPUs produce multiple lines; report the first.
                 first = res.stdout.strip().splitlines()[0]
-                util, used, total, temp = first.split(", ")
-                return f"NVIDIA: {util}% util | Mem: {int(used) / 1024:.1f}GB / {int(total) / 1024:.1f}GB | {temp}°C"
+                temp_str, util_str = [p.strip() for p in first.split(",")]
+                temp_val = float(temp_str)
+                return f"{get_temp_color(temp_val)}{temp_val:.0f}°C{RESET} | load {util_str}%"
         except (ValueError, IndexError):
             pass
 
-    # 2. Check AMD/Intel (via sysfs)
-    # Search for card0, card1, etc.
+    # 2. Check AMD/Intel/Other (via sysfs DRM + hwmon)
     try:
         drm_path = Path("/sys/class/drm")
         if drm_path.exists():
             for card_dir in drm_path.glob("card*"):
-                # Avoid symlinks that don't lead to devices
-                if not (card_dir / "device").exists():
+                device_dir = card_dir / "device"
+                if not device_dir.exists():
                     continue
 
-                # Check for AMD utilization
-                util_path = card_dir / "device/gpu_busy_percent"
+                util_path = device_dir / "gpu_busy_percent"
                 if util_path.exists():
-                    with open(util_path) as f:
-                        util = f.read().strip()
-                    # Find temperature in hwmon subdirectories
+                    try:
+                        with open(util_path) as f:
+                            util = f.read().strip()
+                    except OSError:
+                        util = "0"
+
                     temp_str = ""
-                    hwmon_root = card_dir / "device/hwmon"
+                    hwmon_root = device_dir / "hwmon"
                     if hwmon_root.exists():
                         for hw_dir in hwmon_root.glob("hwmon*"):
                             t_file = hw_dir / "temp1_input"
                             if t_file.exists():
-                                with open(t_file) as f:
-                                    temp_str = f" | {int(f.read().strip()) / 1000:.0f}°C"
+                                try:
+                                    with open(t_file) as f:
+                                        temp_val = int(f.read().strip()) / 1000
+                                        color = get_temp_color(temp_val)
+                                        temp_str = f"{color}{temp_val:.0f}°C{RESET} | "
+                                except (OSError, ValueError):
+                                    pass
                                 break
-                    return f"AMD: {util}% utilization{temp_str}"
 
-                # Check for Intel utilization (i915 driver)
-                # Note: Intel utilization is harder via sysfs, but presence check works
-                if (card_dir / "device/vendor").exists():
-                    with open(card_dir / "device/vendor") as f:
-                        vendor = f.read().strip()
-                        if "0x8086" in vendor:  # Intel Vendor ID
-                            return "Intel HD/UHD Graphics (Active)"
+                    return f"{temp_str}load {util}%"
     except (OSError, ValueError):
         pass
 
@@ -407,15 +364,10 @@ def show_status():
     disk_percent = (home_stats.used / home_stats.total) * 100
 
     # 1. Overview & Compute (Uptime, CPU, GPU, Fans)
-    print(_status_row("⏱️", "Uptime:", uptime))
-    print(_status_row("📊", "CPU Load:", cpu_load))
-
-    temp_color = GREEN
-    if temp_val > 80:
-        temp_color = RED
-    elif temp_val > 60:
-        temp_color = YELLOW
-    print(_status_row("🌡️", "CPU Temp:", f"{temp_color}{cpu_temp_str}{RESET}"))
+    uptime_str = f"{uptime} (since boot)" if uptime != "Unknown" else uptime
+    print(_status_row("⏱️", "Uptime:", uptime_str))
+    cpu_status_str = f"{get_temp_color(temp_val)}{cpu_temp_str}{RESET} | {cpu_load}"
+    print(_status_row("📟", "CPU Status:", cpu_status_str))
 
     if gpu:
         print(_status_row("🎮", "GPU Status:", gpu))
@@ -423,7 +375,7 @@ def show_status():
     if fans:
         print(_status_row("⚙️", "Fan Speed:", fans))
 
-    # 2. Memory & Storage (RAM, Swap, ZRAM, Disk)
+    # 2. Memory & Storage (RAM, Disk)
     mem_bar = draw_bar(mem_percent, width=20)
     mem_color = get_color_for_percent(mem_percent)
     print(
@@ -434,34 +386,6 @@ def show_status():
             f"({used_mem_str} / {total_mem_str})",
         )
     )
-
-    swap_data = get_swap_info()
-    if swap_data:
-        swap_used_str, swap_total_str, swap_pct = swap_data
-        swap_bar = draw_bar(swap_pct, width=20)
-        swap_color = get_color_for_percent(swap_pct)
-        print(
-            _status_row(
-                "🔁",
-                "Swap:",
-                f"{swap_bar}  {swap_color}{format_percent(swap_pct)}{RESET}  "
-                f"({swap_used_str} / {swap_total_str})",
-            )
-        )
-
-    zram_data = get_zram_info()
-    if zram_data:
-        comp_str, orig_str, zram_pct, ratio_str = zram_data
-        zram_bar = draw_bar(zram_pct, width=20)
-        zram_color = get_color_for_percent(zram_pct)
-        print(
-            _status_row(
-                "⚡",
-                "ZRAM RAM:",
-                f"{zram_bar}  {zram_color}{format_percent(zram_pct)}{RESET}  "
-                f"({comp_str} compressed from {orig_str}, {ratio_str} ratio)",
-            )
-        )
 
     disk_bar = draw_bar(disk_percent, width=20)
     disk_color = get_color_for_percent(disk_percent)
