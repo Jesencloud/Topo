@@ -1,3 +1,4 @@
+import contextlib
 import fcntl
 import os
 import shutil
@@ -196,21 +197,112 @@ def get_ip_info():
 
 
 def get_cpu_temp() -> tuple[float | None, str]:
-    """Read CPU temperature from /sys/class/thermal.
+    """Read authentic CPU core temperature from /sys/class/hwmon or /sys/class/thermal.
 
-    Returns ``(None, "N/A")`` when there is no readable sensor. The value used to
-    be ``0``, which is indistinguishable from a genuinely cold CPU and so came
-    out colored green -- see :func:`get_temp_color`.
+    Priority:
+    1. Dedicated CPU hardware monitor (coretemp on Intel, k10temp/zenpower on AMD, cpu_thermal on ARM)
+    2. Other hwmon sensors with CPU label or acpi thermal zone
+    3. Standard fallback: /sys/class/thermal/thermal_zone*/temp
     """
+    # 1. Check dedicated CPU hwmon drivers
     try:
-        temp_path = Path("/sys/class/thermal/thermal_zone0/temp")
-        if temp_path.exists():
-            with open(temp_path) as f:
-                temp_mc = int(f.read().strip())
-                temp_c = temp_mc / 1000
-                return temp_c, f"{temp_c:.0f}°C"
-    except (OSError, ValueError):
+        hwmon_root = Path("/sys/class/hwmon")
+        if hwmon_root.exists():
+            # Known CPU core sensor driver names
+            cpu_drivers = {"coretemp", "k10temp", "zenpower", "cpu_thermal", "soc_thermal"}
+            candidates = []
+
+            for hw_dir in hwmon_root.glob("hwmon*"):
+                name_file = hw_dir / "name"
+                drv_name = ""
+                if name_file.exists():
+                    with contextlib.suppress(OSError):
+                        drv_name = name_file.read_text().strip().lower()
+
+                is_cpu_drv = any(k in drv_name for k in cpu_drivers)
+
+                for t_input in hw_dir.glob("temp*_input"):
+                    try:
+                        raw_str = t_input.read_text().strip()
+                        raw_val = int(raw_str)
+                        temp_c = raw_val / 1000.0
+                        # Ignore disconnected or broken probes. Linux hwmon
+                        # occasionally exposes sentinel readings such as 127C
+                        # or 255C for sensors that are not physically present.
+                        if not 0 < temp_c < 125:
+                            continue
+
+                        # Check label (e.g. Tctl, Tdie, Package id 0, CPU)
+                        label_file = hw_dir / t_input.name.replace("_input", "_label")
+                        label = ""
+                        if label_file.exists():
+                            label = label_file.read_text().strip().lower()
+
+                        priority = 0
+                        if is_cpu_drv:
+                            # A dedicated CPU driver always outranks a board/EC
+                            # probe. Within it, prefer package/die readings,
+                            # then a labelled core, then an unlabelled channel.
+                            if any(k in label for k in ("tctl", "tdie", "package")):
+                                priority = 5
+                            elif "core" in label or "cpu" in label:
+                                priority = 4
+                            else:
+                                priority = 3
+                        elif "cpu" in label:
+                            priority = 2
+                        elif "acpitz" in drv_name:
+                            priority = 1
+
+                        if priority > 0:
+                            candidates.append((priority, temp_c))
+                    except (OSError, ValueError):
+                        continue
+
+            if candidates:
+                # Pick highest priority, then highest temperature among them
+                candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
+                best_temp = candidates[0][1]
+                return best_temp, f"{best_temp:.0f}°C"
+    except OSError:
         pass
+
+    # 2. Fallback to CPU-related /sys/class/thermal/thermal_zone* entries.
+    try:
+        thermal_root = Path("/sys/class/thermal")
+        if thermal_root.exists():
+            thermal_candidates = []
+            for tz in sorted(thermal_root.glob("thermal_zone*")):
+                temp_file = tz / "temp"
+                type_file = tz / "type"
+                if not temp_file.exists() or not type_file.exists():
+                    continue
+                try:
+                    zone_type = type_file.read_text().strip().lower()
+                    raw_val = int(temp_file.read_text().strip())
+                    temp_c = raw_val / 1000.0
+                    if not 0 < temp_c < 125:
+                        continue
+
+                    if any(k in zone_type for k in ("x86_pkg", "cpu", "package")):
+                        priority = 3
+                    elif any(k in zone_type for k in ("soc", "acpitz")):
+                        priority = 2
+                    else:
+                        # Do not report a GPU, battery, wireless, or other
+                        # unrelated thermal zone as the CPU temperature.
+                        continue
+                    thermal_candidates.append((priority, temp_c))
+                except (OSError, ValueError):
+                    continue
+
+            if thermal_candidates:
+                thermal_candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
+                best_temp = thermal_candidates[0][1]
+                return best_temp, f"{best_temp:.0f}°C"
+    except OSError:
+        pass
+
     return None, "N/A"
 
 
@@ -264,7 +356,9 @@ def get_gpu_info() -> str | None:
                 first = res.stdout.strip().splitlines()[0]
                 temp_str, util_str = [p.strip() for p in first.split(",")]
                 temp_val = float(temp_str)
-                return f"{get_temp_color(temp_val)}{temp_val:.0f}°C{RESET} | load {util_str}%"
+                if 0 < temp_val < 125:
+                    return f"{get_temp_color(temp_val)}{temp_val:.0f}°C{RESET} | load {util_str}%"
+                return f"load {util_str}%"
         except (ValueError, IndexError):
             pass
 
@@ -278,29 +372,53 @@ def get_gpu_info() -> str | None:
                     continue
 
                 util_path = device_dir / "gpu_busy_percent"
+                util = None
                 if util_path.exists():
                     try:
-                        with open(util_path) as f:
-                            util = f.read().strip()
-                    except OSError:
-                        util = "0"
+                        util_value = int(util_path.read_text().strip())
+                        if 0 <= util_value <= 100:
+                            util = util_value
+                    except (OSError, ValueError):
+                        pass
 
-                    temp_str = ""
-                    hwmon_root = device_dir / "hwmon"
-                    if hwmon_root.exists():
-                        for hw_dir in hwmon_root.glob("hwmon*"):
-                            t_file = hw_dir / "temp1_input"
-                            if t_file.exists():
-                                try:
-                                    with open(t_file) as f:
-                                        temp_val = int(f.read().strip()) / 1000
-                                        color = get_temp_color(temp_val)
-                                        temp_str = f"{color}{temp_val:.0f}°C{RESET} | "
-                                except (OSError, ValueError):
-                                    pass
-                                break
+                gpu_temps = []
+                hwmon_root = device_dir / "hwmon"
+                if hwmon_root.exists():
+                    for hw_dir in hwmon_root.glob("hwmon*"):
+                        for t_input in hw_dir.glob("temp*_input"):
+                            try:
+                                raw_val = int(t_input.read_text().strip())
+                                temp_c = raw_val / 1000.0
+                                if not 0 < temp_c < 125:
+                                    continue
 
-                    return f"{temp_str}load {util}%"
+                                # Check sensor label (junction/hotspot/edge/gpu)
+                                label_file = hw_dir / t_input.name.replace("_input", "_label")
+                                label = ""
+                                if label_file.exists():
+                                    label = label_file.read_text().strip().lower()
+
+                                priority = 1
+                                if any(k in label for k in ("junction", "hotspot")):
+                                    priority = 3
+                                elif any(k in label for k in ("edge", "gpu", "core")):
+                                    priority = 2
+
+                                gpu_temps.append((priority, temp_c))
+                            except (OSError, ValueError):
+                                continue
+
+                parts = []
+                if gpu_temps:
+                    # Pick highest priority, then highest temperature
+                    gpu_temps.sort(key=lambda x: (x[0], x[1]), reverse=True)
+                    best_gpu_temp = gpu_temps[0][1]
+                    color = get_temp_color(best_gpu_temp)
+                    parts.append(f"{color}{best_gpu_temp:.0f}°C{RESET}")
+                if util is not None:
+                    parts.append(f"load {util}%")
+                if parts:
+                    return " | ".join(parts)
     except (OSError, ValueError):
         pass
 

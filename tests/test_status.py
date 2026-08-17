@@ -1,5 +1,6 @@
 import socket
 from contextlib import ExitStack
+from pathlib import Path
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
@@ -101,15 +102,32 @@ def test_get_cpu_load_summary():
     assert summary == "load 25%"
 
 
-def test_get_cpu_temp():
-    mock_data = "45000"  # 45.0 C
+def test_get_cpu_temp_hwmon_dedicated():
+    def mock_hwmon_glob(self, pattern):
+        if "hwmon*" in pattern:
+            return [Path("/sys/class/hwmon/hwmon5")]
+        if "temp*_input" in pattern:
+            return [Path("/sys/class/hwmon/hwmon5/temp1_input")]
+        return []
+
+    def mock_read_text(self, *args, **kwargs):
+        p = str(self)
+        if p.endswith("/name"):
+            return "k10temp\n"
+        if p.endswith("/temp1_label"):
+            return "Tctl\n"
+        if p.endswith("/temp1_input"):
+            return "52000\n"
+        return ""
+
     with (
         patch("pathlib.Path.exists", return_value=True),
-        patch("builtins.open", mock_open(read_data=mock_data)),
+        patch("pathlib.Path.glob", mock_hwmon_glob),
+        patch("pathlib.Path.read_text", mock_read_text),
     ):
         val, text = get_cpu_temp()
-        assert val == 45.0
-        assert text == "45°C"
+        assert val == 52.0
+        assert text == "52°C"
 
 
 def test_get_cpu_temp_missing():
@@ -246,6 +264,80 @@ def test_get_gpu_info_multi_gpu_uses_first_line():
     assert result is not None
     assert "55°C" in result
     assert "load 10%" in result
+
+
+def test_get_gpu_info_drm_hwmon_junction_priority():
+    def mock_drm_glob(self, pattern):
+        if "card*" in pattern:
+            return [Path("/sys/class/drm/card0")]
+        if "hwmon*" in pattern:
+            return [Path("/sys/class/drm/card0/device/hwmon/hwmon1")]
+        if "temp*_input" in pattern:
+            return [
+                Path("/sys/class/drm/card0/device/hwmon/hwmon1/temp1_input"),
+                Path("/sys/class/drm/card0/device/hwmon/hwmon1/temp2_input"),
+            ]
+        return []
+
+    def mock_read_text(self, *args, **kwargs):
+        p = str(self)
+        if p.endswith("/temp1_input"):
+            return "45000\n"
+        if p.endswith("/temp1_label"):
+            return "edge\n"
+        if p.endswith("/temp2_input"):
+            return "58000\n"
+        if p.endswith("/temp2_label"):
+            return "junction\n"
+        if p.endswith("/gpu_busy_percent"):
+            return "22\n"
+        return ""
+
+    with (
+        patch("src.core.status.shutil.which", return_value=None),
+        patch("pathlib.Path.exists", return_value=True),
+        patch("pathlib.Path.glob", mock_drm_glob),
+        patch("pathlib.Path.read_text", mock_read_text),
+        patch("builtins.open", mock_open(read_data="22\n")),
+    ):
+        result = get_gpu_info()
+
+    assert result is not None
+    assert "58°C" in result
+    assert "load 22%" in result
+
+
+def test_get_gpu_info_drm_reads_temperature_without_utilization_node():
+    def mock_drm_glob(self, pattern):
+        if "card*" in pattern:
+            return [Path("/sys/class/drm/card0")]
+        if "hwmon*" in pattern:
+            return [Path("/sys/class/drm/card0/device/hwmon/hwmon1")]
+        if "temp*_input" in pattern:
+            return [Path("/sys/class/drm/card0/device/hwmon/hwmon1/temp1_input")]
+        return []
+
+    def mock_exists(self):
+        return not str(self).endswith("/gpu_busy_percent")
+
+    def mock_read_text(self, *args, **kwargs):
+        if str(self).endswith("/temp1_input"):
+            return "61000\n"
+        if str(self).endswith("/temp1_label"):
+            return "hotspot\n"
+        return ""
+
+    with (
+        patch("src.core.status.shutil.which", return_value=None),
+        patch("pathlib.Path.exists", mock_exists),
+        patch("pathlib.Path.glob", mock_drm_glob),
+        patch("pathlib.Path.read_text", mock_read_text),
+    ):
+        result = get_gpu_info()
+
+    assert result is not None
+    assert "61°C" in result
+    assert "load" not in result
 
 
 # --- percent rows ---
