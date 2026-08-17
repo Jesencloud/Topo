@@ -15,6 +15,7 @@ from src.core.status import (
     get_gpu_info,
     get_ip_info,
     get_mem_info,
+    get_system_health_assessment,
     get_temp_color,
     get_uptime,
     show_status,
@@ -364,3 +365,41 @@ def test_status_row_keeps_the_number_at_exactly_zero(capsys):
 
     assert "0.0%" in row
     assert "<" not in row
+
+
+def test_system_health_assessment_optimal():
+    icon, color, verdict = get_system_health_assessment(
+        cpu_temp_c=45.0,
+        cpu_load_str="load 5%",
+        mem_percent=40.0,
+        disk_percent=20.0,
+        battery_data=(100, "100%", "Health: 100.0% | Cycles: 10"),
+    )
+    assert icon == "🌿"
+    assert "optimal" in verdict
+
+
+def test_system_health_assessment_moderate():
+    icon, color, verdict = get_system_health_assessment(
+        cpu_temp_c=72.0,
+        cpu_load_str="load 50%",
+        mem_percent=82.0,
+        disk_percent=60.0,
+        battery_data=None,
+    )
+    assert icon == "🟡"
+    assert "moderate" in verdict
+
+
+def test_system_health_assessment_warning_heavy_load():
+    icon, color, verdict = get_system_health_assessment(
+        cpu_temp_c=85.0,
+        cpu_load_str="load 95%",
+        mem_percent=92.0,
+        disk_percent=94.0,
+        battery_data=None,
+    )
+    assert icon == "🔴"
+    assert "Disk space low" in verdict
+    assert "Memory load critical" in verdict
+    assert "CPU temperature hot" in verdict

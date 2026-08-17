@@ -343,6 +343,70 @@ def get_top_processes():
     return []
 
 
+def get_system_health_assessment(
+    cpu_temp_c: float | None,
+    cpu_load_str: str,
+    mem_percent: float,
+    disk_percent: float,
+    battery_data: tuple[int, str, str] | None,
+) -> tuple[str, str, str]:
+    """Evaluate overall system health based on hardware metrics.
+
+    Returns:
+        (icon, color, message)
+    """
+    issues = []
+
+    # Parse numeric CPU load percent
+    cpu_load_val = 0.0
+    if "%" in cpu_load_str:
+        try:
+            num_part = cpu_load_str.replace("load", "").replace("%", "").strip()
+            cpu_load_val = float(num_part)
+        except ValueError:
+            pass
+
+    # 1. Critical & Warning Checks
+    if disk_percent >= 90.0:
+        issues.append(f"Disk space low ({disk_percent:.0f}%)")
+    elif disk_percent >= 80.0:
+        issues.append(f"Disk usage high ({disk_percent:.0f}%)")
+
+    if mem_percent >= 90.0:
+        issues.append(f"Memory load critical ({mem_percent:.0f}%)")
+    elif mem_percent >= 80.0:
+        issues.append(f"Memory usage high ({mem_percent:.0f}%)")
+
+    if cpu_temp_c is not None:
+        if cpu_temp_c > 80.0:
+            issues.append(f"CPU temperature hot ({cpu_temp_c:.0f}°C)")
+        elif cpu_temp_c > 70.0:
+            issues.append(f"CPU temperature elevated ({cpu_temp_c:.0f}°C)")
+
+    if cpu_load_val >= 90.0:
+        issues.append(f"CPU workload heavy ({cpu_load_val:.0f}%)")
+
+    if battery_data:
+        try:
+            health_str = battery_data[2]
+            if "Health:" in health_str:
+                health_val = float(health_str.split("Health:")[1].split("%")[0].strip())
+                if health_val < 50.0:
+                    issues.append(f"Battery degraded ({health_val:.0f}%)")
+        except (ValueError, IndexError):
+            pass
+
+    critical_issues = [
+        iss for iss in issues if any(k in iss for k in ("critical", "low", "hot", "degraded"))
+    ]
+
+    if not issues:
+        return "🌿", GREEN, "System is running in optimal condition."
+    if not critical_issues:
+        return "🟡", YELLOW, f"System status is moderate ({', '.join(issues)})."
+    return "🔴", RED, f"System under heavy load: {', '.join(issues)}."
+
+
 def show_status():
     """Main status display logic."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -418,4 +482,8 @@ def show_status():
     if top_procs:
         print(_status_row("🔝", "Top Processes:", ", ".join(top_procs)))
 
-    print()
+    # 5. Overall Assessment Verdict
+    icon, color, verdict = get_system_health_assessment(
+        temp_val, cpu_load, mem_percent, disk_percent, battery_data
+    )
+    print(f"\n{color}{icon}{RESET} {verdict}\n")
