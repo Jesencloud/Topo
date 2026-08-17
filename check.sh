@@ -100,7 +100,52 @@ fi
 echo -e "  ${GREEN}✓${NC} ${GRAY}Cargo clippy${NC}"
 echo -e "  ${GREEN}✓${NC} ${GRAY}Rust linting complete.${NC}\n"
 
-echo -e "${PURPLE}☉ 4. Running ShellCheck...${NC}"
+echo -e "${PURPLE}☉ 4. Synchronizing local Rust engine...${NC}"
+ENGINE_ARCH=""
+case "$(uname -m)" in
+    x86_64)
+        ENGINE_ARCH="x86_64"
+        ;;
+    aarch64|arm64)
+        ENGINE_ARCH="aarch64"
+        ;;
+    *)
+        echo -e "  ${YELLOW}⚠${NC} ${GRAY}Unsupported host architecture; local engine sync skipped.${NC}"
+        ;;
+esac
+
+if [ -n "$ENGINE_ARCH" ]; then
+    ENGINE_BIN="src/core/bin/topo-core-${ENGINE_ARCH}"
+    ENGINE_SOURCE_CHANGED=0
+    if [ ! -x "$ENGINE_BIN" ]; then
+        ENGINE_SOURCE_CHANGED=1
+    elif [ "topo-core/Cargo.toml" -nt "$ENGINE_BIN" ] || [ "topo-core/Cargo.lock" -nt "$ENGINE_BIN" ] ||
+        find topo-core/src -type f -newer "$ENGINE_BIN" -print -quit | grep -q .; then
+        ENGINE_SOURCE_CHANGED=1
+    fi
+
+    if [ "$ENGINE_SOURCE_CHANGED" -eq 1 ]; then
+        echo -e "  ${GRAY}Rust sources are newer than ${ENGINE_BIN}; building release engine...${NC}"
+        if ! OUT=$(cargo build --quiet --release --manifest-path topo-core/Cargo.toml 2>&1); then
+            echo -e "${RED}❌ Rust engine build failed:${NC}\n$OUT"
+            exit 1
+        fi
+        ENGINE_TMP=$(mktemp "${ENGINE_BIN}.tmp.XXXXXX")
+        if ! cp "topo-core/target/release/topo-core" "$ENGINE_TMP"; then
+            rm -f "$ENGINE_TMP"
+            echo -e "${RED}❌ Could not stage the rebuilt local engine.${NC}"
+            exit 1
+        fi
+        chmod +x "$ENGINE_TMP"
+        mv -f "$ENGINE_TMP" "$ENGINE_BIN"
+        echo -e "  ${GREEN}✓${NC} ${GRAY}${ENGINE_BIN} rebuilt and updated.${NC}"
+    else
+        echo -e "  ${GREEN}✓${NC} ${GRAY}${ENGINE_BIN} is up to date.${NC}"
+    fi
+fi
+echo -e "  ${GREEN}✓${NC} ${GRAY}Local Rust engine synchronization complete.${NC}\n"
+
+echo -e "${PURPLE}☉ 5. Running ShellCheck...${NC}"
 if ! OUT=$(find . -type f -name '*.sh' -exec shellcheck {} + 2>&1); then
     echo -e "${RED}❌ ShellCheck failed:${NC}\n$OUT"
     exit 1
@@ -108,7 +153,7 @@ fi
 echo -e "  ${GREEN}✓${NC} ${GRAY}Shell scripts validated${NC}"
 echo -e "  ${GREEN}✓${NC} ${GRAY}Shell script linting complete.${NC}\n"
 
-echo -e "${PURPLE}☉ 5. Running Tests...${NC}"
+echo -e "${PURPLE}☉ 6. Running Tests...${NC}"
 if [ -t 1 ]; then echo -e "  ${GRAY}↓ Running Python application tests (pytest)...${NC}"; fi
 if ! OUT=$(pytest -q -p no:tach 2>&1); then
     echo -e "${RED}❌ Python tests failed:${NC}\n$OUT"

@@ -319,9 +319,8 @@ mkdir -p "$BIN_DIR"
 # about, since Python invokes this binary as a subprocess afterwards.
 fetch_engine_binary() {
     local bin_name="$1"
-    # Stage inside VERIFY_DIR (removed by the EXIT trap) so an aborted install
-    # never leaves an unverified file in BIN_DIR — the next run would otherwise
-    # mistake that residue for a bundled engine and chmod +x it.
+    # Stage inside VERIFY_DIR (removed by the EXIT trap) so an aborted download
+    # never overwrites the bundled engine with a truncated or unverified file.
     require_release_manifest
     local staged="$VERIFY_DIR/$bin_name"
     start_action "↓" "Fetching ${bin_name} engine"
@@ -332,25 +331,15 @@ fetch_engine_binary() {
     mv -f "$staged" "$BIN_DIR/$bin_name"
     end_action
     if [ "$MINIMAL" = false ]; then
-        echo -e "  ${GREEN}✓${NC} ${GRAY}${bin_name} checksum verified${NC}"
+        echo -e "  ${GREEN}✓${NC} ${GRAY}${bin_name} downloaded, verified, and installed${NC}"
     fi
 }
 
 if [[ "$ARCH" == "x86_64" ]]; then
-    if [ ! -f "$BIN_DIR/topo-core-x86_64" ]; then
-        fetch_engine_binary "topo-core-x86_64"
-    else
-        if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓${NC} ${GRAY}Using bundled x86_64 engine.${NC}"; fi
-        chmod +x "$BIN_DIR/topo-core-x86_64" 2>/dev/null || true
-    fi
+    fetch_engine_binary "topo-core-x86_64"
     rm -f "$BIN_DIR/topo-core-aarch64"
 elif [[ "$ARCH" == "aarch64" ]] || [[ "$ARCH" == "arm64" ]]; then
-    if [ ! -f "$BIN_DIR/topo-core-aarch64" ]; then
-        fetch_engine_binary "topo-core-aarch64"
-    else
-        if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓${NC} ${GRAY}Using bundled ARM64 engine.${NC}"; fi
-        chmod +x "$BIN_DIR/topo-core-aarch64" 2>/dev/null || true
-    fi
+    fetch_engine_binary "topo-core-aarch64"
     rm -f "$BIN_DIR/topo-core-x86_64"
 fi
 
