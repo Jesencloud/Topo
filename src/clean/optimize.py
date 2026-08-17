@@ -709,7 +709,7 @@ def _authenticate_sudo_session(dry_run: bool) -> bool:
         else:
             print(f" {RED}✗{RESET} Authorization failed. Optimization skipped.\n")
         return False
-    print(f" {GREEN}✓{RESET} Authorization successful.\n")
+    print(f"{GREEN}ꗃ{RESET} Authorization successful.\n")
     return True
 
 

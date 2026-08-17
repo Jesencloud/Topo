@@ -1515,7 +1515,7 @@ def run_uninstall():
                     print(f" {RED}✗{RESET} Authorization failed. Uninstall cancelled.\n")
                     return
 
-            print(f" {GREEN}✓{RESET} Authorization successful.\n")
+            print(f"{GREEN}ꗃ{RESET} Authorization successful.\n")
 
             # --- EXECUTION ---
             print(f"\n {WHITE}🚀 Processing...{RESET}\n")
