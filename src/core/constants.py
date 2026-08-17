@@ -105,6 +105,7 @@ GRAY: str = ""
 RESET: str = ""
 BOLD: str = ""
 PURPLE: str = ""
+EARTH: str = ""
 THEME_TITLE: str = ""
 GREEN_NB: str = ""
 GRAY_NB: str = ""
@@ -131,6 +132,7 @@ _COLOR_NAMES: tuple[str, ...] = (
     "RESET",
     "BOLD",
     "PURPLE",
+    "EARTH",
     "THEME_TITLE",
     "GREEN_NB",
     "GRAY_NB",
@@ -162,13 +164,26 @@ def _propagate_colors() -> None:
 
 
 def _init_colors(disable: bool = False):
-    global BLUE, CYAN, MAGENTA, YELLOW, GREEN, RED, WHITE, GRAY, RESET, BOLD, PURPLE, THEME_TITLE
+    global \
+        BLUE, \
+        CYAN, \
+        MAGENTA, \
+        YELLOW, \
+        GREEN, \
+        RED, \
+        WHITE, \
+        GRAY, \
+        RESET, \
+        BOLD, \
+        PURPLE, \
+        EARTH, \
+        THEME_TITLE
     global GREEN_NB, GRAY_NB, HIGHLIGHT, OK, SKIP
 
     if disable:
         BLUE = CYAN = MAGENTA = YELLOW = GREEN = RED = WHITE = GRAY = RESET = BOLD = PURPLE = (
-            THEME_TITLE
-        ) = ""
+            EARTH
+        ) = THEME_TITLE = ""
         GREEN_NB = GRAY_NB = HIGHLIGHT = ""
         OK = "✓"
         SKIP = "◎"
@@ -190,6 +205,7 @@ def _init_colors(disable: bool = False):
         RESET = "\033[0m"
         BOLD = "\033[1m"
         PURPLE = "\033[1;95m"
+        EARTH = YELLOW  # Adaptive Bold Yellow (Matches theme #8B8B00 across palettes)
         THEME_TITLE = PURPLE
 
         GREEN_NB = "\033[0;32m"

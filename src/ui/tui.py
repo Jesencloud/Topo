@@ -1,4 +1,4 @@
-from ..core.constants import GREEN, RESET, TOPO_VERSION, WHITE
+from ..core.constants import EARTH, GREEN, RESET, TOPO_VERSION, WHITE
 from .navigator import InteractiveMenu
 
 CLEAN_ACTION = "clean"
@@ -11,15 +11,9 @@ QUIT_ACTION = "quit"
 
 def render_banner():
     """Renders professional industrial monochrome TUI header for TOPO."""
-    # The dot used to cycle cyan -> green -> purple once per render_banner() call.
-    # render_banner() runs on every full redraw, i.e. on every keystroke, so the
-    # color tracked how fast the user was typing rather than any state of the
-    # program -- and because the palette lived in a module-level list of inline
-    # SGR literals, constants._propagate_colors() could not reach it and the dot
-    # stayed colored under --no-color. One color, from constants, fixes both.
     return f"""
- {GREEN}⠶⣶⠶  ⢰⠶⡆ ⢰⠶⡆ ⢰⠶⡆{RESET}
-  {GREEN}⠿   ⠸⠤⠇ ⢸⠉⠁ ⠸⠤⠇{RESET}   {GREEN}●{RESET}{WHITE} v{TOPO_VERSION} is digging deeper 🦡{RESET}"""
+ {EARTH}⠶⣶⠶  ⢰⠶⡆ ⢰⠶⡆ ⢰⠶⡆{RESET}
+  {EARTH}⠿   ⠸⠤⠇ ⢸⠉⠁ ⠸⠤⠇{RESET}   {GREEN}●{RESET}{WHITE} v{TOPO_VERSION} is digging deeper 🦡{RESET}"""
 
 
 def main_menu():
