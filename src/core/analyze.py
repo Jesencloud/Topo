@@ -16,7 +16,6 @@ from . import system
 from .app_cache import find_cleanable_cache_dirs, get_cache_cleanable_reason
 from .constants import (
     BLUE,
-    CLEAR_LINE,
     CYAN,
     ERASE_BELOW,
     GRAY,
@@ -247,16 +246,8 @@ def _parallel_scan_sizes(
         scan_started = True
 
     unique = list(dict.fromkeys(paths))
-    # get_rust_tree_data/get_rust_scan_data key the cache by the normalized
-    # (symlink-resolved) path, so every probe here must use the same key —
-    # otherwise a symlinked input (e.g. ~/.cache moved to another partition)
-    # is seeded under its resolved key but read under the raw key, silently
-    # reporting size 0. The returned dict stays keyed by the caller's path.
     norm = {p: _normalize_scan_path(p) for p in unique}
     roots = [p for p in unique if not any(parent in unique for parent in p.parents)]
-    # Drop roots already seeded by an earlier scan — e.g. the root-view Home tree
-    # scan seeds its large descendants (~/.cache/*, model dirs). Without this those
-    # insight subtrees would be walked a second time here, defeating the merge.
     roots = [p for p in roots if ScanCache.get(norm[p]) is None]
 
     def scan_one(p: Path) -> None:
@@ -282,6 +273,8 @@ def _scan_status_message(scan_reason: str, target_label: str, frame: str) -> str
         return f" {PURPLE}{frame}{RESET} {GRAY}Refreshing analysis on {target_label}...{RESET}"
     if scan_reason == "explore":
         return f" {PURPLE}{frame}{RESET} {GRAY}Opening {target_label}...{RESET}"
+    if scan_reason == "insights":
+        return f" {PURPLE}{frame}{RESET} {GRAY}Rust Engine: Analyzing Linux insights, please wait . . .{RESET}"
     return (
         f" {PURPLE}{frame}{RESET} {GRAY}Rust Engine: Analyzing disk usage, please wait . . .{RESET}"
     )
@@ -752,14 +745,14 @@ def run_deep_analysis(target_path: Path | None = None):
                     for ins in insights
                     if ins["path"].exists() and not ins.get("is_smart")
                 ]
-                scan_sizes = _parallel_scan_sizes(
-                    rust_paths,
-                    on_scan_start=lambda: print(
-                        f"{CLEAR_LINE} {PURPLE}•{RESET} {GRAY}Rust Engine: "
-                        f"Analyzing Linux insights, please wait . . .{RESET}",
-                        end="",
-                        flush=True,
-                    ),
+                scan_sizes = (
+                    _scan_with_spinner(
+                        lambda paths=rust_paths: _parallel_scan_sizes(paths),
+                        "insights",
+                        "Linux insights",
+                        view_title,
+                    )
+                    or {}
                 )
 
                 # A large secondary tree such as /usr can exceed the LRU entry
