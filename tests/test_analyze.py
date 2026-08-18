@@ -291,6 +291,50 @@ def test_parallel_scan_sizes_collapses_nested_roots_and_limits_workers():
     assert sizes == {root: 100, child: 25, other: 100}
 
 
+def test_parallel_scan_sizes_notifies_only_when_scanning():
+    root = Path("/home/user")
+    notice = MagicMock()
+    ScanCache.clear()
+
+    def fake_tree(path):
+        ScanCache.set(path, {"total_size_bytes": 100})
+
+    with patch("src.core.analyze.get_rust_tree_data", side_effect=fake_tree):
+        assert _parallel_scan_sizes([root], on_scan_start=notice) == {root: 100}
+        assert _parallel_scan_sizes([root], on_scan_start=notice) == {root: 100}
+
+    notice.assert_called_once_with()
+
+
+def test_parallel_scan_sizes_notifies_once_across_both_scan_phases():
+    """A single call can run BOTH phases: the tree-scan of the roots and then the
+    get_rust_scan_data sweep of whatever the tree-scan left uncached. The
+    "Analyzing..." notice must still fire exactly once, not once per phase."""
+    a = Path("/data/a")
+    b = Path("/data/b")  # non-nested sibling, so both start as roots
+    notice = MagicMock()
+    ScanCache.clear()
+
+    def tree_seeds_only_a(path):
+        # The roots tree-scan resolves A but not B, leaving B in `missing`
+        # so the second (get_rust_scan_data) phase also runs.
+        if path == a:
+            ScanCache.set(path, {"total_size_bytes": 10})
+
+    def scan_seeds_b(path):
+        ScanCache.set(path, {"total_size_bytes": 20})
+
+    with (
+        patch("src.core.analyze.get_rust_tree_data", side_effect=tree_seeds_only_a),
+        patch("src.core.analyze.get_rust_scan_data", side_effect=scan_seeds_b),
+    ):
+        sizes = _parallel_scan_sizes([a, b], on_scan_start=notice)
+
+    assert sizes == {a: 10, b: 20}
+    notice.assert_called_once_with()
+    ScanCache.clear()
+
+
 def test_parallel_scan_sizes_reuses_pre_seeded_descendants():
     """Descendants already seeded in ScanCache (e.g. by the root-view Home tree
     scan) must not be tree-scanned a second time here."""
@@ -592,6 +636,65 @@ def test_root_view_uses_tree_scan(mock_tree, mock_parallel, mock_selector, test_
     run_deep_analysis()  # no target_path -> root view (current_target is None)
 
     mock_tree.assert_called_once_with(test_env)
+
+
+@patch("src.core.analyze.AnalyzeSelector")
+@patch("src.core.analyze._parallel_scan_sizes")
+@patch("src.core.analyze.get_rust_tree_data")
+def test_root_view_repins_home_after_secondary_cache_churn(
+    mock_tree, mock_parallel, mock_selector, test_env
+):
+    ScanCache.clear()
+    root_data = {"total_size_bytes": 1000, "subdirs": {}, "top_files": []}
+
+    def scan_home(path):
+        ScanCache.set(path, root_data)
+        return root_data
+
+    def churn_cache(_paths, **_kwargs):
+        for index in range(5):
+            ScanCache.set(test_env / f"secondary-{index}", {"total_size_bytes": index + 1})
+        return {}
+
+    mock_tree.side_effect = scan_home
+    mock_parallel.side_effect = churn_cache
+    mock_selector.return_value.run.side_effect = [("QUIT", None), ("QUIT", None)]
+
+    with patch.object(ScanCache, "MAX_ENTRIES", 4):
+        run_deep_analysis()
+        run_deep_analysis()
+
+    mock_tree.assert_called_once_with(test_env)
+    assert ScanCache.get(test_env) is root_data
+    ScanCache.clear()
+
+
+@patch("src.core.analyze.AnalyzeSelector")
+@patch("src.core.analyze._parallel_scan_sizes")
+@patch("src.core.analyze.get_fast_explore_data")
+@patch("src.core.analyze.get_rust_tree_data")
+def test_root_view_does_not_pin_a_fast_explore_fallback_as_home(
+    mock_tree, mock_fast, mock_parallel, mock_selector, test_env
+):
+    """When the Home tree scan yields nothing and the view falls back to a fast
+    preview, that partial listing must not be pinned under the Home key. The
+    re-pin exists to keep a *full* scan hot; caching a preview there would serve
+    it as the full scan on the next entry."""
+    ScanCache.clear()
+    mock_tree.return_value = {}  # engine came back empty -> fast-explore fallback
+    mock_fast.return_value = {
+        "total_size_bytes": 42,
+        "subdirs": {},
+        "top_files": [],
+        "is_fast_explore": True,
+    }
+    mock_parallel.return_value = {}
+    mock_selector.return_value.run.side_effect = [("QUIT", None)]
+
+    run_deep_analysis()
+
+    assert ScanCache.get(test_env) is None
+    ScanCache.clear()
 
 
 @patch("src.core.analyze.SCAN_SPINNER_DELAY", 5.0)

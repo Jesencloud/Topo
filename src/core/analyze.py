@@ -226,7 +226,9 @@ def _explore_notice(data: dict[str, Any] | None) -> str:
     return "Preview mode: direct entries only; folder sizes are not calculated."
 
 
-def _parallel_scan_sizes(paths: list[Path]) -> dict[Path, int]:
+def _parallel_scan_sizes(
+    paths: list[Path], *, on_scan_start: Callable[[], None] | None = None
+) -> dict[Path, int]:
     """Scan multiple paths concurrently via the Rust engine.
 
     Returns {path: total_size_bytes}. The work is subprocess/IO bound, so threads
@@ -235,6 +237,14 @@ def _parallel_scan_sizes(paths: list[Path]) -> dict[Path, int]:
     sizes: dict[Path, int] = {}
     if not paths:
         return sizes
+
+    scan_started = False
+
+    def notify_scan_start() -> None:
+        nonlocal scan_started
+        if not scan_started and on_scan_start is not None:
+            on_scan_start()
+        scan_started = True
 
     unique = list(dict.fromkeys(paths))
     # get_rust_tree_data/get_rust_scan_data key the cache by the normalized
@@ -253,10 +263,12 @@ def _parallel_scan_sizes(paths: list[Path]) -> dict[Path, int]:
         get_rust_tree_data(p)
 
     if roots:
+        notify_scan_start()
         with ThreadPoolExecutor(max_workers=min(2, len(roots))) as executor:
             list(executor.map(scan_one, roots))
     missing = [path for path in unique if ScanCache.get(norm[path]) is None]
     if missing:
+        notify_scan_start()
         with ThreadPoolExecutor(max_workers=min(2, len(missing))) as executor:
             list(executor.map(get_rust_scan_data, missing))
     for path in unique:
@@ -722,11 +734,6 @@ def run_deep_analysis(target_path: Path | None = None):
                 # Collect every path that needs a Rust scan and run them concurrently.
                 # Home is already scanned (total_scan_size); smart views use a Python
                 # age-filter instead of a full scan.
-                print(
-                    f"{CLEAR_LINE}   • Rust Engine: Analyzing Linux insights, please wait . . .",
-                    end="",
-                    flush=True,
-                )
                 rust_paths = [
                     t["path"]
                     for t in targets
@@ -737,7 +744,22 @@ def run_deep_analysis(target_path: Path | None = None):
                     for ins in insights
                     if ins["path"].exists() and not ins.get("is_smart")
                 ]
-                scan_sizes = _parallel_scan_sizes(rust_paths)
+                scan_sizes = _parallel_scan_sizes(
+                    rust_paths,
+                    on_scan_start=lambda: print(
+                        f"{CLEAR_LINE}   • Rust Engine: "
+                        "Analyzing Linux insights, please wait . . .",
+                        end="",
+                        flush=True,
+                    ),
+                )
+
+                # A large secondary tree such as /usr can exceed the LRU entry
+                # limit by itself and evict Home even though Home was just scanned.
+                # Keep the root result hot so returning to the main menu and opening
+                # Analyze again in the same process does not repeat the full scan.
+                if not data.get("is_fast_explore"):
+                    ScanCache.set(target_to_scan, data)
 
                 for t in targets:
                     if t["path"].exists():
