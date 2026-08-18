@@ -3,7 +3,6 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from .constants import DEFAULT_PURGE_SEARCH_PATHS
 from .paths import get_config_dir
 
 
@@ -12,7 +11,6 @@ def get_config_file() -> Path:
 
 
 DEFAULT_CONFIG = {
-    "purge_search_paths": DEFAULT_PURGE_SEARCH_PATHS,
     "use_trash": True,
     "min_age_days": 7,
     "show_scrollbar": True,
@@ -47,10 +45,6 @@ def normalize_config(user_config: Any) -> dict[str, Any]:
     if not isinstance(user_config, dict):
         return config
 
-    purge_paths = user_config.get("purge_search_paths")
-    if isinstance(purge_paths, list) and all(isinstance(p, str) for p in purge_paths):
-        config["purge_search_paths"] = purge_paths
-
     min_age_days = user_config.get("min_age_days")
     if isinstance(min_age_days, int) and min_age_days >= 0:
         config["min_age_days"] = min_age_days
@@ -77,34 +71,5 @@ def save_config(config: dict[str, Any]) -> bool:
         return False
 
 
-def get_purge_paths() -> list[str]:
-    config = load_config()
-    return config.get("purge_search_paths", DEFAULT_CONFIG["purge_search_paths"])
-
-
 def get_show_scrollbar() -> bool:
     return bool(load_config().get("show_scrollbar", DEFAULT_CONFIG["show_scrollbar"]))
-
-
-def add_purge_path(path_str: str) -> bool:
-    path = str(Path(path_str).expanduser().resolve())
-    config = load_config()
-    paths = config.get("purge_search_paths", [])
-    if path not in paths:
-        paths.append(path)
-        config["purge_search_paths"] = paths
-        save_config(config)
-        return True
-    return False
-
-
-def remove_purge_path(path_str: str) -> bool:
-    path = str(Path(path_str).expanduser().resolve())
-    config = load_config()
-    paths = config.get("purge_search_paths", [])
-    if path in paths:
-        paths.remove(path)
-        config["purge_search_paths"] = paths
-        save_config(config)
-        return True
-    return False

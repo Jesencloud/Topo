@@ -20,7 +20,6 @@ from src.ui.navigator import (
     InteractiveMenu,
     MouseEvent,
     Navigator,
-    PaginatedSelector,
     UninstallPreviewSelector,
     UninstallSelector,
     draw_bar,
@@ -786,17 +785,6 @@ def test_uninstall_preview_space_cancels(test_env):
 
     with patch("pathlib.Path.home", return_value=test_env):
         assert drive(selector, [Navigator.SPACE]) is False
-
-
-# --- PaginatedSelector ---
-def test_paginated_manage_paths():
-    items = [{"project": f"p{i}", "path": Path("/tmp"), "size": 100} for i in range(5)]
-    assert drive(PaginatedSelector("t", items), ["s"]) == "MANAGE_PATHS"
-
-
-def test_paginated_enter_defaults_to_hover():
-    items = [{"project": f"p{i}", "path": Path("/tmp"), "size": 100} for i in range(5)]
-    assert drive(PaginatedSelector("t", items), ["\r"]) == [0]
 
 
 def test_sgr_mouse_drag_sequence_is_parsed():

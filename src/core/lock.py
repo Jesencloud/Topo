@@ -15,7 +15,7 @@ LOCK_FILE_PATH = Path.home() / ".config" / "topo" / "topo.lock"
 class SingleInstanceLock:
     """POSIX fcntl file-lock based single instance guard.
 
-    Ensures only one instance of topo clean/uninstall/purge is running
+    Ensures only one instance of topo clean/uninstall is running
     per user session.
     """
 

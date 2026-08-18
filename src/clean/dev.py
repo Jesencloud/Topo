@@ -1,7 +1,7 @@
 import shutil
 from pathlib import Path
 
-from ..core.constants import CLEAN_CARGO_AGE_DAYS, DEFAULT_PURGE_SEARCH_PATHS, DEV_CACHES, OK
+from ..core.constants import CLEAN_CARGO_AGE_DAYS, DEFAULT_PROJECT_SEARCH_PATHS, DEV_CACHES, OK
 from ..core.file_ops import (
     bytes_to_human,
     clean_path_by_age,
@@ -146,7 +146,7 @@ def clean_python_pycache(dry_run=False):
     total_size = 0
     total_items = 0
 
-    for search_path in DEFAULT_PURGE_SEARCH_PATHS:
+    for search_path in DEFAULT_PROJECT_SEARCH_PATHS:
         root = Path(search_path)
         if not root.is_dir():
             continue

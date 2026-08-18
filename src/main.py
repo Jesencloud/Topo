@@ -4,7 +4,6 @@ from contextlib import contextmanager
 
 from .clean.app_manager import run_uninstall
 from .clean.optimize import optimize_system
-from .clean.project import run_purge
 from .clean.runner import run_clean
 from .core import system, terminal_state
 from .core.analyze import run_deep_analysis
@@ -81,18 +80,6 @@ OPTIMIZE_HELP = """
 Examples:
   topo optimize             Run system maintenance
   topo optimize --dry-run   Preview maintenance changes
-"""
-
-PURGE_HELP = """
-Examples:
-  topo purge             Open the project artifact purger
-  topo purge --dry-run   Preview project artifacts without deleting
-"""
-
-ALL_HELP = """
-Examples:
-  topo all             Run cleanup and project purge tasks
-  topo all --dry-run   Preview cleanup and project purge tasks
 """
 
 REMOVE_HELP = """
@@ -217,14 +204,6 @@ def _main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=OPTIMIZE_HELP,
     )
-    subparsers.add_parser(
-        "purge",
-        parents=[dry_run_parent],
-        help="Interactive project artifact purging",
-        description="Open the interactive project artifact purger.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=PURGE_HELP,
-    )
     subparsers.add_parser("status", help="Monitor system health and resource usage")
     subparsers.add_parser(
         "doctor", help="Run a comprehensive diagnostic check of the Topo environment"
@@ -242,14 +221,6 @@ def _main():
         default=10,
         metavar="N",
         help="Number of sessions to show (default: 10)",
-    )
-    subparsers.add_parser(
-        "all",
-        parents=[dry_run_parent],
-        help="Run all cleanup and purge tasks sequentially",
-        description="Run cleanup and project purge tasks sequentially.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=ALL_HELP,
     )
 
     # --- Management ---
@@ -346,10 +317,8 @@ def _main():
     # Commands requiring single-instance concurrency lock
     LOCK_REQUIRED_COMMANDS = {
         "clean",
-        "purge",
         "uninstall",
         "optimize",
-        "all",
         "remove",
         "analyze",
         None,
@@ -385,19 +354,15 @@ def _execute_main_router(args, dry_run, wl_parser):
 
     # CLI Mode Execution
     # Suppress version banner for silent link command to keep installation log clean
-    if args.command not in ("analyze", "uninstall", "purge") and not (
+    if args.command not in ("analyze", "uninstall") and not (
         args.command == "link" and args.silent
     ):
         print(f"{BLUE}topo {TOPO_VERSION} (Python Edition){RESET}")
         os_id = system.get_os_id()
         print(f"System: {os_id}")
 
-    if args.command in ("clean", "all"):
+    if args.command == "clean":
         run_clean(dry_run)
-
-    if args.command in ("purge", "all"):
-        with alternate_screen():
-            run_purge(dry_run)
 
     if args.command == "uninstall":
         with alternate_screen():
