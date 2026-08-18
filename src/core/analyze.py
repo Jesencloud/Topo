@@ -17,7 +17,6 @@ from .app_cache import find_cleanable_cache_dirs, get_cache_cleanable_reason
 from .constants import (
     BLUE,
     CLEAR_LINE,
-    CLEAR_SCREEN,
     CYAN,
     ERASE_BELOW,
     GREEN,
@@ -42,8 +41,8 @@ from .text import sanitize_for_display
 _ANALYZE_COMMAND_TIMEOUT = 300
 SCAN_SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 
-# Grace period before a scan paints the (screen-clearing) scan header + spinner.
-# Scans that finish within this window redraw in place like a cache hit, so fast
+# Grace period before a scan paints the scan header + spinner. Scans that
+# finish within this window redraw in place like a cache hit, so fast
 # small-directory scans don't flash/jitter; only slower scans show the spinner.
 SCAN_SPINNER_DELAY = 0.15
 ANALYZE_RESULT_LIMIT = 50
@@ -286,10 +285,16 @@ def _scan_status_message(scan_reason: str, target_label: str, frame: str) -> str
 
 
 def _render_scan_header(view_title: str) -> None:
-    # Place the title exactly where AnalyzeSelector.render() puts it (home,
-    # one blank line, then the title on row 2) so the screen does not shift
-    # vertically when the scan screen hands off to the result list.
-    print(f"{CLEAR_SCREEN}\n{PURPLE}{view_title}{RESET}{ERASE_BELOW}", flush=True)
+    # Repaint in place (home + clear-line + erase-below) rather than issuing a
+    # full-screen CLEAR_SCREEN. \033[2J blanks the whole screen in a discrete
+    # step, so on a sub-view scan that just barely crosses SCAN_SPINNER_DELAY the
+    # previous list flashes to black before the title lands -- an intermittent
+    # flicker when drilling in from the parent view. Homing and erasing below in
+    # one write (the same idiom AnalyzeSelector.render / _write_scrollable_frame
+    # use) overwrites the frame with no all-blank intermediate. Vertical
+    # placement is unchanged -- home, one blank line, then the title on row 2 --
+    # so the handoff to the result list still doesn't shift.
+    print(f"\033[H\033[K\n{PURPLE}{view_title}{RESET}{ERASE_BELOW}", flush=True)
 
 
 def _scan_with_spinner(
@@ -300,8 +305,8 @@ def _scan_with_spinner(
     If it finishes within ``SCAN_SPINNER_DELAY`` the scan screen is never
     painted, so fast scans (small dirs / mostly-cached subtrees) hand off to the
     result list with an in-place redraw — exactly like a cache hit, no flash or
-    jitter. Only scans slower than the grace period clear the screen and animate
-    the spinner."""
+    jitter. Only scans slower than the grace period paint the scan header (in
+    place, without a full-screen clear) and animate the spinner."""
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(worker)
         elapsed = 0.0

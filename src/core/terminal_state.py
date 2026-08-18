@@ -51,16 +51,25 @@ def restore_raw_state(fd: int, settings: Any) -> None:
 
 
 def enter_alternate_screen() -> None:
+    # Only the outermost enter actually switches the buffer. Nested spans (e.g. the
+    # TUI menu holding the alt-screen while it launches an alternate-screen action)
+    # must NOT re-emit \x1b[?1049h: toggling the buffer off then on flashes the main
+    # buffer -- the shell prompt -- for a frame between the two spans.
     global _alternate_screen_depth
     _alternate_screen_depth += 1
-    _write(ENTER_ALTERNATE_SCREEN)
+    if _alternate_screen_depth == 1:
+        _write(ENTER_ALTERNATE_SCREEN)
 
 
 def exit_alternate_screen() -> None:
+    # Mirror enter: only leave the alt-screen once the outermost span closes, so an
+    # inner span ending never drops back to the main buffer mid-session.
     global _alternate_screen_depth
-    if _alternate_screen_depth > 0:
-        _alternate_screen_depth -= 1
-    _write(EXIT_ALTERNATE_SCREEN)
+    if _alternate_screen_depth <= 0:
+        return
+    _alternate_screen_depth -= 1
+    if _alternate_screen_depth == 0:
+        _write(EXIT_ALTERNATE_SCREEN)
 
 
 def hide_cursor() -> None:

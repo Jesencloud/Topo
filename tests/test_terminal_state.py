@@ -46,3 +46,48 @@ def test_signal_handler_resets_terminal_before_termination(monkeypatch):
 
     assert exc.value.code == 128 + signal.SIGTERM
     assert calls == [True]
+
+
+def _capture_writes(monkeypatch):
+    writes = []
+    monkeypatch.setattr("sys.stdout.write", writes.append)
+    monkeypatch.setattr("sys.stdout.flush", lambda: None)
+    return writes
+
+
+def test_nested_enter_does_not_retoggle_the_alternate_buffer(monkeypatch):
+    # A nested span (the TUI menu launching an alternate-screen action while it
+    # already holds the alt-screen) must not switch the buffer off and on -- that
+    # is exactly the frame where the shell prompt flashes through.
+    _reset_terminal_state()
+    writes = _capture_writes(monkeypatch)
+
+    terminal_state.enter_alternate_screen()  # outermost: switches to alt
+    terminal_state.enter_alternate_screen()  # nested: no-op on the buffer
+    terminal_state.exit_alternate_screen()  # inner span closes: still in alt
+
+    assert writes == [terminal_state.ENTER_ALTERNATE_SCREEN]
+    assert terminal_state._alternate_screen_depth == 1
+
+
+def test_outermost_exit_leaves_the_alternate_buffer(monkeypatch):
+    _reset_terminal_state()
+    terminal_state.enter_alternate_screen()
+    terminal_state.enter_alternate_screen()
+    terminal_state.exit_alternate_screen()
+    writes = _capture_writes(monkeypatch)
+
+    terminal_state.exit_alternate_screen()  # outermost span closes
+
+    assert writes == [terminal_state.EXIT_ALTERNATE_SCREEN]
+    assert terminal_state._alternate_screen_depth == 0
+
+
+def test_exit_without_active_alternate_screen_is_silent(monkeypatch):
+    _reset_terminal_state()
+    writes = _capture_writes(monkeypatch)
+
+    terminal_state.exit_alternate_screen()
+
+    assert writes == []
+    assert terminal_state._alternate_screen_depth == 0

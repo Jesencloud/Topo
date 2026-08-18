@@ -452,12 +452,18 @@ def test_scan_status_message_uses_spinner_frame():
     assert "🚀" not in scan_msg
 
 
-def test_render_scan_header_clears_screen_and_prints_title(capsys):
+def test_render_scan_header_repaints_in_place_without_full_clear(capsys):
     _render_scan_header("Analyze Disk")
 
     output = capsys.readouterr().out
-    # Clears the screen and homes the cursor (CLEAR_SCREEN = \033[2J\033[H).
-    assert output.startswith("\033[2J\033[H")
+    # Repaints in place: homes the cursor and clears row by row, but must NOT
+    # issue a full-screen CLEAR_SCREEN (\033[2J) -- that blanks the whole screen
+    # in a discrete step and flashes the previous list to black when a sub-view
+    # scan just barely crosses the spinner grace period.
+    assert output.startswith("\033[H")
+    assert "\033[2J" not in output
+    # Still erases below so the previous frame's body does not show through.
+    assert "\033[J" in output
     assert "Analyze Disk" in output
     # The title must sit on row 2 (one blank line above it), matching
     # AnalyzeSelector.render(), so the screen does not shift vertically when

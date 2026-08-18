@@ -118,6 +118,24 @@ def alternate_screen():
         terminal_state.exit_alternate_screen()
 
 
+@contextmanager
+def main_screen():
+    """Temporarily drop to the main screen buffer from within an alternate-screen span.
+
+    The TUI menu loop holds one continuous alternate-screen session (so selecting an
+    alternate-screen action never flashes the shell prompt between the menu and the
+    action). Report-style commands (clean/optimize/status) still want to print into
+    the main buffer so their output survives in the scrollback after topo exits; this
+    steps back to the main buffer for the command's duration and restores the
+    alternate screen on the way out.
+    """
+    terminal_state.exit_alternate_screen()
+    try:
+        yield
+    finally:
+        terminal_state.enter_alternate_screen()
+
+
 def _clear_screen():
     sys.stdout.write(CLEAR_SCREEN)
     sys.stdout.flush()
@@ -134,15 +152,16 @@ def _print_interrupted(clear_screen=False):
 
 
 def _run_terminal_tui_command(command, *args):
-    try:
-        _clear_screen()
-        result = command(*args)
-        if result is False:
-            return True
-        return Navigator.wait_for_return()
-    except KeyboardInterrupt:
-        _print_interrupted(clear_screen=True)
-        return False
+    with main_screen():
+        try:
+            _clear_screen()
+            result = command(*args)
+            if result is False:
+                return True
+            return Navigator.wait_for_return()
+        except KeyboardInterrupt:
+            _print_interrupted(clear_screen=True)
+            return False
 
 
 def _run_alternate_tui(command, *args):
@@ -353,15 +372,15 @@ def _execute_main_router(args, dry_run, wl_parser):
             ANALYZE_ACTION: lambda: _run_alternate_tui(run_deep_analysis) or True,
             STATUS_ACTION: lambda: _run_terminal_tui_command(show_status),
         }
-        while True:
-            with alternate_screen():
+        with alternate_screen():
+            while True:
                 choice = main_menu()
 
-            if choice == QUIT_ACTION:
-                break
-            action = menu_routes.get(choice)
-            if action and not action():
-                break
+                if choice == QUIT_ACTION:
+                    break
+                action = menu_routes.get(choice)
+                if action and not action():
+                    break
         return
 
     # CLI Mode Execution
