@@ -13,6 +13,7 @@ from typing import Any
 from ..core import system, terminal_state
 from ..core.constants import (
     BOLD,
+    CLEAR_LINE,
     CLEAR_SCREEN,
     GRAY,
     GREEN,
@@ -53,8 +54,8 @@ def opt_log(message, success=True, skipped=False):
         msg = f"{message}"
 
     with print_lock:
-        # Use a single print statement within a lock to ensure atomicity
-        print(f"  {icon} {msg}")
+        # Use CLEAR_LINE to cleanly overwrite the running spinner line without collision
+        print(f"{CLEAR_LINE}  {icon} {msg}")
 
 
 _read_sudo_choice = terminal_state.read_sudo_choice
@@ -717,7 +718,6 @@ def optimize_system(dry_run: bool = False) -> bool | None:
     sys.stdout.write(CLEAR_SCREEN)
     sys.stdout.flush()
     print(f"\n{PURPLE}System Optimization{RESET}\n")
-    print(f"{GRAY}Running maintenance tasks in parallel...{RESET}")
 
     if not _authenticate_sudo_session(dry_run):
         return False
@@ -725,21 +725,52 @@ def optimize_system(dry_run: bool = False) -> bool | None:
     start_time = time.time()
     registered_tasks = OptimizationRegistry.tasks
 
-    worker_count = min(max(len(registered_tasks), 1), OPTIMIZATION_MAX_WORKERS)
-    with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        futures = {executor.submit(task, dry_run=dry_run): task for task in registered_tasks}
+    braille_frames = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+    stop_spinner = threading.Event()
 
-        for future in as_completed(futures):
-            try:
-                result = future.result()
-                if result:
-                    opt_log(result, skipped=dry_run)
-            except Exception as exc:
-                # Optimization runs independent maintenance tasks concurrently; one
-                # task failure should not abort the rest of the batch.
-                task = futures[future]
-                opt_log(f"{task.__name__} failed ({type(exc).__name__})", success=False)
+    def _animate_spinner(
+        ev: threading.Event = stop_spinner,
+        frames: tuple[str, ...] = braille_frames,
+    ):
+        frame_idx = 0
+        while not ev.is_set():
+            frame = frames[frame_idx % len(frames)]
+            # Share print_lock with opt_log: without it a task result printed by a
+            # worker can interleave with a spinner frame mid-write and get clobbered
+            # by the frame's leading CLEAR_LINE. Hold the lock only around the write,
+            # never across the sleep.
+            with print_lock:
+                sys.stdout.write(
+                    f"{CLEAR_LINE}  {PURPLE}{frame}{RESET} {GRAY}Running maintenance tasks in parallel...{RESET}"
+                )
+                sys.stdout.flush()
+            frame_idx += 1
+            time.sleep(0.08)
+
+    spinner_thread = threading.Thread(target=_animate_spinner, daemon=True)
+    spinner_thread.start()
+
+    worker_count = min(max(len(registered_tasks), 1), OPTIMIZATION_MAX_WORKERS)
+    try:
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = {executor.submit(task, dry_run=dry_run): task for task in registered_tasks}
+
+            for future in as_completed(futures):
+                try:
+                    result = future.result()
+                    if result:
+                        opt_log(result, skipped=dry_run)
+                except Exception as exc:
+                    # Optimization runs independent maintenance tasks concurrently; one
+                    # task failure should not abort the rest of the batch.
+                    task = futures[future]
+                    opt_log(f"{task.__name__} failed ({type(exc).__name__})", success=False)
+    finally:
+        stop_spinner.set()
+        spinner_thread.join(timeout=0.2)
+        sys.stdout.write(f"{CLEAR_LINE}")
+        sys.stdout.flush()
 
     duration = time.time() - start_time
-    print(f"\n{GREEN}{BOLD}✨ All tasks completed in {duration:.1f}s.{RESET}")
+    print(f"\n{GREEN}{BOLD}✔ All tasks completed in {duration:.1f}s.{RESET}")
     return None

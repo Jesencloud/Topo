@@ -168,9 +168,9 @@ def run_clean(dry_run: bool = False) -> bool | None:
         with contextlib.redirect_stdout(buf):
             for task in tasks:
                 size, items, _ = task.action(dry_run=dry_run)
-                total_size += size
-                total_items += items
                 if size > 0 or items > 0:
+                    total_size += size
+                    total_items += items
                     category_results.append((task.name, size, items))
 
         output = buf.getvalue()

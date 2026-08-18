@@ -19,6 +19,7 @@ from .constants import (
     CLEAR_LINE,
     CYAN,
     ERASE_BELOW,
+    GRAY,
     GREEN,
     MAGENTA,
     PURPLE,
@@ -278,10 +279,12 @@ def _parallel_scan_sizes(
 
 def _scan_status_message(scan_reason: str, target_label: str, frame: str) -> str:
     if scan_reason == "refresh":
-        return f"   {frame} Refreshing analysis on {target_label}..."
+        return f" {PURPLE}{frame}{RESET} {GRAY}Refreshing analysis on {target_label}...{RESET}"
     if scan_reason == "explore":
-        return f"   {frame} Opening {target_label}..."
-    return f"   {frame} Rust Engine: Analyzing disk usage, please wait . . ."
+        return f" {PURPLE}{frame}{RESET} {GRAY}Opening {target_label}...{RESET}"
+    return (
+        f" {PURPLE}{frame}{RESET} {GRAY}Rust Engine: Analyzing disk usage, please wait . . .{RESET}"
+    )
 
 
 def _render_scan_header(view_title: str) -> None:
@@ -752,8 +755,8 @@ def run_deep_analysis(target_path: Path | None = None):
                 scan_sizes = _parallel_scan_sizes(
                     rust_paths,
                     on_scan_start=lambda: print(
-                        f"{CLEAR_LINE}   • Rust Engine: "
-                        "Analyzing Linux insights, please wait . . .",
+                        f"{CLEAR_LINE} {PURPLE}•{RESET} {GRAY}Rust Engine: "
+                        f"Analyzing Linux insights, please wait . . .{RESET}",
                         end="",
                         flush=True,
                     ),

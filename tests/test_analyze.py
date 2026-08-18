@@ -447,8 +447,9 @@ def test_scan_status_message_uses_spinner_frame():
     scan_msg = _scan_status_message("scan", "Home", "⠋")
     refresh_msg = _scan_status_message("refresh", "Downloads", "⠙")
 
-    assert scan_msg == "   ⠋ Rust Engine: Analyzing disk usage, please wait . . ."
-    assert refresh_msg == "   ⠙ Refreshing analysis on Downloads..."
+    assert "⠋" in scan_msg and "Rust Engine: Analyzing disk usage" in scan_msg
+    assert "⠙" in refresh_msg and "Refreshing analysis on Downloads" in refresh_msg
+    assert scan_msg.startswith(" ") and not scan_msg.startswith("   ")
     assert "🚀" not in scan_msg
 
 
