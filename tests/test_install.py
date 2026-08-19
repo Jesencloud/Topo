@@ -1,7 +1,24 @@
 import os
+import subprocess
 from pathlib import Path
 
 from src.manage.install import _get_link_target_dir, run_install_link
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_install_script_fails_early_when_curl_is_missing(tmp_path):
+    result = subprocess.run(
+        ["/bin/bash", str(REPO_ROOT / "install.sh"), "--minimal"],
+        env={"HOME": str(tmp_path), "PATH": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "curl is required but not installed" in result.stdout
+    assert "python3 is required" not in result.stdout
 
 
 def test_get_link_target_dir_uses_override(monkeypatch, tmp_path):

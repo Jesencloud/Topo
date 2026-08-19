@@ -22,6 +22,21 @@
 
 > 保持 Linux 系统干练与高效的最优雅方式。灵感源自 macOS 上的 [Mole](https://github.com/tw93/mole)。
 
+## 运行要求
+
+Topo 需要 Linux、Python 3.10 或更高版本、`curl`，以及 Python `packaging` 库。
+通过 DEB/RPM 安装时，系统包管理器会自动解析这些依赖。使用脚本安装或直接从源码目录运行前，
+如系统尚未安装相关依赖，请先执行对应命令：
+
+```bash
+sudo apt install python3 curl python3-packaging       # Debian / Ubuntu
+sudo dnf install python3 curl python3-packaging       # Fedora / RHEL
+sudo pacman -S python curl python-packaging           # Arch / Manjaro
+```
+
+脚本安装器会在安装 Topo 前检查这些运行要求。本项目目前不以 Python wheel 形式发布，
+因此不支持使用 `pip install .` 安装。
+
 ## 快速开始
 
 **一键脚本安装 (推荐)**

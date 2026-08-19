@@ -69,6 +69,9 @@ else
     if [ "$MINIMAL" = false ]; then echo -e "  ${YELLOW}ℹ${NC} ${GRAY}git not found (signed release installation is unaffected)${NC}"; fi
 fi
 
+command -v curl >/dev/null 2>&1 || { echo -e "  ${RED}✗ Error: curl is required but not installed.${NC}"; exit 1; }
+if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓${NC} ${GRAY}curl installed${NC}"; fi
+
 command -v python3 >/dev/null 2>&1 || { echo -e "  ${RED}✗ Error: python3 is required but not installed.${NC}"; exit 1; }
 if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓${NC} ${GRAY}python3 installed${NC}"; fi
 if ! python3 -c "import packaging" >/dev/null 2>&1; then

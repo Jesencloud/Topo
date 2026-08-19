@@ -22,6 +22,22 @@
 
 > The most elegant way to keep your Linux system lean and mean. Inspired by [Mole](https://github.com/tw93/mole) on macOS.
 
+## Requirements
+
+Topo requires Linux, Python 3.10 or newer, `curl`, and the Python `packaging` library.
+DEB/RPM installations resolve these dependencies through the system package manager. For
+script installation or running directly from a source checkout, install them first if needed:
+
+```bash
+sudo apt install python3 curl python3-packaging       # Debian / Ubuntu
+sudo dnf install python3 curl python3-packaging       # Fedora / RHEL
+sudo pacman -S python curl python-packaging           # Arch / Manjaro
+```
+
+The script installer checks these runtime requirements before installing Topo. This repository
+is not currently distributed as a Python wheel, so `pip install .` is not a supported installation
+method.
+
 ## Quick Start
 
 **Script Installation (Recommended)**
