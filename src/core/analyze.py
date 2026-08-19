@@ -35,11 +35,11 @@ from .file_ops import (
 )
 from .heavy_cache import get_analyze_cache_defs
 from .scan_cache import ScanCache
+from .spinner import DEFAULT_SPINNER_FRAMES
 from .system import run_command
 from .text import sanitize_for_display
 
 _ANALYZE_COMMAND_TIMEOUT = 300
-SCAN_SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 
 # Grace period before a scan paints the scan header + spinner. Scans that
 # finish within this window redraw in place like a cache hit, so fast
@@ -318,7 +318,7 @@ def _scan_with_spinner(
                     msg = _scan_status_message(
                         scan_reason,
                         target_label,
-                        SCAN_SPINNER_FRAMES[frame_index % len(SCAN_SPINNER_FRAMES)],
+                        DEFAULT_SPINNER_FRAMES[frame_index % len(DEFAULT_SPINNER_FRAMES)],
                     )
                     last_len = max(last_len, len(msg))
                     print(msg, end="\r", flush=True)

@@ -31,6 +31,7 @@ from ..core.file_ops import (
     safe_remove,
 )
 from ..core.lock import is_file_locked, is_sqlite_busy
+from ..core.spinner import threaded_spinner
 from ..core.system import has_sudo, run_command
 
 # Lock to ensure parallel tasks don't corrupt the terminal output
@@ -697,34 +698,23 @@ def optimize_system(dry_run: bool = False) -> bool | None:
     start_time = time.time()
     registered_tasks = OptimizationRegistry.tasks
 
-    braille_frames = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
-    stop_spinner = threading.Event()
-
-    def _animate_spinner(
-        ev: threading.Event = stop_spinner,
-        frames: tuple[str, ...] = braille_frames,
-    ):
-        frame_idx = 0
-        while not ev.is_set():
-            frame = frames[frame_idx % len(frames)]
-            # Share print_lock with opt_log: without it a task result printed by a
-            # worker can interleave with a spinner frame mid-write and get clobbered
-            # by the frame's leading CLEAR_LINE. Hold the lock only around the write,
-            # never across the sleep.
-            with print_lock:
-                sys.stdout.write(
-                    f"{CLEAR_LINE}  {PURPLE}{frame}{RESET} {GRAY}Running maintenance tasks in parallel...{RESET}"
-                )
-                sys.stdout.flush()
-            frame_idx += 1
-            time.sleep(0.08)
-
-    spinner_thread = threading.Thread(target=_animate_spinner, daemon=True)
-    spinner_thread.start()
+    def render_optimization_spinner(frame: str) -> None:
+        # Share print_lock with opt_log: without it a task result printed by a
+        # worker can interleave with a spinner frame mid-write and get clobbered
+        # by the frame's leading CLEAR_LINE. Hold the lock only around the write,
+        # never across the wait.
+        with print_lock:
+            sys.stdout.write(
+                f"{CLEAR_LINE}  {PURPLE}{frame}{RESET} {GRAY}Running maintenance tasks in parallel...{RESET}"
+            )
+            sys.stdout.flush()
 
     worker_count = min(max(len(registered_tasks), 1), OPTIMIZATION_MAX_WORKERS)
     try:
-        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        with (
+            threaded_spinner(render_optimization_spinner),
+            ThreadPoolExecutor(max_workers=worker_count) as executor,
+        ):
             futures = {executor.submit(task, dry_run=dry_run): task for task in registered_tasks}
 
             for future in as_completed(futures):
@@ -738,8 +728,6 @@ def optimize_system(dry_run: bool = False) -> bool | None:
                     task = futures[future]
                     opt_log(f"{task.__name__} failed ({type(exc).__name__})", success=False)
     finally:
-        stop_spinner.set()
-        spinner_thread.join(timeout=0.2)
         sys.stdout.write(f"{CLEAR_LINE}")
         sys.stdout.flush()
 

@@ -4,7 +4,6 @@ import re
 import shutil
 import subprocess
 import sys
-import threading
 import time
 from array import array
 from collections import defaultdict
@@ -41,6 +40,7 @@ from ..core.file_ops import (
 )
 from ..core.history import record_history_session
 from ..core.scan_cache import ScanCache
+from ..core.spinner import threaded_spinner
 from ..core.text import sanitize_for_display
 from ..core.whitelist import LINUX_USER_DATA_DIRS
 from ..ui.navigator import Navigator, UninstallPreviewSelector, UninstallSelector
@@ -1464,31 +1464,16 @@ def run_uninstall():
 
     while True:
         if not manager.has_fresh_scan_cache():
-            braille_frames = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
-            stop_scan_spinner = threading.Event()
 
-            def _animate_scan_spinner(
-                ev: threading.Event = stop_scan_spinner,
-                frames: tuple[str, ...] = braille_frames,
-            ):
-                frame_idx = 0
-                while not ev.is_set():
-                    frame = frames[frame_idx % len(frames)]
-                    sys.stdout.write(
-                        CLEAR_SCREEN + f"\n {THEME_TITLE}Select Application to Remove{RESET}\n\n"
-                        f" {PURPLE}{frame}{RESET} {GRAY}Scanning installed applications...{RESET}\033[K"
-                    )
-                    sys.stdout.flush()
-                    frame_idx += 1
-                    time.sleep(0.08)
+            def render_scan_spinner(frame: str) -> None:
+                sys.stdout.write(
+                    CLEAR_SCREEN + f"\n {THEME_TITLE}Select Application to Remove{RESET}\n\n"
+                    f" {PURPLE}{frame}{RESET} {GRAY}Scanning installed applications...{RESET}\033[K"
+                )
+                sys.stdout.flush()
 
-            scan_spinner_thread = threading.Thread(target=_animate_scan_spinner, daemon=True)
-            scan_spinner_thread.start()
-            try:
+            with threaded_spinner(render_scan_spinner):
                 apps = manager.run_full_scan(use_cache=True)
-            finally:
-                stop_scan_spinner.set()
-                scan_spinner_thread.join(timeout=0.2)
         else:
             apps = manager.run_full_scan(use_cache=True)
 
@@ -1541,25 +1526,11 @@ def run_uninstall():
             print(f"{GREEN}ꗃ{RESET} Authorization successful.")
 
             # --- EXECUTION ---
-            braille_frames = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
-            stop_spinner = threading.Event()
             current_status = ["Processing..."]
 
-            def _animate_spinner(
-                ev: threading.Event = stop_spinner,
-                frames: tuple[str, ...] = braille_frames,
-                status_box: list[str] = current_status,
-            ):
-                frame_idx = 0
-                while not ev.is_set():
-                    frame = frames[frame_idx % len(frames)]
-                    sys.stdout.write(f"{CLEAR_LINE}{PURPLE}{frame}{RESET} {status_box[0]}")
-                    sys.stdout.flush()
-                    frame_idx += 1
-                    time.sleep(0.08)
-
-            spinner_thread = threading.Thread(target=_animate_spinner, daemon=True)
-            spinner_thread.start()
+            def render_removal_spinner(frame: str, status_box: list[str] = current_status) -> None:
+                sys.stdout.write(f"{CLEAR_LINE}{PURPLE}{frame}{RESET} {status_box[0]}")
+                sys.stdout.flush()
 
             removed_names = []
             failed_names = []
@@ -1567,29 +1538,28 @@ def run_uninstall():
             has_apt = False
 
             try:
-                for app, paths, _ in all_targets:
-                    # `name` comes from a .desktop Name= field, so it is untrusted; these
-                    # lists feed the summary lines only, never a filesystem operation.
-                    safe_app_name = sanitize_for_display(str(app["name"]))
-                    current_status[0] = f"Removing {BOLD}{safe_app_name}{RESET}..."
-                    if app["type"] == "APT":
-                        has_apt = True
-                    result = manager.execute_uninstall(app, paths)
-                    package_removed = bool(result.get("package_removed"))
-                    paths_removed = any(ok for ok, _ in result.get("removed_paths", []))
-                    if package_removed or paths_removed:
-                        removed_names.append(safe_app_name)
-                        if package_removed:
-                            total_freed_all += app["size_bytes"]
-                    else:
-                        failed_names.append(safe_app_name)
+                with threaded_spinner(render_removal_spinner):
+                    for app, paths, _ in all_targets:
+                        # `name` comes from a .desktop Name= field, so it is untrusted; these
+                        # lists feed the summary lines only, never a filesystem operation.
+                        safe_app_name = sanitize_for_display(str(app["name"]))
+                        current_status[0] = f"Removing {BOLD}{safe_app_name}{RESET}..."
+                        if app["type"] == "APT":
+                            has_apt = True
+                        result = manager.execute_uninstall(app, paths)
+                        package_removed = bool(result.get("package_removed"))
+                        paths_removed = any(ok for ok, _ in result.get("removed_paths", []))
+                        if package_removed or paths_removed:
+                            removed_names.append(safe_app_name)
+                            if package_removed:
+                                total_freed_all += app["size_bytes"]
+                        else:
+                            failed_names.append(safe_app_name)
 
-                if has_apt and removed_names:
-                    current_status[0] = "Cleaning up orphaned dependencies..."
-                    system.run_command(["apt", "autoremove", "-y"], use_sudo=True, capture=True)
+                    if has_apt and removed_names:
+                        current_status[0] = "Cleaning up orphaned dependencies..."
+                        system.run_command(["apt", "autoremove", "-y"], use_sudo=True, capture=True)
             finally:
-                stop_spinner.set()
-                spinner_thread.join(timeout=0.2)
                 sys.stdout.write(f"{CLEAR_LINE}")
                 sys.stdout.flush()
 
