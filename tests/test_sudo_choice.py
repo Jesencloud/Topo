@@ -1,7 +1,5 @@
 from unittest.mock import patch
 
-import pytest
-
 from src.clean import optimize, runner
 from src.core import terminal_state
 
@@ -21,8 +19,7 @@ class FakeStdin:
         return self.keys.pop(0)
 
 
-@pytest.mark.parametrize("module", [runner, optimize])
-def test_sudo_choice_ignores_unrecognized_keys(module):
+def test_sudo_choice_ignores_unrecognized_keys():
     stdin = FakeStdin(["x", "1", "\r"])
 
     with (
@@ -31,11 +28,10 @@ def test_sudo_choice_ignores_unrecognized_keys(module):
         patch.object(terminal_state.termios, "tcsetattr"),
         patch.object(terminal_state.tty, "setraw"),
     ):
-        assert module._read_sudo_choice() == "\r"
+        assert terminal_state.read_sudo_choice() == "\r"
 
 
-@pytest.mark.parametrize("module", [runner, optimize])
-def test_sudo_choice_ignores_escape_sequences(module):
+def test_sudo_choice_ignores_escape_sequences():
     stdin = FakeStdin(["\x1b", "[", "A", " "])
 
     with (
@@ -53,7 +49,7 @@ def test_sudo_choice_ignores_escape_sequences(module):
             ],
         ),
     ):
-        assert module._read_sudo_choice() == " "
+        assert terminal_state.read_sudo_choice() == " "
 
 
 def test_clean_space_skips_clean_without_sudo():
@@ -61,8 +57,8 @@ def test_clean_space_skips_clean_without_sudo():
         return 0, 0, 0
 
     with (
-        patch("src.clean.runner._read_sudo_choice", return_value=" "),
-        patch("src.clean.runner.system.ensure_sudo_session") as mock_sudo,
+        patch("src.core.terminal_state.read_sudo_choice", return_value=" "),
+        patch("src.core.system.ensure_sudo_session") as mock_sudo,
         patch("src.clean.runner.proactive_app_detection", return_value={}),
         patch("src.clean.runner.record_history_session"),
         patch("src.clean.runner.clean_package_manager", side_effect=no_op) as mock_pkg,
@@ -90,8 +86,8 @@ def test_clean_space_skips_clean_without_sudo():
 def test_clean_sudo_cancel_prompt_has_no_trailing_blank_line():
     with (
         patch("builtins.print") as mock_print,
-        patch("src.clean.runner._read_sudo_choice", return_value="\r"),
-        patch("src.clean.runner.system.ensure_sudo_session", return_value=False),
+        patch("src.core.terminal_state.read_sudo_choice", return_value="\r"),
+        patch("src.core.system.ensure_sudo_session", return_value=False),
         patch("src.clean.runner.proactive_app_detection", return_value={}),
         patch.object(runner.system, "SUDO_CANCELLED", True),
     ):
@@ -111,8 +107,8 @@ def test_optimize_sudo_cancel_prompt_has_no_trailing_blank_line():
     with (
         patch("builtins.print") as mock_print,
         patch("src.clean.optimize.os.system"),
-        patch("src.clean.optimize._read_sudo_choice", return_value="\r"),
-        patch("src.clean.optimize.system.ensure_sudo_session", return_value=False),
+        patch("src.core.terminal_state.read_sudo_choice", return_value="\r"),
+        patch("src.core.system.ensure_sudo_session", return_value=False),
         patch.object(optimize.system, "SUDO_CANCELLED", True),
     ):
         optimize.optimize_system(dry_run=False)

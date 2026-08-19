@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 from src.clean.optimize import (
     OptimizationRegistry,
     _points_at_transient_mount,
+    opt_log,
     optimize_system,
     run_autostart_cleanup,
     run_broken_symlink_cleanup,
@@ -21,6 +22,14 @@ from src.clean.optimize import (
     vacuum_single_db,
 )
 from src.core.system import CommandResult
+
+
+def test_opt_log_uses_failure_icon_when_unsuccessful(capsys):
+    opt_log("task failed", success=False)
+
+    output = capsys.readouterr().out
+    assert "✗ task failed" in output
+    assert "✓ task failed" not in output
 
 
 def test_registered_optimization_tasks_are_runnable_entry_points():
@@ -45,7 +54,7 @@ def test_optimize_system_caps_worker_pool_and_reports_task_failures(capsys):
     tasks = [failing_task] * 6
     with (
         patch.object(OptimizationRegistry, "tasks", tasks),
-        patch("src.clean.optimize._authenticate_sudo_session", return_value=True),
+        patch("src.core.system.authenticate_sudo_session", return_value=True),
         patch(
             "src.clean.optimize.ThreadPoolExecutor",
             wraps=__import__(

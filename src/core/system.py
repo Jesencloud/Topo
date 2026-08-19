@@ -7,7 +7,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .constants import BOLD, CLEAR_LINE, ERASE_BELOW, RESET, YELLOW
+from . import terminal_state
+from .constants import (
+    BOLD,
+    CLEAR_LINE,
+    ERASE_BELOW,
+    GRAY,
+    GREEN,
+    PURPLE,
+    RED,
+    RESET,
+    YELLOW,
+)
 
 _SAFE_USERNAME_RE = re.compile(r"[a-z_][a-z0-9_-]{0,31}\$?\Z")
 _SAFE_SUDOERS_PATH_RE = re.compile(r"/[A-Za-z0-9._+/-]*\Z")
@@ -106,6 +117,36 @@ def has_sudo():
     """Check if current user has active sudo session"""
     res = run_command(["-n", "true"], use_sudo=True)
     return res.ok
+
+
+def authenticate_sudo_session(dry_run: bool, *, request_subject: str, action: str) -> bool:
+    """Ask for consent and pre-authorize sudo for a named operation."""
+    if dry_run:
+        return True
+
+    action_title = action.capitalize()
+    print(
+        f"{PURPLE}➔{RESET} {request_subject} need sudo. "
+        f"{GREEN}Enter{RESET} continue, {GRAY}Space{RESET} skip:",
+        end=" ",
+        flush=True,
+    )
+    choice = terminal_state.read_sudo_choice()
+    print()
+    if choice in (" ", "\x1b"):
+        return False
+
+    if not ensure_sudo_session(
+        f"{PURPLE}➔{RESET} System {action} requires admin access\n{PURPLE}➔{RESET} Password: "
+    ):
+        if SUDO_CANCELLED:
+            print(f" {YELLOW}⚠️  {action_title} cancelled by user.{RESET}", end="")
+        else:
+            print(f" {RED}✗{RESET} Authorization failed. {action_title} skipped.\n")
+        return False
+
+    print(f"{GREEN}ꗃ{RESET} Authorization successful.\n")
+    return True
 
 
 def ensure_sudo_session(prompt: str | None = None):

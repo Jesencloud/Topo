@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
-from ..core import system, terminal_state
+from ..core import system
 from ..core.constants import (
     BOLD,
     CLEAR_LINE,
@@ -21,7 +21,6 @@ from ..core.constants import (
     RED,
     RESET,
     SQLITE_PROGRESS_INTERVAL,
-    YELLOW,
 )
 from ..core.desktop_entry import get_desktop_exec_command
 from ..core.file_ops import (
@@ -50,15 +49,12 @@ def opt_log(message, success=True, skipped=False):
         icon = f"{GRAY}◎{RESET}"
         msg = f"{GRAY}{message} · skipped{RESET}"
     else:
-        icon = f"{GREEN}✓{RESET}"
+        icon = f"{GREEN}✓{RESET}" if success else f"{RED}✗{RESET}"
         msg = f"{message}"
 
     with print_lock:
         # Use CLEAR_LINE to cleanly overwrite the running spinner line without collision
         print(f"{CLEAR_LINE}  {icon} {msg}")
-
-
-_read_sudo_choice = terminal_state.read_sudo_choice
 
 
 class OptimizationRegistry:
@@ -688,38 +684,14 @@ def run_package_repo_refresh(dry_run=False):
     return None
 
 
-def _authenticate_sudo_session(dry_run: bool) -> bool:
-    if dry_run:
-        return True
-
-    print(
-        f"{PURPLE}➔{RESET} Optimization tasks need sudo. "
-        f"{GREEN}Enter{RESET} continue, {GRAY}Space{RESET} skip:",
-        end=" ",
-        flush=True,
-    )
-    choice = _read_sudo_choice()
-    print()
-    if choice in (" ", "\x1b"):
-        return False
-    if not system.ensure_sudo_session(
-        f"{PURPLE}➔{RESET} System optimization requires admin access\n{PURPLE}➔{RESET} Password: "
-    ):
-        if system.SUDO_CANCELLED:
-            print(f" {YELLOW}⚠️  Optimization cancelled by user.{RESET}", end="")
-        else:
-            print(f" {RED}✗{RESET} Authorization failed. Optimization skipped.\n")
-        return False
-    print(f"{GREEN}ꗃ{RESET} Authorization successful.\n")
-    return True
-
-
 def optimize_system(dry_run: bool = False) -> bool | None:
     sys.stdout.write(CLEAR_SCREEN)
     sys.stdout.flush()
     print(f"\n{PURPLE}System Optimization{RESET}\n")
 
-    if not _authenticate_sudo_session(dry_run):
+    if not system.authenticate_sudo_session(
+        dry_run, request_subject="Optimization tasks", action="optimization"
+    ):
         return False
 
     start_time = time.time()

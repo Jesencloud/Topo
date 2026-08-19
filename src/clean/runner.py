@@ -6,16 +6,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from ..core import system, terminal_state
+from ..core import system
 from ..core.constants import (
     BLUE,
     GRAY,
     GREEN,
     PURPLE,
-    RED,
     RESET,
     THEME_TITLE,
-    YELLOW,
 )
 from ..core.file_ops import bytes_to_human
 from ..core.history import record_history_session
@@ -31,8 +29,6 @@ from .system import (
     clean_zombies,
 )
 from .user import clean_user_data
-
-_read_sudo_choice = terminal_state.read_sudo_choice
 
 
 @dataclass(frozen=True)
@@ -82,36 +78,6 @@ class TaskRegistry:
         ]
 
 
-def _authenticate_sudo_session(dry_run: bool) -> bool:
-    """Pre-authorizes sudo to prevent progress interruptions."""
-    if dry_run:
-        return True
-
-    print(
-        f"{PURPLE}➔{RESET} System caches need sudo. "
-        f"{GREEN}Enter{RESET} continue, {GRAY}Space{RESET} skip:",
-        end=" ",
-        flush=True,
-    )
-    choice = _read_sudo_choice()
-    print()
-
-    if choice in (" ", "\x1b"):
-        return False
-
-    if not system.ensure_sudo_session(
-        f"{PURPLE}➔{RESET} System cleanup requires admin access\n{PURPLE}➔{RESET} Password: "
-    ):
-        if system.SUDO_CANCELLED:
-            print(f" {YELLOW}⚠️  Cleanup cancelled by user.{RESET}", end="")
-        else:
-            print(f" {RED}✗{RESET} Authorization failed. Cleanup skipped.\n")
-        return False
-
-    print(f"{GREEN}ꗃ{RESET} Authorization successful.\n")
-    return True
-
-
 def _print_cleanup_summary(
     dry_run: bool,
     total_size: int,
@@ -152,7 +118,9 @@ def run_clean(dry_run: bool = False) -> bool | None:
         f"{GRAY}● Use 'topo clean --dry-run' to preview, 'topo whitelist --help' for whitelist details.{RESET}"
     )
 
-    if not _authenticate_sudo_session(dry_run):
+    if not system.authenticate_sudo_session(
+        dry_run, request_subject="System caches", action="cleanup"
+    ):
         return False
 
     session_command = "clean --dry-run" if dry_run else "clean"
