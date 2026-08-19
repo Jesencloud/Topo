@@ -342,14 +342,18 @@ def _execute_main_router(args, dry_run):
             STATUS_ACTION: lambda: _run_terminal_tui_command(show_status),
         }
         with alternate_screen():
-            while True:
-                choice = main_menu()
+            terminal_state.hide_cursor()
+            try:
+                while True:
+                    choice = main_menu()
 
-                if choice == QUIT_ACTION:
-                    break
-                action = menu_routes.get(choice)
-                if action and not action():
-                    break
+                    if choice == QUIT_ACTION:
+                        break
+                    action = menu_routes.get(choice)
+                    if action and not action():
+                        break
+            finally:
+                terminal_state.show_cursor()
         return
 
     # CLI Mode Execution

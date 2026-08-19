@@ -19,6 +19,7 @@ _installed = False
 _previous_handlers: dict[int, Any] = {}
 _raw_states: list[tuple[int, Any]] = []
 _alternate_screen_depth = 0
+_cursor_hidden_depth = 0
 _cursor_hidden = False
 _mouse_tracking_enabled = False
 
@@ -73,15 +74,21 @@ def exit_alternate_screen() -> None:
 
 
 def hide_cursor() -> None:
-    global _cursor_hidden
+    global _cursor_hidden, _cursor_hidden_depth
+    _cursor_hidden_depth += 1
     _cursor_hidden = True
-    _write(HIDE_CURSOR)
+    if _cursor_hidden_depth == 1:
+        _write(HIDE_CURSOR)
 
 
 def show_cursor() -> None:
-    global _cursor_hidden
-    _cursor_hidden = False
-    _write(SHOW_CURSOR)
+    global _cursor_hidden, _cursor_hidden_depth
+    if _cursor_hidden_depth <= 0:
+        return
+    _cursor_hidden_depth -= 1
+    _cursor_hidden = _cursor_hidden_depth > 0
+    if _cursor_hidden_depth == 0:
+        _write(SHOW_CURSOR)
 
 
 def enable_mouse_tracking() -> None:
@@ -97,7 +104,7 @@ def disable_mouse_tracking() -> None:
 
 
 def reset_terminal(force: bool = False) -> None:
-    global _alternate_screen_depth, _cursor_hidden, _mouse_tracking_enabled
+    global _alternate_screen_depth, _cursor_hidden, _cursor_hidden_depth, _mouse_tracking_enabled
 
     active = (
         bool(_raw_states)
@@ -114,6 +121,7 @@ def reset_terminal(force: bool = False) -> None:
 
     _write(MOUSE_DISABLE + SHOW_CURSOR + RESET_GRAPHICS + EXIT_ALTERNATE_SCREEN)
     _alternate_screen_depth = 0
+    _cursor_hidden_depth = 0
     _cursor_hidden = False
     _mouse_tracking_enabled = False
 

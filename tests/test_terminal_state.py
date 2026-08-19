@@ -8,6 +8,7 @@ from src.core import terminal_state
 def _reset_terminal_state():
     terminal_state._raw_states.clear()
     terminal_state._alternate_screen_depth = 0
+    terminal_state._cursor_hidden_depth = 0
     terminal_state._cursor_hidden = False
     terminal_state._mouse_tracking_enabled = False
 
@@ -91,3 +92,19 @@ def test_exit_without_active_alternate_screen_is_silent(monkeypatch):
 
     assert writes == []
     assert terminal_state._alternate_screen_depth == 0
+
+
+def test_nested_cursor_hide_does_not_flash_visible_between_views(monkeypatch):
+    _reset_terminal_state()
+    writes = _capture_writes(monkeypatch)
+
+    terminal_state.hide_cursor()  # outer menu span
+    terminal_state.hide_cursor()  # selector span
+    terminal_state.show_cursor()  # selector closes: remain hidden
+
+    assert writes == [terminal_state.HIDE_CURSOR]
+    assert terminal_state._cursor_hidden_depth == 1
+    assert terminal_state._cursor_hidden is True
+
+    terminal_state.show_cursor()
+    assert writes == [terminal_state.HIDE_CURSOR, terminal_state.SHOW_CURSOR]
