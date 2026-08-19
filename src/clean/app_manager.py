@@ -1571,7 +1571,7 @@ def run_uninstall():
             if removed_names:
                 ScanCache.clear()
                 UninstallManager.clear_scan_cache()
-            print("=" * 70)
+            print(f"\n{'=' * 70}")
             print(f"{BLUE}Uninstall complete{RESET}")
             names_str = ", ".join(removed_names) if removed_names else "none"
             msg = f"Removed {len(removed_names)} app(s), freed {GREEN}"

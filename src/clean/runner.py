@@ -91,7 +91,7 @@ def _print_cleanup_summary(
     print(f"{BLUE}{status_text}{RESET}")
 
     if category_results:
-        print(f"\n{GRAY}Breakdown:{RESET}")
+        print(f"Breakdown:{RESET}")
         for name, size, items in category_results:
             print(f"  • {name:<25} {GREEN}{bytes_to_human(size):>10}{RESET} ({items} items)")
 

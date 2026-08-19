@@ -106,7 +106,7 @@ def run_install_link(silent=False):
 
     if not silent and (in_path or configured):
         print(
-            f"\n  {GREEN}✓{RESET} {GRAY}System setup complete. '{BOLD}topo{RESET}{GRAY}' is ready to use!{RESET}"
+            f"  {GREEN}✓{RESET} {GRAY}System setup complete. '{BOLD}topo{RESET}{GRAY}' is ready to use!{RESET}"
         )
 
     return True
