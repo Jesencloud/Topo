@@ -337,7 +337,7 @@ def test_analyze_space_then_enter_deletes_selected_batch():
 
 def test_analyze_del_no_longer_deletes_selected_batch():
     sel = AnalyzeSelector("t", _analyze_items(), can_select=True)
-    action, _ = drive(sel, [Navigator.SPACE, Navigator.DEL, Navigator.ESC])
+    action, _ = drive(sel, [Navigator.SPACE, "\x7f", Navigator.ESC])
     assert action == "QUIT"
     assert sel.selected_items == {0}
 

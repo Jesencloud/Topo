@@ -22,4 +22,3 @@ run_package_repo_refresh
 exc_tb
 exc_type
 exc_val
-DEL

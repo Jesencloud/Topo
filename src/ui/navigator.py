@@ -411,7 +411,6 @@ class Navigator:
     ENTER = ("\r", "\n")
     ESC = "\x1b"
     SPACE = " "
-    DEL = "\x7f"
     MOUSE_DISABLE = terminal_state.MOUSE_DISABLE
     MOUSE_ENABLE = terminal_state.MOUSE_ENABLE
     _last_size = None
@@ -606,34 +605,26 @@ class Navigator:
     @staticmethod
     def play_click():
         """Plays a subtle navigation sound."""
-        if Navigator.is_muted:
-            return
-        player = Navigator._get_sound_player("click")
-        if player == "bell":
-            sys.stdout.write("\a")
-            sys.stdout.flush()
-        else:
-            try:
-                subprocess.Popen(player, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            except (OSError, subprocess.SubprocessError):
-                sys.stdout.write("\a")
-                sys.stdout.flush()
+        Navigator._play_sound("click", 1)
 
     @staticmethod
     def play_delete():
         """Plays a distinct sound for deletion or uninstallation."""
+        Navigator._play_sound("delete", 2)
+
+    @staticmethod
+    def _play_sound(sound_name: str, fallback_bells: int) -> None:
         if Navigator.is_muted:
             return
-        player = Navigator._get_sound_player("delete")
+        player = Navigator._get_sound_player(sound_name)
         if player == "bell":
-            # For delete, we can play bell twice for a different feel if no wav
-            sys.stdout.write("\a\a")
+            sys.stdout.write("\a" * fallback_bells)
             sys.stdout.flush()
         else:
             try:
                 subprocess.Popen(player, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except (OSError, subprocess.SubprocessError):
-                sys.stdout.write("\a\a")
+                sys.stdout.write("\a" * fallback_bells)
                 sys.stdout.flush()
 
     @staticmethod

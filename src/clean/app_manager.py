@@ -1097,7 +1097,7 @@ class UninstallManager:
 
         def _process_single_app(app: dict[str, Any]):
             residue_paths = self.find_residue_paths(
-                app["id"], app["name"], app["type"], pre_scanned_entries=pre_scanned_entries
+                app["id"], app["name"], pre_scanned_entries=pre_scanned_entries
             )
             inst_dir_val = app.get("install_dir")
             target_inst_dir: Path | None = Path(inst_dir_val).resolve() if inst_dir_val else None
@@ -1160,7 +1160,6 @@ class UninstallManager:
         self,
         app_id: str,
         app_name: str,
-        app_type: str,
         pre_scanned_entries: dict[Path, _ResidueEntryIndex] | None = None,
     ) -> list[Path]:
         """Finds all data/config/cache paths associated with an app."""
@@ -1493,7 +1492,7 @@ def run_uninstall():
         selected_apps = [apps[i] for i in selected_indices]
         all_targets = []
         for app in selected_apps:
-            app_paths = manager.find_residue_paths(app["id"], app["name"], app["type"])
+            app_paths = manager.find_residue_paths(app["id"], app["name"])
             is_running = False
             for proc in manager._candidate_process_names(app, app_paths):
                 try:

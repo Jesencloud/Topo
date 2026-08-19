@@ -326,12 +326,12 @@ def _main():
 
     if args.command in LOCK_REQUIRED_COMMANDS:
         with SingleInstanceLock():
-            _execute_main_router(args, dry_run, wl_parser)
+            _execute_main_router(args, dry_run)
     else:
-        _execute_main_router(args, dry_run, wl_parser)
+        _execute_main_router(args, dry_run)
 
 
-def _execute_main_router(args, dry_run, wl_parser):
+def _execute_main_router(args, dry_run):
     # If no command is provided, enter TUI
     if args.command is None:
         menu_routes = {

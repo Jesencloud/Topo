@@ -142,7 +142,7 @@ def test_find_residue_paths(test_env):
         patch("pathlib.Path.home", return_value=test_env),
         patch("src.clean.app_manager.safe_remove", return_value=(True, "OK")),
     ):
-        paths = mgr.find_residue_paths("myapp", "MyApp", "DNF")
+        paths = mgr.find_residue_paths("myapp", "MyApp")
         assert any("myapp" in str(p).lower() for p in paths)
 
 
@@ -166,9 +166,7 @@ def test_residue_shared_indexes_are_scanned_once(test_env):
                 "src.clean.app_manager.os.scandir", side_effect=AssertionError("rescanned roots")
             ),
         ):
-            paths = mgr.find_residue_paths(
-                "com.example.myapp", "MyApp", "Flatpak", pre_scanned_entries=index
-            )
+            paths = mgr.find_residue_paths("com.example.myapp", "MyApp", pre_scanned_entries=index)
 
     assert icon in paths
     assert service in paths
@@ -313,9 +311,9 @@ def test_find_residue_paths_ignores_generic_short_tail_tokens(test_env):
         patch("pathlib.Path.home", return_value=test_env),
         patch("src.clean.app_manager.safe_remove", return_value=(True, "OK")),
     ):
-        assert mgr.find_residue_paths("org.example.go", "Example Go", "Flatpak") == []
-        assert mgr.find_residue_paths("org.example.code", "Example Code", "Flatpak") == []
-        assert mgr.find_residue_paths("org.example.id", "Example Id", "Flatpak") == []
+        assert mgr.find_residue_paths("org.example.go", "Example Go") == []
+        assert mgr.find_residue_paths("org.example.code", "Example Code") == []
+        assert mgr.find_residue_paths("org.example.id", "Example Id") == []
 
 
 def test_find_residue_paths_allows_specific_prefix_and_substring(test_env):
@@ -330,8 +328,8 @@ def test_find_residue_paths_allows_specific_prefix_and_substring(test_env):
         patch("pathlib.Path.home", return_value=test_env),
         patch("src.clean.app_manager.safe_remove", return_value=(True, "OK")),
     ):
-        telegram_paths = mgr.find_residue_paths("org.telegram.desktop", "Telegram", "Flatpak")
-        myapp_paths = mgr.find_residue_paths("com.example.myapp", "MyApp", "Flatpak")
+        telegram_paths = mgr.find_residue_paths("org.telegram.desktop", "Telegram")
+        myapp_paths = mgr.find_residue_paths("com.example.myapp", "MyApp")
 
     assert telegram_cache in telegram_paths
     assert myapp_state in myapp_paths
@@ -349,8 +347,8 @@ def test_find_residue_paths_skips_official_only_apps(test_env):
         patch("pathlib.Path.home", return_value=test_env),
         patch("src.clean.app_manager.safe_remove", return_value=(True, "OK")),
     ):
-        assert mgr.find_residue_paths("tailscale", "Tailscale VPN", "DNF") == []
-        assert mgr.find_residue_paths("org.fcitx.Fcitx5", "Fcitx5", "Flatpak") == []
+        assert mgr.find_residue_paths("tailscale", "Tailscale VPN") == []
+        assert mgr.find_residue_paths("org.fcitx.Fcitx5", "Fcitx5") == []
 
 
 @patch("shutil.which")
@@ -775,9 +773,9 @@ def test_find_residue_paths_never_targets_xdg_user_dirs(test_env):
         patch("pathlib.Path.home", return_value=test_env),
         patch("src.clean.app_manager.safe_remove", return_value=(True, "OK")),
     ):
-        music_paths = mgr.find_residue_paths("org.gnome.Music", "Music", "Flatpak")
-        videos_paths = mgr.find_residue_paths("org.gnome.Totem", "Videos", "Flatpak")
-        docs_paths = mgr.find_residue_paths("com.example.Documents", "Documents", "Flatpak")
+        music_paths = mgr.find_residue_paths("org.gnome.Music", "Music")
+        videos_paths = mgr.find_residue_paths("org.gnome.Totem", "Videos")
+        docs_paths = mgr.find_residue_paths("com.example.Documents", "Documents")
 
     assert music_dir not in music_paths
     assert videos_dir not in videos_paths
@@ -881,7 +879,7 @@ def test_find_residue_paths_skips_visible_home_workspace(test_env):
         patch("pathlib.Path.home", return_value=test_env),
         patch("src.clean.app_manager.safe_remove", return_value=(True, "OK")),
     ):
-        paths = mgr.find_residue_paths("com.example.notes", "Notes", "Flatpak")
+        paths = mgr.find_residue_paths("com.example.notes", "Notes")
 
     assert workspace not in paths
     assert hidden in paths
