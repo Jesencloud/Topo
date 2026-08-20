@@ -614,6 +614,28 @@ def test_analyze_render_shows_available_page_directions():
     assert "↓ More items below" not in last_page
 
 
+def test_analyze_page_numbers_accumulate_but_digits_select_current_page():
+    selector = AnalyzeSelector("t", _analyze_items(30), can_select=True)
+    action, _ = drive(selector, [Navigator.PGDN, "15", "16", "30", "31", Navigator.ESC])
+
+    assert action == "QUIT"
+    assert selector.selected_items == {15, 29}
+
+    selector.current_page = 1
+    selector.selected_index = 15
+    with (
+        patch(
+            "src.ui.navigator.shutil.get_terminal_size",
+            return_value=os.terminal_size((100, 24)),
+        ),
+        patch("sys.stdout.write") as write,
+        patch("sys.stdout.flush"),
+    ):
+        selector.render()
+    visible = ANSI_CSI_RE.sub("", write.call_args.args[0])
+    assert "16." in visible
+
+
 def test_analyze_delete_confirm_mentions_uncalculated_sizes():
     items = [
         {

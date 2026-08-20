@@ -803,7 +803,7 @@ class AnalyzeSelector(_PagedSelector):
 
         total_disk = bytes_to_human(shutil.disk_usage("/").total)
         hint = (
-            f"{GRAY}Select a location to explore (Type numbers or Space to select):{RESET}"
+            f"{GRAY}Select a location to explore (Type numbers for current page or Space to select):{RESET}"
             if self.can_select
             else f"{GRAY}Select a category to explore (Total: {total_disk}):{RESET}"
         )
@@ -834,7 +834,7 @@ class AnalyzeSelector(_PagedSelector):
                 is_selected = i in self.selected_items
                 cursor = "\033[1;36m▶\033[0m" if is_hover else " "
                 if self.can_select:
-                    num = (i - start) + 1
+                    num = i + 1
                     checkbox_str = (
                         f"\033[1;32m✓ {num:2}.{RESET} "
                         if is_selected
@@ -877,7 +877,7 @@ class AnalyzeSelector(_PagedSelector):
         if end < total_len:
             page_hints.append("↓ More items below")
         if page_hints:
-            buf.append(f"   {GRAY}{' | '.join(page_hints)}{RESET}\033[K\n")
+            buf.append(f"\n {GRAY}{' | '.join(page_hints)}{RESET}\033[K")
 
         order_icon = "↓" if self.sort_reverse else "↑"
         page_info = f" Page {self.current_page + 1} of {total_pages} |" if total_pages > 1 else ""
@@ -962,10 +962,11 @@ class AnalyzeSelector(_PagedSelector):
                 elif key.isdigit() and self.can_select:
                     num_str = Navigator.read_number(fd, key)
                     try:
-                        num = int(num_str)
-                        page_offset = 9 if num_str == "0" else num - 1
-                        idx = self.current_page * self.page_size + page_offset
-                        if idx < total_len:
+                        displayed_num = 10 if num_str == "0" else int(num_str)
+                        page_start = self.current_page * self.page_size + 1
+                        page_end = min(page_start + self.page_size - 1, total_len)
+                        if page_start <= displayed_num <= page_end:
+                            idx = displayed_num - 1
                             self._toggle_index_selection(idx)
                     except ValueError:
                         pass
