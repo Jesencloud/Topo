@@ -542,7 +542,7 @@ class Navigator:
     def wait_for_return(message=None):
         """Standardized non-blocking return/exit prompt."""
         if message is None:
-            msg_str = f"Press {GREEN}Enter{RESET} {WHITE}to return to Main Menu{RESET}, {CYAN}ESC{RESET} {WHITE}to exit...{RESET}"
+            msg_str = f"Press {GREEN}Enter{RESET} {WHITE}to return to Main Menu{RESET}, {GREEN}ESC{RESET} {WHITE}to exit Topo...{RESET}"
         else:
             msg_str = message
         print(f"\n{msg_str} ", end="", flush=True)

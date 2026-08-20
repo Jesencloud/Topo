@@ -154,6 +154,10 @@ def read_sudo_choice() -> str:
         tty.setraw(fd)
         while True:
             choice = sys.stdin.read(1)
+            if choice == "\x03":
+                # Raw mode turns Ctrl+C into a byte instead of SIGINT. Restore
+                # the terminal in finally, then let the caller cancel cleanly.
+                raise KeyboardInterrupt
             if choice in ("\r", "\n", " "):
                 return choice
             if choice == "\x1b":

@@ -12,7 +12,6 @@ from .constants import (
     BOLD,
     CLEAR_LINE,
     ERASE_BELOW,
-    GRAY,
     GREEN,
     PURPLE,
     RED,
@@ -121,17 +120,23 @@ def has_sudo():
 
 def authenticate_sudo_session(dry_run: bool, *, request_subject: str, action: str) -> bool:
     """Ask for consent and pre-authorize sudo for a named operation."""
+    global SUDO_CANCELLED
     if dry_run:
         return True
 
     action_title = action.capitalize()
     print(
         f"{PURPLE}➔{RESET} {request_subject} need sudo. "
-        f"{GREEN}Enter{RESET} continue, {GRAY}Space{RESET} skip:",
+        f"{GREEN}Enter{RESET} continue, {GREEN}Space {RESET}or{GREEN} ESC{RESET} cancel:",
         end=" ",
         flush=True,
     )
-    choice = terminal_state.read_sudo_choice()
+    try:
+        choice = terminal_state.read_sudo_choice()
+    except KeyboardInterrupt:
+        SUDO_CANCELLED = True
+        print()
+        return False
     print()
     if choice in (" ", "\x1b"):
         return False

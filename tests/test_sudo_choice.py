@@ -1,5 +1,7 @@
 from unittest.mock import patch
 
+import pytest
+
 from src.clean import optimize, runner
 from src.core import terminal_state
 
@@ -29,6 +31,38 @@ def test_sudo_choice_ignores_unrecognized_keys():
         patch.object(terminal_state.tty, "setraw"),
     ):
         assert terminal_state.read_sudo_choice() == "\r"
+
+
+def test_sudo_choice_ctrl_c_cancels_and_restores_terminal():
+    stdin = FakeStdin(["\x03"])
+
+    with (
+        patch.object(terminal_state.sys, "stdin", stdin),
+        patch.object(terminal_state.termios, "tcgetattr", return_value=["old"]),
+        patch.object(terminal_state.tty, "setraw"),
+        patch.object(terminal_state, "restore_raw_state") as restore_raw_state,
+        pytest.raises(KeyboardInterrupt),
+    ):
+        terminal_state.read_sudo_choice()
+
+    restore_raw_state.assert_called_once_with(0, ["old"])
+
+
+def test_sudo_confirmation_ctrl_c_cancels_before_password_prompt():
+    with (
+        patch("src.core.terminal_state.read_sudo_choice", side_effect=KeyboardInterrupt),
+        patch("src.core.system.ensure_sudo_session") as ensure_sudo_session,
+        patch("builtins.print"),
+    ):
+        assert (
+            runner.system.authenticate_sudo_session(
+                False, request_subject="System caches", action="cleanup"
+            )
+            is False
+        )
+
+    assert runner.system.SUDO_CANCELLED is True
+    ensure_sudo_session.assert_not_called()
 
 
 def test_sudo_choice_ignores_escape_sequences():

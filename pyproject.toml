@@ -2,6 +2,7 @@
 # 指定代码目标版本
 target-version = "py310"
 line-length = 100
+exclude = [".vulture_whitelist.py"]
 
 [tool.ruff.lint]
 # 启用的规则集
