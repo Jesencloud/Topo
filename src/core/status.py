@@ -648,4 +648,5 @@ def show_status():
     icon, color, verdict = get_system_health_assessment(
         temp_val, cpu_load, mem_percent, disk_percent, battery_data
     )
-    print(f"\n{color}{icon}{RESET} {verdict}\n")
+    status_row = _status_row(icon, "Overall Status:", verdict)
+    print(status_row.replace(icon, f"{color}{icon}{RESET}", 1))
