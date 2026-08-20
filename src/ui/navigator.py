@@ -835,15 +835,16 @@ class AnalyzeSelector(_PagedSelector):
                 cursor = "\033[1;36m▶\033[0m" if is_hover else " "
                 if self.can_select:
                     num = (i - start) + 1
-                    num_str = f" {num}" if num < 10 else str(num)
                     checkbox_str = (
-                        f"\033[1;32m✓ {num_str}.\033[0m "
+                        f"\033[1;32m✓ {num:2}.{RESET} "
                         if is_selected
-                        else f"{GRAY}○{RESET} {num_str}."
+                        else f"{GRAY}○{RESET} {num:2}. "
                     )
-                    checkbox_str = f"{checkbox_str} "
                 else:
-                    checkbox_str = f" {i + 1:2}. "
+                    # Keep the non-selectable root rows the same width as the
+                    # selectable child rows so all columns remain fixed while
+                    # drilling into a directory.
+                    checkbox_str = f"  {i + 1:2}. "
 
                 size_known = item.get("size_known", True)
                 if size_known:

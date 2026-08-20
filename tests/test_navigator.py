@@ -428,6 +428,39 @@ def test_analyze_render_keeps_space_between_icon_and_name():
     assert "📄  file.txt" not in visible_output
 
 
+def test_analyze_render_keeps_columns_fixed_between_directory_levels():
+    item = {
+        "name": "folder",
+        "path": Path("/tmp/folder"),
+        "size": 100,
+        "percent": 12.5,
+        "icon": "📄",
+    }
+
+    def render_row(can_select):
+        selector = AnalyzeSelector("t", [item.copy()], can_select=can_select)
+        with (
+            patch(
+                "src.ui.navigator.shutil.get_terminal_size",
+                return_value=os.terminal_size((100, 24)),
+            ),
+            patch("sys.stdout.write") as write,
+            patch("sys.stdout.flush"),
+        ):
+            selector.render()
+
+        rows = [
+            ANSI_CSI_RE.sub("", row) for row in re.split(r"\x1b\[\d+;1H", write.call_args.args[0])
+        ]
+        return next(row for row in rows if "folder" in row)
+
+    root_row = render_row(can_select=False)
+    child_row = render_row(can_select=True)
+
+    for token in ("12.5%", "📄", "folder"):
+        assert root_row.index(token) == child_row.index(token)
+
+
 def test_analyze_render_shows_a_bound_for_a_tiny_share():
     """A file too small to reach 0.1% must not be presented as 0.0% of the disk.
 
