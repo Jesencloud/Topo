@@ -871,16 +871,24 @@ class AnalyzeSelector(_PagedSelector):
                     f"{cursor} {checkbox_str}{RESET}{bar_str}{percent_str}  {icon}{gap}{style}{name_padded}{RESET} | {style}{size_str:>10}{RESET}\033[K\n"
                 )
 
+        page_hints = []
+        if start > 0:
+            page_hints.append("↑ More items above")
+        if end < total_len:
+            page_hints.append("↓ More items below")
+        if page_hints:
+            buf.append(f"   {GRAY}{' | '.join(page_hints)}{RESET}\033[K\n")
+
         order_icon = "↓" if self.sort_reverse else "↑"
-        page_info = f" Page {self.current_page + 1}/{total_pages} |" if total_pages > 1 else ""
+        page_info = f" Page {self.current_page + 1} of {total_pages} |" if total_pages > 1 else ""
 
         if self.can_select:
             prompts = [
-                f" {GRAY}{page_info} ↑↓←→ | PgUp/PgDn: Page | A: All | F: Folder | R: Reload | S: Sort {order_icon} | Space: Select{RESET}"
+                f"{GRAY}{page_info} ↑↓←→ | PgUp/PgDn: Page | A: All | F: Open Location | R: Reload | S: Sort {order_icon} | Space: Select{RESET}"
             ]
         else:
             prompts = [
-                f" {GRAY}{page_info} ↑↓→ | F: Folder | R: Reload | S: Sort {order_icon}{RESET}"
+                f"{GRAY}{page_info} ↑↓→ | F: Enter Folder | R: Reload | S: Sort {order_icon}{RESET}"
             ]
 
         buf.append("\n\033[K\n")

@@ -585,6 +585,35 @@ def test_analyze_render_shows_unknown_folder_size():
     assert "|         --" in visible_output
 
 
+def test_analyze_render_shows_available_page_directions():
+    selector = AnalyzeSelector("t", _analyze_items(31), can_select=True)
+
+    def render_page(page):
+        selector.current_page = page
+        selector.selected_index = page * selector.page_size
+        with (
+            patch(
+                "src.ui.navigator.shutil.get_terminal_size",
+                return_value=os.terminal_size((100, 24)),
+            ),
+            patch("sys.stdout.write") as write,
+            patch("sys.stdout.flush"),
+        ):
+            selector.render()
+        return ANSI_CSI_RE.sub("", write.call_args.args[0])
+
+    first_page = render_page(0)
+    assert "↓ More items below" in first_page
+    assert "↑ More items above" not in first_page
+
+    middle_page = render_page(1)
+    assert "↑ More items above | ↓ More items below" in middle_page
+
+    last_page = render_page(2)
+    assert "↑ More items above" in last_page
+    assert "↓ More items below" not in last_page
+
+
 def test_analyze_delete_confirm_mentions_uncalculated_sizes():
     items = [
         {
