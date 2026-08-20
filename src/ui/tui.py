@@ -16,7 +16,7 @@ def render_banner():
   {EARTH}⠿   ⠸⠤⠇ ⢸⠉⠁ ⠸⠤⠇{RESET}   {GREEN}●{RESET}{WHITE} v{TOPO_VERSION} is digging deeper 🦡{RESET}"""
 
 
-def main_menu():
+def main_menu(selected_index=0):
     options = [
         (CLEAN_ACTION, "1. Clean", "Free up disk space"),
         (UNINSTALL_ACTION, "2. Uninstall", "Remove apps completely"),
@@ -30,6 +30,7 @@ def main_menu():
         [(label, desc) for _, label, desc in options],
         show_banner=render_banner,
     )
+    menu.selected_index = max(0, min(selected_index, len(menu.options) - 1))
     choice_idx = menu.run()
 
     if choice_idx is None:

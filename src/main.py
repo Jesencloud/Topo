@@ -341,14 +341,24 @@ def _execute_main_router(args, dry_run):
             ANALYZE_ACTION: lambda: _run_alternate_tui(run_deep_analysis) or True,
             STATUS_ACTION: lambda: _run_terminal_tui_command(show_status),
         }
+        menu_indices = {
+            CLEAN_ACTION: 0,
+            UNINSTALL_ACTION: 1,
+            OPTIMIZE_ACTION: 2,
+            ANALYZE_ACTION: 3,
+            STATUS_ACTION: 4,
+        }
+        selected_menu_index = 0
         with alternate_screen():
             terminal_state.hide_cursor()
             try:
                 while True:
-                    choice = main_menu()
+                    choice = main_menu(selected_menu_index)
 
                     if choice == QUIT_ACTION:
                         break
+                    if choice in menu_indices:
+                        selected_menu_index = menu_indices[choice]
                     action = menu_routes.get(choice)
                     if action and not action():
                         break
