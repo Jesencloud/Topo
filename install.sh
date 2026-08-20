@@ -143,6 +143,78 @@ PY
 fi
 if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓${NC} ${GRAY}target release ${TARGET_REF}${NC}"; fi
 
+# A repeated curl install should be cheap when the requested release is already
+# complete. Only skip the verified download when every runtime artifact and
+# the launcher/PATH setup match this release; missing, non-executable, or
+# stale pieces fall through to the normal atomic upgrade path below. This
+# lightweight check does not validate binary checksums.
+installed_version_matches() {
+    local target_version="${TARGET_REF#v}"
+    local local_version
+    local link_dir
+    local path_entry
+    local launcher_path
+    local engine_name
+    local export_line
+    local config_path
+    local found_config=false
+
+    [ "$TARGET_REF" != "main" ] || return 1
+    [ -f "$HOME/.topo/VERSION" ] || return 1
+    local_version=$(tr -d '[:space:]' < "$HOME/.topo/VERSION" 2>/dev/null || true)
+    [ "$local_version" = "$target_version" ] || return 1
+    [ -x "$HOME/.topo/topo" ] || return 1
+    [ -f "$HOME/.topo/src/main.py" ] || return 1
+
+    if [ -n "${TOPO_LINK_DIR:-}" ]; then
+        # topo link resolves relative overrides from ~/.topo after activation.
+        path_entry=$(python3 -c 'import os; from pathlib import Path; print(Path(os.environ["TOPO_LINK_DIR"]).expanduser())' </dev/null 2>/dev/null) || return 1
+        if [[ "$path_entry" = /* ]]; then
+            link_dir="$path_entry"
+        else
+            link_dir="$HOME/.topo/$path_entry"
+        fi
+    elif [ "$(id -u)" -eq 0 ]; then
+        link_dir="/usr/local/bin"
+        path_entry="$link_dir"
+    else
+        link_dir="$HOME/.local/bin"
+        path_entry="$link_dir"
+    fi
+    launcher_path="$link_dir/topo"
+    [ -L "$launcher_path" ] || return 1
+    [ "$(readlink -f "$launcher_path" 2>/dev/null || true)" = "$(readlink -f "$HOME/.topo/topo" 2>/dev/null || true)" ] || return 1
+
+    case "$(uname -m)" in
+        x86_64) engine_name="topo-core-x86_64" ;;
+        aarch64|arm64) engine_name="topo-core-aarch64" ;;
+        *) return 1 ;;
+    esac
+    [ -x "$HOME/.topo/src/core/bin/$engine_name" ] || return 1
+
+    if [[ ":${PATH}:" == *":${path_entry}:"* ]]; then
+        return 0
+    fi
+    if [ "$path_entry" = "$HOME/.local/bin" ]; then
+        export_line="export PATH=\"\$HOME/.local/bin:\$PATH\""
+    else
+        export_line="export PATH=\"${path_entry}:\$PATH\""
+    fi
+    for config_path in "$HOME/.bashrc" "$HOME/.zshrc"; do
+        [ -e "$config_path" ] || continue
+        found_config=true
+        grep -Fq "$export_line" "$config_path" 2>/dev/null || return 1
+    done
+    [ "$found_config" = true ]
+}
+
+if installed_version_matches; then
+    if [ "$MINIMAL" = false ]; then
+        echo -e "  ${GREEN}✓${NC} ${GRAY}Topo ${BOLD}v${TARGET_REF#v}${NC}${GRAY} is already installed; skipping download.${NC}"
+    fi
+    exit 0
+fi
+
 # --- Release verification infrastructure (fail-closed) ---------------------
 # Trust anchor: the release key fingerprint is pinned here, so a tampered
 # SHA256SUMS is rejected even when the attacker also controls the manifest and
