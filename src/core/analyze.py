@@ -664,6 +664,8 @@ def run_deep_analysis(target_path: Path | None = None):
     total_scan_size = 0
     needs_scan = True
     scan_reason = "scan"
+    selected_index = 0
+    current_page = 0
 
     while True:
         target_to_scan = current_target or _normalize_scan_path(Path.home())
@@ -707,6 +709,8 @@ def run_deep_analysis(target_path: Path | None = None):
                     results = prev["results"]
                     data = prev["data"]
                     total_scan_size = prev["total_size"]
+                    selected_index = prev.get("selected_index", 0)
+                    current_page = prev.get("current_page", 0)
                     needs_scan = False
                     continue
                 else:
@@ -849,7 +853,15 @@ def run_deep_analysis(target_path: Path | None = None):
             notice=_explore_notice(data),
             sort_mode="name" if data and data.get("is_fast_explore") else "size",
         )
+        # Restore the cursor/page belonging to this view.  Parent views keep
+        # these values on the navigation stack while a child directory is open.
+        selector.selected_index = min(selected_index, max(0, len(results) - 1))
+        selector.current_page = current_page
         action, idx = selector.run()
+        if isinstance(selector.selected_index, int):
+            selected_index = selector.selected_index
+        if isinstance(selector.current_page, int):
+            current_page = selector.current_page
 
         if action == "QUIT":
             break
@@ -860,6 +872,8 @@ def run_deep_analysis(target_path: Path | None = None):
                 results = prev["results"]
                 data = prev["data"]
                 total_scan_size = prev["total_size"]
+                selected_index = prev.get("selected_index", 0)
+                current_page = prev.get("current_page", 0)
                 # Recalculate parent percentages to reflect any deletions done in child
                 if total_scan_size > 0:
                     for r in results:
@@ -896,9 +910,13 @@ def run_deep_analysis(target_path: Path | None = None):
                         "results": results,
                         "data": data,
                         "total_size": total_scan_size,
+                        "selected_index": selected_index,
+                        "current_page": current_page,
                     }
                 )
                 current_target = item["path"]
+                selected_index = 0
+                current_page = 0
                 needs_scan = True
                 scan_reason = "scan"
             elif item["path"].is_file():
