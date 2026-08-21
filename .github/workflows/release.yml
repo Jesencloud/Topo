@@ -254,12 +254,19 @@ jobs:
               ! dpkg-query -W topo >/dev/null 2>&1
               ;;
             rpm-zypper)
+              zypper --non-interactive refresh
+              zypper --non-interactive install python311 python311-pip
+              python3.11 -m pip install packaging
+              ln -sf /usr/bin/python3.11 /usr/local/bin/python3
               zypper --non-interactive install --allow-unsigned-rpm ./dist/packages/topo-*-1.x86_64.rpm
               topo --version
               topo remove
               ! rpm -q topo
               ;;
             rpm-dnf)
+              dnf install -y python3.11 python3.11-pip
+              python3.11 -m pip install packaging
+              ln -sf /usr/bin/python3.11 /usr/local/bin/python3
               dnf install -y ./dist/packages/topo-*-1.x86_64.rpm
               topo --version
               topo remove
