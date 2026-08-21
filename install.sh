@@ -86,17 +86,52 @@ if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓${NC} ${GRAY}python packag
 
 if [ "$MINIMAL" = false ]; then
     PACKAGE_REMOVE_COMMAND=""
-    if command -v rpm >/dev/null 2>&1 && rpm -q topo >/dev/null 2>&1; then
-        PACKAGE_REMOVE_COMMAND="sudo dnf remove topo"
+    PACKAGE_VERSION=""
+    PACKAGE_FORMAT="system package"
+    PACKAGE_REMOVE_METHOD="system package manager"
+    # Warn when another package-managed Topo installation is still present.
+    # A user-space install may take precedence in PATH, but the system copy
+    # remains a second installation source and can cause version confusion.
+    if command -v rpm >/dev/null 2>&1 && rpm -q topo >/dev/null 2>&1 && \
+        rpm -ql topo 2>/dev/null | grep -Fxq '/usr/bin/topo'; then
+        PACKAGE_VERSION="$(rpm -q --qf '%{VERSION}' topo 2>/dev/null || true)"
+        PACKAGE_FORMAT="RPM system package"
+        if command -v zypper >/dev/null 2>&1; then
+            PACKAGE_REMOVE_METHOD="Zypper"
+            PACKAGE_REMOVE_COMMAND="sudo zypper remove topo"
+        elif command -v dnf >/dev/null 2>&1; then
+            PACKAGE_REMOVE_METHOD="DNF"
+            PACKAGE_REMOVE_COMMAND="sudo dnf remove topo"
+        elif command -v yum >/dev/null 2>&1; then
+            PACKAGE_REMOVE_METHOD="YUM"
+            PACKAGE_REMOVE_COMMAND="sudo yum remove topo"
+        else
+            PACKAGE_REMOVE_METHOD="RPM"
+            PACKAGE_REMOVE_COMMAND="sudo rpm -e topo"
+        fi
     elif command -v dpkg-query >/dev/null 2>&1 && \
-        dpkg-query -W -f='${Status}' topo 2>/dev/null | grep -q "install ok installed"; then
-        PACKAGE_REMOVE_COMMAND="sudo apt remove topo"
+        dpkg-query -W -f='${Status}' topo 2>/dev/null | grep -q "install ok installed" && \
+        dpkg-query -L topo 2>/dev/null | grep -Fxq '/usr/bin/topo'; then
+        PACKAGE_VERSION="$(dpkg-query -W -f='${Version}' topo 2>/dev/null | sed 's/-[^-]*$//' || true)"
+        PACKAGE_FORMAT="DEB system package"
+        if command -v apt >/dev/null 2>&1; then
+            PACKAGE_REMOVE_METHOD="APT"
+            PACKAGE_REMOVE_COMMAND="sudo apt remove topo"
+        else
+            PACKAGE_REMOVE_METHOD="APT"
+            PACKAGE_REMOVE_COMMAND="sudo apt-get remove topo"
+        fi
     fi
 
     if [ -n "$PACKAGE_REMOVE_COMMAND" ]; then
-        echo -e "  ${YELLOW}⚠ A system package install of Topo is still registered.${NC}"
-        echo -e "  ${GRAY}It may shadow this script install through an old /usr/bin/topo path.${NC}"
-        echo -e "  ${GRAY}Remove the package install with:${NC} ${BOLD}${PACKAGE_REMOVE_COMMAND}${NC}"
+        if [ -n "$PACKAGE_VERSION" ]; then
+            echo -e "  ${YELLOW}⚠ Topo ${PACKAGE_VERSION} is still installed as an ${PACKAGE_FORMAT}.${NC}"
+        else
+            echo -e "  ${YELLOW}⚠ Topo is still installed as an ${PACKAGE_FORMAT}.${NC}"
+        fi
+        echo -e "  ${GRAY}The 'curl | bash' method installs a separate user copy under ~/.topo.${NC}"
+        echo -e "  ${GRAY}Keeping both installation methods may cause version or command-path confusion.${NC}"
+        echo -e "  ${GRAY}Remove the system package with ${PACKAGE_REMOVE_METHOD}:${NC} ${BOLD}${PACKAGE_REMOVE_COMMAND}${NC}"
         echo -e "  ${GRAY}Then refresh your shell command cache with:${NC} ${BOLD}hash -r${NC}"
     fi
 fi
@@ -526,6 +561,11 @@ if [ "$MINIMAL" = false ]; then
     echo -e "\n${GREEN} ⠶⣶⠶  ⢰⠶⡆ ⢰⠶⡆ ⢰⠶⡆ ${NC}"
     echo -e "${GREEN}  ⠿   ⠸⠤⠇ ⢸⠉⠁ ⠸⠤⠇ ${NC}  ${PURPLE}●${NC} ${GRAY}v${TOPO_VER} is digging deeper 🦡${NC}\n"
     
-    echo -e "${GRAY}Type '${NC}${BOLD}topo${NC}${GRAY}' in your terminal to get started, or '${NC}${BOLD}topo --help${NC}${GRAY}' to explore all commands.${NC}"
-    echo -e "${GRAY}If your shell still tries an old '${NC}/usr/bin/topo${GRAY}' path, run '${NC}hash -r${GRAY}' or reopen the terminal.${NC}"
+    echo -e "${GRAY}Type '${NC}${BOLD}topo${NC}${GRAY}' to get started, or '${NC}${BOLD}topo --help${NC}${GRAY}' to explore all commands.${NC}"
+    if [ -n "$PACKAGE_REMOVE_COMMAND" ]; then
+        echo -e "${YELLOW}⚠ A system package version may still be selected by this shell.${NC}"
+        echo -e "${GRAY}If '${NC}${BOLD}topo --version${NC}${GRAY}' shows the older version, run '${NC}${BOLD}hash -r${NC}${GRAY}' or open a new terminal.${NC}"
+    else
+        echo -e "${GRAY}If your shell still uses an old command path, run '${NC}${BOLD}hash -r${NC}${GRAY}' or reopen the terminal.${NC}"
+    fi
 fi
