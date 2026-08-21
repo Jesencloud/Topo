@@ -8,6 +8,7 @@ if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
     CYAN='\033[1;36m'
     GREEN='\033[0;32m'
     YELLOW='\033[1;33m'
+    EARTH="$YELLOW"
     RED='\033[1;31m'
     GRAY='\033[38;5;244m'
     BOLD='\033[1m'
@@ -17,6 +18,7 @@ else
     CYAN=''
     GREEN=''
     YELLOW=''
+    EARTH=''
     RED=''
     GRAY=''
     BOLD=''
@@ -558,8 +560,8 @@ if [ "$MINIMAL" = false ]; then
         echo -e "  ${GREEN}✓${NC} ${GRAY}Topo ${BOLD}v${TOPO_VER}${NC}${GRAY} installed successfully!${NC}"
     fi
 
-    echo -e "\n${GREEN} ⠶⣶⠶  ⢰⠶⡆ ⢰⠶⡆ ⢰⠶⡆ ${NC}"
-    echo -e "${GREEN}  ⠿   ⠸⠤⠇ ⢸⠉⠁ ⠸⠤⠇ ${NC}  ${PURPLE}●${NC} ${GRAY}v${TOPO_VER} is digging deeper 🦡${NC}\n"
+    echo -e "\n${EARTH} ⠶⣶⠶  ⢰⠶⡆ ⢰⠶⡆ ⢰⠶⡆ ${NC}"
+    echo -e "${EARTH}  ⠿   ⠸⠤⠇ ⢸⠉⠁ ⠸⠤⠇ ${NC}  ${PURPLE}●${NC} ${GRAY}v${TOPO_VER} is digging deeper 🦡${NC}\n"
     
     echo -e "${GRAY}Type '${NC}${BOLD}topo${NC}${GRAY}' to get started, or '${NC}${BOLD}topo --help${NC}${GRAY}' to explore all commands.${NC}"
     if [ -n "$PACKAGE_REMOVE_COMMAND" ]; then
