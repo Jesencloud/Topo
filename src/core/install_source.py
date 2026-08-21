@@ -25,6 +25,7 @@ DNF_OS_IDS = {
     "ol",
     "amzn",
 }
+ZYPPER_OS_IDS = {"opensuse", "opensuse-leap", "opensuse-tumbleweed", "sles"}
 
 DEB_ARCH_BY_MACHINE = {
     "x86_64": "amd64",
@@ -71,6 +72,8 @@ def get_package_manager(os_id: str | None = None) -> str | None:
         return "apt"
     if distro in DNF_OS_IDS:
         return "dnf"
+    if distro in ZYPPER_OS_IDS:
+        return "zypper"
     return None
 
 
@@ -83,7 +86,7 @@ def get_package_asset_name(
     if package_manager == "apt":
         deb_arch = DEB_ARCH_BY_MACHINE.get(current_machine, "amd64")
         return f"topo_{package_version}_{deb_arch}.deb"
-    if package_manager == "dnf":
+    if package_manager in {"dnf", "zypper"}:
         rpm_arch = RPM_ARCH_BY_MACHINE.get(current_machine, "x86_64")
         return f"topo-{package_version}-1.{rpm_arch}.rpm"
     return None
@@ -104,6 +107,15 @@ def get_package_upgrade_argv(
         return [*sudo, "apt", "install", "-y", str(package_path)]
     if package_manager == "dnf":
         return [*sudo, "dnf", "upgrade", "-y", str(package_path)]
+    if package_manager == "zypper":
+        return [
+            *sudo,
+            "zypper",
+            "--non-interactive",
+            "install",
+            "--allow-unsigned-rpm",
+            str(package_path),
+        ]
     return None
 
 
@@ -114,4 +126,6 @@ def get_package_remove_argv(os_id: str | None = None) -> list[str] | None:
         return [*sudo, "apt", "remove", "-y", "topo"]
     if package_manager == "dnf":
         return [*sudo, "dnf", "remove", "-y", "topo"]
+    if package_manager == "zypper":
+        return [*sudo, "zypper", "--non-interactive", "remove", "topo"]
     return None

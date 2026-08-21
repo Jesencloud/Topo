@@ -38,6 +38,10 @@ def test_get_package_asset_name_uses_distro_and_arch():
         install_source.get_package_asset_name("v1.2.3", os_id="fedora", machine="aarch64")
         == "topo-1.2.3-1.aarch64.rpm"
     )
+    assert (
+        install_source.get_package_asset_name("v1.2.3", os_id="opensuse-leap", machine="x86_64")
+        == "topo-1.2.3-1.x86_64.rpm"
+    )
     assert install_source.get_package_asset_name("v1.2.3", os_id="unknown") is None
 
 
@@ -59,6 +63,14 @@ def test_get_package_execution_argv_uses_sudo_for_non_root(monkeypatch, tmp_path
         "-y",
         "topo",
     ]
+    assert install_source.get_package_upgrade_argv(package_path, os_id="opensuse-leap") == [
+        "sudo",
+        "zypper",
+        "--non-interactive",
+        "install",
+        "--allow-unsigned-rpm",
+        str(package_path),
+    ]
 
 
 def test_get_package_execution_argv_omits_sudo_for_root(monkeypatch, tmp_path):
@@ -75,5 +87,11 @@ def test_get_package_execution_argv_omits_sudo_for_root(monkeypatch, tmp_path):
         "apt",
         "remove",
         "-y",
+        "topo",
+    ]
+    assert install_source.get_package_remove_argv(os_id="opensuse-leap") == [
+        "zypper",
+        "--non-interactive",
+        "remove",
         "topo",
     ]

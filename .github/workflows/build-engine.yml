@@ -236,9 +236,93 @@ jobs:
           ! grep -F "apt remove -y topo" <<<"$remove_output"
           ! rpm -q topo
 
+  release-distro-smoke:
+    name: Release Smoke Test (${{ matrix.name }})
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Debian stable
+            image: debian:stable
+            package: deb
+          - name: openSUSE Leap
+            image: opensuse/leap:15.6
+            package: rpm-zypper
+          - name: Rocky Linux 9
+            image: rockylinux:9
+            package: rpm-dnf
+    container: ${{ matrix.image }}
+    steps:
+      - name: Download Package Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: topo-linux-packages
+          path: dist/packages
+
+      - name: Install, Verify, and Remove Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ matrix.package }}" in
+            deb)
+              apt-get update
+              apt-get install -y ./dist/packages/topo_*_amd64.deb
+              topo --version
+              topo remove
+              ! dpkg-query -W topo >/dev/null 2>&1
+              ;;
+            rpm-zypper)
+              zypper --non-interactive install --allow-unsigned-rpm ./dist/packages/topo-*-1.x86_64.rpm
+              topo --version
+              topo remove
+              ! rpm -q topo
+              ;;
+            rpm-dnf)
+              dnf install -y ./dist/packages/topo-*-1.x86_64.rpm
+              topo --version
+              topo remove
+              ! rpm -q topo
+              ;;
+          esac
+
+  release-arm64-smoke:
+    name: Release Smoke Test (ARM64 via QEMU)
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download ARM64 Core Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: topo-core-aarch64
+          path: artifacts
+
+      - name: Enable ARM64 Emulation
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Run ARM64 Core Smoke Test
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x artifacts/topo-core-aarch64
+          docker run --rm --platform linux/arm64 \
+            -v "$PWD/artifacts/topo-core-aarch64:/usr/local/bin/topo-core:ro" \
+            alpine:3.22 /usr/local/bin/topo-core /tmp
+
   release:
     name: Attach Release Assets
-    needs: [package, smoke-ubuntu, smoke-fedora]
+    needs:
+      - package
+      - smoke-script-install
+      - smoke-ubuntu
+      - smoke-fedora
+      - release-distro-smoke
+      - release-arm64-smoke
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     permissions:
