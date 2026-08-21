@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -218,7 +219,7 @@ def run_remove(dry_run=False):
     total_size: int = sum(item["size"] for item in to_remove)
 
     # 2. Preview (Compact Header)
-    print(f"\n {PURPLE}☉ Topo Uninstall{RESET} {GRAY}- The following items will be removed:{RESET}")
+    print(f"\n{PURPLE} ●{RESET} The following items will be removed:{RESET}")
     for item in to_remove:
         size_str = bytes_to_human(int(item["size"]))
         disp_path = str(item["path"]).replace(str(Path.home()), "~")
@@ -233,7 +234,7 @@ def run_remove(dry_run=False):
 
     # 3. Confirmation (Mole-style)
     print(
-        f"\n {PURPLE}●{RESET} Remove topo ({bytes_to_human(total_size)})? {GREEN}Enter{RESET} confirm, {GRAY}ESC{RESET} cancel: ",
+        f"\n {PURPLE}●{RESET} Remove topo ({bytes_to_human(total_size)}): Press {GREEN}Enter{RESET} confirm, {GREEN}ESC{RESET} cancel: ",
         end="",
         flush=True,
     )
@@ -252,11 +253,11 @@ def run_remove(dry_run=False):
         terminal_state.restore_raw_state(fd, old_settings)
 
     if ch not in ("\r", "\n", "y", "Y"):
-        print(f"\n\n {GRAY}Uninstallation cancelled.{RESET}")
+        print(f"\n\n {YELLOW}⚠{RESET}{GRAY} Uninstallation cancelled.{RESET}")
         return
 
     # 4. Execution
-    print("\n")
+    print()
     had_errors = False
     for item in to_remove:
         p: Path = item["path"]
@@ -272,12 +273,28 @@ def run_remove(dry_run=False):
             had_errors = True
             print(f"  {RED}✗{RESET} Failed to remove {p}: {reason}")
 
+    # Deletion auditing can recreate XDG_STATE_HOME/topo, while protection
+    # checks can recreate ~/.config/topo to read an empty whitelist after the
+    # original directory was removed. Clear both self-generated directories
+    # once all uninstall work is finished.
+    config_dir = Path.home() / ".config" / "topo"
+    state_dir = (
+        Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))).expanduser()
+        / "topo"
+    )
+    for generated_dir in (config_dir, state_dir):
+        if not generated_dir.exists():
+            continue
+        try:
+            shutil.rmtree(generated_dir)
+        except OSError as e:
+            had_errors = True
+            print(f"  {RED}✗{RESET} Failed to remove {generated_dir}: {e}")
+
     if _strip_topo_path_lines():
         print(f"  {GREEN}✓{RESET} {GRAY}Removed PATH entry from shell config{RESET}")
 
-    print("\n" + "=" * 65)
     if had_errors:
-        print(f" {YELLOW}⚠{RESET} {GRAY}topo removal completed with errors (see above).{RESET}")
+        print(f"\n {YELLOW}⚠{RESET} {GRAY}Topo removal completed with errors (see above).{RESET}\n")
     else:
-        print(f" {GREEN}✓{RESET} {GRAY}topo has been successfully removed from your system.{RESET}")
-    print("=" * 65 + "\n")
+        print(f"\n {GREEN}✨ Topo has been successfully removed from your system!{RESET}\n")

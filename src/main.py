@@ -319,7 +319,6 @@ def _main():
         "clean",
         "uninstall",
         "optimize",
-        "remove",
         "analyze",
         None,
     }
