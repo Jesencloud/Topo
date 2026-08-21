@@ -1,28 +1,8 @@
-name: Build & Package
+name: Release
 
 on:
-  pull_request:
-    branches: ["main"]
-    paths:
-      - "install.sh"
-      - "packaging/**"
-      - "src/manage/**"
-      - "src/core/install_source.py"
-      - "topo"
-      - "VERSION"
-      - ".github/workflows/build-engine.yml"
-      - ".github/workflows/release.yml"
   push:
-    branches: ["main"]
-    paths:
-      - "install.sh"
-      - "packaging/**"
-      - "src/manage/**"
-      - "src/core/install_source.py"
-      - "topo"
-      - "VERSION"
-      - ".github/workflows/build-engine.yml"
-      - ".github/workflows/release.yml"
+    tags: ['v*']
   workflow_dispatch:
 
 permissions:
@@ -235,3 +215,193 @@ jobs:
           grep -F "dnf remove -y topo" <<<"$remove_output"
           ! grep -F "apt remove -y topo" <<<"$remove_output"
           ! rpm -q topo
+
+  release-distro-smoke:
+    name: Release Smoke Test (${{ matrix.name }})
+    needs: package
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Debian stable
+            image: debian:stable
+            package: deb
+          - name: openSUSE Leap
+            image: opensuse/leap:15.6
+            package: rpm-zypper
+          - name: Rocky Linux 9
+            image: rockylinux:9
+            package: rpm-dnf
+    container: ${{ matrix.image }}
+    steps:
+      - name: Download Package Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: topo-linux-packages
+          path: dist/packages
+
+      - name: Install, Verify, and Remove Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ matrix.package }}" in
+            deb)
+              apt-get update
+              apt-get install -y ./dist/packages/topo_*_amd64.deb
+              topo --version
+              topo remove
+              ! dpkg-query -W topo >/dev/null 2>&1
+              ;;
+            rpm-zypper)
+              zypper --non-interactive install --allow-unsigned-rpm ./dist/packages/topo-*-1.x86_64.rpm
+              topo --version
+              topo remove
+              ! rpm -q topo
+              ;;
+            rpm-dnf)
+              dnf install -y ./dist/packages/topo-*-1.x86_64.rpm
+              topo --version
+              topo remove
+              ! rpm -q topo
+              ;;
+          esac
+
+  release-arm64-smoke:
+    name: Release Smoke Test (ARM64 via QEMU)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download ARM64 Core Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: topo-core-aarch64
+          path: artifacts
+
+      - name: Enable ARM64 Emulation
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Run ARM64 Core Smoke Test
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x artifacts/topo-core-aarch64
+          docker run --rm --platform linux/arm64 \
+            -v "$PWD/artifacts/topo-core-aarch64:/usr/local/bin/topo-core:ro" \
+            alpine:3.22 /usr/local/bin/topo-core /tmp
+
+  release:
+    name: Attach Release Assets
+    needs:
+      - package
+      - smoke-script-install
+      - smoke-ubuntu
+      - smoke-fedora
+      - release-distro-smoke
+      - release-arm64-smoke
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download x86_64 Core Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: topo-core-x86_64
+          path: artifacts/topo-core-x86_64
+
+      - name: Download aarch64 Core Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: topo-core-aarch64
+          path: artifacts/topo-core-aarch64
+
+      - name: Download Package Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: topo-linux-packages
+          path: dist/packages
+
+      - name: Verify Release Notes
+        run: test -f "docs/releases/${{ github.ref_name }}.md"
+
+      - name: Import GPG Release Key
+        shell: bash
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GPG_PRIVATE_KEY}" ]; then
+            echo "::error::GPG_PRIVATE_KEY secret is required to sign release assets."
+            exit 1
+          fi
+          printf '%s' "${GPG_PRIVATE_KEY}" | gpg --batch --import
+
+      - name: Stage Release Assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf release-assets
+          mkdir -p release-assets
+          cp artifacts/topo-core-x86_64/topo-core-x86_64 release-assets/
+          cp artifacts/topo-core-aarch64/topo-core-aarch64 release-assets/
+          cp dist/packages/*.deb release-assets/
+          cp dist/packages/*.rpm release-assets/
+          cp install.sh release-assets/
+          # Signed source archive: install.sh's no-git path verifies this instead
+          # of piping GitHub's unsigned auto-generated tarball straight into tar.
+          git archive --format=tar.gz --prefix="topo-src/" \
+            -o release-assets/topo-src.tar.gz HEAD
+
+      - name: Generate Release Checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-assets
+          rm -f SHA256SUMS
+          sha256sum \
+            topo-core-x86_64 \
+            topo-core-aarch64 \
+            install.sh \
+            topo-src.tar.gz \
+            *.deb \
+            *.rpm \
+            > SHA256SUMS
+          sha256sum -c SHA256SUMS
+
+      - name: Sign Checksum Manifest
+        shell: bash
+        env:
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GPG_PASSPHRASE}" ]; then
+            echo "::error::GPG_PASSPHRASE secret is required to sign release assets."
+            exit 1
+          fi
+          gpg --batch --yes --pinentry-mode loopback \
+            --passphrase "${GPG_PASSPHRASE}" \
+            --armor --detach-sign release-assets/SHA256SUMS
+
+      - name: Attach Assets to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: docs/releases/${{ github.ref_name }}.md
+          files: |
+            release-assets/topo-core-x86_64
+            release-assets/topo-core-aarch64
+            release-assets/topo-src.tar.gz
+            release-assets/*.deb
+            release-assets/*.rpm
+            release-assets/SHA256SUMS
+            release-assets/SHA256SUMS.asc
+            assets/topo-release-public.asc
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc.') || contains(github.ref_name, '-beta.') || contains(github.ref_name, '-alpha.') }}
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
