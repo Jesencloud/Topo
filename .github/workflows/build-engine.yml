@@ -1,15 +1,73 @@
-name: Build & Release Topo Core
+name: Build, Package & Release
 
 on:
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "install.sh"
+      - "packaging/**"
+      - "src/manage/**"
+      - "src/core/install_source.py"
+      - "topo"
+      - "VERSION"
+      - ".github/workflows/build-engine.yml"
   push:
+    branches: ["main"]
+    paths:
+      - "install.sh"
+      - "packaging/**"
+      - "src/manage/**"
+      - "src/core/install_source.py"
+      - "topo"
+      - "VERSION"
+      - ".github/workflows/build-engine.yml"
     tags:
       - 'v*'
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
+  smoke-script-install:
+    name: Smoke Test install.sh on Ubuntu
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Script Prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v gpg >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y gnupg
+          fi
+          if ! python3 -c "import packaging" >/dev/null 2>&1; then
+            python3 -m pip install packaging
+          fi
+
+      - name: Install and Verify User Copy
+        shell: bash
+        env:
+          HOME: ${{ runner.temp }}/topo-home
+          TOPO_LINK_DIR: ${{ runner.temp }}/topo-home/.local/bin
+          PATH: ${{ runner.temp }}/topo-home/.local/bin:/usr/local/bin:/usr/bin:/bin
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME"
+
+          bash install.sh --minimal
+          version="$(tr -d '[:space:]' < "$HOME/.topo/VERSION")"
+          test -x "$HOME/.topo/topo"
+          test -L "$TOPO_LINK_DIR/topo"
+          test "$(readlink -f "$TOPO_LINK_DIR/topo")" = "$(readlink -f "$HOME/.topo/topo")"
+          test "$($TOPO_LINK_DIR/topo --version)" = "topo ${version}"
+
+          repeat_output="$(bash install.sh --version "v${version}")"
+          printf '%s\n' "$repeat_output"
+          grep -F "Topo v${version} is already installed; skipping download." <<<"$repeat_output"
+
   build:
     name: Build for ${{ matrix.target }}
     runs-on: ubuntu-latest
@@ -183,6 +241,8 @@ jobs:
     needs: [package, smoke-ubuntu, smoke-fedora]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
