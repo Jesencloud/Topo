@@ -9,7 +9,7 @@ from typing import Any
 
 from packaging.version import InvalidVersion, Version
 
-from ..core.constants import BOLD, CYAN, GRAY, GREEN, RED, RESET, YELLOW
+from ..core.constants import BOLD, GRAY, GREEN, RED, RESET, YELLOW
 from ..core.install_source import (
     PACKAGE_INSTALL,
     get_install_source,
@@ -342,7 +342,7 @@ def run_update():
     # the VERSION file should be in the root of the installation (~/.topo/VERSION)
     local_version = _read_local_version()
 
-    print(f" {CYAN}🚀 Checking for updates...{RESET} (Local: v{local_version})")
+    print(f" {GREEN}✓{RESET} Checking for updates...{RESET} (Local: v{local_version})")
 
     # 2. Fetch latest stable release tag
     try:
@@ -361,11 +361,11 @@ def run_update():
         print(f" {RED}❌ Invalid local version: {local_version!r}{RESET}")
         return
     if remote_parsed == local_parsed:
-        print(f" {GREEN}✓{RESET} {BOLD}Topo is already up to date!{RESET} (v{local_version})")
+        print(f" {GREEN}✓{RESET} Topo is already up to date!{RESET} (v{local_version})")
         return
     if remote_parsed < local_parsed:
         print(
-            f" {GREEN}✓{RESET} {BOLD}Local Topo is newer than remote.{RESET} "
+            f" {GREEN}✓{RESET} Local Topo is newer than remote.{RESET} "
             f"(local: v{local_version}, remote: {remote_tag})"
         )
         return
