@@ -539,9 +539,15 @@ def _selector_session(enable_mouse=True):
 class _PagedSelector:
     """Mixin with page math and cursor movement shared by paginated selectors.
 
-    Subclasses provide ``self.items``, ``self.selected_index`` and
-    ``self.current_page``. ``page_size`` defaults to 15 and may be overridden
-    per-instance.
+    Subclasses provide ``self.items``, ``self.selected_index``,
+    ``self.current_page`` and ``self.selected_items``. ``page_size`` defaults to
+    15 and may be overridden per-instance.
+
+    What goes *into* ``selected_items`` is up to the subclass: override
+    ``_selection_key`` to store something other than the row index. Analyze
+    keeps indices and drops the selection whenever the list is re-sorted;
+    Uninstall keeps application ids precisely so that its N/S/T sorting does not
+    scramble what the user has ticked.
     """
 
     page_size = 15
@@ -550,7 +556,7 @@ class _PagedSelector:
     items: list
     selected_index: int
     current_page: int
-    selected_items: set[int]
+    selected_items: set
 
     def _total_pages(self):
         return max(1, (len(self.items) + self.page_size - 1) // self.page_size)
@@ -571,19 +577,27 @@ class _PagedSelector:
             self.current_page = (self.current_page + delta) % self._total_pages()
             self.selected_index = self.current_page * self.page_size
 
-    def _toggle_index_selection(self, idx):
-        if idx in self.selected_items:
-            self.selected_items.remove(idx)
+    def _selection_key(self, idx):
+        """What identifies row *idx* once selected. The index, unless overridden."""
+        return idx
+
+    def _is_selected(self, idx):
+        return self._selection_key(idx) in self.selected_items
+
+    def _toggle_selection(self, idx):
+        key = self._selection_key(idx)
+        if key in self.selected_items:
+            self.selected_items.remove(key)
         else:
-            self.selected_items.add(idx)
+            self.selected_items.add(key)
 
     def _toggle_current_page_selection(self):
         start, end = self._page_bounds()
-        page_indices = set(range(start, end))
-        if page_indices.issubset(self.selected_items):
-            self.selected_items -= page_indices
+        page_keys = {self._selection_key(i) for i in range(start, end)}
+        if page_keys.issubset(self.selected_items):
+            self.selected_items -= page_keys
         else:
-            self.selected_items |= page_indices
+            self.selected_items |= page_keys
 
     def _index_from_typed_number(self, num_str):
         """Map a typed row number to its index, or None if this page has no such row.
@@ -715,12 +729,20 @@ class AnalyzeSelector(_PagedSelector):
             buf.append(f"{YELLOW}⚠ {self.notice}{RESET}\033[K\n")
         buf.append("\033[K\n")
 
+        total_len = len(self.items)
+        # Row numbers run across the whole list, so the column has to fit the
+        # largest one. A fast-explore view is not capped by ANALYZE_RESULT_LIMIT
+        # -- it can list up to FAST_EXPLORE_ENTRY_LIMIT entries -- so three-digit
+        # numbers are reachable, and a fixed two-cell field would push every
+        # later page a column to the right. Two stays the floor, so the usual
+        # sub-100 list is laid out exactly as before.
+        num_w = max(2, len(str(total_len)))
+
         columns = shutil.get_terminal_size().columns
-        available = columns - (2 + 5 + 8 + 3 + 2 + 5 + 12 + 5)
+        available = columns - (2 + 5 + 8 + 3 + 2 + 5 + 12 + 5) - (num_w - 2)
         bar_w = 20 if available > 40 else 10 if available > 20 else 0
         name_w = min(30, available - bar_w) if bar_w > 0 else max(15, available)
 
-        total_len = len(self.items)
         total_pages = max(1, (total_len + self.page_size - 1) // self.page_size)
         self.current_page = max(0, min(self.current_page, total_pages - 1))
         start = self.current_page * self.page_size
@@ -734,19 +756,21 @@ class AnalyzeSelector(_PagedSelector):
             for i in range(start, end):
                 item = self.items[i]
                 is_hover = i == self.selected_index
-                is_selected = i in self.selected_items
+                is_selected = self._is_selected(i)
                 cursor = f"{CYAN}▶{RESET}" if is_hover else " "
+                num_key = f"{i + 1:>{num_w}}"
                 if self.can_select:
-                    num = i + 1
                     checkbox_str = (
-                        f"{GREEN}✓ {num:2}.{RESET} " if is_selected else f"{GRAY}○{RESET} {num:2}. "
+                        f"{GREEN}✓ {num_key}.{RESET} "
+                        if is_selected
+                        else f"{GRAY}○{RESET} {num_key}. "
                     )
                 else:
                     # A bullet, not the checkbox the child views use: these root
                     # categories cannot be ticked, and an ○ here would invite a
                     # Space press that does nothing. One cell either way, so the
                     # columns stay put while drilling into a directory.
-                    checkbox_str = f"{GRAY}•{RESET} {i + 1:2}. "
+                    checkbox_str = f"{GRAY}•{RESET} {num_key}. "
 
                 size_known = item.get("size_known", True)
                 if size_known:
@@ -857,11 +881,11 @@ class AnalyzeSelector(_PagedSelector):
                     elif self._total_pages() > 1:
                         self._flip_page(1)
                 elif key == Navigator.SPACE and self.can_select:
-                    self._toggle_index_selection(self.selected_index)
+                    self._toggle_selection(self.selected_index)
                 elif key.isdigit() and self.can_select:
                     idx = self._index_from_typed_number(Navigator.read_number(fd, key))
                     if idx is not None:
-                        self._toggle_index_selection(idx)
+                        self._toggle_selection(idx)
                 elif key in Navigator.ENTER:
                     if total_len == 0:
                         continue
@@ -918,7 +942,7 @@ class UninstallSelector(_PagedSelector):
         self.title = title
         self.items = items
         self.selected_index = 0
-        self.selected_ids = set()
+        self.selected_items: set[str] = set()
         self.sort_key = "install_time"
         self.sort_reverse = True
         self.page_size = 15
@@ -958,7 +982,7 @@ class UninstallSelector(_PagedSelector):
         total_len = len(self.items)
         buf.append(
             f"\n {THEME_TITLE}{self.title}{RESET} "
-            f"{GRAY}{len(self.selected_ids)}/{total_len} selected{RESET}\033[K\n\n"
+            f"{GRAY}{len(self.selected_items)}/{total_len} selected{RESET}\033[K\n\n"
         )
 
         if total_len == 0:
@@ -983,7 +1007,7 @@ class UninstallSelector(_PagedSelector):
             for i in range(start, end):
                 item = self.items[i]
                 is_hover = i == self.selected_index
-                is_selected = item["id"] in self.selected_ids
+                is_selected = self._is_selected(i)
                 num_key = f"{i + 1:>{num_w}}"
                 cursor = f"{CYAN}▶{RESET}" if is_hover else " "
                 checkbox = (
@@ -1038,12 +1062,12 @@ class UninstallSelector(_PagedSelector):
                 f"{sort_hint}{RESET}\033[K\n"
             )
 
-        if self.selected_ids:
+        if self.selected_items:
             buf.append(
                 f"\n {THEME_TITLE}☉ Selected Apps to Remove:{RESET} "
                 f"Press {GREEN}Enter{RESET} {WHITE}to Uninstall{RESET}, {CYAN}ESC{RESET} {WHITE}to Exit{RESET}\033[K\n"
             )
-            selected_names = [i["name"] for i in self.items if i["id"] in self.selected_ids]
+            selected_names = [i["name"] for i in self.items if i["id"] in self.selected_items]
             selected_columns = 2 if terminal_width >= 80 else 1
             selected_name_width = (
                 35 if selected_columns == 2 else max(4, min(35, terminal_width - 7))
@@ -1091,11 +1115,11 @@ class UninstallSelector(_PagedSelector):
                     if self._total_pages() > 1:
                         self._flip_page(1)
                 elif key == Navigator.SPACE and total_len > 0:
-                    self._toggle_selected_id(self.selected_index)
+                    self._toggle_selection(self.selected_index)
                 elif key.isdigit() and total_len > 0:
                     idx = self._index_from_typed_number(Navigator.read_number(fd, key))
                     if idx is not None:
-                        self._toggle_selected_id(idx)
+                        self._toggle_selection(idx)
                 elif len(key) == 1 and key.lower() in ("s", "n", "t"):
                     self.sort_key = (
                         "size_bytes"
@@ -1107,29 +1131,27 @@ class UninstallSelector(_PagedSelector):
                     self.sort_reverse = not self.sort_reverse
                     self._sort_items()
                 elif len(key) == 1 and key.lower() == "a":
-                    start, end = self._page_bounds()
-                    page_ids = {self.items[i]["id"] for i in range(start, end)}
-                    if page_ids.issubset(self.selected_ids):
-                        self.selected_ids -= page_ids
-                    else:
-                        self.selected_ids |= page_ids
+                    self._toggle_current_page_selection()
                 elif key in Navigator.ENTER:
-                    if not self.selected_ids:
+                    if not self.selected_items:
                         continue
                     return [
-                        i for i, item in enumerate(self.items) if item["id"] in self.selected_ids
+                        i for i, item in enumerate(self.items) if item["id"] in self.selected_items
                     ]
                 elif key == Navigator.ESC and len(key) == 1:
                     return []
                 elif key == "MOUSE_EVENT":
                     continue
 
-    def _toggle_selected_id(self, idx):
-        item_id = self.items[idx]["id"]
-        if item_id in self.selected_ids:
-            self.selected_ids.remove(item_id)
-        else:
-            self.selected_ids.add(item_id)
+    def _selection_key(self, idx):
+        """Applications are tracked by id, not row index.
+
+        N/S/T re-sort the list in place, so an index would follow whatever row
+        happens to land in that position afterwards -- and this list gates an
+        uninstall. Analyze can afford indices because it clears the selection
+        whenever it sorts.
+        """
+        return self.items[idx]["id"]
 
 
 class UninstallPreviewSelector:

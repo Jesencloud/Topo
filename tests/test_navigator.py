@@ -84,6 +84,33 @@ def drive_with_writes(selector, keys):
         return selector.run(), write.call_args_list
 
 
+def render_buffer(selector, width=100):
+    """Render *selector* and return the frame buffer it handed to the writer.
+
+    Captures the buffer rather than what reaches stdout: the frame writer
+    positions the cursor per row instead of emitting newlines, so splitlines()
+    over its output would see one very long line.
+    """
+    frames = []
+    with (
+        patch(
+            "src.ui.navigator.shutil.get_terminal_size",
+            return_value=os.terminal_size((width, 24)),
+        ),
+        patch(
+            "src.ui.navigator._render_scrollable_frame",
+            side_effect=lambda _owner, parts, _focus=None: frames.append(parts),
+        ),
+    ):
+        selector.render()
+    return "".join(frames[0])
+
+
+def render_lines(selector, width=100):
+    """render_buffer with the escape sequences stripped, split into lines."""
+    return ANSI_CSI_RE.sub("", render_buffer(selector, width)).splitlines()
+
+
 def _analyze_items(n=20):
     return [
         {"name": f"item{i}", "path": Path("/tmp"), "size": (n - i) * 100, "percent": 1.0}
@@ -615,25 +642,10 @@ def test_analyze_marks_only_that_the_list_continues():
     def has_continuation_marker(selector, page=0):
         selector.current_page = page
         selector.selected_index = page * selector.page_size
-        frames = []
-        with (
-            patch(
-                "src.ui.navigator.shutil.get_terminal_size",
-                return_value=os.terminal_size((100, 24)),
-            ),
-            # Captures the buffer rather than the composed frame: the frame
-            # writer positions the cursor per row instead of emitting newlines,
-            # so splitlines() on its output would see one long line.
-            patch(
-                "src.ui.navigator._render_scrollable_frame",
-                side_effect=lambda _, parts, __, frames=frames: frames.append(parts),
-            ),
-        ):
-            selector.render()
-        visible = ANSI_CSI_RE.sub("", "".join(frames[0]))
+        lines = render_lines(selector)
         # A whole line of its own -- pad_and_truncate also emits "..." inside a
         # clipped filename, so a substring test would answer the wrong question.
-        return any(line.strip() == "..." for line in visible.splitlines())
+        return any(line.strip() == "..." for line in lines)
 
     # 31 items at 15 a page: two full pages, then a single trailing row.
     paged = AnalyzeSelector("t", _analyze_items(31), can_select=True)
@@ -717,21 +729,11 @@ def test_analyze_name_sort_keeps_directories_first_when_reversed():
 # --- UninstallSelector ---
 def test_uninstall_hint_uses_gray():
     selector = UninstallSelector("t", _uninstall_items()[:2])
-    frames = []
+    # The colours have to be stand-ins during the render itself, so the patch
+    # wraps the call rather than living inside the helper.
+    with patch.multiple("src.ui.navigator", GREEN="<GREEN>", GRAY="<GRAY>", RESET="<RESET>"):
+        output = render_buffer(selector, 200)
 
-    with (
-        patch.multiple("src.ui.navigator", GREEN="<GREEN>", GRAY="<GRAY>", RESET="<RESET>"),
-        patch(
-            "src.ui.navigator.shutil.get_terminal_size", return_value=os.terminal_size((200, 24))
-        ),
-        patch(
-            "src.ui.navigator._render_scrollable_frame",
-            side_effect=lambda _, parts, __: frames.append(parts),
-        ),
-    ):
-        selector.render()
-
-    output = "".join(frames[0])
     footer = next(line for line in output.splitlines() if "Page 1/" in line)
     for key in ("↑↓←→", "PgUp/PgDn", "A", "N", "S", "T"):
         assert key in footer
@@ -755,20 +757,8 @@ def test_uninstall_rows_reflow_as_terminal_narrows():
     selector = UninstallSelector("t", [item])
 
     def render_at(width):
-        frames = []
-        with (
-            patch(
-                "src.ui.navigator.shutil.get_terminal_size",
-                return_value=os.terminal_size((width, 24)),
-            ),
-            patch(
-                "src.ui.navigator._render_scrollable_frame",
-                side_effect=lambda _, parts, __, frames=frames: frames.append(parts),
-            ),
-        ):
-            selector.render()
-        visible = ANSI_CSI_RE.sub("", "".join(frames[0]))
-        return next(line for line in visible.splitlines() if "A very" in line)
+        lines = render_lines(selector, width)
+        return next(line for line in lines if "A very" in line)
 
     wide = render_at(80)
     medium = render_at(50)
@@ -785,21 +775,8 @@ def test_uninstall_rows_reflow_as_terminal_narrows():
 def test_uninstall_footer_stays_on_one_rendered_line_at_all_widths():
     selector = UninstallSelector("t", _uninstall_items())
     for width in (35, 80, 120):
-        frames = []
-        with (
-            patch(
-                "src.ui.navigator.shutil.get_terminal_size",
-                return_value=os.terminal_size((width, 24)),
-            ),
-            patch(
-                "src.ui.navigator._render_scrollable_frame",
-                side_effect=lambda _, parts, __, frames=frames: frames.append(parts),
-            ),
-        ):
-            selector.render()
-
-        visible = ANSI_CSI_RE.sub("", "".join(frames[0]))
-        footer_lines = [line for line in visible.splitlines() if "Page 1/" in line]
+        lines = render_lines(selector, width)
+        footer_lines = [line for line in lines if "Page 1/" in line]
 
         assert len(footer_lines) == 1
         footer = footer_lines[0]
@@ -823,21 +800,7 @@ def test_uninstall_header_explains_how_to_select():
     the footer past 80 columns -- so the one hint telling you the digit shortcut
     exists was the first thing truncated away on a standard terminal.
     """
-    frames = []
-    with (
-        patch(
-            "src.ui.navigator.shutil.get_terminal_size",
-            return_value=os.terminal_size((100, 24)),
-        ),
-        patch(
-            "src.ui.navigator._render_scrollable_frame",
-            side_effect=lambda _, parts, __, frames=frames: frames.append(parts),
-        ),
-    ):
-        UninstallSelector(SCREEN_TITLE, _uninstall_items()).render()
-
-    visible = ANSI_CSI_RE.sub("", "".join(frames[0]))
-    lines = visible.splitlines()
+    lines = render_lines(UninstallSelector(SCREEN_TITLE, _uninstall_items()))
     title = next(i for i, line in enumerate(lines) if SCREEN_TITLE in line)
     hint = next(
         i for i, line in enumerate(lines) if line.strip().startswith("Select apps to uninstall")
@@ -863,41 +826,15 @@ def test_uninstall_selector_renders_the_title_it_was_given():
     its scan spinner each carried their own copy and could drift apart -- the
     title would jump the moment the scan handed off to the list.
     """
-    frames = []
-    with (
-        patch(
-            "src.ui.navigator.shutil.get_terminal_size",
-            return_value=os.terminal_size((100, 24)),
-        ),
-        patch(
-            "src.ui.navigator._render_scrollable_frame",
-            side_effect=lambda _, parts, __, frames=frames: frames.append(parts),
-        ),
-    ):
-        UninstallSelector("Some Other Screen", _uninstall_items()).render()
-
-    visible = ANSI_CSI_RE.sub("", "".join(frames[0]))
-    assert "Some Other Screen" in visible
+    lines = render_lines(UninstallSelector("Some Other Screen", _uninstall_items()))
+    assert any("Some Other Screen" in line for line in lines)
 
 
 def test_uninstall_empty_list_does_not_offer_a_selection_hint():
     """Nothing to number, so telling the user to type a row number would be noise."""
-    frames = []
-    with (
-        patch(
-            "src.ui.navigator.shutil.get_terminal_size",
-            return_value=os.terminal_size((100, 24)),
-        ),
-        patch(
-            "src.ui.navigator._render_scrollable_frame",
-            side_effect=lambda _, parts, __, frames=frames: frames.append(parts),
-        ),
-    ):
-        UninstallSelector("t", []).render()
-
-    visible = ANSI_CSI_RE.sub("", "".join(frames[0]))
-    assert "No applications found" in visible
-    assert "Select apps to uninstall" not in visible
+    lines = render_lines(UninstallSelector("t", []))
+    assert any("No applications found" in line for line in lines)
+    assert not any("Select apps to uninstall" in line for line in lines)
 
 
 def test_uninstall_space_then_enter_returns_indices():
@@ -918,22 +855,22 @@ def test_uninstall_page_numbers_accumulate_but_digits_select_current_page():
     drive(selector, [Navigator.PGDN, "15", "16", "30", "31", Navigator.ESC])
 
     # 15 and 31 are off this page; 16 and 30 are its first and last rows.
-    assert selector.selected_ids == {"app15", "app29"}
+    assert selector.selected_items == {"app15", "app29"}
 
     selector = UninstallSelector("t", _uninstall_items(30))
     drive(selector, ["20", Navigator.ESC])
-    assert selector.selected_ids == set()
+    assert selector.selected_items == set()
 
 
 def test_uninstall_zero_selects_nothing():
     """No row is numbered 0, so it matches nothing -- row 10 is typed in full."""
     selector = UninstallSelector("t", _uninstall_items(30))
     drive(selector, ["0", Navigator.ESC])
-    assert selector.selected_ids == set()
+    assert selector.selected_items == set()
 
     selector = UninstallSelector("t", _uninstall_items(30))
     drive(selector, ["10", Navigator.ESC])
-    assert selector.selected_ids == {"app9"}
+    assert selector.selected_items == {"app9"}
 
 
 def test_uninstall_number_column_widens_for_three_digit_rows():
@@ -944,20 +881,8 @@ def test_uninstall_number_column_widens_for_three_digit_rows():
     """
 
     def first_row(count):
-        frames = []
-        with (
-            patch(
-                "src.ui.navigator.shutil.get_terminal_size",
-                return_value=os.terminal_size((100, 24)),
-            ),
-            patch(
-                "src.ui.navigator._render_scrollable_frame",
-                side_effect=lambda _, parts, __, frames=frames: frames.append(parts),
-            ),
-        ):
-            UninstallSelector("t", _uninstall_items(count)).render()
-        visible = ANSI_CSI_RE.sub("", "".join(frames[0]))
-        return next(line for line in visible.splitlines() if "app0" in line)
+        lines = render_lines(UninstallSelector("t", _uninstall_items(count)))
+        return next(line for line in lines if "app0" in line)
 
     # The cursor sits on the first row, so the prefix carries it.
     assert first_row(20).startswith("▶ ○  1. app0")
@@ -1006,7 +931,7 @@ def test_uninstall_delete_key_does_not_confirm_selected_app():
     sel = UninstallSelector("t", _uninstall_items())
     result = drive(sel, [Navigator.SPACE, "\x1b[3~", Navigator.ESC])
     assert result == []
-    assert sel.selected_ids == {"app0"}
+    assert sel.selected_items == {"app0"}
 
 
 def test_uninstall_esc_returns_empty():
