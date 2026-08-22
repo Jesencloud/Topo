@@ -142,7 +142,10 @@ def run_uninstall():
             print(f"\n{'=' * 70}")
             print(f"{BLUE}Uninstall complete{RESET}")
             names_str = ", ".join(removed_names) if removed_names else "none"
-            msg = f"Removed {len(removed_names)} app(s), freed {GREEN}"
+            # Count and size get the same treatment as each other, the way the
+            # preview prompt colours its pair -- but in green, not the preview's
+            # purple: this is the report of what happened, not a question.
+            msg = f"Removed {GREEN}{len(removed_names)}{RESET} app(s), freed {GREEN}"
             msg += f"{bytes_to_human(total_freed_all)}{RESET}: {names_str}"
             print(msg)
             if failed_names:

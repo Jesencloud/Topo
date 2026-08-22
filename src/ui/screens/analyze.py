@@ -160,7 +160,7 @@ def run_deep_analysis(target_path: Path | None = None):
 
     while True:
         target_to_scan = current_target or normalize_scan_path(Path.home())
-        view_title = "Analyze Disk" if current_target is None else f"Exploring: {current_target}"
+        view_title = " Analyze Disk" if current_target is None else f" Exploring: {current_target}"
 
         if needs_scan:
             target_label = target_to_scan.name if current_target else "Home"

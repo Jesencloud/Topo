@@ -701,11 +701,11 @@ class AnalyzeSelector(_PagedSelector):
             if not buf[-1].endswith("\n"):
                 buf.append("\n")
 
-        buf.append(f"\n {THEME_TITLE}{self.title}{RESET}\033[K\n\n")
+        buf.append(f"\n{THEME_TITLE}{self.title}{RESET}\033[K\n\n")
 
         total_disk = bytes_to_human(shutil.disk_usage("/").total)
         hint = (
-            f"{GRAY}Select a location to explore (Enter item numbers from this page, or press Space to select):{RESET}"
+            f" {GRAY}Select a location to explore (Enter item numbers from this page, or press Space to select):{RESET}"
             if self.can_select
             else f" {GRAY}Select a category to explore (Total: {total_disk}):{RESET}"
         )
@@ -873,13 +873,18 @@ class AnalyzeSelector(_PagedSelector):
                             1 for item in selected if not item.get("size_known", True)
                         )
                         item_text = "item" if count == 1 else "items"
-                        size_text = bytes_to_human(total_size)
+                        # The numbers carry the weight of the decision, so they
+                        # are the coloured part -- same treatment the uninstall
+                        # preview gives its app count and size.
+                        size_text = f"{PURPLE}{bytes_to_human(total_size)}{RESET}"
                         if unknown_count:
-                            size_text = f"{size_text} known, {unknown_count} uncalculated"
+                            size_text = (
+                                f"{size_text} known, {PURPLE}{unknown_count}{RESET} uncalculated"
+                            )
                         self.confirm_text = (
-                            f"{PURPLE}➔{RESET} Delete {count} {item_text}, "
+                            f"{PURPLE}➔{RESET} Delete {PURPLE}{count}{RESET} {item_text}, "
                             f"{size_text}  "
-                            f"{GREEN}Enter{RESET} confirm, {GRAY}Space{RESET} cancel:"
+                            f"{GREEN}Enter{RESET} confirm, {GREEN}Space{RESET} cancel:"
                         )
                         continue
                     return "DRILL_DOWN", self.selected_index
@@ -1138,7 +1143,7 @@ class UninstallPreviewSelector:
 
     def render(self):
         buf = ["\033[H"]
-        buf.append(f"{THEME_TITLE}➔{RESET} {THEME_TITLE}Uninstallation Preview{RESET}\033[K\n")
+        buf.append(f"\n {THEME_TITLE}➔{RESET} {THEME_TITLE}Uninstallation Preview{RESET}\033[K\n")
         buf.append("\033[K\n")
 
         for app, app_paths, is_running in self.targets:
@@ -1151,11 +1156,10 @@ class UninstallPreviewSelector:
                 buf.append(f"    {mark} {color}{self._path_label(path)}{RESET}\033[K\n")
 
         buf.append("\033[K\n")
-        buf.append("\033[K\n")
         app_text = "application" if self.app_count == 1 else "applications"
         prompt = (
-            f" Remove {self.app_count} {app_text}, {bytes_to_human(self.total_size)} "
-            f" {GREEN}Enter{RESET} confirm, {GRAY}Space{RESET} cancel: "
+            f" Remove {PURPLE}{self.app_count}{RESET} {app_text}, {PURPLE}{bytes_to_human(self.total_size)}{RESET} "
+            f" {GREEN}Enter{RESET} confirm, {GREEN}Space{RESET} cancel: "
         )
         focus_line = _frame_line_count(buf)
         buf.append(prompt + "\033[K")
@@ -1283,9 +1287,9 @@ class TopFilesSelector:
                     )
                     item_text = "item" if count == 1 else "items"
                     self.confirm_text = (
-                        f"{PURPLE}➔{RESET} Delete {count} {item_text}, "
-                        f"{bytes_to_human(total_size)}  "
-                        f"{GREEN}Enter{RESET} confirm, {GRAY}Space{RESET} cancel:"
+                        f"{PURPLE}➔{RESET} Delete {PURPLE}{count}{RESET} {item_text}, "
+                        f"{PURPLE}{bytes_to_human(total_size)}{RESET}  "
+                        f"{GREEN}Enter{RESET} confirm, {GREEN}Space{RESET} cancel:"
                     )
                 elif key == Navigator.ESC and len(key) == 1:
                     return []
