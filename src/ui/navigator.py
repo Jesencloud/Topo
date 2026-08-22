@@ -2,7 +2,6 @@ import os
 import re
 import select
 import shutil
-import subprocess
 import sys
 import termios
 import time
@@ -27,6 +26,7 @@ from ..core.constants import (
 )
 from ..core.file_ops import bytes_to_human
 from ..core.render import draw_bar, format_percent, get_color_for_percent
+from ..core.sound import is_muted, play_click, toggle_mute
 from ..core.text import char_width, display_width, sanitize_for_display
 
 ANSI_CSI_RE = re.compile("\x1b\\[[0-?]*[ -/]*[@-~]")
@@ -265,14 +265,14 @@ def _move_selection_with_wheel(owner, event, step=1):
     if options and hasattr(owner, "selected_index"):
         _clear_manual_scroll(owner)
         owner.selected_index = (owner.selected_index + delta) % len(options)
-        Navigator.play_click()
+        play_click()
         return True
 
     items = getattr(owner, "items", None)
     if items and hasattr(owner, "selected_index"):
         _clear_manual_scroll(owner)
         owner.selected_index = (owner.selected_index + delta) % len(items)
-        Navigator.play_click()
+        play_click()
         return True
 
     return False
@@ -346,8 +346,6 @@ class Navigator:
     MOUSE_DISABLE = terminal_state.MOUSE_DISABLE
     MOUSE_ENABLE = terminal_state.MOUSE_ENABLE
     _last_size = None
-    is_muted = False
-    _sound_configs: dict[str, str | list[str]] = {}
 
     @staticmethod
     @contextmanager
@@ -500,66 +498,6 @@ class Navigator:
         return num_str
 
     @staticmethod
-    def _get_sound_player(sound_name):
-        """Resolves the player and path for a named sound (e.g. 'click', 'delete')."""
-        if sound_name not in Navigator._sound_configs:
-            from ..core.paths import get_config_dir
-
-            # 1. Check for user override
-            config_sound = get_config_dir() / "sounds" / f"{sound_name}.wav"
-            # 2. Check for bundled asset (default)
-            project_root = Path(__file__).parent.parent.parent
-            asset_map = {"click": "cli_click.wav", "delete": "delete_remove.wav"}
-            bundled_sound = project_root / "assets" / asset_map.get(sound_name, "")
-
-            target_sound = None
-            if config_sound.exists():
-                target_sound = config_sound
-            elif bundled_sound.exists():
-                target_sound = bundled_sound
-
-            player: str | list[str] | None = None
-            if target_sound:
-                if shutil.which("pw-play"):
-                    player = ["pw-play", str(target_sound)]
-                elif shutil.which("paplay"):
-                    player = ["paplay", str(target_sound)]
-                elif shutil.which("aplay"):
-                    player = ["aplay", str(target_sound)]
-
-            if not player:
-                player = "bell"
-
-            Navigator._sound_configs[sound_name] = player
-
-        return Navigator._sound_configs[sound_name]
-
-    @staticmethod
-    def play_click():
-        """Plays a subtle navigation sound."""
-        Navigator._play_sound("click", 1)
-
-    @staticmethod
-    def play_delete():
-        """Plays a distinct sound for deletion or uninstallation."""
-        Navigator._play_sound("delete", 2)
-
-    @staticmethod
-    def _play_sound(sound_name: str, fallback_bells: int) -> None:
-        if Navigator.is_muted:
-            return
-        player = Navigator._get_sound_player(sound_name)
-        if player == "bell":
-            sys.stdout.write("\a" * fallback_bells)
-            sys.stdout.flush()
-        else:
-            try:
-                subprocess.Popen(player, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            except (OSError, subprocess.SubprocessError):
-                sys.stdout.write("\a" * fallback_bells)
-                sys.stdout.flush()
-
-    @staticmethod
     def hide_cursor():
         terminal_state.hide_cursor()
 
@@ -608,7 +546,7 @@ class _PagedSelector:
         if n:
             self.selected_index = (self.selected_index + delta) % n
             self.current_page = self.selected_index // self.page_size
-            Navigator.play_click()
+            play_click()
 
     def _flip_page(self, delta):
         if self.items:
@@ -655,7 +593,7 @@ class InteractiveMenu:
             else:
                 buf.append(f"{prefix}{label:<15} {desc}\033[K\n")
         buf.append("\033[K\n")
-        mute_label = "Unmute" if Navigator.is_muted else "Mute"
+        mute_label = "Unmute" if is_muted() else "Mute"
         buf.append(f" {GRAY}↑/↓ | M: {mute_label} | Enter: Select | ESC: Quit{RESET}\033[K\n")
         buf.append("\033[J")
         _render_scrollable_frame(self, buf, focus_line)
@@ -672,20 +610,20 @@ class InteractiveMenu:
                 _clear_manual_scroll(self)
                 if key in (Navigator.UP, "\x1bOA"):
                     self.selected_index = (self.selected_index - 1) % len(self.options)
-                    Navigator.play_click()
+                    play_click()
                 elif key in (Navigator.DOWN, "\x1bOB"):
                     self.selected_index = (self.selected_index + 1) % len(self.options)
-                    Navigator.play_click()
+                    play_click()
                 elif len(key) == 1 and key.isdigit() and key != "0":
                     # Menu labels are numbered ("1. Clean"), so a digit selects
                     # and activates that entry directly.
                     idx = int(key) - 1
                     if idx < len(self.options):
                         self.selected_index = idx
-                        Navigator.play_click()
+                        play_click()
                         return idx
                 elif len(key) == 1 and key.lower() == "m":
-                    Navigator.is_muted = not Navigator.is_muted
+                    toggle_mute()
                 elif key in (Navigator.LEFT, Navigator.RIGHT, "\x1bOC", "\x1bOD"):
                     continue
                 elif key in Navigator.ENTER:
@@ -1294,10 +1232,10 @@ class TopFilesSelector:
 
                 if key in (Navigator.UP, "\x1bOA"):
                     self.selected_index = (self.selected_index - 1) % len(self.items)
-                    Navigator.play_click()
+                    play_click()
                 elif key in (Navigator.DOWN, "\x1bOB"):
                     self.selected_index = (self.selected_index + 1) % len(self.items)
-                    Navigator.play_click()
+                    play_click()
                 elif key == Navigator.SPACE:
                     if self.selected_index in self.selected_items:
                         self.selected_items.remove(self.selected_index)
@@ -1372,7 +1310,7 @@ class ConfirmSelector:
                     "\x1bOD",
                 ):
                     self.selected_index = 1 - self.selected_index
-                    Navigator.play_click()
+                    play_click()
                 elif len(key) == 1 and key.lower() == "y":
                     return True
                 elif len(key) == 1 and key.lower() == "n":

@@ -851,7 +851,7 @@ def test_analyze_delete_browser_profile_root_cleans_cache_children(test_env):
         # No trash backend here, so the permanent downgrade needs consent; this
         # stands in for the user answering "yes" once for the batch.
         patch("src.core.analyze._permanent_fallback_consent", return_value=lambda _p: True),
-        patch("src.core.analyze.Navigator.play_delete") as mock_play_delete,
+        patch("src.core.analyze.play_delete") as mock_play_delete,
     ):
         assert _delete_analyze_paths([chrome_root, firefox_root]) is True
 
@@ -878,7 +878,7 @@ def test_analyze_delete_keeps_data_when_permanent_fallback_is_declined(test_env,
         patch("src.core.analyze._ensure_admin_for_delete", return_value=True),
         # _which_cached() memoizes, so patching shutil.which alone is order-dependent.
         patch("src.core.file_ops._which_cached", return_value=None),
-        patch("src.core.analyze.Navigator.play_delete") as mock_play_delete,
+        patch("src.core.analyze.play_delete") as mock_play_delete,
     ):
         assert _delete_analyze_paths([target]) is False
 

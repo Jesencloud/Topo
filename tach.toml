@@ -3,7 +3,7 @@
 # The layering is dependency-inversion: core is the bottom and depends on
 # nothing; ui/clean/manage each depend only on core; main wires them together.
 #
-# KNOWN FAILING: `tach check` currently reports 7 violations, all of the same
+# KNOWN FAILING: `tach check` currently reports 6 violations, all of the same
 # kind -- core.analyze and clean.app_manager construct interactive selectors
 # from ui.navigator, which puts a `core -> ui` edge in the graph and closes a
 # cycle. Fixing that means moving the interaction out of those modules (or

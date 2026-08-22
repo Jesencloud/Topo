@@ -40,6 +40,7 @@ from ..core.file_ops import (
 )
 from ..core.history import record_history_session
 from ..core.scan_cache import ScanCache
+from ..core.sound import play_delete
 from ..core.spinner import threaded_spinner
 from ..core.text import sanitize_for_display
 from ..core.whitelist import LINUX_USER_DATA_DIRS
@@ -1580,7 +1581,7 @@ def run_uninstall():
             if failed_names:
                 print(f" {RED}✗ Failed:{RESET} {', '.join(failed_names)}")
             print("=" * 70)
-            Navigator.play_delete()
+            play_delete()
 
             # Standardized return/exit prompt
             if not Navigator.wait_for_return(

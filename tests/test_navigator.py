@@ -657,7 +657,7 @@ def test_analyze_delete_confirm_mentions_uncalculated_sizes():
     ]
     sel = AnalyzeSelector("t", items, can_select=True, sort_mode="name")
 
-    with patch.object(Navigator, "play_click"):
+    with patch("src.ui.navigator.play_click"):
         drive(
             sel,
             [Navigator.SPACE, Navigator.DOWN, Navigator.SPACE, "\r", Navigator.ESC, Navigator.ESC],

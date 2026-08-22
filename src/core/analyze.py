@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from ..ui.navigator import AnalyzeSelector, ConfirmSelector, Navigator, TopFilesSelector
+from ..ui.navigator import AnalyzeSelector, ConfirmSelector, TopFilesSelector
 from . import system
 from .app_cache import find_cleanable_cache_dirs, get_cache_cleanable_reason
 from .constants import (
@@ -35,6 +35,7 @@ from .file_ops import (
 )
 from .heavy_cache import get_analyze_cache_defs
 from .scan_cache import ScanCache
+from .sound import play_delete
 from .spinner import DEFAULT_SPINNER_FRAMES
 from .system import run_command
 from .text import sanitize_for_display
@@ -632,7 +633,7 @@ def _delete_analyze_paths(paths: list[Path]) -> bool:
         if removed:
             changed = True
     if changed:
-        Navigator.play_delete()
+        play_delete()
     return changed
 
 
