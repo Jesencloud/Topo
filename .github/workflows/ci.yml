@@ -22,7 +22,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install Python Linter
-        run: pip install ruff mypy packaging vulture
+        run: pip install ruff mypy packaging vulture tach
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -40,6 +40,14 @@ jobs:
 
       - name: Run Mypy (Python)
         run: mypy src/
+
+      # Enforces the layering declared in tach.toml: core depends on nothing,
+      # ui is a widget toolkit that may only reach for core, and ui.screens is
+      # the one place allowed to compose the toolkit with a feature package.
+      # Never fix a failure here with `tach sync` -- that writes whatever the
+      # code currently does into depends_on and turns the check off.
+      - name: Run Tach Module Boundary Check (Python)
+        run: tach check
 
       - name: Run Vulture Dead Code Check (Python)
         run: vulture src/ .vulture_whitelist.py
