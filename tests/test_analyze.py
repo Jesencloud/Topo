@@ -11,16 +11,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.core.analyze import (
+    PERMANENT_DELETE_QUESTION,
     _delete_analyze_paths,
     _direct_child_count_exceeds,
-    _explore_notice,
     _needs_admin_for_deletion,
     _normalize_scan_path,
     _parallel_scan_sizes,
     _permanent_fallback_consent,
-    _render_scan_header,
-    _scan_status_message,
-    _scan_with_spinner,
     _should_use_fast_explore,
     _sudo_remove,
     build_analysis_entry,
@@ -28,10 +25,17 @@ from src.core.analyze import (
     get_fast_explore_data,
     get_rust_scan_data,
     get_rust_tree_data,
-    run_deep_analysis,
 )
 from src.core.file_ops import CACHEDIR_TAG_SIGNATURE, has_valid_cachedir_tag
 from src.core.scan_cache import ScanCache
+from src.ui.screens.analyze import (
+    _confirm_permanent_delete,
+    _explore_notice,
+    _render_scan_header,
+    _scan_status_message,
+    _scan_with_spinner,
+    run_deep_analysis,
+)
 
 
 def test_scan_cache():
@@ -473,9 +477,9 @@ def test_render_scan_header_repaints_in_place_without_full_clear(capsys):
     assert after_home[: after_home.index("Analyze Disk")].count("\n") == 1
 
 
-@patch("src.core.analyze.AnalyzeSelector")
-@patch("src.core.analyze._should_use_fast_explore", return_value=True)
-@patch("src.core.analyze._get_rust_scan_data_with_spinner")
+@patch("src.ui.screens.analyze.AnalyzeSelector")
+@patch("src.ui.screens.analyze._should_use_fast_explore", return_value=True)
+@patch("src.ui.screens.analyze._get_rust_scan_data_with_spinner")
 def test_fast_explore_ignores_rust_scan_cache(
     mock_single, _mock_should_fast, mock_selector, test_env
 ):
@@ -565,9 +569,9 @@ def test_fast_explore_notice_explains_truncation():
     assert "folder sizes are not calculated" in notice
 
 
-@patch("src.core.analyze.AnalyzeSelector")
-@patch("src.core.analyze._should_use_fast_explore", return_value=False)
-@patch("src.core.analyze._get_rust_scan_data_with_spinner")
+@patch("src.ui.screens.analyze.AnalyzeSelector")
+@patch("src.ui.screens.analyze._should_use_fast_explore", return_value=False)
+@patch("src.ui.screens.analyze._get_rust_scan_data_with_spinner")
 def test_regular_directory_uses_rust_size_view(
     mock_single, _mock_should_fast, mock_selector, test_env
 ):
@@ -592,10 +596,10 @@ def test_regular_directory_uses_rust_size_view(
     assert by_name["a.txt"]["size"] == 3
 
 
-@patch("src.core.analyze.AnalyzeSelector")
-@patch("src.core.analyze._should_use_fast_explore", return_value=True)
-@patch("src.core.analyze._get_rust_scan_data_with_spinner")
-@patch("src.core.analyze.build_analysis_entry")
+@patch("src.ui.screens.analyze.AnalyzeSelector")
+@patch("src.ui.screens.analyze._should_use_fast_explore", return_value=True)
+@patch("src.ui.screens.analyze._get_rust_scan_data_with_spinner")
+@patch("src.ui.screens.analyze.build_analysis_entry")
 def test_fast_explore_builds_rows_without_per_path_analysis(
     mock_build_entry, mock_single, _mock_should_fast, mock_selector, test_env
 ):
@@ -611,9 +615,9 @@ def test_fast_explore_builds_rows_without_per_path_analysis(
     mock_build_entry.assert_not_called()
 
 
-@patch("src.core.analyze.AnalyzeSelector")
-@patch("src.core.analyze._should_use_fast_explore", return_value=True)
-@patch("src.core.analyze._get_rust_scan_data_with_spinner")
+@patch("src.ui.screens.analyze.AnalyzeSelector")
+@patch("src.ui.screens.analyze._should_use_fast_explore", return_value=True)
+@patch("src.ui.screens.analyze._get_rust_scan_data_with_spinner")
 def test_wide_cache_directory_uses_fast_explore_not_rust(
     mock_single, _mock_should_fast, mock_selector, test_env
 ):
@@ -631,9 +635,9 @@ def test_wide_cache_directory_uses_fast_explore_not_rust(
     assert "icon-0.png" in shown_names
 
 
-@patch("src.core.analyze.AnalyzeSelector")
-@patch("src.core.analyze._parallel_scan_sizes")
-@patch("src.core.analyze.get_rust_tree_data")
+@patch("src.ui.screens.analyze.AnalyzeSelector")
+@patch("src.ui.screens.analyze._parallel_scan_sizes")
+@patch("src.ui.screens.analyze.get_rust_tree_data")
 def test_root_view_uses_tree_scan(mock_tree, mock_parallel, mock_selector, test_env):
     ScanCache.clear()
     mock_tree.return_value = {"total_size_bytes": 1000, "subdirs": {}, "top_files": []}
@@ -645,9 +649,9 @@ def test_root_view_uses_tree_scan(mock_tree, mock_parallel, mock_selector, test_
     mock_tree.assert_called_once_with(test_env)
 
 
-@patch("src.core.analyze.AnalyzeSelector")
-@patch("src.core.analyze._parallel_scan_sizes")
-@patch("src.core.analyze.get_rust_tree_data")
+@patch("src.ui.screens.analyze.AnalyzeSelector")
+@patch("src.ui.screens.analyze._parallel_scan_sizes")
+@patch("src.ui.screens.analyze.get_rust_tree_data")
 def test_root_view_repins_home_after_secondary_cache_churn(
     mock_tree, mock_parallel, mock_selector, test_env
 ):
@@ -676,10 +680,10 @@ def test_root_view_repins_home_after_secondary_cache_churn(
     ScanCache.clear()
 
 
-@patch("src.core.analyze.AnalyzeSelector")
-@patch("src.core.analyze._parallel_scan_sizes")
-@patch("src.core.analyze.get_fast_explore_data")
-@patch("src.core.analyze.get_rust_tree_data")
+@patch("src.ui.screens.analyze.AnalyzeSelector")
+@patch("src.ui.screens.analyze._parallel_scan_sizes")
+@patch("src.ui.screens.analyze.get_fast_explore_data")
+@patch("src.ui.screens.analyze.get_rust_tree_data")
 def test_root_view_does_not_pin_a_fast_explore_fallback_as_home(
     mock_tree, mock_fast, mock_parallel, mock_selector, test_env
 ):
@@ -704,8 +708,8 @@ def test_root_view_does_not_pin_a_fast_explore_fallback_as_home(
     ScanCache.clear()
 
 
-@patch("src.core.analyze.SCAN_SPINNER_DELAY", 5.0)
-@patch("src.core.analyze._render_scan_header")
+@patch("src.ui.screens.analyze.SCAN_SPINNER_DELAY", 5.0)
+@patch("src.ui.screens.analyze._render_scan_header")
 def test_scan_with_spinner_skips_header_for_fast_scan(mock_header):
     """A scan that finishes within the grace period never paints the scan screen,
     so fast small-dir scans hand off to the list with an in-place redraw."""
@@ -715,8 +719,8 @@ def test_scan_with_spinner_skips_header_for_fast_scan(mock_header):
     mock_header.assert_not_called()
 
 
-@patch("src.core.analyze.SCAN_SPINNER_DELAY", 0.0)
-@patch("src.core.analyze._render_scan_header")
+@patch("src.ui.screens.analyze.SCAN_SPINNER_DELAY", 0.0)
+@patch("src.ui.screens.analyze._render_scan_header")
 def test_scan_with_spinner_shows_header_for_slow_scan(mock_header):
     """A scan slower than the grace period paints the scan screen + spinner."""
 
@@ -897,30 +901,51 @@ def test_permanent_fallback_consent_declines_without_a_terminal(capsys):
 
 def test_permanent_fallback_consent_asks_once_per_batch():
     """The confirmation is asked at most once and then reused for the batch."""
-    consent = _permanent_fallback_consent()
+    ask = MagicMock(return_value=True)
+    consent = _permanent_fallback_consent(ask)
     with (
         patch("src.core.analyze.sys.stdin.isatty", return_value=True),
         patch("src.core.analyze.sys.stdout.isatty", return_value=True),
-        patch("src.core.analyze.ConfirmSelector") as mock_confirm,
     ):
-        mock_confirm.return_value.run.return_value = True
         assert consent(Path("/tmp/one")) is True
         assert consent(Path("/tmp/two")) is True
-    assert mock_confirm.call_count == 1
+    ask.assert_called_once_with(PERMANENT_DELETE_QUESTION)
 
 
 def test_permanent_fallback_consent_remembers_a_refusal():
     """A refusal is also remembered, so the user is not asked repeatedly."""
+    ask = MagicMock(return_value=False)
+    consent = _permanent_fallback_consent(ask)
+    with (
+        patch("src.core.analyze.sys.stdin.isatty", return_value=True),
+        patch("src.core.analyze.sys.stdout.isatty", return_value=True),
+    ):
+        assert consent(Path("/tmp/one")) is False
+        assert consent(Path("/tmp/two")) is False
+    assert ask.call_count == 1
+
+
+def test_permanent_fallback_consent_declines_when_no_way_to_ask(capsys):
+    """A caller that supplies no dialog is treated like a run with no terminal.
+
+    core decides the question is warranted; putting it up is the UI's job. With
+    nobody able to ask, the recoverable answer stands even on a real terminal.
+    """
     consent = _permanent_fallback_consent()
     with (
         patch("src.core.analyze.sys.stdin.isatty", return_value=True),
         patch("src.core.analyze.sys.stdout.isatty", return_value=True),
-        patch("src.core.analyze.ConfirmSelector") as mock_confirm,
     ):
-        mock_confirm.return_value.run.return_value = False
-        assert consent(Path("/tmp/one")) is False
-        assert consent(Path("/tmp/two")) is False
-    assert mock_confirm.call_count == 1
+        assert consent(Path("/tmp/whatever")) is False
+    assert "skipping instead of deleting permanently" in capsys.readouterr().out
+
+
+def test_screen_confirm_drives_the_selector_dialog():
+    """The injected asker is what actually puts ConfirmSelector on screen."""
+    with patch("src.ui.screens.analyze.ConfirmSelector") as mock_confirm:
+        mock_confirm.return_value.run.return_value = True
+        assert _confirm_permanent_delete("Delete permanently?") is True
+    mock_confirm.assert_called_once_with("Delete permanently?")
 
 
 def test_analyze_delete_system_path_requires_admin():

@@ -12,17 +12,13 @@
 # ui.screens is where the selector-driven flows live, and is the one place
 # allowed to compose the toolkit with a feature package.
 #
-# KNOWN FAILING: `tach check` currently reports 3 violations -- core.analyze
-# builds interactive selectors from ui.navigator, which puts a `core -> ui` edge
-# in the graph and closes a cycle with the `ui -> core` edge every UI module
-# already has. The fix is to move run_deep_analysis into ui.screens and inject
-# the one genuine yes/no question (ConfirmSelector) as a callable, the way
-# _safe_remove_analyze_path already takes permanent_consent. Until then the
-# config stays red on purpose rather than relaxed to match the code. Do NOT run
-# `tach sync` -- it would write the violating edges into depends_on and silence
-# the gate, which is how `core -> ui` got legitimized once before.
+# KNOWN FAILING: nothing -- `tach check` is clean. Keep it that way: if a check
+# starts failing, fix the import rather than widening depends_on, and never run
+# `tach sync`, which writes whatever the code currently does into the config and
+# would silently legitimize the next `core -> ui` edge the way it did once
+# before.
 #
-# tach is not wired into CI yet; that should wait until the graph is clean.
+# tach is not wired into CI yet. Now that the graph is clean it can be.
 
 
 interfaces = []
