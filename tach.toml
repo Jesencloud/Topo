@@ -1,0 +1,47 @@
+# Module boundaries, enforced by `tach check` (also run from check.sh).
+#
+# The layering is dependency-inversion: core is the bottom and depends on
+# nothing; ui/clean/manage each depend only on core; main wires them together.
+#
+# KNOWN FAILING: `tach check` currently reports 7 violations, all of the same
+# kind -- core.analyze and clean.app_manager construct interactive selectors
+# from ui.navigator, which puts a `core -> ui` edge in the graph and closes a
+# cycle. Fixing that means moving the interaction out of those modules (or
+# inverting it behind a Protocol), so the config is committed red on purpose
+# rather than relaxed to match the code. Do NOT run `tach sync` -- it would
+# write the violating edges into depends_on and silence the gate.
+#
+# tach is not wired into CI yet; that should wait until the graph is clean.
+
+interfaces = []
+exclude = [
+    "**/*__pycache__",
+    "**/*egg-info",
+    "**/docs",
+    "**/tests",
+    "**/venv",
+]
+source_roots = [
+    ".",
+]
+root_module = "ignore"
+
+[[modules]]
+path = "src.core"
+depends_on = []
+
+[[modules]]
+path = "src.ui"
+depends_on = ["src.core"]
+
+[[modules]]
+path = "src.clean"
+depends_on = ["src.core"]
+
+[[modules]]
+path = "src.manage"
+depends_on = ["src.core"]
+
+[[modules]]
+path = "src.main"
+depends_on = ["src.core", "src.ui", "src.clean", "src.manage"]
