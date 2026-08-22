@@ -3,7 +3,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 import time
 from array import array
 from collections import defaultdict
@@ -14,21 +13,7 @@ from typing import Any
 
 from ..core import system
 from ..core.constants import (
-    BLUE,
-    BOLD,
-    CLEAR_LINE,
-    CLEAR_SCREEN,
-    CYAN,
-    GRAY,
-    GREEN,
-    MAGENTA,
-    PURPLE,
-    RED,
-    RESET,
     RPM_QUERY_BATCH_SIZE,
-    THEME_TITLE,
-    WHITE,
-    YELLOW,
 )
 from ..core.desktop_entry import get_desktop_exec_names, get_desktop_icon, get_desktop_name
 from ..core.file_ops import (
@@ -39,12 +24,7 @@ from ..core.file_ops import (
     safe_remove,
 )
 from ..core.history import record_history_session
-from ..core.scan_cache import ScanCache
-from ..core.sound import play_delete
-from ..core.spinner import threaded_spinner
-from ..core.text import sanitize_for_display
 from ..core.whitelist import LINUX_USER_DATA_DIRS
-from ..ui.navigator import Navigator, UninstallPreviewSelector, UninstallSelector
 
 
 @dataclass(frozen=True, eq=False)
@@ -1334,6 +1314,30 @@ class UninstallManager:
 
         return paths
 
+    def build_removal_targets(
+        self, apps: list[dict[str, Any]]
+    ) -> list[tuple[dict[str, Any], list[Path], bool]]:
+        """Resolve residue paths and running state for each app about to be removed.
+
+        Both answers cost real work -- residue discovery walks the filesystem and
+        the running check spawns one pgrep per candidate process name -- so they
+        are computed once here rather than from inside a render loop. The result
+        is exactly what UninstallPreviewSelector needs to draw the confirmation.
+        """
+        targets = []
+        for app in apps:
+            app_paths = self.find_residue_paths(app["id"], app["name"])
+            is_running = False
+            for proc in self._candidate_process_names(app, app_paths):
+                try:
+                    if system.run_command(["pgrep", "-x", proc], capture=True, timeout=5).ok:
+                        is_running = True
+                        break
+                except (OSError, subprocess.SubprocessError):
+                    pass
+            targets.append((app, app_paths, is_running))
+        return targets
+
     def execute_uninstall(self, app: dict[str, Any], paths: list[Path]):
         """Terminates app and removes all files."""
         app_name = str(app.get("name") or app.get("id") or "unknown")
@@ -1457,134 +1461,3 @@ class UninstallManager:
             if package_status == "failed" and not package_event_recorded:
                 record_deletion_audit(app.get("id", app_name), package_mode, "failed", package_size)
             record_history_session(session_command, "ended")
-
-
-def run_uninstall():
-    manager = UninstallManager()
-
-    while True:
-        if not manager.has_fresh_scan_cache():
-
-            def render_scan_spinner(frame: str) -> None:
-                sys.stdout.write(
-                    CLEAR_SCREEN + f"\n {THEME_TITLE}Select Application to Remove{RESET}\n\n"
-                    f" {PURPLE}{frame}{RESET} {GRAY}Scanning installed applications...{RESET}\033[K"
-                )
-                sys.stdout.flush()
-
-            with threaded_spinner(render_scan_spinner):
-                apps = manager.run_full_scan(use_cache=True)
-        else:
-            apps = manager.run_full_scan(use_cache=True)
-
-        if not apps:
-            print(f"\n   {RED}No applications found to uninstall.{RESET}")
-            Navigator.wait_for_return()
-            return
-
-        selector = UninstallSelector("Select Application to Remove", apps)
-        selected_indices = selector.run()
-
-        if not selected_indices:
-            return
-
-        # Residue discovery and process checks touch the filesystem / spawn pgrep,
-        # so compute them once before handing the preview data to the UI layer.
-        selected_apps = [apps[i] for i in selected_indices]
-        all_targets = []
-        for app in selected_apps:
-            app_paths = manager.find_residue_paths(app["id"], app["name"])
-            is_running = False
-            for proc in manager._candidate_process_names(app, app_paths):
-                try:
-                    if system.run_command(["pgrep", "-x", proc], capture=True, timeout=5).ok:
-                        is_running = True
-                        break
-                except (OSError, subprocess.SubprocessError):
-                    pass
-            all_targets.append((app, app_paths, is_running))
-
-        confirmed = UninstallPreviewSelector(all_targets).run()
-
-        if confirmed:
-            # Ensure sudo session (require password) outside raw mode so sudo can own input.
-            if not system.ensure_sudo_session(
-                f"{MAGENTA}➔{RESET} App removal requires admin access\n{MAGENTA}➔{RESET} Password: "
-            ):
-                if system.SUDO_CANCELLED:
-                    # Navigator.wait_for_return already adds a leading newline
-                    print(f" {YELLOW}⚠️  Uninstall cancelled by user.{RESET}", end="")
-                    if not Navigator.wait_for_return(
-                        f"Press {GREEN}Enter{RESET} {WHITE}to return to application list{RESET}, {CYAN}ESC{RESET} {WHITE}to exit...{RESET}"
-                    ):
-                        return
-                    continue
-                else:
-                    print(f" {RED}✗{RESET} Authorization failed. Uninstall cancelled.\n")
-                    return
-
-            print(f"{GREEN}ꗃ{RESET} Authorization successful.")
-
-            # --- EXECUTION ---
-            current_status = ["Processing..."]
-
-            def render_removal_spinner(frame: str, status_box: list[str] = current_status) -> None:
-                sys.stdout.write(f"{CLEAR_LINE}{PURPLE}{frame}{RESET} {status_box[0]}")
-                sys.stdout.flush()
-
-            removed_names = []
-            failed_names = []
-            total_freed_all = 0
-            has_apt = False
-
-            try:
-                with threaded_spinner(render_removal_spinner):
-                    for app, paths, _ in all_targets:
-                        # `name` comes from a .desktop Name= field, so it is untrusted; these
-                        # lists feed the summary lines only, never a filesystem operation.
-                        safe_app_name = sanitize_for_display(str(app["name"]))
-                        current_status[0] = f"Removing {BOLD}{safe_app_name}{RESET}..."
-                        if app["type"] == "APT":
-                            has_apt = True
-                        result = manager.execute_uninstall(app, paths)
-                        package_removed = bool(result.get("package_removed"))
-                        paths_removed = any(ok for ok, _ in result.get("removed_paths", []))
-                        if package_removed or paths_removed:
-                            removed_names.append(safe_app_name)
-                            if package_removed:
-                                total_freed_all += app["size_bytes"]
-                        else:
-                            failed_names.append(safe_app_name)
-
-                    if has_apt and removed_names:
-                        current_status[0] = "Cleaning up orphaned dependencies..."
-                        system.run_command(["apt", "autoremove", "-y"], use_sudo=True, capture=True)
-            finally:
-                sys.stdout.write(f"{CLEAR_LINE}")
-                sys.stdout.flush()
-
-            for name in removed_names:
-                print(f"{GREEN}✓{RESET} Removed {BOLD}{name}{RESET}")
-            for name in failed_names:
-                print(f"{RED}✗{RESET} Failed to remove {BOLD}{name}{RESET}")
-
-            # Final Summary — only report what actually succeeded.
-            if removed_names:
-                ScanCache.clear()
-                UninstallManager.clear_scan_cache()
-            print(f"\n{'=' * 70}")
-            print(f"{BLUE}Uninstall complete{RESET}")
-            names_str = ", ".join(removed_names) if removed_names else "none"
-            msg = f"Removed {len(removed_names)} app(s), freed {GREEN}"
-            msg += f"{bytes_to_human(total_freed_all)}{RESET}: {names_str}"
-            print(msg)
-            if failed_names:
-                print(f" {RED}✗ Failed:{RESET} {', '.join(failed_names)}")
-            print("=" * 70)
-            play_delete()
-
-            # Standardized return/exit prompt
-            if not Navigator.wait_for_return(
-                f"Press {GREEN}Enter{RESET} {WHITE}to return to application list{RESET}, {CYAN}ESC{RESET} {WHITE}to exit...{RESET}"
-            ):
-                return  # Exit uninstall completely

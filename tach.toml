@@ -1,17 +1,29 @@
 # Module boundaries, enforced by `tach check` (also run from check.sh).
 #
-# The layering is dependency-inversion: core is the bottom and depends on
-# nothing; ui/clean/manage each depend only on core; main wires them together.
+# The layering runs one way, core at the bottom:
 #
-# KNOWN FAILING: `tach check` currently reports 6 violations, all of the same
-# kind -- core.analyze and clean.app_manager construct interactive selectors
-# from ui.navigator, which puts a `core -> ui` edge in the graph and closes a
-# cycle. Fixing that means moving the interaction out of those modules (or
-# inverting it behind a Protocol), so the config is committed red on purpose
-# rather than relaxed to match the code. Do NOT run `tach sync` -- it would
-# write the violating edges into depends_on and silence the gate.
+#   core  <-  ui  <-  ui.screens  <-  main
+#   core  <-  clean / manage  <-  ui.screens, main
+#
+# core depends on nothing. ui is a terminal *widget toolkit* (Navigator, the
+# selectors, raw mode, mouse) -- infrastructure like curses, not the top of the
+# stack -- so it also sits low and may only reach for core. Feature packages
+# (clean, manage) hold logic and their own non-interactive entry points.
+# ui.screens is where the selector-driven flows live, and is the one place
+# allowed to compose the toolkit with a feature package.
+#
+# KNOWN FAILING: `tach check` currently reports 3 violations -- core.analyze
+# builds interactive selectors from ui.navigator, which puts a `core -> ui` edge
+# in the graph and closes a cycle with the `ui -> core` edge every UI module
+# already has. The fix is to move run_deep_analysis into ui.screens and inject
+# the one genuine yes/no question (ConfirmSelector) as a callable, the way
+# _safe_remove_analyze_path already takes permanent_consent. Until then the
+# config stays red on purpose rather than relaxed to match the code. Do NOT run
+# `tach sync` -- it would write the violating edges into depends_on and silence
+# the gate, which is how `core -> ui` got legitimized once before.
 #
 # tach is not wired into CI yet; that should wait until the graph is clean.
+
 
 interfaces = []
 exclude = [
@@ -34,6 +46,13 @@ depends_on = []
 path = "src.ui"
 depends_on = ["src.core"]
 
+# Interactive screens compose the toolkit above with the feature packages. They
+# are a nested module precisely so that this wider allowance does NOT extend to
+# src.ui itself: navigator.py stays a toolkit that cannot import a feature.
+[[modules]]
+path = "src.ui.screens"
+depends_on = ["src.core", "src.ui", "src.clean"]
+
 [[modules]]
 path = "src.clean"
 depends_on = ["src.core"]
@@ -44,4 +63,4 @@ depends_on = ["src.core"]
 
 [[modules]]
 path = "src.main"
-depends_on = ["src.core", "src.ui", "src.clean", "src.manage"]
+depends_on = ["src.core", "src.ui", "src.ui.screens", "src.clean", "src.manage"]

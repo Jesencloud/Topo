@@ -2,7 +2,6 @@ import argparse
 import sys
 from contextlib import contextmanager
 
-from .clean.app_manager import run_uninstall
 from .clean.optimize import optimize_system
 from .clean.runner import run_clean
 from .core import system, terminal_state
@@ -25,6 +24,7 @@ from .manage.install import run_install_link
 from .manage.remove import run_remove
 from .manage.update import run_update
 from .ui.navigator import Navigator
+from .ui.screens.uninstall import run_uninstall
 from .ui.tui import (
     ANALYZE_ACTION,
     CLEAN_ACTION,

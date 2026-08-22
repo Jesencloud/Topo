@@ -4,8 +4,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.clean.app_manager import UninstallManager, _ResidueEntryIndex, run_uninstall
+from src.clean.app_manager import UninstallManager, _ResidueEntryIndex
 from src.core.history import parse_deletion_history
+from src.ui.screens.uninstall import run_uninstall
 
 
 @pytest.fixture(autouse=True)
@@ -52,7 +53,7 @@ def test_run_uninstall_escape_selector():
     ]
     with (
         patch("src.clean.app_manager.UninstallManager.run_full_scan", return_value=mock_apps),
-        patch("src.clean.app_manager.UninstallSelector.run", return_value=[]),
+        patch("src.ui.screens.uninstall.UninstallSelector.run", return_value=[]),
     ):
         run_uninstall()
 
@@ -70,8 +71,8 @@ def test_run_uninstall_execute_and_exit():
     ]
     with (
         patch("src.clean.app_manager.UninstallManager.run_full_scan", return_value=mock_apps),
-        patch("src.clean.app_manager.UninstallSelector.run", return_value=[0]),
-        patch("src.clean.app_manager.UninstallPreviewSelector.run", return_value=True),
+        patch("src.ui.screens.uninstall.UninstallSelector.run", return_value=[0]),
+        patch("src.ui.screens.uninstall.UninstallPreviewSelector.run", return_value=True),
         patch("src.clean.app_manager.UninstallManager.execute_uninstall") as mock_exec,
         patch("src.ui.navigator.Navigator.wait_for_return", return_value=False),
         patch("src.core.system.ensure_sudo_session", return_value=True),
@@ -107,8 +108,8 @@ def test_run_uninstall_cancel():
             "src.clean.app_manager.UninstallManager.run_full_scan",
             side_effect=mock_scan_side_effect,
         ),
-        patch("src.clean.app_manager.UninstallSelector.run", return_value=[0]),
-        patch("src.clean.app_manager.UninstallPreviewSelector.run", return_value=False),
+        patch("src.ui.screens.uninstall.UninstallSelector.run", return_value=[0]),
+        patch("src.ui.screens.uninstall.UninstallPreviewSelector.run", return_value=False),
         patch("src.clean.app_manager.UninstallManager.execute_uninstall") as mock_exec,
         patch("src.ui.navigator.Navigator.wait_for_return", return_value=False),
         patch("subprocess.run") as mock_run,
@@ -845,8 +846,8 @@ def test_run_uninstall_failed_package_not_counted(capsys):
     ]
     with (
         patch("src.clean.app_manager.UninstallManager.run_full_scan", return_value=mock_apps),
-        patch("src.clean.app_manager.UninstallSelector.run", return_value=[0]),
-        patch("src.clean.app_manager.UninstallPreviewSelector.run", return_value=True),
+        patch("src.ui.screens.uninstall.UninstallSelector.run", return_value=[0]),
+        patch("src.ui.screens.uninstall.UninstallPreviewSelector.run", return_value=True),
         patch("src.clean.app_manager.UninstallManager.find_residue_paths", return_value=[]),
         patch(
             "src.clean.app_manager.UninstallManager.execute_uninstall",
