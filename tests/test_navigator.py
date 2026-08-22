@@ -27,6 +27,7 @@ from src.ui.navigator import (
     icon_gap,
     pad_and_truncate,
 )
+from src.ui.screens.uninstall import SCREEN_TITLE
 
 
 @contextmanager
@@ -603,33 +604,45 @@ def test_analyze_render_shows_unknown_folder_size():
     assert "|         --" in visible_output
 
 
-def test_analyze_render_shows_available_page_directions():
-    selector = AnalyzeSelector("t", _analyze_items(31), can_select=True)
+def test_analyze_marks_only_that_the_list_continues():
+    """A page with rows after it ends in "..."; the last page ends bare.
 
-    def render_page(page):
+    This replaced a "↑ More items above | ↓ More items below" pair. Nothing marks
+    the rows above any more: landing on a later page is something the user just
+    did, and the footer's page counter already says where they are.
+    """
+
+    def has_continuation_marker(selector, page=0):
         selector.current_page = page
         selector.selected_index = page * selector.page_size
+        frames = []
         with (
             patch(
                 "src.ui.navigator.shutil.get_terminal_size",
                 return_value=os.terminal_size((100, 24)),
             ),
-            patch("sys.stdout.write") as write,
-            patch("sys.stdout.flush"),
+            # Captures the buffer rather than the composed frame: the frame
+            # writer positions the cursor per row instead of emitting newlines,
+            # so splitlines() on its output would see one long line.
+            patch(
+                "src.ui.navigator._render_scrollable_frame",
+                side_effect=lambda _, parts, __, frames=frames: frames.append(parts),
+            ),
         ):
             selector.render()
-        return ANSI_CSI_RE.sub("", write.call_args.args[0])
+        visible = ANSI_CSI_RE.sub("", "".join(frames[0]))
+        # A whole line of its own -- pad_and_truncate also emits "..." inside a
+        # clipped filename, so a substring test would answer the wrong question.
+        return any(line.strip() == "..." for line in visible.splitlines())
 
-    first_page = render_page(0)
-    assert "↓ More items below" in first_page
-    assert "↑ More items above" not in first_page
+    # 31 items at 15 a page: two full pages, then a single trailing row.
+    paged = AnalyzeSelector("t", _analyze_items(31), can_select=True)
+    assert has_continuation_marker(paged, 0)
+    assert has_continuation_marker(paged, 1)
+    assert not has_continuation_marker(paged, 2)
 
-    middle_page = render_page(1)
-    assert "↑ More items above | ↓ More items below" in middle_page
-
-    last_page = render_page(2)
-    assert "↑ More items above" in last_page
-    assert "↓ More items below" not in last_page
+    # A list that fits on one page is never marked as continuing.
+    assert not has_continuation_marker(AnalyzeSelector("t", _analyze_items(5), can_select=True))
 
 
 def test_analyze_page_numbers_accumulate_but_digits_select_current_page():
@@ -720,10 +733,15 @@ def test_uninstall_hint_uses_gray():
 
     output = "".join(frames[0])
     footer = next(line for line in output.splitlines() if "Page 1/" in line)
-    for key in ("↑↓←→", "PgUp/PgDn", "A", "N", "S", "T", "Space"):
+    for key in ("↑↓←→", "PgUp/PgDn", "A", "N", "S", "T"):
         assert key in footer
     assert "<GREEN>" not in footer
     assert footer.lstrip().startswith("<GRAY>")
+
+    # The selection hint moved to the header line, which has to stay gray too.
+    header_hint = next(line for line in output.splitlines() if "Select apps to uninstall" in line)
+    assert "<GREEN>" not in header_hint
+    assert header_hint.lstrip().startswith("<GRAY>")
 
 
 def test_uninstall_rows_reflow_as_terminal_narrows():
@@ -792,15 +810,160 @@ def test_uninstall_footer_stays_on_one_rendered_line_at_all_widths():
             "N: Name",
             "S: Size",
             "T: Time",
-            "Space: Select",
         ):
             assert hint in footer
+        # How to select is explained in the header line, not crammed in here.
+        assert "Select" not in footer
+
+
+def test_uninstall_header_explains_how_to_select():
+    """The selection hint sits under the title, matching Analyze.
+
+    It used to be a "Space: Select" fragment at the end of the footer, which ran
+    the footer past 80 columns -- so the one hint telling you the digit shortcut
+    exists was the first thing truncated away on a standard terminal.
+    """
+    frames = []
+    with (
+        patch(
+            "src.ui.navigator.shutil.get_terminal_size",
+            return_value=os.terminal_size((100, 24)),
+        ),
+        patch(
+            "src.ui.navigator._render_scrollable_frame",
+            side_effect=lambda _, parts, __, frames=frames: frames.append(parts),
+        ),
+    ):
+        UninstallSelector(SCREEN_TITLE, _uninstall_items()).render()
+
+    visible = ANSI_CSI_RE.sub("", "".join(frames[0]))
+    lines = visible.splitlines()
+    title = next(i for i, line in enumerate(lines) if SCREEN_TITLE in line)
+    hint = next(
+        i for i, line in enumerate(lines) if line.strip().startswith("Select apps to uninstall")
+    )
+
+    assert hint > title
+    # Compared stripped: the leading indent is a layout detail being tuned.
+    assert lines[hint].strip() == (
+        "Select apps to uninstall (Enter item numbers from this page, or press Space to select):"
+    )
+    # The title names the screen so the sentence under it can carry the
+    # instruction; a title phrased as one would say "select" twice in a row.
+    assert "select" not in SCREEN_TITLE.lower()
+    assert "0/20 selected" in lines[title]
+    for line in lines:
+        assert display_width(line) <= 100
+
+
+def test_uninstall_selector_renders_the_title_it_was_given():
+    """The title is a constructor argument, not a string baked into render().
+
+    It was hardcoded while __init__ still stored the argument, so the screen and
+    its scan spinner each carried their own copy and could drift apart -- the
+    title would jump the moment the scan handed off to the list.
+    """
+    frames = []
+    with (
+        patch(
+            "src.ui.navigator.shutil.get_terminal_size",
+            return_value=os.terminal_size((100, 24)),
+        ),
+        patch(
+            "src.ui.navigator._render_scrollable_frame",
+            side_effect=lambda _, parts, __, frames=frames: frames.append(parts),
+        ),
+    ):
+        UninstallSelector("Some Other Screen", _uninstall_items()).render()
+
+    visible = ANSI_CSI_RE.sub("", "".join(frames[0]))
+    assert "Some Other Screen" in visible
+
+
+def test_uninstall_empty_list_does_not_offer_a_selection_hint():
+    """Nothing to number, so telling the user to type a row number would be noise."""
+    frames = []
+    with (
+        patch(
+            "src.ui.navigator.shutil.get_terminal_size",
+            return_value=os.terminal_size((100, 24)),
+        ),
+        patch(
+            "src.ui.navigator._render_scrollable_frame",
+            side_effect=lambda _, parts, __, frames=frames: frames.append(parts),
+        ),
+    ):
+        UninstallSelector("t", []).render()
+
+    visible = ANSI_CSI_RE.sub("", "".join(frames[0]))
+    assert "No applications found" in visible
+    assert "Select apps to uninstall" not in visible
 
 
 def test_uninstall_space_then_enter_returns_indices():
     sel = UninstallSelector("t", _uninstall_items())
     result = drive(sel, [Navigator.SPACE, "\r"])
     assert result == [0]
+
+
+def test_uninstall_page_numbers_accumulate_but_digits_select_current_page():
+    """Rows are numbered across the list, matching Analyze.
+
+    Page 2 shows 16-30, so those are the numbers that select there; a number
+    belonging to another page is ignored rather than reaching a row the user
+    cannot see. The per-page scheme this replaced took "20" on page 1 as page
+    offset 20 and toggled row 20 -- on page 2.
+    """
+    selector = UninstallSelector("t", _uninstall_items(30))
+    drive(selector, [Navigator.PGDN, "15", "16", "30", "31", Navigator.ESC])
+
+    # 15 and 31 are off this page; 16 and 30 are its first and last rows.
+    assert selector.selected_ids == {"app15", "app29"}
+
+    selector = UninstallSelector("t", _uninstall_items(30))
+    drive(selector, ["20", Navigator.ESC])
+    assert selector.selected_ids == set()
+
+
+def test_uninstall_zero_selects_nothing():
+    """No row is numbered 0, so it matches nothing -- row 10 is typed in full."""
+    selector = UninstallSelector("t", _uninstall_items(30))
+    drive(selector, ["0", Navigator.ESC])
+    assert selector.selected_ids == set()
+
+    selector = UninstallSelector("t", _uninstall_items(30))
+    drive(selector, ["10", Navigator.ESC])
+    assert selector.selected_ids == {"app9"}
+
+
+def test_uninstall_number_column_widens_for_three_digit_rows():
+    """A 100+ row list must not push the name column right by a cell.
+
+    Numbers now run across the whole list, so the column is sized from the
+    largest one. Short lists keep the two-cell column they always had.
+    """
+
+    def first_row(count):
+        frames = []
+        with (
+            patch(
+                "src.ui.navigator.shutil.get_terminal_size",
+                return_value=os.terminal_size((100, 24)),
+            ),
+            patch(
+                "src.ui.navigator._render_scrollable_frame",
+                side_effect=lambda _, parts, __, frames=frames: frames.append(parts),
+            ),
+        ):
+            UninstallSelector("t", _uninstall_items(count)).render()
+        visible = ANSI_CSI_RE.sub("", "".join(frames[0]))
+        return next(line for line in visible.splitlines() if "app0" in line)
+
+    # The cursor sits on the first row, so the prefix carries it.
+    assert first_row(20).startswith("▶ ○  1. app0")
+    assert first_row(120).startswith("▶ ○   1. app0")
+    # The extra number cell comes out of the name budget, not the line width.
+    assert display_width(first_row(120)) <= 100
 
 
 def test_uninstall_defaults_to_install_time_sort():

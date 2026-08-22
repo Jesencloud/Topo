@@ -32,6 +32,13 @@ from ...core.spinner import threaded_spinner
 from ...core.text import sanitize_for_display
 from ..navigator import Navigator, UninstallPreviewSelector, UninstallSelector
 
+# The scan spinner and the list both paint it, so it lives in one place: a
+# mismatch would make the title jump the moment the scan hands off to the list.
+# It names the screen rather than instructing ("Analyze Disk", not "Select a
+# location..."), which is what leaves the sentence under it free to be the
+# instruction without repeating the same verb twice.
+SCREEN_TITLE = "Uninstall Apps"
+
 
 def run_uninstall():
     manager = UninstallManager()
@@ -41,7 +48,7 @@ def run_uninstall():
 
             def render_scan_spinner(frame: str) -> None:
                 sys.stdout.write(
-                    CLEAR_SCREEN + f"\n {THEME_TITLE}Select Application to Remove{RESET}\n\n"
+                    CLEAR_SCREEN + f"\n {THEME_TITLE}{SCREEN_TITLE}{RESET}\n\n"
                     f" {PURPLE}{frame}{RESET} {GRAY}Scanning installed applications...{RESET}\033[K"
                 )
                 sys.stdout.flush()
@@ -56,7 +63,7 @@ def run_uninstall():
             Navigator.wait_for_return()
             return
 
-        selector = UninstallSelector("Select Application to Remove", apps)
+        selector = UninstallSelector(SCREEN_TITLE, apps)
         selected_indices = selector.run()
 
         if not selected_indices:

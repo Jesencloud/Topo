@@ -333,6 +333,23 @@ def icon_gap(icon: str) -> str:
     return " " * max(0, _ICON_SLOT - display_width(icon)) + " "
 
 
+# Where the row-number field starts, past the cursor, its gap, the bullet and
+# its gap -- the prefix every paginated row shares. The continuation marker is
+# indented to it so the ellipsis sits directly beneath the numbers.
+_ROW_NUMBER_INDENT = " " * 4
+
+
+def _continuation_marker(page_end: int, total: int) -> str:
+    """The "list carries on" ellipsis, or blanks when this is the last page.
+
+    Blank rather than absent: dropping the line would let the footer hop up a
+    row the moment the last page is reached. Nothing marks the rows *above* --
+    arriving on a later page is something the user just did, and the page
+    counter already says where they are.
+    """
+    return f"{_ROW_NUMBER_INDENT}{'...' if page_end < total else ''}"
+
+
 class Navigator:
     UP = "\x1b[A"
     DOWN = "\x1b[B"
@@ -567,6 +584,21 @@ class _PagedSelector:
         else:
             self.selected_items |= page_indices
 
+    def _index_from_typed_number(self, num_str):
+        """Map a typed row number to its index, or None if this page has no such row.
+
+        Rows are numbered across the whole list, so what the user types is the
+        number on screen -- and only the rows this page shows can be reached.
+        "0" resolves to -1 and is therefore rejected like any other off-page
+        number, which is the point: no row is numbered 0.
+        """
+        try:
+            idx = int(num_str) - 1
+        except ValueError:
+            return None
+        start, end = self._page_bounds()
+        return idx if start <= idx < end else None
+
 
 class InteractiveMenu:
     def __init__(self, title, options, show_banner=None):
@@ -673,9 +705,9 @@ class AnalyzeSelector(_PagedSelector):
 
         total_disk = bytes_to_human(shutil.disk_usage("/").total)
         hint = (
-            f"{GRAY}Select a location to explore (Type numbers for current page or Space to select):{RESET}"
+            f"{GRAY}Select a location to explore (Enter item numbers from this page, or press Space to select):{RESET}"
             if self.can_select
-            else f"{GRAY}Select a category to explore (Total: {total_disk}):{RESET}"
+            else f" {GRAY}Select a category to explore (Total: {total_disk}):{RESET}"
         )
         buf.append(f"{hint}\033[K\n")
         if self.notice:
@@ -741,20 +773,14 @@ class AnalyzeSelector(_PagedSelector):
                     f"{cursor} {checkbox_str}{RESET}{bar_str}{percent_str}  {icon}{gap}{style}{name_padded}{RESET} | {style}{size_str:>10}{RESET}\033[K\n"
                 )
 
-        page_hints = []
-        if start > 0:
-            page_hints.append("↑ More items above")
-        if end < total_len:
-            page_hints.append("↓ More items below")
-        if page_hints:
-            buf.append(f"\n {GRAY}{' | '.join(page_hints)}{RESET}\033[K")
+        buf.append(f"{_continuation_marker(end, total_len)}\033[K")
 
         order_icon = "↓" if self.sort_reverse else "↑"
         page_info = f" Page {self.current_page + 1} of {total_pages} |" if total_pages > 1 else ""
 
         if self.can_select:
             prompts = [
-                f"{GRAY}{page_info} ↑↓←→ | PgUp/PgDn: Page | A: All | F: Open Location | R: Reload | S: Sort {order_icon} | Space: Select{RESET}"
+                f"{GRAY}{page_info} ↑↓←→ | PgUp/PgDn: Page | A: All | F: Open Location | R: Reload | S: Sort {order_icon}{RESET}"
             ]
         else:
             prompts = [
@@ -830,21 +856,9 @@ class AnalyzeSelector(_PagedSelector):
                 elif key == Navigator.SPACE and self.can_select:
                     self._toggle_index_selection(self.selected_index)
                 elif key.isdigit() and self.can_select:
-                    num_str = Navigator.read_number(fd, key)
-                    try:
-                        # No row is numbered 0, so a bare "0" matches nothing and
-                        # reaching row 10 means typing "10". Mapping 0 to 10 made
-                        # the key you press disagree with the number on screen,
-                        # and it only ever lined up on page 1 anyway: once rows
-                        # are numbered 16-30, there is no 10 to jump to.
-                        displayed_num = int(num_str)
-                        page_start = self.current_page * self.page_size + 1
-                        page_end = min(page_start + self.page_size - 1, total_len)
-                        if page_start <= displayed_num <= page_end:
-                            idx = displayed_num - 1
-                            self._toggle_index_selection(idx)
-                    except ValueError:
-                        pass
+                    idx = self._index_from_typed_number(Navigator.read_number(fd, key))
+                    if idx is not None:
+                        self._toggle_index_selection(idx)
                 elif key in Navigator.ENTER:
                     if total_len == 0:
                         continue
@@ -935,7 +949,7 @@ class UninstallSelector(_PagedSelector):
         terminal_width = max(20, shutil.get_terminal_size(fallback=(80, 24)).columns)
         total_len = len(self.items)
         buf.append(
-            f"\n {THEME_TITLE}Select Application to Remove{RESET} "
+            f"\n {THEME_TITLE}{self.title}{RESET} "
             f"{GRAY}{len(self.selected_ids)}/{total_len} selected{RESET}\033[K\n\n"
         )
 
@@ -943,17 +957,26 @@ class UninstallSelector(_PagedSelector):
             focus_line = _frame_line_count(buf)
             buf.append(f"\n   {GRAY}No applications found{RESET}\033[K\n")
         else:
+            buf.append(
+                f" {GRAY}Select apps to uninstall "
+                f"(Enter item numbers from this page, or press Space to select):{RESET}\033[K\n"
+            )
+            buf.append("\033[K\n")
             total_pages = (total_len + self.page_size - 1) // self.page_size
             self.current_page = max(0, min(self.current_page, total_pages - 1))
             start = self.current_page * self.page_size
             end = min(start + self.page_size, total_len)
             focus_line = 0
+            # Row numbers run across the whole list rather than restarting each
+            # page, so the column must be as wide as the largest one or a
+            # three-digit row would push the name column a cell to the right.
+            # Two is the floor, which is the width every list had before.
+            num_w = max(2, len(str(total_len)))
             for i in range(start, end):
                 item = self.items[i]
                 is_hover = i == self.selected_index
                 is_selected = item["id"] in self.selected_ids
-                num = (i - start) + 1
-                num_key = f" {num}" if num < 10 else str(num)
+                num_key = f"{i + 1:>{num_w}}"
                 cursor = "\033[1;36m▶\033[0m" if is_hover else " "
                 checkbox = (
                     f"\033[1;32m✓ {num_key}.\033[0m"
@@ -966,22 +989,30 @@ class UninstallSelector(_PagedSelector):
                 install_time = self._format_time_ago(item["install_time"])
                 # Responsive columns: preserve the actionable name first, then
                 # add size and time only when the terminal has room for them.
+                # The budgets subtract num_w because the number column is the one
+                # fixed-width part that can change size between lists.
                 if terminal_width >= 60:
-                    name_width = max(8, min(35, terminal_width - 34))
+                    name_width = max(8, min(35, terminal_width - 32 - num_w))
                     details = (
                         f"  {name_style}{item['size_str']:>12}{RESET} | "
                         f"{time_style}{install_time}{RESET}"
                     )
                 elif terminal_width >= 42:
-                    name_width = max(8, terminal_width - 22)
+                    name_width = max(8, terminal_width - 20 - num_w)
                     details = f"  {name_style}{item['size_str']:>12}{RESET}"
                 else:
-                    name_width = max(4, terminal_width - 8)
+                    name_width = max(4, terminal_width - 6 - num_w)
                     details = ""
                 name_padded = pad_and_truncate(clean_name, name_width)
                 if is_hover:
                     focus_line = _frame_line_count(buf)
                 buf.append(f"{cursor} {checkbox} {name_style}{name_padded}{RESET}{details}\033[K\n")
+
+            # Carries its own newline, unlike Analyze's: the footer below
+            # contributes only one, and the blank line that separates the rows
+            # from it has to survive.
+            buf.append(f"{_continuation_marker(end, total_len)}\033[K\n")
+
             sort_dir = "↓" if self.sort_reverse else "↑"
             sort_labels = {
                 "name": f"N: Name {sort_dir}",
@@ -995,7 +1026,7 @@ class UninstallSelector(_PagedSelector):
             page_info = f"Page {self.current_page + 1}/{total_pages}"
             buf.append(
                 f"\n {GRAY}{page_info} | ↑↓←→ | PgUp/PgDn: Page | A: All | "
-                f"{sort_hint} | Space: Select{RESET}\033[K\n"
+                f"{sort_hint}{RESET}\033[K\n"
             )
 
         if self.selected_ids:
@@ -1053,15 +1084,9 @@ class UninstallSelector(_PagedSelector):
                 elif key == Navigator.SPACE and total_len > 0:
                     self._toggle_selected_id(self.selected_index)
                 elif key.isdigit() and total_len > 0:
-                    num_str = Navigator.read_number(fd, key)
-                    try:
-                        num = int(num_str)
-                        page_offset = 9 if num_str == "0" else num - 1
-                        idx = self.current_page * self.page_size + page_offset
-                        if idx < total_len:
-                            self._toggle_selected_id(idx)
-                    except ValueError:
-                        pass
+                    idx = self._index_from_typed_number(Navigator.read_number(fd, key))
+                    if idx is not None:
+                        self._toggle_selected_id(idx)
                 elif len(key) == 1 and key.lower() in ("s", "n", "t"):
                     self.sort_key = (
                         "size_bytes"
