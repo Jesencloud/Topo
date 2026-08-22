@@ -13,6 +13,7 @@ from pathlib import Path
 from ..core import terminal_state
 from ..core.config import get_show_scrollbar
 from ..core.constants import (
+    BLUE,
     BOLD,
     CYAN,
     GRAY,
@@ -618,10 +619,10 @@ class InteractiveMenu:
         buf.append("\033[K\n")
         focus_line = 0
         for i, (label, desc) in enumerate(self.options):
-            prefix = " \033[1;36m>\033[0m " if i == self.selected_index else "   "
+            prefix = f" {CYAN}>{RESET} " if i == self.selected_index else "   "
             if i == self.selected_index:
                 focus_line = _frame_line_count(buf)
-                buf.append(f"{prefix}\033[1;36m{label:<15} {desc}{RESET}\033[K\n")
+                buf.append(f"{prefix}{CYAN}{label:<15} {desc}{RESET}\033[K\n")
             else:
                 buf.append(f"{prefix}{label:<15} {desc}\033[K\n")
         buf.append("\033[K\n")
@@ -734,19 +735,18 @@ class AnalyzeSelector(_PagedSelector):
                 item = self.items[i]
                 is_hover = i == self.selected_index
                 is_selected = i in self.selected_items
-                cursor = "\033[1;36m▶\033[0m" if is_hover else " "
+                cursor = f"{CYAN}▶{RESET}" if is_hover else " "
                 if self.can_select:
                     num = i + 1
                     checkbox_str = (
-                        f"\033[1;32m✓ {num:2}.{RESET} "
-                        if is_selected
-                        else f"{GRAY}○{RESET} {num:2}. "
+                        f"{GREEN}✓ {num:2}.{RESET} " if is_selected else f"{GRAY}○{RESET} {num:2}. "
                     )
                 else:
-                    # Keep the non-selectable root rows the same width as the
-                    # selectable child rows so all columns remain fixed while
-                    # drilling into a directory.
-                    checkbox_str = f"  {i + 1:2}. "
+                    # A bullet, not the checkbox the child views use: these root
+                    # categories cannot be ticked, and an ○ here would invite a
+                    # Space press that does nothing. One cell either way, so the
+                    # columns stay put while drilling into a directory.
+                    checkbox_str = f"{GRAY}•{RESET} {i + 1:2}. "
 
                 size_known = item.get("size_known", True)
                 if size_known:
@@ -763,7 +763,10 @@ class AnalyzeSelector(_PagedSelector):
                     percent_str = f"{WHITE}{'--':>6}{RESET}"
                     size_str = "--"
                 bar_str = f"{bar}  " if bar_w > 0 else ""
-                style = "\033[1;36m" if is_hover else "\033[1;35m" if is_selected else ""
+                # Being selected outranks being hovered: a row marked for
+                # deletion has to keep saying so while the cursor passes over it,
+                # and the ▶ already shows where the cursor is.
+                style = PURPLE if is_selected else CYAN if is_hover else ""
                 name_padded = pad_and_truncate(sanitize_for_display(item["name"]), name_w)
                 icon = item.get("icon", "🗂️")
                 gap = icon_gap(icon)
@@ -982,13 +985,14 @@ class UninstallSelector(_PagedSelector):
                 is_hover = i == self.selected_index
                 is_selected = item["id"] in self.selected_ids
                 num_key = f"{i + 1:>{num_w}}"
-                cursor = "\033[1;36m▶\033[0m" if is_hover else " "
+                cursor = f"{CYAN}▶{RESET}" if is_hover else " "
                 checkbox = (
-                    f"\033[1;32m✓ {num_key}.\033[0m"
-                    if is_selected
-                    else f"{GRAY}○{RESET} {num_key}."
+                    f"{GREEN}✓ {num_key}.{RESET}" if is_selected else f"{GRAY}○{RESET} {num_key}."
                 )
-                name_style = "\033[1;36m" if is_hover else "\033[1;35m" if is_selected else ""
+                # Being selected outranks being hovered: a row marked for removal
+                # has to keep saying so while the cursor passes over it, and the
+                # ▶ already shows where the cursor is.
+                name_style = PURPLE if is_selected else CYAN if is_hover else ""
                 time_style = name_style
                 clean_name = sanitize_for_display(item["name"])
                 install_time = self._format_time_ago(item["install_time"])
@@ -1147,11 +1151,11 @@ class UninstallPreviewSelector:
         buf.append("\033[K\n")
 
         for app, app_paths, is_running in self.targets:
-            running_tag = " \033[1;33m[Running]\033[0m" if is_running else ""
-            buf.append(f"  \033[1;32m✓\033[0m {BOLD}{app['name']}{RESET}{running_tag}\033[K\n")
+            running_tag = f" {YELLOW}[Running]{RESET}" if is_running else ""
+            buf.append(f"  {GREEN}✓{RESET} {BOLD}{app['name']}{RESET}{running_tag}\033[K\n")
             for path in app_paths:
                 is_risky = path.parent == Path.home()
-                mark = "\033[1;33m⚠\033[0m" if is_risky else "\033[1;34m✓\033[0m"
+                mark = f"{YELLOW}⚠{RESET}" if is_risky else f"{BLUE}✓{RESET}"
                 color = YELLOW if is_risky else GRAY
                 buf.append(f"    {mark} {color}{self._path_label(path)}{RESET}\033[K\n")
 
@@ -1211,8 +1215,8 @@ class TopFilesSelector:
         focus_line = 0
         for i in range(start, end):
             item = self.items[i]
-            cursor = "\033[1;36m▶\033[0m" if i == self.selected_index else " "
-            checkbox = "[\033[1;32m✓\033[0m]" if i in self.selected_items else "[ ]"
+            cursor = f"{CYAN}▶{RESET}" if i == self.selected_index else " "
+            checkbox = f"[{GREEN}✓{RESET}]" if i in self.selected_items else "[ ]"
             if i == self.selected_index:
                 focus_line = _frame_line_count(buf)
             clean_path = sanitize_for_display(str(item["path"]))
