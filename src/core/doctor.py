@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from .analyze import _get_core_binary
+from .analyze import get_core_binary
 from .constants import BLUE, BOLD, CYAN, GRAY, GREEN, PURPLE, RED, RESET, YELLOW
 from .install_source import get_install_root, get_install_source
 from .system import get_invoking_user, get_os_id, run_command
@@ -104,7 +104,7 @@ def run_doctor():
 
     # 3. Rust Engine
     print(f"{BOLD}{BLUE}Rust Engine{RESET}")
-    engine = _get_core_binary()
+    engine = get_core_binary()
     if engine and engine.exists():
         print(f"  {GREEN}✓{RESET} Executable: {CYAN}{engine}{RESET}")
         engine_ok, engine_detail = _check_rust_engine_response(engine)

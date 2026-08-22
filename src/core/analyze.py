@@ -43,7 +43,7 @@ FAST_EXPLORE_ENTRY_LIMIT = 500
 
 
 @functools.cache
-def _get_core_binary() -> Path | None:
+def get_core_binary() -> Path | None:
     """Resolves the architecture-specific topo-core binary path.
 
     install.sh keeps only the binary matching the host arch (e.g. it removes
@@ -62,7 +62,7 @@ def _get_core_binary() -> Path | None:
     return None
 
 
-def _normalize_scan_path(path: str | Path) -> Path:
+def normalize_scan_path(path: str | Path) -> Path:
     """Return one stable absolute cache/process key without leaking resolve errors."""
     raw = Path(path).expanduser()
     try:
@@ -73,11 +73,11 @@ def _normalize_scan_path(path: str | Path) -> Path:
 
 def get_rust_scan_data(path: Path, *, use_cache: bool = True) -> dict[str, Any] | None:
     """Calls the architecture-specific topo-core binary and returns parsed JSON."""
-    binary = _get_core_binary()
+    binary = get_core_binary()
     if binary is None:
         return None
 
-    path = _normalize_scan_path(path)
+    path = normalize_scan_path(path)
     # Check cache first
     cached = ScanCache.get(path)
     if use_cache and cached:
@@ -96,11 +96,11 @@ def get_rust_scan_data(path: Path, *, use_cache: bool = True) -> dict[str, Any] 
 
 def get_rust_tree_data(path: Path) -> dict[str, Any] | None:
     """Scan once and seed ScanCache for every significant descendant."""
-    binary = _get_core_binary()
+    binary = get_core_binary()
     if binary is None:
         return None
 
-    path = _normalize_scan_path(path)
+    path = normalize_scan_path(path)
     res = run_command(
         [str(binary), "--tree", str(path)],
         capture=True,
@@ -140,9 +140,7 @@ def _direct_child_count_exceeds(path: Path, limit: int = FAST_EXPLORE_ENTRY_LIMI
     return False
 
 
-def _should_use_fast_explore(
-    path: Path, direct_entry_limit: int = FAST_EXPLORE_ENTRY_LIMIT
-) -> bool:
+def should_use_fast_explore(path: Path, direct_entry_limit: int = FAST_EXPLORE_ENTRY_LIMIT) -> bool:
     return _direct_child_count_exceeds(path, direct_entry_limit)
 
 
@@ -205,7 +203,7 @@ def get_fast_explore_data(
     return data
 
 
-def _parallel_scan_sizes(
+def parallel_scan_sizes(
     paths: list[Path], *, on_scan_start: Callable[[], None] | None = None
 ) -> dict[Path, int]:
     """Scan multiple paths concurrently via the Rust engine.
@@ -226,7 +224,7 @@ def _parallel_scan_sizes(
         scan_started = True
 
     unique = list(dict.fromkeys(paths))
-    norm = {p: _normalize_scan_path(p) for p in unique}
+    norm = {p: normalize_scan_path(p) for p in unique}
     roots = [p for p in unique if not any(parent in unique for parent in p.parents)]
     roots = [p for p in roots if ScanCache.get(norm[p]) is None]
 
@@ -550,7 +548,7 @@ def _delete_analyze_paths(
     return changed
 
 
-def _delete_and_refresh_cache(
+def delete_and_refresh_cache(
     paths: list[Path],
     current_target: Path | None,
     *,

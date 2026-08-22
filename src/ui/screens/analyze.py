@@ -18,17 +18,17 @@ from ...core.analyze import (
     ANALYZE_RESULT_LIMIT,
     FAST_EXPLORE_ENTRY_LIMIT,
     SCAN_SPINNER_DELAY,
-    _delete_and_refresh_cache,
-    _normalize_scan_path,
-    _parallel_scan_sizes,
-    _should_use_fast_explore,
     build_analysis_entry,
     build_linux_insights,
+    delete_and_refresh_cache,
     get_age_hint,
     get_fast_explore_data,
     get_old_items_info,
     get_rust_scan_data,
     get_rust_tree_data,
+    normalize_scan_path,
+    parallel_scan_sizes,
+    should_use_fast_explore,
 )
 from ...core.constants import BLUE, CYAN, ERASE_BELOW, GRAY, MAGENTA, PURPLE, RESET, YELLOW
 from ...core.scan_cache import ScanCache
@@ -149,7 +149,7 @@ def run_deep_analysis(target_path: Path | None = None):
     state_stack: list[dict[str, Any]] = []
 
     # Current active state
-    current_target: Path | None = _normalize_scan_path(target_path) if target_path else None
+    current_target: Path | None = normalize_scan_path(target_path) if target_path else None
     results: list[dict[str, Any]] = []
     data: dict[str, Any] | None = None
     total_scan_size = 0
@@ -159,13 +159,13 @@ def run_deep_analysis(target_path: Path | None = None):
     current_page = 0
 
     while True:
-        target_to_scan = current_target or _normalize_scan_path(Path.home())
+        target_to_scan = current_target or normalize_scan_path(Path.home())
         view_title = "Analyze Disk" if current_target is None else f"Exploring: {current_target}"
 
         if needs_scan:
             target_label = target_to_scan.name if current_target else "Home"
             if current_target is not None:
-                if _should_use_fast_explore(target_to_scan):
+                if should_use_fast_explore(target_to_scan):
                     data = _fast_explore_with_spinner(
                         target_to_scan,
                         "refresh" if scan_reason == "refresh" else "explore",
@@ -242,7 +242,7 @@ def run_deep_analysis(target_path: Path | None = None):
                 ]
                 scan_sizes = (
                     _scan_with_spinner(
-                        lambda paths=rust_paths: _parallel_scan_sizes(paths),
+                        lambda paths=rust_paths: parallel_scan_sizes(paths),
                         "insights",
                         "Linux insights",
                         view_title,
@@ -387,7 +387,7 @@ def run_deep_analysis(target_path: Path | None = None):
                 selected_idxs = top_selector.run()
                 if selected_idxs:
                     paths = [item["smart_items"][s_idx]["path"] for s_idx in selected_idxs]
-                    if _delete_and_refresh_cache(
+                    if delete_and_refresh_cache(
                         paths, current_target, ask_permanent=_confirm_permanent_delete
                     ):
                         needs_scan = True
@@ -440,7 +440,7 @@ def run_deep_analysis(target_path: Path | None = None):
         elif action == "DELETE_BATCH":
             selected_idxs = idx  # action was DELETE_BATCH, idx contains the list
             paths = [results[s_idx]["path"] for s_idx in selected_idxs]
-            if _delete_and_refresh_cache(
+            if delete_and_refresh_cache(
                 paths, current_target, ask_permanent=_confirm_permanent_delete
             ):
                 needs_scan = True

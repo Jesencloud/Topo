@@ -17,7 +17,7 @@ class ScanCache:
     """Bounded, freshness-aware memory cache for Rust scan results.
 
     Thread-safe: ``get``/``set``/``discard``/``clear`` are guarded by a
-    class-level lock. ``analyze._parallel_scan_sizes`` seeds the cache from a
+    class-level lock. ``analyze.parallel_scan_sizes`` seeds the cache from a
     ThreadPoolExecutor (several workers each calling ``set`` many times), and
     the byte accounting (``_estimated_bytes``) plus the LRU ordering are
     read-modify-write state that would otherwise drift under that concurrency,

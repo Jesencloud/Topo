@@ -15,16 +15,16 @@ from src.core.analyze import (
     _delete_analyze_paths,
     _direct_child_count_exceeds,
     _needs_admin_for_deletion,
-    _normalize_scan_path,
-    _parallel_scan_sizes,
     _permanent_fallback_consent,
-    _should_use_fast_explore,
     _sudo_remove,
     build_analysis_entry,
     build_linux_insights,
     get_fast_explore_data,
     get_rust_scan_data,
     get_rust_tree_data,
+    normalize_scan_path,
+    parallel_scan_sizes,
+    should_use_fast_explore,
 )
 from src.core.file_ops import CACHEDIR_TAG_SIGNATURE, has_valid_cachedir_tag
 from src.core.scan_cache import ScanCache
@@ -121,7 +121,7 @@ def test_scan_cache_invalid_rust_estimate_falls_back(tmp_path, invalid_hint):
 def _dev_engine_binary() -> Path:
     """Build and return the engine from the current checkout.
 
-    Deliberately not ``_get_core_binary()``: that returns the *packaged* binary
+    Deliberately not ``get_core_binary()``: that returns the *packaged* binary
     under ``src/core/bin``, which is a release artifact and can predate the
     scanner source being tested here.
     """
@@ -157,7 +157,7 @@ def test_rust_cache_hint_never_undercharges_the_generic_estimate(tmp_path):
     (tmp_path / "目录-中文" / "inner").mkdir(parents=True)
     (tmp_path / "目录-中文" / "inner" / "f.bin").write_bytes(b"y" * 512)
 
-    root = _normalize_scan_path(tmp_path)
+    root = normalize_scan_path(tmp_path)
     single = json.loads(
         subprocess.run([str(binary), str(root)], capture_output=True, text=True, check=True).stdout
     )
@@ -182,7 +182,7 @@ def test_rust_cache_hint_never_undercharges_the_generic_estimate(tmp_path):
 def test_scan_cache_byte_accounting_stays_consistent_under_concurrency(monkeypatch, tmp_path):
     """Concurrent set/get from many threads must not corrupt the cache.
 
-    ``_parallel_scan_sizes`` seeds the cache from a ThreadPoolExecutor (several
+    ``parallel_scan_sizes`` seeds the cache from a ThreadPoolExecutor (several
     workers each calling ``set`` many times). The byte counter and LRU order are
     read-modify-write state; without the class-level lock, concurrent eviction
     both drifts ``_estimated_bytes`` and races ``move_to_end`` into a KeyError.
@@ -263,7 +263,7 @@ def test_get_rust_tree_data_seeds_descendant_cache():
     }
     ScanCache.clear()
     with (
-        patch("src.core.analyze._get_core_binary", return_value=Path("/tmp/topo-core")),
+        patch("src.core.analyze.get_core_binary", return_value=Path("/tmp/topo-core")),
         patch(
             "src.core.analyze.run_command",
             return_value=MagicMock(ok=True, stdout=json.dumps(payload)),
@@ -289,7 +289,7 @@ def test_parallel_scan_sizes_collapses_nested_roots_and_limits_workers():
             ScanCache.set(child, {"total_size_bytes": 25})
 
     with patch("src.core.analyze.get_rust_tree_data", side_effect=fake_tree):
-        sizes = _parallel_scan_sizes([root, child, other, child])
+        sizes = parallel_scan_sizes([root, child, other, child])
 
     assert scanned == [root, other]
     assert sizes == {root: 100, child: 25, other: 100}
@@ -304,8 +304,8 @@ def test_parallel_scan_sizes_notifies_only_when_scanning():
         ScanCache.set(path, {"total_size_bytes": 100})
 
     with patch("src.core.analyze.get_rust_tree_data", side_effect=fake_tree):
-        assert _parallel_scan_sizes([root], on_scan_start=notice) == {root: 100}
-        assert _parallel_scan_sizes([root], on_scan_start=notice) == {root: 100}
+        assert parallel_scan_sizes([root], on_scan_start=notice) == {root: 100}
+        assert parallel_scan_sizes([root], on_scan_start=notice) == {root: 100}
 
     notice.assert_called_once_with()
 
@@ -332,7 +332,7 @@ def test_parallel_scan_sizes_notifies_once_across_both_scan_phases():
         patch("src.core.analyze.get_rust_tree_data", side_effect=tree_seeds_only_a),
         patch("src.core.analyze.get_rust_scan_data", side_effect=scan_seeds_b),
     ):
-        sizes = _parallel_scan_sizes([a, b], on_scan_start=notice)
+        sizes = parallel_scan_sizes([a, b], on_scan_start=notice)
 
     assert sizes == {a: 10, b: 20}
     notice.assert_called_once_with()
@@ -357,7 +357,7 @@ def test_parallel_scan_sizes_reuses_pre_seeded_descendants():
         ScanCache.set(path, {"total_size_bytes": 100})
 
     with patch("src.core.analyze.get_rust_tree_data", side_effect=fake_tree):
-        sizes = _parallel_scan_sizes([other, hub, models])
+        sizes = parallel_scan_sizes([other, hub, models])
 
     # hub and models are cache hits -> only /usr is scanned.
     assert scanned == [other]
@@ -366,7 +366,7 @@ def test_parallel_scan_sizes_reuses_pre_seeded_descendants():
 
 def test_parallel_scan_sizes_matches_symlinked_input_to_resolved_cache_key(tmp_path):
     """The scan functions key the cache by the normalized (symlink-resolved)
-    path, so _parallel_scan_sizes must probe under the same key. A symlinked
+    path, so parallel_scan_sizes must probe under the same key. A symlinked
     input (e.g. ~/.cache moved to another partition) would otherwise be seeded
     under its resolved key but read under the raw key, silently reporting 0."""
     ScanCache.clear()
@@ -374,14 +374,14 @@ def test_parallel_scan_sizes_matches_symlinked_input_to_resolved_cache_key(tmp_p
     real.mkdir()
     link = tmp_path / "linked_cache"
     link.symlink_to(real, target_is_directory=True)
-    assert _normalize_scan_path(link) != link  # guard: the symlink must resolve
+    assert normalize_scan_path(link) != link  # guard: the symlink must resolve
 
     def fake_tree(path):
         # Mimic get_rust_tree_data: cache under the normalized (resolved) key.
-        ScanCache.set(_normalize_scan_path(path), {"total_size_bytes": 4096})
+        ScanCache.set(normalize_scan_path(path), {"total_size_bytes": 4096})
 
     with patch("src.core.analyze.get_rust_tree_data", side_effect=fake_tree):
-        sizes = _parallel_scan_sizes([link])
+        sizes = parallel_scan_sizes([link])
 
     # Keyed by the caller's original path, with the size found via the resolved key.
     assert sizes == {link: 4096}
@@ -434,7 +434,7 @@ def test_get_rust_tree_data_returns_root_even_when_root_is_too_large_to_cache(te
 def test_normalize_scan_path_falls_back_when_resolve_fails(tmp_path):
     relative = Path("relative-target")
     with patch.object(Path, "resolve", side_effect=OSError("unavailable")):
-        normalized = _normalize_scan_path(relative)
+        normalized = normalize_scan_path(relative)
 
     assert normalized == relative.absolute()
 
@@ -478,7 +478,7 @@ def test_render_scan_header_repaints_in_place_without_full_clear(capsys):
 
 
 @patch("src.ui.screens.analyze.AnalyzeSelector")
-@patch("src.ui.screens.analyze._should_use_fast_explore", return_value=True)
+@patch("src.ui.screens.analyze.should_use_fast_explore", return_value=True)
 @patch("src.ui.screens.analyze._get_rust_scan_data_with_spinner")
 def test_fast_explore_ignores_rust_scan_cache(
     mock_single, _mock_should_fast, mock_selector, test_env
@@ -510,8 +510,8 @@ def test_should_use_fast_explore_only_for_wide_directories(test_env):
 
     assert _direct_child_count_exceeds(root, limit=2) is True
     assert _direct_child_count_exceeds(root, limit=3) is False
-    assert _should_use_fast_explore(root, direct_entry_limit=2) is True
-    assert _should_use_fast_explore(root, direct_entry_limit=3) is False
+    assert should_use_fast_explore(root, direct_entry_limit=2) is True
+    assert should_use_fast_explore(root, direct_entry_limit=3) is False
 
 
 def test_fast_explore_data_is_direct_listing_and_non_recursive(test_env):
@@ -570,7 +570,7 @@ def test_fast_explore_notice_explains_truncation():
 
 
 @patch("src.ui.screens.analyze.AnalyzeSelector")
-@patch("src.ui.screens.analyze._should_use_fast_explore", return_value=False)
+@patch("src.ui.screens.analyze.should_use_fast_explore", return_value=False)
 @patch("src.ui.screens.analyze._get_rust_scan_data_with_spinner")
 def test_regular_directory_uses_rust_size_view(
     mock_single, _mock_should_fast, mock_selector, test_env
@@ -597,7 +597,7 @@ def test_regular_directory_uses_rust_size_view(
 
 
 @patch("src.ui.screens.analyze.AnalyzeSelector")
-@patch("src.ui.screens.analyze._should_use_fast_explore", return_value=True)
+@patch("src.ui.screens.analyze.should_use_fast_explore", return_value=True)
 @patch("src.ui.screens.analyze._get_rust_scan_data_with_spinner")
 @patch("src.ui.screens.analyze.build_analysis_entry")
 def test_fast_explore_builds_rows_without_per_path_analysis(
@@ -616,7 +616,7 @@ def test_fast_explore_builds_rows_without_per_path_analysis(
 
 
 @patch("src.ui.screens.analyze.AnalyzeSelector")
-@patch("src.ui.screens.analyze._should_use_fast_explore", return_value=True)
+@patch("src.ui.screens.analyze.should_use_fast_explore", return_value=True)
 @patch("src.ui.screens.analyze._get_rust_scan_data_with_spinner")
 def test_wide_cache_directory_uses_fast_explore_not_rust(
     mock_single, _mock_should_fast, mock_selector, test_env
@@ -636,7 +636,7 @@ def test_wide_cache_directory_uses_fast_explore_not_rust(
 
 
 @patch("src.ui.screens.analyze.AnalyzeSelector")
-@patch("src.ui.screens.analyze._parallel_scan_sizes")
+@patch("src.ui.screens.analyze.parallel_scan_sizes")
 @patch("src.ui.screens.analyze.get_rust_tree_data")
 def test_root_view_uses_tree_scan(mock_tree, mock_parallel, mock_selector, test_env):
     ScanCache.clear()
@@ -650,7 +650,7 @@ def test_root_view_uses_tree_scan(mock_tree, mock_parallel, mock_selector, test_
 
 
 @patch("src.ui.screens.analyze.AnalyzeSelector")
-@patch("src.ui.screens.analyze._parallel_scan_sizes")
+@patch("src.ui.screens.analyze.parallel_scan_sizes")
 @patch("src.ui.screens.analyze.get_rust_tree_data")
 def test_root_view_repins_home_after_secondary_cache_churn(
     mock_tree, mock_parallel, mock_selector, test_env
@@ -681,7 +681,7 @@ def test_root_view_repins_home_after_secondary_cache_churn(
 
 
 @patch("src.ui.screens.analyze.AnalyzeSelector")
-@patch("src.ui.screens.analyze._parallel_scan_sizes")
+@patch("src.ui.screens.analyze.parallel_scan_sizes")
 @patch("src.ui.screens.analyze.get_fast_explore_data")
 @patch("src.ui.screens.analyze.get_rust_tree_data")
 def test_root_view_does_not_pin_a_fast_explore_fallback_as_home(

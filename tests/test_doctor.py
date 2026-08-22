@@ -25,7 +25,7 @@ def test_run_doctor_continues_when_version_file_is_missing(tmp_path, capsys):
     with (
         patch("src.core.doctor.get_install_root", return_value=install_root),
         patch("src.core.doctor.get_install_source", return_value="script"),
-        patch("src.core.doctor._get_core_binary", return_value=None),
+        patch("src.core.doctor.get_core_binary", return_value=None),
         patch("src.core.doctor.shutil.which", return_value=None),
         patch("src.core.doctor.Path.home", return_value=home),
         patch(
@@ -68,7 +68,7 @@ def test_run_doctor_uses_temporary_size_probe_with_short_timeout(tmp_path):
     with (
         patch("src.core.doctor.get_install_root", return_value=install_root),
         patch("src.core.doctor.get_install_source", return_value="script"),
-        patch("src.core.doctor._get_core_binary", return_value=engine),
+        patch("src.core.doctor.get_core_binary", return_value=engine),
         patch("src.core.doctor.shutil.which", return_value=None),
         patch("src.core.doctor.Path.home", return_value=home),
         patch("src.core.doctor.run_command", side_effect=fake_run_command),

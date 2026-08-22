@@ -466,9 +466,9 @@ def _has_recent_content(path: Path, cutoff: float) -> bool:
 
 def _get_path_stats(path: Path) -> dict[str, Any] | None:
     """Return size and newest activity from one Rust traversal."""
-    from .analyze import _get_core_binary
+    from .analyze import get_core_binary
 
-    binary = _get_core_binary()
+    binary = get_core_binary()
     if binary is None:
         return None
     result = run_command([str(binary), "--stats", str(path)], capture=True, timeout=300)
