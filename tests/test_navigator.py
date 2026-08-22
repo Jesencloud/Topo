@@ -364,6 +364,24 @@ def test_analyze_number_toggles_index():
     assert sel.selected_items == {2}
 
 
+def test_analyze_zero_selects_nothing_and_ten_is_typed_in_full():
+    """ "0" used to mean "row 10", so the key pressed disagreed with the screen.
+
+    No row is numbered 0, so it must match nothing; row 10 is reached by typing
+    "10". The old shortcut also only lined up on page 1 -- once rows are numbered
+    16-30 there is no 10 to jump to -- so it could not survive the move to
+    accumulating numbers across pages.
+    """
+    sel = AnalyzeSelector("t", _analyze_items(), can_select=True)
+    action, _ = drive(sel, ["0", Navigator.ESC])
+    assert action == "QUIT"
+    assert sel.selected_items == set()
+
+    sel = AnalyzeSelector("t", _analyze_items(), can_select=True)
+    drive(sel, ["10", Navigator.ESC])
+    assert sel.selected_items == {9}
+
+
 def test_analyze_down_moves_cursor():
     sel = AnalyzeSelector("t", _analyze_items(), can_select=True)
     drive(sel, [Navigator.DOWN, Navigator.DOWN, Navigator.ESC])

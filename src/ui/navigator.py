@@ -832,7 +832,12 @@ class AnalyzeSelector(_PagedSelector):
                 elif key.isdigit() and self.can_select:
                     num_str = Navigator.read_number(fd, key)
                     try:
-                        displayed_num = 10 if num_str == "0" else int(num_str)
+                        # No row is numbered 0, so a bare "0" matches nothing and
+                        # reaching row 10 means typing "10". Mapping 0 to 10 made
+                        # the key you press disagree with the number on screen,
+                        # and it only ever lined up on page 1 anyway: once rows
+                        # are numbered 16-30, there is no 10 to jump to.
+                        displayed_num = int(num_str)
                         page_start = self.current_page * self.page_size + 1
                         page_end = min(page_start + self.page_size - 1, total_len)
                         if page_start <= displayed_num <= page_end:
