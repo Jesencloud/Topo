@@ -267,7 +267,7 @@ def test_draw_bar_levels_differ_without_color():
 
 def test_draw_bar_keeps_the_original_glyph_for_both_segments_when_colored():
     with patch.multiple(
-        "src.ui.navigator", RESET="\033[0m", WHITE="\033[38;5;244m", GREEN="\033[1;32m"
+        "src.core.render", RESET="\033[0m", WHITE="\033[38;5;244m", GREEN="\033[1;32m"
     ):
         bar = draw_bar(50, width=10)
     assert ANSI_CSI_RE.sub("", bar) == "▬" * 10
@@ -288,7 +288,7 @@ def test_draw_bar_zero_percent_honors_force_color():
     # Only RESET and WHITE are read on this path (RESET picks the glyph and
     # terminates the run, WHITE is the default track color), so patching a RED
     # that draw_bar never looks at would just be noise.
-    with patch.multiple("src.ui.navigator", RESET="\033[0m", WHITE="\033[38;5;244m"):
+    with patch.multiple("src.core.render", RESET="\033[0m", WHITE="\033[38;5;244m"):
         forced = draw_bar(0, width=10, force_color="\033[1;31m")
         default = draw_bar(0, width=10)
 

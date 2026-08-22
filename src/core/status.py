@@ -7,9 +7,9 @@ import struct
 from datetime import datetime
 from pathlib import Path
 
-from ..ui.navigator import draw_bar, format_percent, get_color_for_percent
 from .constants import GREEN, PURPLE, RED, RESET, WHITE, YELLOW
 from .file_ops import bytes_to_human
+from .render import draw_bar, format_percent, get_color_for_percent
 from .system import run_command
 from .text import display_width
 
