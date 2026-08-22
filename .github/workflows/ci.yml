@@ -38,8 +38,11 @@ jobs:
       - name: Run Ruff Format (Python)
         run: ruff format --check src tests
 
+      # --check-untyped-defs matches check.sh. Without it mypy skips the bodies
+      # of unannotated functions, which would make CI strictly weaker than the
+      # local gate: a type error in such a body fails ./check.sh and passes here.
       - name: Run Mypy (Python)
-        run: mypy src/
+        run: mypy --check-untyped-defs src/
 
       # Enforces the layering declared in tach.toml: core depends on nothing,
       # ui is a widget toolkit that may only reach for core, and ui.screens is
@@ -81,8 +84,12 @@ jobs:
       - name: Install Python Test Tools
         run: pip install pytest packaging
 
+      # -p no:tach matches check.sh. The tach package registers a pytest plugin
+      # under that name, so a run with tach installed collects differently from
+      # one without. This job does not install tach today, but blocking it here
+      # keeps that true no matter what lands in the install line later.
       - name: Run Pytest (Python)
-        run: pytest -q
+        run: pytest -q -p no:tach
 
   rust-test:
     name: Rust Unit Tests
