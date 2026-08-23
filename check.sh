@@ -28,12 +28,6 @@ else
     echo -e "${GRAY}💡 Hint: Run './check.sh --fix' to automatically fix linting errors.${NC}\n"
 fi
 
-# Mandatory configuration check
-if [ ! -f ".vulture_whitelist.py" ]; then
-    echo -e "${RED}❌ Error: .vulture_whitelist.py is missing! Dead code whitelist file must exist.${NC}"
-    exit 1
-fi
-
 echo -e "${PURPLE}☉ 1. Formatting Code...${NC}"
 if ! OUT=$(ruff format src tests 2>&1); then
     echo -e "${RED}❌ Ruff format failed:${NC}\n$OUT"
@@ -77,7 +71,7 @@ else
 fi
 
 if command -v vulture &> /dev/null; then
-    if ! OUT=$(vulture src/ .vulture_whitelist.py 2>&1); then
+    if ! OUT=$(vulture src/ 2>&1); then
         echo -e "${RED}❌ Vulture dead code check failed:${NC}\n$OUT"
         exit 1
     fi

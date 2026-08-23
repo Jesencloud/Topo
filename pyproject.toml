@@ -1,8 +1,41 @@
+[tool.vulture]
+# These are reached in ways vulture cannot see, so it would report every one of
+# them as dead. The run_* tasks are pulled from OptimizationRegistry rather than
+# called by name; exc_* are the __exit__ protocol parameters, which have to be
+# accepted and are then unused by design.
+#
+# Listed one by one rather than as run_*/exc_* globs: a pattern would also cover
+# a future run_ task that really had gone dead.
+ignore_names = [
+    "run_vacuum_all",
+    "run_fstrim",
+    "run_fccache",
+    "run_sysctl_optimize",
+    "run_tmpfiles_cleanup",
+    "run_ldconfig",
+    "run_locale_gen",
+    "run_man_db_refresh",
+    "run_autostart_cleanup",
+    "run_systemd_user_service_cleanup",
+    "run_user_systemd_reset_failed",
+    "run_swap_management",
+    "run_journal_optimization",
+    "run_coredump_cleanup",
+    "run_broken_symlink_cleanup",
+    "run_desktop_database_refresh",
+    "run_mime_database_refresh",
+    "run_flatpak_repair",
+    "run_tracker_miner_reset",
+    "run_package_repo_refresh",
+    "exc_tb",
+    "exc_type",
+    "exc_val",
+]
+
 [tool.ruff]
 # 指定代码目标版本
 target-version = "py310"
 line-length = 100
-exclude = [".vulture_whitelist.py"]
 
 [tool.ruff.lint]
 # 启用的规则集

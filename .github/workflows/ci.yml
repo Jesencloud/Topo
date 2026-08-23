@@ -52,8 +52,10 @@ jobs:
       - name: Run Tach Module Boundary Check (Python)
         run: tach check
 
+      # The ignore list lives in pyproject.toml under [tool.vulture]; vulture
+      # picks it up from the working directory, so no file argument is needed.
       - name: Run Vulture Dead Code Check (Python)
-        run: vulture src/ .vulture_whitelist.py
+        run: vulture src/
 
       - name: Run Cargo Clippy (Rust)
         working-directory: topo-core
