@@ -96,10 +96,7 @@ def test_clean_space_skips_clean_without_sudo():
         patch("src.core.system.ensure_sudo_session") as mock_sudo,
         patch("src.clean.runner.proactive_app_detection", return_value={}),
         patch("src.clean.runner.record_history_session"),
-        patch("src.clean.runner.clean_package_manager", side_effect=no_op) as mock_pkg,
-        patch("src.clean.runner.clean_orphaned_packages", side_effect=no_op) as mock_orphans,
-        patch("src.clean.runner.clean_journal", side_effect=no_op) as mock_journal,
-        patch("src.clean.runner.clean_zombies", side_effect=no_op) as mock_zombies,
+        patch("src.clean.runner.clean_system_data", side_effect=no_op) as mock_system,
         patch("src.clean.runner.clean_user_data", side_effect=no_op) as mock_user,
         patch("src.clean.runner.clean_apps_deep", side_effect=no_op) as mock_apps,
         patch("src.clean.runner.clean_developer_tools", side_effect=no_op) as mock_dev,
@@ -109,10 +106,7 @@ def test_clean_space_skips_clean_without_sudo():
 
     assert result is False
     mock_sudo.assert_not_called()
-    mock_pkg.assert_not_called()
-    mock_orphans.assert_not_called()
-    mock_journal.assert_not_called()
-    mock_zombies.assert_not_called()
+    mock_system.assert_not_called()
     mock_user.assert_not_called()
     mock_apps.assert_not_called()
     mock_dev.assert_not_called()

@@ -320,3 +320,32 @@ def clean_rotated_logs(dry_run: bool = False) -> tuple[int, int, int]:
     return DryRunReporter.report(
         "Rotated log files", freed_bytes=total_size, items_count=total_items, dry_run=dry_run
     )
+
+
+def clean_system_data(dry_run: bool = False) -> tuple[int, int, int]:
+    """Combined system and package-manager cleanup.
+
+    The order is the one runner.py used to spell out task by task: package
+    caches first, then what they leave behind, then logs, then processes.
+
+    Each sub-cleaner prints its own line, so aggregating here changes the
+    summary rather than the transcript -- the six tasks become one row, the
+    granularity the other three groups already report at.
+    """
+    total_size = 0
+    total_items = 0
+    categories = 0
+
+    for s, i, c in (
+        clean_package_manager(dry_run),
+        clean_orphaned_packages(dry_run),
+        clean_old_kernels(dry_run),
+        clean_journal(dry_run),
+        clean_rotated_logs(dry_run),
+        clean_zombies(dry_run),
+    ):
+        total_size += s
+        total_items += i
+        categories += c
+
+    return total_size, total_items, categories

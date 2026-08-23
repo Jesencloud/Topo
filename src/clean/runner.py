@@ -20,14 +20,7 @@ from ..core.history import record_history_session
 from ..core.scan_cache import ScanCache
 from .apps import clean_apps_deep, proactive_app_detection
 from .dev import clean_developer_tools
-from .system import (
-    clean_journal,
-    clean_old_kernels,
-    clean_orphaned_packages,
-    clean_package_manager,
-    clean_rotated_logs,
-    clean_zombies,
-)
+from .system import clean_system_data
 from .user import clean_user_data
 
 
@@ -47,14 +40,7 @@ class TaskRegistry:
         return [
             (
                 f"{THEME_TITLE}➤ System & Package Manager{RESET}",
-                [
-                    CleanupTask("Package Manager Cache", clean_package_manager),
-                    CleanupTask("Orphaned Packages", clean_orphaned_packages),
-                    CleanupTask("Old Kernels", clean_old_kernels),
-                    CleanupTask("System Journal Logs", clean_journal),
-                    CleanupTask("Rotated Log Files", clean_rotated_logs),
-                    CleanupTask("Zombie Processes", clean_zombies),
-                ],
+                [CleanupTask("System & Packages", clean_system_data)],
             ),
             (
                 f"{THEME_TITLE}➤ User Data Cleanup{RESET}",
