@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from src.core.analyze import get_rust_tree_data
+from src.core.engine import get_rust_tree_data
 from src.core.scan_cache import ScanCache
 from src.uninstall import _ResidueEntryIndex
 

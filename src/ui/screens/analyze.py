@@ -1,6 +1,6 @@
 """The Analyze screen: browse disk usage, drill into directories, delete targets.
 
-Scanning, sizing and deletion all live in core.analyze; this module owns the
+Scanning, sizing and deletion all live in the top-level analyze module; this module owns the
 navigation loop, the scan-progress painting and the selectors. The scan header
 and spinner helpers are here rather than in core because their whole job is
 visual -- they decide when a scan is slow enough to deserve a screen, and repaint
@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from ...core.analyze import (
+from ...analyze import (
     ANALYZE_RESULT_LIMIT,
     FAST_EXPLORE_ENTRY_LIMIT,
     SCAN_SPINNER_DELAY,
@@ -39,7 +39,7 @@ from ..navigator import AnalyzeSelector, ConfirmSelector, TopFilesSelector
 def _confirm_permanent_delete(question: str) -> bool:
     """Put the permanent-delete question to the user.
 
-    core.analyze decides whether the question is warranted and remembers the
+    analyze decides whether the question is warranted and remembers the
     answer for the batch; all this does is render the dialog.
     """
     return ConfirmSelector(question).run()

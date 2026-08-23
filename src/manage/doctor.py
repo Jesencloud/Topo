@@ -5,10 +5,10 @@ import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from .core.constants import BLUE, BOLD, CYAN, GRAY, GREEN, PURPLE, RED, RESET, YELLOW
-from .core.engine import get_core_binary
-from .core.install_source import get_install_root, get_install_source
-from .core.system import get_invoking_user, get_os_id, run_command
+from ..core.constants import BLUE, BOLD, CYAN, GRAY, GREEN, PURPLE, RED, RESET, YELLOW
+from ..core.engine import get_core_binary
+from ..core.install_source import get_install_root, get_install_source
+from ..core.system import get_invoking_user, get_os_id, run_command
 
 DOCTOR_COMMAND_TIMEOUT = 5
 

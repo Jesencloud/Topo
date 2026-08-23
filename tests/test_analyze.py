@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.core.analyze import (
+from src.analyze import (
     PERMANENT_DELETE_QUESTION,
     _delete_analyze_paths,
     _direct_child_count_exceeds,
@@ -290,7 +290,7 @@ def test_parallel_scan_sizes_collapses_nested_roots_and_limits_workers():
         if path == root:
             ScanCache.set(child, {"total_size_bytes": 25})
 
-    with patch("src.core.analyze.get_rust_tree_data", side_effect=fake_tree):
+    with patch("src.analyze.get_rust_tree_data", side_effect=fake_tree):
         sizes = parallel_scan_sizes([root, child, other, child])
 
     assert scanned == [root, other]
@@ -305,7 +305,7 @@ def test_parallel_scan_sizes_notifies_only_when_scanning():
     def fake_tree(path):
         ScanCache.set(path, {"total_size_bytes": 100})
 
-    with patch("src.core.analyze.get_rust_tree_data", side_effect=fake_tree):
+    with patch("src.analyze.get_rust_tree_data", side_effect=fake_tree):
         assert parallel_scan_sizes([root], on_scan_start=notice) == {root: 100}
         assert parallel_scan_sizes([root], on_scan_start=notice) == {root: 100}
 
@@ -331,8 +331,8 @@ def test_parallel_scan_sizes_notifies_once_across_both_scan_phases():
         ScanCache.set(path, {"total_size_bytes": 20})
 
     with (
-        patch("src.core.analyze.get_rust_tree_data", side_effect=tree_seeds_only_a),
-        patch("src.core.analyze.get_rust_scan_data", side_effect=scan_seeds_b),
+        patch("src.analyze.get_rust_tree_data", side_effect=tree_seeds_only_a),
+        patch("src.analyze.get_rust_scan_data", side_effect=scan_seeds_b),
     ):
         sizes = parallel_scan_sizes([a, b], on_scan_start=notice)
 
@@ -358,7 +358,7 @@ def test_parallel_scan_sizes_reuses_pre_seeded_descendants():
         scanned.append(path)
         ScanCache.set(path, {"total_size_bytes": 100})
 
-    with patch("src.core.analyze.get_rust_tree_data", side_effect=fake_tree):
+    with patch("src.analyze.get_rust_tree_data", side_effect=fake_tree):
         sizes = parallel_scan_sizes([other, hub, models])
 
     # hub and models are cache hits -> only /usr is scanned.
@@ -382,7 +382,7 @@ def test_parallel_scan_sizes_matches_symlinked_input_to_resolved_cache_key(tmp_p
         # Mimic get_rust_tree_data: cache under the normalized (resolved) key.
         ScanCache.set(normalize_scan_path(path), {"total_size_bytes": 4096})
 
-    with patch("src.core.analyze.get_rust_tree_data", side_effect=fake_tree):
+    with patch("src.analyze.get_rust_tree_data", side_effect=fake_tree):
         sizes = parallel_scan_sizes([link])
 
     # Keyed by the caller's original path, with the size found via the resolved key.
@@ -391,7 +391,7 @@ def test_parallel_scan_sizes_matches_symlinked_input_to_resolved_cache_key(tmp_p
 
 def test_get_rust_tree_data_survives_lru_eviction(test_env):
     """The tree result must return its root even if cache capacity is exceeded."""
-    from src.core.analyze import get_rust_tree_data
+    from src.analyze import get_rust_tree_data
 
     large_tree = {
         ".": {"total_size_bytes": 1000, "file_count": 10, "subdirs": {}},
@@ -816,9 +816,9 @@ def test_analyze_delete_user_writable_path_without_admin(test_env):
 
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.core.analyze._ensure_admin_for_delete", return_value=True) as mock_admin_check,
-        patch("src.core.analyze.safe_remove", return_value=(True, "Moved to trash")) as mock_safe,
-        patch("src.core.analyze._sudo_remove") as mock_sudo,
+        patch("src.analyze._ensure_admin_for_delete", return_value=True) as mock_admin_check,
+        patch("src.analyze.safe_remove", return_value=(True, "Moved to trash")) as mock_safe,
+        patch("src.analyze._sudo_remove") as mock_sudo,
     ):
         assert _delete_analyze_paths([target]) is True
 
@@ -851,13 +851,13 @@ def test_analyze_delete_browser_profile_root_cleans_cache_children(test_env):
     firefox_login_db.write_text("{}")
 
     with (
-        patch("src.core.analyze._ensure_admin_for_delete", return_value=True),
+        patch("src.analyze._ensure_admin_for_delete", return_value=True),
         # _which_cached() memoizes, so patching shutil.which alone is order-dependent.
         patch("src.core.file_ops._which_cached", return_value=None),
         # No trash backend here, so the permanent downgrade needs consent; this
         # stands in for the user answering "yes" once for the batch.
-        patch("src.core.analyze._permanent_fallback_consent", return_value=lambda _p: True),
-        patch("src.core.analyze.play_delete") as mock_play_delete,
+        patch("src.analyze._permanent_fallback_consent", return_value=lambda _p: True),
+        patch("src.analyze.play_delete") as mock_play_delete,
     ):
         assert _delete_analyze_paths([chrome_root, firefox_root]) is True
 
@@ -881,10 +881,10 @@ def test_analyze_delete_keeps_data_when_permanent_fallback_is_declined(test_env,
     (target / "payload.bin").write_text("data")
 
     with (
-        patch("src.core.analyze._ensure_admin_for_delete", return_value=True),
+        patch("src.analyze._ensure_admin_for_delete", return_value=True),
         # _which_cached() memoizes, so patching shutil.which alone is order-dependent.
         patch("src.core.file_ops._which_cached", return_value=None),
-        patch("src.core.analyze.play_delete") as mock_play_delete,
+        patch("src.analyze.play_delete") as mock_play_delete,
     ):
         assert _delete_analyze_paths([target]) is False
 
@@ -919,7 +919,7 @@ def test_old_items_info_reports_whether_each_entry_is_a_directory(tmp_path):
 def test_permanent_fallback_consent_declines_without_a_terminal(capsys):
     """A non-interactive run answers "no" instead of deleting unrecoverably."""
     consent = _permanent_fallback_consent()
-    with patch("src.core.analyze.sys.stdin.isatty", return_value=False):
+    with patch("src.analyze.sys.stdin.isatty", return_value=False):
         assert consent(Path("/tmp/whatever")) is False
     assert "skipping instead of deleting permanently" in capsys.readouterr().out
 
@@ -929,8 +929,8 @@ def test_permanent_fallback_consent_asks_once_per_batch():
     ask = MagicMock(return_value=True)
     consent = _permanent_fallback_consent(ask)
     with (
-        patch("src.core.analyze.sys.stdin.isatty", return_value=True),
-        patch("src.core.analyze.sys.stdout.isatty", return_value=True),
+        patch("src.analyze.sys.stdin.isatty", return_value=True),
+        patch("src.analyze.sys.stdout.isatty", return_value=True),
     ):
         assert consent(Path("/tmp/one")) is True
         assert consent(Path("/tmp/two")) is True
@@ -942,8 +942,8 @@ def test_permanent_fallback_consent_remembers_a_refusal():
     ask = MagicMock(return_value=False)
     consent = _permanent_fallback_consent(ask)
     with (
-        patch("src.core.analyze.sys.stdin.isatty", return_value=True),
-        patch("src.core.analyze.sys.stdout.isatty", return_value=True),
+        patch("src.analyze.sys.stdin.isatty", return_value=True),
+        patch("src.analyze.sys.stdout.isatty", return_value=True),
     ):
         assert consent(Path("/tmp/one")) is False
         assert consent(Path("/tmp/two")) is False
@@ -958,8 +958,8 @@ def test_permanent_fallback_consent_declines_when_no_way_to_ask(capsys):
     """
     consent = _permanent_fallback_consent()
     with (
-        patch("src.core.analyze.sys.stdin.isatty", return_value=True),
-        patch("src.core.analyze.sys.stdout.isatty", return_value=True),
+        patch("src.analyze.sys.stdin.isatty", return_value=True),
+        patch("src.analyze.sys.stdout.isatty", return_value=True),
     ):
         assert consent(Path("/tmp/whatever")) is False
     assert "skipping instead of deleting permanently" in capsys.readouterr().out
@@ -977,10 +977,10 @@ def test_analyze_delete_system_path_requires_admin():
     target = Path("/var/cache/topo-test")
 
     with (
-        patch("src.core.analyze.get_size_fast", return_value=4096),
-        patch("src.core.analyze._ensure_admin_for_delete", return_value=True) as mock_admin_check,
-        patch("src.core.analyze.safe_remove") as mock_safe,
-        patch("src.core.analyze._sudo_remove", return_value=True) as mock_sudo,
+        patch("src.analyze.get_size_fast", return_value=4096),
+        patch("src.analyze._ensure_admin_for_delete", return_value=True) as mock_admin_check,
+        patch("src.analyze.safe_remove") as mock_safe,
+        patch("src.analyze._sudo_remove", return_value=True) as mock_sudo,
     ):
         assert _delete_analyze_paths([target]) is True
 
@@ -1005,9 +1005,9 @@ def test_sudo_remove_operates_on_resolved_root_managed_path():
         return MagicMock(ok=True)
 
     with (
-        patch("src.core.analyze.run_command", side_effect=fake_run),
-        patch("src.core.analyze.get_size_fast", return_value=0),
-        patch("src.core.analyze.validate_path_for_deletion", return_value=(True, "")),
+        patch("src.analyze.run_command", side_effect=fake_run),
+        patch("src.analyze.get_size_fast", return_value=0),
+        patch("src.analyze.validate_path_for_deletion", return_value=(True, "")),
         patch.object(
             Path,
             "lstat",
@@ -1028,8 +1028,8 @@ def test_sudo_remove_rejects_user_writable_ancestor(test_env):
     target.mkdir(parents=True)
 
     with (
-        patch("src.core.analyze.run_command") as mock_run,
-        patch("src.core.analyze.get_size_fast", return_value=0),
+        patch("src.analyze.run_command") as mock_run,
+        patch("src.analyze.get_size_fast", return_value=0),
     ):
         assert _sudo_remove(target) is False
 

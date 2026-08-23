@@ -45,14 +45,17 @@ depends_on = ["src.core"]
 # src.ui itself: navigator.py stays a toolkit that cannot import a feature.
 [[modules]]
 path = "src.ui.screens"
-depends_on = ["src.core", "src.ui", "src.uninstall"]
+depends_on = ["src.core", "src.ui", "src.analyze", "src.uninstall"]
 
-# One feature each. clean is a package because it cleans four different things;
-# optimize, uninstall and status are single modules. The first two used to sit
-# inside clean despite importing nothing from it -- the package name claimed one
-# feature while holding three -- and status sat in core, which is meant to be
-# the infrastructure everything else builds on, not a home for a top-level
-# command.
+# The five main-menu features, one module each -- clean is a package only
+# because it cleans four different things. The split that decides where a
+# command lives is what it acts on: these five work on the user's system, while
+# manage/ works on the topo installation itself, which is why doctor lives there
+# rather than beside them. core/ is the infrastructure all of them build on, so
+# it holds none of them.
+#
+# Uninstall and Analyze are the two that drive a full-screen selector, so each
+# is a pair: the logic here, the screen under ui/screens/.
 [[modules]]
 path = "src.clean"
 depends_on = ["src.core"]
@@ -66,11 +69,11 @@ path = "src.uninstall"
 depends_on = ["src.core"]
 
 [[modules]]
-path = "src.status"
+path = "src.analyze"
 depends_on = ["src.core"]
 
 [[modules]]
-path = "src.doctor"
+path = "src.status"
 depends_on = ["src.core"]
 
 [[modules]]
@@ -86,6 +89,5 @@ depends_on = [
     "src.clean",
     "src.optimize",
     "src.status",
-    "src.doctor",
     "src.manage",
 ]

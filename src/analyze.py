@@ -7,29 +7,29 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from . import system
-from .app_cache import find_cleanable_cache_dirs, get_cache_cleanable_reason
-from .constants import (
+from .core import system
+from .core.app_cache import find_cleanable_cache_dirs, get_cache_cleanable_reason
+from .core.constants import (
     GREEN,
     MAGENTA,
     RED,
     RESET,
     YELLOW,
 )
-from .engine import get_rust_scan_data, get_rust_tree_data, normalize_scan_path
-from .file_ops import (
+from .core.engine import get_rust_scan_data, get_rust_tree_data, normalize_scan_path
+from .core.file_ops import (
     TRASH_UNAVAILABLE_REASON,
     get_size_fast,
     record_deletion_audit,
     safe_remove,
     validate_path_for_deletion,
 )
-from .file_types import icon_for_entry
-from .heavy_cache import get_analyze_cache_defs
-from .scan_cache import ScanCache
-from .sound import play_delete
-from .system import run_command
-from .text import sanitize_for_display
+from .core.file_types import icon_for_entry
+from .core.heavy_cache import get_analyze_cache_defs
+from .core.scan_cache import ScanCache
+from .core.sound import play_delete
+from .core.system import run_command
+from .core.text import sanitize_for_display
 
 # Grace period before a scan paints the scan header + spinner. Scans that
 # finish within this window redraw in place like a cache hit, so fast

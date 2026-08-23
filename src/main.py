@@ -16,7 +16,7 @@ from .core.constants import (
 from .core.history import show_history
 from .core.lock import SingleInstanceLock
 from .core.whitelist import add_to_whitelist, remove_from_whitelist
-from .doctor import run_doctor
+from .manage.doctor import run_doctor
 from .manage.install import run_install_link
 from .manage.remove import run_remove
 from .manage.update import run_update
