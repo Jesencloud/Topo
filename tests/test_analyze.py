@@ -265,9 +265,9 @@ def test_get_rust_tree_data_seeds_descendant_cache():
     }
     ScanCache.clear()
     with (
-        patch("src.core.analyze.get_core_binary", return_value=Path("/tmp/topo-core")),
+        patch("src.core.engine.get_core_binary", return_value=Path("/tmp/topo-core")),
         patch(
-            "src.core.analyze.run_command",
+            "src.core.engine.run_command",
             return_value=MagicMock(ok=True, stdout=json.dumps(payload)),
         ),
     ):
@@ -404,7 +404,7 @@ def test_get_rust_tree_data_survives_lru_eviction(test_env):
     fake_res.stdout = json.dumps(large_tree)
 
     with (
-        patch("src.core.analyze.run_command", return_value=fake_res),
+        patch("src.core.engine.run_command", return_value=fake_res),
         patch.object(ScanCache, "MAX_ENTRIES", 4),
     ):
         result = get_rust_tree_data(test_env)
@@ -423,7 +423,7 @@ def test_get_rust_tree_data_returns_root_even_when_root_is_too_large_to_cache(te
     }
     fake_res = MagicMock(ok=True, stdout=json.dumps({".": root_data}))
     with (
-        patch("src.core.analyze.run_command", return_value=fake_res),
+        patch("src.core.engine.run_command", return_value=fake_res),
         patch.object(ScanCache, "MAX_ESTIMATED_BYTES", 1),
     ):
         result = get_rust_tree_data(test_env)

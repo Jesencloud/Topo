@@ -24,13 +24,11 @@ from ...core.analyze import (
     get_age_hint,
     get_fast_explore_data,
     get_old_items_info,
-    get_rust_scan_data,
-    get_rust_tree_data,
-    normalize_scan_path,
     parallel_scan_sizes,
     should_use_fast_explore,
 )
 from ...core.constants import BLUE, CYAN, ERASE_BELOW, GRAY, MAGENTA, PURPLE, RESET, YELLOW
+from ...core.engine import get_rust_scan_data, get_rust_tree_data, normalize_scan_path
 from ...core.file_types import DIRECTORY_ICON, icon_for_entry
 from ...core.scan_cache import ScanCache
 from ...core.spinner import DEFAULT_SPINNER_FRAMES

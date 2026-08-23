@@ -505,7 +505,7 @@ def test_clean_app_generic_reuses_parent_fast_scan_for_child_sizes(test_env):
 
     with (
         patch(
-            "src.core.analyze.get_rust_scan_data",
+            "src.core.file_ops.get_rust_scan_data",
             return_value={"total_size_bytes": 300, "subdirs": {"a.bin": 100, "b.bin": 200}},
         ) as mock_scan,
         patch("src.clean.apps.get_size_fast") as mock_size,
@@ -528,7 +528,7 @@ def test_clean_app_generic_falls_back_when_parent_fast_scan_unavailable(test_env
     cache_file.write_bytes(b"0" * 100)
 
     with (
-        patch("src.core.analyze.get_rust_scan_data", return_value=None),
+        patch("src.core.file_ops.get_rust_scan_data", return_value=None),
         patch("src.clean.apps.get_size_fast", return_value=100) as mock_size,
         patch("src.clean.apps.safe_remove", return_value=(True, "deleted")) as mock_remove,
     ):

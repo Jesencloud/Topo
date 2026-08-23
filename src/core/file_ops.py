@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .constants import SECONDS_PER_DAY
+from .engine import get_core_binary, get_rust_scan_data
 from .system import run_command
 from .text import is_unsafe_display_char
 from .whitelist import (
@@ -310,9 +311,6 @@ def _coerce_non_negative_size(value: Any) -> int | None:
 
 
 def _get_fast_scan_data(path: Path) -> dict[str, Any] | None:
-    # Lazy import breaks the analyze <-> file_ops import cycle.
-    from .analyze import get_rust_scan_data
-
     data = get_rust_scan_data(path)
     return data if isinstance(data, dict) else None
 
@@ -466,8 +464,6 @@ def _has_recent_content(path: Path, cutoff: float) -> bool:
 
 def _get_path_stats(path: Path) -> dict[str, Any] | None:
     """Return size and newest activity from one Rust traversal."""
-    from .analyze import get_core_binary
-
     binary = get_core_binary()
     if binary is None:
         return None

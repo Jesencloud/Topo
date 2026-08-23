@@ -1,7 +1,7 @@
 from pathlib import Path
 from unittest.mock import patch
 
-from src.core import doctor
+from src import doctor
 from src.core.system import CommandResult
 
 
@@ -23,13 +23,13 @@ def test_run_doctor_continues_when_version_file_is_missing(tmp_path, capsys):
     home.mkdir()
 
     with (
-        patch("src.core.doctor.get_install_root", return_value=install_root),
-        patch("src.core.doctor.get_install_source", return_value="script"),
-        patch("src.core.doctor.get_core_binary", return_value=None),
-        patch("src.core.doctor.shutil.which", return_value=None),
-        patch("src.core.doctor.Path.home", return_value=home),
+        patch("src.doctor.get_install_root", return_value=install_root),
+        patch("src.doctor.get_install_source", return_value="script"),
+        patch("src.doctor.get_core_binary", return_value=None),
+        patch("src.doctor.shutil.which", return_value=None),
+        patch("src.doctor.Path.home", return_value=home),
         patch(
-            "src.core.doctor.run_command",
+            "src.doctor.run_command",
             return_value=_command_result(["sudo"], returncode=1),
         ),
     ):
@@ -66,12 +66,12 @@ def test_run_doctor_uses_temporary_size_probe_with_short_timeout(tmp_path):
         return _command_result(args, returncode=1)
 
     with (
-        patch("src.core.doctor.get_install_root", return_value=install_root),
-        patch("src.core.doctor.get_install_source", return_value="script"),
-        patch("src.core.doctor.get_core_binary", return_value=engine),
-        patch("src.core.doctor.shutil.which", return_value=None),
-        patch("src.core.doctor.Path.home", return_value=home),
-        patch("src.core.doctor.run_command", side_effect=fake_run_command),
+        patch("src.doctor.get_install_root", return_value=install_root),
+        patch("src.doctor.get_install_source", return_value="script"),
+        patch("src.doctor.get_core_binary", return_value=engine),
+        patch("src.doctor.shutil.which", return_value=None),
+        patch("src.doctor.Path.home", return_value=home),
+        patch("src.doctor.run_command", side_effect=fake_run_command),
     ):
         doctor.run_doctor()
 

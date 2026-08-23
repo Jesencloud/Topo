@@ -1,7 +1,4 @@
-import functools
-import json
 import os
-import platform
 import stat
 import sys
 import time
@@ -19,6 +16,7 @@ from .constants import (
     RESET,
     YELLOW,
 )
+from .engine import get_rust_scan_data, get_rust_tree_data, normalize_scan_path
 from .file_ops import (
     TRASH_UNAVAILABLE_REASON,
     get_size_fast,
@@ -33,101 +31,16 @@ from .sound import play_delete
 from .system import run_command
 from .text import sanitize_for_display
 
-_ANALYZE_COMMAND_TIMEOUT = 300
-
 # Grace period before a scan paints the scan header + spinner. Scans that
 # finish within this window redraw in place like a cache hit, so fast
 # small-directory scans don't flash/jitter; only slower scans show the spinner.
+# The rm -rf that a sudo delete falls back to. Shared a constant with the
+# scanner's timeout while both lived here, though they time different things.
+_SUDO_REMOVE_TIMEOUT = 300
+
 SCAN_SPINNER_DELAY = 0.15
 ANALYZE_RESULT_LIMIT = 50
 FAST_EXPLORE_ENTRY_LIMIT = 500
-
-
-@functools.cache
-def get_core_binary() -> Path | None:
-    """Resolves the architecture-specific topo-core binary path.
-
-    install.sh keeps only the binary matching the host arch (e.g. it removes
-    topo-core-x86_64 on ARM64), so we must pick the name dynamically. Falls back
-    to any available engine binary for dev/single-arch checkouts.
-    """
-    bin_dir = Path(__file__).parent / "bin"
-    arch = platform.machine().lower()
-    suffix = "aarch64" if arch in ("aarch64", "arm64") else "x86_64"
-    preferred = bin_dir / f"topo-core-{suffix}"
-    if preferred.exists():
-        return preferred
-    for candidate in sorted(bin_dir.glob("topo-core-*")):
-        if candidate.is_file():
-            return candidate
-    return None
-
-
-def normalize_scan_path(path: str | Path) -> Path:
-    """Return one stable absolute cache/process key without leaking resolve errors."""
-    raw = Path(path).expanduser()
-    try:
-        return raw.resolve(strict=False)
-    except (OSError, RuntimeError):
-        return raw.absolute()
-
-
-def get_rust_scan_data(path: Path, *, use_cache: bool = True) -> dict[str, Any] | None:
-    """Calls the architecture-specific topo-core binary and returns parsed JSON."""
-    binary = get_core_binary()
-    if binary is None:
-        return None
-
-    path = normalize_scan_path(path)
-    # Check cache first
-    cached = ScanCache.get(path)
-    if use_cache and cached:
-        return cached
-
-    res = run_command([str(binary), str(path)], capture=True, timeout=_ANALYZE_COMMAND_TIMEOUT)
-    if res.ok:
-        try:
-            data = json.loads(res.stdout)
-        except json.JSONDecodeError:
-            return None
-        ScanCache.set(path, data)
-        return data
-    return None
-
-
-def get_rust_tree_data(path: Path) -> dict[str, Any] | None:
-    """Scan once and seed ScanCache for every significant descendant."""
-    binary = get_core_binary()
-    if binary is None:
-        return None
-
-    path = normalize_scan_path(path)
-    res = run_command(
-        [str(binary), "--tree", str(path)],
-        capture=True,
-        timeout=_ANALYZE_COMMAND_TIMEOUT,
-    )
-    if not res.ok:
-        return None
-    try:
-        tree = json.loads(res.stdout)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(tree, dict) or not isinstance(tree.get("."), dict):
-        return None
-    root_data = None
-    for relative, aggregate in tree.items():
-        if not isinstance(aggregate, dict):
-            continue
-        node = path if relative == "." else path / relative
-        data_item = {"path": str(node), "top_files": [], **aggregate}
-        if relative == ".":
-            root_data = data_item
-            continue
-        ScanCache.set(node, data_item)
-    if root_data:
-        ScanCache.set(path, root_data)
-    return root_data or ScanCache.get(path)
 
 
 def _direct_child_count_exceeds(path: Path, limit: int = FAST_EXPLORE_ENTRY_LIMIT) -> bool:
@@ -415,7 +328,7 @@ def _sudo_remove(path: Path) -> bool:
         ["rm", "-rf", "--one-file-system", "--", str(target_path)],
         use_sudo=True,
         capture=True,
-        timeout=_ANALYZE_COMMAND_TIMEOUT,
+        timeout=_SUDO_REMOVE_TIMEOUT,
     )
     if res.ok:
         record_deletion_audit(target_path, "sudo-permanent", "deleted", size_bytes)

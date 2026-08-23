@@ -70,6 +70,10 @@ path = "src.status"
 depends_on = ["src.core"]
 
 [[modules]]
+path = "src.doctor"
+depends_on = ["src.core"]
+
+[[modules]]
 path = "src.manage"
 depends_on = ["src.core"]
 
@@ -82,5 +86,6 @@ depends_on = [
     "src.clean",
     "src.optimize",
     "src.status",
+    "src.doctor",
     "src.manage",
 ]
