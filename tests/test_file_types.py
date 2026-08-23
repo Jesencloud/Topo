@@ -36,10 +36,10 @@ def test_suffixes_are_written_without_a_dot_and_lowercased():
 @pytest.mark.parametrize(
     ("name", "expected"),
     [
-        ("song.mp3", "🎵"),
-        ("album.flac", "🎵"),
-        ("clip.mp4", "🎬"),
-        ("movie.mkv", "🎬"),
+        ("song.mp3", "🎶"),
+        ("album.flac", "🎶"),
+        ("clip.mp4", "📹"),
+        ("movie.mkv", "📹"),
         ("photo.jpg", "🖼️"),
         ("icon.svg", "🖼️"),
         ("bundle.zip", "📦"),
@@ -74,7 +74,7 @@ def test_only_the_last_suffix_is_read():
 
 
 def test_matching_ignores_case():
-    assert icon_for_entry("HOLIDAY.MP4") == "🎬"
+    assert icon_for_entry("HOLIDAY.MP4") == "📹"
     assert icon_for_entry("Archive.TAR.GZ") == "📦"
 
 
@@ -86,7 +86,7 @@ def test_a_directory_outranks_its_extension():
 
 
 def test_accepts_a_path_as_well_as_a_name():
-    assert icon_for_entry(Path("/home/u/Videos/holiday.mkv")) == "🎬"
+    assert icon_for_entry(Path("/home/u/Videos/holiday.mkv")) == "📹"
 
 
 def test_choosing_an_icon_touches_no_filesystem(tmp_path):
@@ -96,5 +96,5 @@ def test_choosing_an_icon_touches_no_filesystem(tmp_path):
     FAST_EXPLORE_ENTRY_LIMIT rows a frame.
     """
     missing = tmp_path / "does-not-exist.mp3"
-    assert icon_for_entry(missing) == "🎵"
+    assert icon_for_entry(missing) == "🎶"
     assert not missing.exists()

@@ -97,8 +97,8 @@ Interactively select applications to remove. Topo automatically traces and purge
 $ topo uninstall
 
  Select Application to Remove
- ▶ ✓  1. brave-browser                           428.7 MiB
-   ✓  2. Thunderbird                             368.7 MB
+  ✓  1. brave-browser                           428.7 MiB
+  ✓  2. Thunderbird                             368.7 MB
 ```
 
 ### 3. Disk Usage Explorer (`topo analyze`)
@@ -107,8 +107,8 @@ Powered by a high-speed Rust engine, scan hundreds of thousands of files in mill
 $ topo analyze
 
 Exploring: /home/users/.config/Cursor
-  ○  1. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬   59.9%  🗂️ WebStorage     |  109.4 MiB
-  ✓  2. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    6.8%  🗂️ Cache          |   12.4 MiB
+  ○  1. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬   59.9%  📁 WebStorage     |  109.4 MiB
+  ○  2. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    6.8%  📁 Cache          |   12.4 MiB
 ```
 
 ### 4. Audit & History (`topo history`)

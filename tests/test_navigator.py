@@ -445,33 +445,49 @@ def test_analyze_empty_view_waits_for_back():
 
 
 def test_analyze_render_keeps_space_between_icon_and_name():
+    """A name starts in the same column whatever its icon's width.
+
+    icon_gap pads a one-cell glyph out to the two cells an emoji usually takes,
+    so a row carrying a variation-selector icon must not pull its name a column
+    left. The fixture keeps one narrow icon on purpose: every category icon is
+    two cells wide today, so a fixture built only from those would still pass
+    with the padding deleted.
+
+    Asserting the column rather than a literal gap is what lets the icons in
+    core.file_types be swapped without touching this test.
+    """
+    narrow = "\U0001f5c2\ufe0f"  # card index dividers + VS16: one cell
+    wide = "\U0001f4c4"  # page facing up: two cells
+    assert display_width(narrow) == 1 and display_width(wide) == 2
+
     items = [
-        {"name": "folder", "path": Path("/tmp/folder"), "size": 100, "percent": 1.0, "icon": "🗂️"},
+        {
+            "name": "folder",
+            "path": Path("/tmp/folder"),
+            "size": 100,
+            "percent": 1.0,
+            "icon": narrow,
+        },
         {
             "name": "file.txt",
             "path": Path("/tmp/file.txt"),
             "size": 50,
             "percent": 0.5,
-            "icon": "📄",
+            "icon": wide,
         },
     ]
     sel = AnalyzeSelector("t", items, can_select=True)
     sel.selected_items.add(1)
 
-    with (
-        patch(
-            "src.ui.navigator.shutil.get_terminal_size", return_value=os.terminal_size((100, 24))
-        ),
-        patch("sys.stdout.write") as write,
-        patch("sys.stdout.flush"),
-    ):
-        sel.render()
-
-    output = write.call_args.args[0]
-    visible_output = ANSI_CSI_RE.sub("", output)
-    assert "🗂️  folder" in visible_output
-    assert "📄 file.txt" in visible_output
-    assert "📄  file.txt" not in visible_output
+    lines = render_lines(sel)
+    columns = {
+        name: display_width(line[: line.index(name)])
+        for name in ("folder", "file.txt")
+        for line in lines
+        if name in line and "%" in line
+    }
+    assert len(columns) == 2, columns
+    assert len(set(columns.values())) == 1, columns
 
 
 def test_analyze_render_keeps_columns_fixed_between_directory_levels():
@@ -514,7 +530,7 @@ def test_analyze_render_shows_a_bound_for_a_tiny_share():
     only line up if the percent field kept its width for the small entry.
     """
     items = [
-        {"name": "big", "path": Path("/tmp/big"), "size": 10**9, "percent": 99.5, "icon": "🗂️"},
+        {"name": "big", "path": Path("/tmp/big"), "size": 10**9, "percent": 99.5, "icon": "📁"},
         {"name": "tiny", "path": Path("/tmp/tiny"), "size": 512, "percent": 0.00005, "icon": "📄"},
     ]
     sel = AnalyzeSelector("t", items, can_select=True)
@@ -534,7 +550,7 @@ def test_analyze_render_shows_a_bound_for_a_tiny_share():
     tiny_row = next(row for row in rows if "tiny" in row)
     assert "<0.1%" in tiny_row
     assert "0.0%" not in tiny_row
-    assert big_row.index("🗂️") == tiny_row.index("📄")
+    assert big_row.index("📁") == tiny_row.index("📄")
 
 
 def test_analyze_render_aligns_a_row_whose_size_is_unknown():
@@ -611,7 +627,7 @@ def test_analyze_render_shows_unknown_folder_size():
             "path": Path("/tmp/folder"),
             "size": 0,
             "percent": 0.0,
-            "icon": "🗂️",
+            "icon": "📁",
             "size_known": False,
         }
     ]
@@ -686,7 +702,7 @@ def test_analyze_delete_confirm_mentions_uncalculated_sizes():
             "path": Path("/tmp/folder"),
             "size": 0,
             "percent": 0.0,
-            "icon": "🗂️",
+            "icon": "📁",
             "size_known": False,
         },
         {

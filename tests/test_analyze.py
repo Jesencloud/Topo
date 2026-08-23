@@ -757,7 +757,7 @@ def test_build_analysis_entry_marks_cachedir_tag_as_cleanable(test_env):
 
     assert entry["is_cleanable"] is True
     assert entry["cleanable_reason"] == "CACHEDIR.TAG"
-    assert entry["icon"] == "🗂️"
+    assert entry["icon"] == "📁"
     assert entry["percent"] == 50
 
 
@@ -769,7 +769,7 @@ def test_build_analysis_entry_marks_browser_cache_as_cleanable(test_env):
 
     assert entry["is_cleanable"] is True
     assert entry["cleanable_reason"] == "App cache"
-    assert entry["icon"] == "🗂️"
+    assert entry["icon"] == "📁"
 
 
 def test_build_analysis_entry_marks_desktop_app_cache_as_cleanable(test_env):
@@ -780,7 +780,7 @@ def test_build_analysis_entry_marks_desktop_app_cache_as_cleanable(test_env):
 
     assert entry["is_cleanable"] is True
     assert entry["cleanable_reason"] == "App cache"
-    assert entry["icon"] == "🗂️"
+    assert entry["icon"] == "📁"
 
 
 def test_build_analysis_entry_marks_generic_xdg_cache_as_cleanable(test_env):
@@ -792,7 +792,7 @@ def test_build_analysis_entry_marks_generic_xdg_cache_as_cleanable(test_env):
 
     assert entry["is_cleanable"] is True
     assert entry["cleanable_reason"] == "XDG cache"
-    assert entry["icon"] == "🗂️"
+    assert entry["icon"] == "📁"
     assert root_entry["is_cleanable"] is False
 
 

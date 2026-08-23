@@ -96,8 +96,8 @@ Total space freed: 1.25 GB | Free space now: 482.2 GB
 $ topo uninstall
 
  Select Application to Remove
- ▶ ✓  1. brave-browser                           428.7 MiB
-   ✓  2. Thunderbird                             368.7 MB
+  ✓  1. brave-browser                           428.7 MiB
+  ✓  2. Thunderbird                             368.7 MB
 ```
 
 ### 3. 磁盘占用分析 (`topo analyze`)
@@ -106,8 +106,8 @@ $ topo uninstall
 $ topo analyze
 
 Exploring: /home/users/.config/Cursor
-  ○  1. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬   59.9%  🗂️ WebStorage     |  109.4 MiB
-  ✓  2. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    6.8%  🗂️ Cache          |   12.4 MiB
+  ○  1. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬   59.9%  📁 WebStorage     |  109.4 MiB
+  ○  2. ▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬    6.8%  📁 Cache          |   12.4 MiB
 ```
 
 ### 4. 审计与历史 (`topo history`)

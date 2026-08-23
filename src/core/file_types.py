@@ -17,14 +17,14 @@ holds rather than by being cleanup targets.
 
 from pathlib import Path
 
-DIRECTORY_ICON = "🗂️"
+DIRECTORY_ICON = "📁"
 DEFAULT_FILE_ICON = "📄"
 
 # (icon, suffixes) rather than a flat map so the source reads as the category
 # table it is. Suffixes are written without the leading dot.
 _CATEGORIES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
-        "🎵",
+        "🎶",
         (
             "mp3",
             "wav",
@@ -44,7 +44,7 @@ _CATEGORIES: tuple[tuple[str, tuple[str, ...]], ...] = (
         ),
     ),
     (
-        "🎬",
+        "📹",
         (
             "mp4",
             "mkv",
