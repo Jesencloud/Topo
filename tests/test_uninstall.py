@@ -4,9 +4,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.clean.app_manager import UninstallManager, _ResidueEntryIndex
 from src.core.history import parse_deletion_history
 from src.ui.screens.uninstall import run_uninstall
+from src.uninstall import UninstallManager, _ResidueEntryIndex
 
 
 @pytest.fixture(autouse=True)
@@ -40,7 +40,7 @@ def deterministic_gram_buckets(monkeypatch):
 
 def test_run_uninstall_no_apps():
     with (
-        patch("src.clean.app_manager.UninstallManager.run_full_scan", return_value=[]),
+        patch("src.uninstall.UninstallManager.run_full_scan", return_value=[]),
         patch("src.ui.navigator.Navigator.wait_for_return") as mock_wait,
     ):
         run_uninstall()
@@ -52,7 +52,7 @@ def test_run_uninstall_escape_selector():
         {"id": "test", "name": "Test", "size_bytes": 100, "size_str": "100B", "type": "DNF"}
     ]
     with (
-        patch("src.clean.app_manager.UninstallManager.run_full_scan", return_value=mock_apps),
+        patch("src.uninstall.UninstallManager.run_full_scan", return_value=mock_apps),
         patch("src.ui.screens.uninstall.UninstallSelector.run", return_value=[]),
     ):
         run_uninstall()
@@ -70,10 +70,10 @@ def test_run_uninstall_execute_and_exit():
         }
     ]
     with (
-        patch("src.clean.app_manager.UninstallManager.run_full_scan", return_value=mock_apps),
+        patch("src.uninstall.UninstallManager.run_full_scan", return_value=mock_apps),
         patch("src.ui.screens.uninstall.UninstallSelector.run", return_value=[0]),
         patch("src.ui.screens.uninstall.UninstallPreviewSelector.run", return_value=True),
-        patch("src.clean.app_manager.UninstallManager.execute_uninstall") as mock_exec,
+        patch("src.uninstall.UninstallManager.execute_uninstall") as mock_exec,
         patch("src.ui.navigator.Navigator.wait_for_return", return_value=False),
         patch("src.core.system.ensure_sudo_session", return_value=True),
         patch("subprocess.run") as mock_run,
@@ -105,12 +105,12 @@ def test_run_uninstall_cancel():
 
     with (
         patch(
-            "src.clean.app_manager.UninstallManager.run_full_scan",
+            "src.uninstall.UninstallManager.run_full_scan",
             side_effect=mock_scan_side_effect,
         ),
         patch("src.ui.screens.uninstall.UninstallSelector.run", return_value=[0]),
         patch("src.ui.screens.uninstall.UninstallPreviewSelector.run", return_value=False),
-        patch("src.clean.app_manager.UninstallManager.execute_uninstall") as mock_exec,
+        patch("src.uninstall.UninstallManager.execute_uninstall") as mock_exec,
         patch("src.ui.navigator.Navigator.wait_for_return", return_value=False),
         patch("subprocess.run") as mock_run,
     ):
@@ -141,7 +141,7 @@ def test_find_residue_paths(test_env):
 
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.clean.app_manager.safe_remove", return_value=(True, "OK")),
+        patch("src.uninstall.safe_remove", return_value=(True, "OK")),
     ):
         paths = mgr.find_residue_paths("myapp", "MyApp")
         assert any("myapp" in str(p).lower() for p in paths)
@@ -163,9 +163,7 @@ def test_residue_shared_indexes_are_scanned_once(test_env):
         with (
             patch("pathlib.Path.rglob", side_effect=AssertionError("rescanned icons")),
             patch("pathlib.Path.glob", side_effect=AssertionError("rescanned services")),
-            patch(
-                "src.clean.app_manager.os.scandir", side_effect=AssertionError("rescanned roots")
-            ),
+            patch("src.uninstall.os.scandir", side_effect=AssertionError("rescanned roots")),
         ):
             paths = mgr.find_residue_paths("com.example.myapp", "MyApp", pre_scanned_entries=index)
 
@@ -310,7 +308,7 @@ def test_find_residue_paths_ignores_generic_short_tail_tokens(test_env):
 
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.clean.app_manager.safe_remove", return_value=(True, "OK")),
+        patch("src.uninstall.safe_remove", return_value=(True, "OK")),
     ):
         assert mgr.find_residue_paths("org.example.go", "Example Go") == []
         assert mgr.find_residue_paths("org.example.code", "Example Code") == []
@@ -327,7 +325,7 @@ def test_find_residue_paths_allows_specific_prefix_and_substring(test_env):
 
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.clean.app_manager.safe_remove", return_value=(True, "OK")),
+        patch("src.uninstall.safe_remove", return_value=(True, "OK")),
     ):
         telegram_paths = mgr.find_residue_paths("org.telegram.desktop", "Telegram")
         myapp_paths = mgr.find_residue_paths("com.example.myapp", "MyApp")
@@ -346,7 +344,7 @@ def test_find_residue_paths_skips_official_only_apps(test_env):
 
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.clean.app_manager.safe_remove", return_value=(True, "OK")),
+        patch("src.uninstall.safe_remove", return_value=(True, "OK")),
     ):
         assert mgr.find_residue_paths("tailscale", "Tailscale VPN") == []
         assert mgr.find_residue_paths("org.fcitx.Fcitx5", "Fcitx5") == []
@@ -499,7 +497,7 @@ def test_run_full_scan_keeps_user_libreoffice_apps(mock_run, mock_which):
     ]
 
 
-@patch("src.clean.app_manager.system.run_command")
+@patch("src.uninstall.system.run_command")
 @patch("shutil.which")
 def test_run_full_scan_apt(mock_which, mock_run_cmd):
     mock_which.side_effect = lambda x: "/usr/bin/dpkg-query" if x == "dpkg-query" else None
@@ -521,7 +519,7 @@ def test_run_full_scan_apt(mock_which, mock_run_cmd):
     ]
 
 
-@patch("src.clean.app_manager.system.run_command")
+@patch("src.uninstall.system.run_command")
 @patch("shutil.which")
 def test_run_full_scan_pacman(mock_which, mock_run_cmd):
     mock_which.side_effect = lambda x: "/usr/bin/pacman" if x == "pacman" else None
@@ -573,7 +571,7 @@ def test_run_full_scan_flatpaks(mock_run, mock_which):
     assert myapp["type"] == "Flatpak"
 
 
-@patch("src.clean.app_manager.system.run_command")
+@patch("src.uninstall.system.run_command")
 @patch("shutil.which")
 def test_run_full_scan_snaps(mock_which, mock_run_cmd):
     mock_which.side_effect = lambda x: "/usr/bin/snap" if x == "snap" else None
@@ -613,7 +611,7 @@ def test_execute_uninstall_flatpak(mock_run, mock_run_cmd, test_env):
 
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.clean.app_manager.safe_remove", return_value=(True, "OK")),
+        patch("src.uninstall.safe_remove", return_value=(True, "OK")),
     ):
         details = mgr.execute_uninstall(app, [])
 
@@ -636,7 +634,7 @@ def test_execute_uninstall_snap(mock_run_cmd, test_env):
 
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.clean.app_manager.safe_remove", return_value=(True, "OK")),
+        patch("src.uninstall.safe_remove", return_value=(True, "OK")),
     ):
         details = mgr.execute_uninstall(app, [])
 
@@ -664,7 +662,7 @@ def test_execute_uninstall_dnf(mock_run, mock_run_cmd, test_env):
     with (
         patch("shutil.which", side_effect=lambda x: "/usr/bin/dnf" if x == "dnf" else None),
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.clean.app_manager.safe_remove", return_value=(True, "OK")),
+        patch("src.uninstall.safe_remove", return_value=(True, "OK")),
     ):
         # Pass a dummy path to ensure safe_remove logic is at least executed
         dummy_path = test_env / ".config/heavy-app"
@@ -694,7 +692,7 @@ def test_execute_uninstall_apt(mock_run_cmd, test_env):
 
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.clean.app_manager.safe_remove", return_value=(True, "OK")),
+        patch("src.uninstall.safe_remove", return_value=(True, "OK")),
     ):
         details = mgr.execute_uninstall(app, [])
 
@@ -715,7 +713,7 @@ def test_execute_uninstall_pacman(mock_run_cmd, test_env):
 
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.clean.app_manager.safe_remove", return_value=(True, "OK")),
+        patch("src.uninstall.safe_remove", return_value=(True, "OK")),
     ):
         details = mgr.execute_uninstall(app, [])
 
@@ -772,7 +770,7 @@ def test_find_residue_paths_never_targets_xdg_user_dirs(test_env):
 
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.clean.app_manager.safe_remove", return_value=(True, "OK")),
+        patch("src.uninstall.safe_remove", return_value=(True, "OK")),
     ):
         music_paths = mgr.find_residue_paths("org.gnome.Music", "Music")
         videos_paths = mgr.find_residue_paths("org.gnome.Totem", "Videos")
@@ -796,7 +794,7 @@ def test_uninstall_cannot_delete_xdg_user_data_dir(test_env):
 
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.clean.app_manager.safe_remove", return_value=(True, "OK")),
+        patch("src.uninstall.safe_remove", return_value=(True, "OK")),
     ):
         ok_dir, reason = safe_remove(music, use_trash=False, allow_app_data_removal=True)
         ok_file, _ = safe_remove(song, use_trash=False, allow_app_data_removal=True)
@@ -845,12 +843,12 @@ def test_run_uninstall_failed_package_not_counted(capsys):
         }
     ]
     with (
-        patch("src.clean.app_manager.UninstallManager.run_full_scan", return_value=mock_apps),
+        patch("src.uninstall.UninstallManager.run_full_scan", return_value=mock_apps),
         patch("src.ui.screens.uninstall.UninstallSelector.run", return_value=[0]),
         patch("src.ui.screens.uninstall.UninstallPreviewSelector.run", return_value=True),
-        patch("src.clean.app_manager.UninstallManager.find_residue_paths", return_value=[]),
+        patch("src.uninstall.UninstallManager.find_residue_paths", return_value=[]),
         patch(
-            "src.clean.app_manager.UninstallManager.execute_uninstall",
+            "src.uninstall.UninstallManager.execute_uninstall",
             return_value={"package_removed": False, "removed_paths": []},
         ),
         patch("src.core.system.ensure_sudo_session", return_value=True),
@@ -878,7 +876,7 @@ def test_find_residue_paths_skips_visible_home_workspace(test_env):
 
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.clean.app_manager.safe_remove", return_value=(True, "OK")),
+        patch("src.uninstall.safe_remove", return_value=(True, "OK")),
     ):
         paths = mgr.find_residue_paths("com.example.notes", "Notes")
 
@@ -899,7 +897,7 @@ def test_execute_uninstall_residue_goes_to_trash(test_env):
         patch("src.core.system.run_command", return_value=MagicMock(ok=True, returncode=0)),
         patch("subprocess.run", return_value=MagicMock(returncode=1)),
         patch(
-            "src.clean.app_manager.safe_remove", return_value=(True, "Moved to trash")
+            "src.uninstall.safe_remove", return_value=(True, "Moved to trash")
         ) as mock_safe_remove,
     ):
         mgr.execute_uninstall(app, [residue])

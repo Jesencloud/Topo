@@ -4,7 +4,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from src.clean.optimize import (
+from src.core.system import CommandResult
+from src.optimize import (
     OptimizationRegistry,
     _points_at_transient_mount,
     opt_log,
@@ -21,7 +22,6 @@ from src.clean.optimize import (
     run_vacuum_all,
     vacuum_single_db,
 )
-from src.core.system import CommandResult
 
 
 def test_opt_log_uses_failure_icon_when_unsuccessful(capsys):
@@ -56,7 +56,7 @@ def test_optimize_system_caps_worker_pool_and_reports_task_failures(capsys):
         patch.object(OptimizationRegistry, "tasks", tasks),
         patch("src.core.system.authenticate_sudo_session", return_value=True),
         patch(
-            "src.clean.optimize.ThreadPoolExecutor",
+            "src.optimize.ThreadPoolExecutor",
             wraps=__import__(
                 "concurrent.futures", fromlist=["ThreadPoolExecutor"]
             ).ThreadPoolExecutor,
@@ -77,8 +77,8 @@ def test_run_systemd_user_service_cleanup_removes_broken_unit(test_env):
 
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.clean.optimize.shutil.which", return_value="/usr/bin/systemctl"),
-        patch("src.clean.optimize.run_command") as mock_run,
+        patch("src.optimize.shutil.which", return_value="/usr/bin/systemctl"),
+        patch("src.optimize.run_command") as mock_run,
     ):
         result = run_systemd_user_service_cleanup(dry_run=False)
 
@@ -198,8 +198,8 @@ def test_run_coredump_cleanup_skips_when_no_core_files(tmp_path):
     (coredump_dir / "note.txt").write_text("not a coredump")
 
     with (
-        patch("src.clean.optimize.COREDUMP_DIR", coredump_dir),
-        patch("src.clean.optimize.run_command") as mock_run,
+        patch("src.optimize.COREDUMP_DIR", coredump_dir),
+        patch("src.optimize.run_command") as mock_run,
     ):
         result = run_coredump_cleanup(dry_run=False)
 
@@ -214,8 +214,8 @@ def test_run_coredump_cleanup_dry_run_keeps_core_files(tmp_path):
     core_file.write_text("core")
 
     with (
-        patch("src.clean.optimize.COREDUMP_DIR", coredump_dir),
-        patch("src.clean.optimize.run_command") as mock_run,
+        patch("src.optimize.COREDUMP_DIR", coredump_dir),
+        patch("src.optimize.run_command") as mock_run,
     ):
         result = run_coredump_cleanup(dry_run=True)
 
@@ -230,9 +230,9 @@ def test_run_coredump_cleanup_deletes_core_files_with_find(tmp_path):
     (coredump_dir / "core.app.1000").write_text("core")
 
     with (
-        patch("src.clean.optimize.COREDUMP_DIR", coredump_dir),
+        patch("src.optimize.COREDUMP_DIR", coredump_dir),
         patch(
-            "src.clean.optimize.run_command",
+            "src.optimize.run_command",
             return_value=CommandResult(["find"], 0),
         ) as mock_run,
     ):
@@ -262,9 +262,9 @@ def test_run_coredump_cleanup_returns_none_when_find_fails(tmp_path):
     (coredump_dir / "core.app.1000").write_text("core")
 
     with (
-        patch("src.clean.optimize.COREDUMP_DIR", coredump_dir),
+        patch("src.optimize.COREDUMP_DIR", coredump_dir),
         patch(
-            "src.clean.optimize.run_command",
+            "src.optimize.run_command",
             return_value=CommandResult(["find"], 1),
         ),
     ):
@@ -385,9 +385,9 @@ def test_run_broken_symlink_cleanup_skips_user_dirs_unless_opted_in(test_env, mo
 
 def test_run_sysctl_optimize():
     with (
-        patch("src.clean.optimize.shutil.which", return_value="/usr/sbin/sysctl"),
-        patch("src.clean.optimize.has_sudo", return_value=True),
-        patch("src.clean.optimize.run_command") as mock_run,
+        patch("src.optimize.shutil.which", return_value="/usr/sbin/sysctl"),
+        patch("src.optimize.has_sudo", return_value=True),
+        patch("src.optimize.run_command") as mock_run,
     ):
         mock_run.return_value = CommandResult(["sysctl"], 0)
         res = run_sysctl_optimize(dry_run=False)
@@ -396,8 +396,8 @@ def test_run_sysctl_optimize():
 
 def test_run_tmpfiles_cleanup():
     with (
-        patch("src.clean.optimize.shutil.which", return_value="/usr/bin/systemd-tmpfiles"),
-        patch("src.clean.optimize.run_command") as mock_run,
+        patch("src.optimize.shutil.which", return_value="/usr/bin/systemd-tmpfiles"),
+        patch("src.optimize.run_command") as mock_run,
     ):
         mock_run.return_value = CommandResult(["systemd-tmpfiles"], 0)
         res = run_tmpfiles_cleanup(dry_run=False)
@@ -415,9 +415,9 @@ def test_run_user_systemd_reset_failed_resets_failed_units():
     )
 
     with (
-        patch("src.clean.optimize.shutil.which", return_value="/usr/bin/systemctl"),
+        patch("src.optimize.shutil.which", return_value="/usr/bin/systemctl"),
         patch(
-            "src.clean.optimize.run_command",
+            "src.optimize.run_command",
             side_effect=[
                 list_result,
                 CommandResult(["systemctl"], 0),
@@ -441,9 +441,9 @@ def test_run_user_systemd_reset_failed_resets_failed_units():
 
 def test_run_user_systemd_reset_failed_dry_run_does_not_reset():
     with (
-        patch("src.clean.optimize.shutil.which", return_value="/usr/bin/systemctl"),
+        patch("src.optimize.shutil.which", return_value="/usr/bin/systemctl"),
         patch(
-            "src.clean.optimize.run_command",
+            "src.optimize.run_command",
             return_value=CommandResult(
                 ["systemctl"],
                 0,
@@ -459,9 +459,9 @@ def test_run_user_systemd_reset_failed_dry_run_does_not_reset():
 
 def test_run_user_systemd_reset_failed_skips_when_no_failed_units():
     with (
-        patch("src.clean.optimize.shutil.which", return_value="/usr/bin/systemctl"),
+        patch("src.optimize.shutil.which", return_value="/usr/bin/systemctl"),
         patch(
-            "src.clean.optimize.run_command",
+            "src.optimize.run_command",
             return_value=CommandResult(["systemctl"], 0, stdout=""),
         ) as mock_run,
     ):
@@ -474,7 +474,7 @@ def test_run_user_systemd_reset_failed_skips_when_no_failed_units():
 def test_run_vacuum_all_skips_when_browser_is_running(test_env):
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.clean.optimize._is_any_process_running", return_value=True),
+        patch("src.optimize._is_any_process_running", return_value=True),
     ):
         result = run_vacuum_all(dry_run=False)
 
@@ -487,7 +487,7 @@ def test_run_desktop_database_refresh_dry_run(test_env):
 
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.clean.optimize.shutil.which", return_value="/usr/bin/update-desktop-database"),
+        patch("src.optimize.shutil.which", return_value="/usr/bin/update-desktop-database"),
     ):
         result = run_desktop_database_refresh(dry_run=True)
 
@@ -500,7 +500,7 @@ def test_run_mime_database_refresh_dry_run(test_env):
 
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.clean.optimize.shutil.which", return_value="/usr/bin/update-mime-database"),
+        patch("src.optimize.shutil.which", return_value="/usr/bin/update-mime-database"),
     ):
         result = run_mime_database_refresh(dry_run=True)
 
@@ -518,8 +518,8 @@ def test_vacuum_single_db_closes_connection_on_error(tmp_path):
     # is_sqlite_busy() opens its own connection through the same sqlite3 module,
     # so it must be stubbed out or the patched connect would be consumed twice.
     with (
-        patch("src.clean.optimize.is_sqlite_busy", return_value=False),
-        patch("src.clean.optimize.sqlite3.connect", return_value=fake_conn),
+        patch("src.optimize.is_sqlite_busy", return_value=False),
+        patch("src.optimize.sqlite3.connect", return_value=fake_conn),
     ):
         result = vacuum_single_db(db)
 

@@ -1,13 +1,12 @@
 """The uninstall screen: pick applications, preview the damage, then remove them.
 
 The scanning, residue discovery and removal all belong to UninstallManager in
-clean.app_manager; this module only sequences them around the selectors and
-reports what happened.
+the top-level uninstall module; this module only sequences them around the
+selectors and reports what happened.
 """
 
 import sys
 
-from ...clean.app_manager import UninstallManager
 from ...core import system
 from ...core.constants import (
     BLUE,
@@ -30,6 +29,7 @@ from ...core.scan_cache import ScanCache
 from ...core.sound import play_delete
 from ...core.spinner import threaded_spinner
 from ...core.text import sanitize_for_display
+from ...uninstall import UninstallManager
 from ..navigator import Navigator, UninstallPreviewSelector, UninstallSelector
 
 # The scan spinner and the list both paint it, so it lives in one place: a

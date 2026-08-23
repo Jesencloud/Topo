@@ -3,9 +3,9 @@ from pathlib import Path
 
 import pytest
 
-from src.clean.app_manager import _ResidueEntryIndex
 from src.core.analyze import get_rust_tree_data
 from src.core.scan_cache import ScanCache
+from src.uninstall import _ResidueEntryIndex
 
 
 def test_stress_rust_engine_deep_directory_tree(tmp_path):

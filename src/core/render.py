@@ -1,10 +1,11 @@
 """Percentage rendering: progress bars, percent formatting, and level colors.
 
 These are pure formatting helpers -- they take a number and return a string.
-They live in core rather than ui because core.status renders the same bars for
-the non-interactive `topo status` output, and having core reach into
-ui.navigator for them put a `core -> ui` edge in the module graph, closing a
-cycle with the `ui -> core` edge that every UI module already has.
+They live in core because two unrelated callers need the same bars: the status
+report draws them for `topo status`, and ui.navigator draws them in the Analyze
+rows. Keeping them here is what stopped the shared code from being reached for
+through ui.navigator, which put a `core -> ui` edge in the module graph and
+closed a cycle with the `ui -> core` edge every UI module already has.
 
 ui.navigator re-exports these names, so `navigator.draw_bar` keeps working.
 """

@@ -11,20 +11,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..core import system
-from ..core.constants import (
+from .core import system
+from .core.constants import (
     RPM_QUERY_BATCH_SIZE,
 )
-from ..core.desktop_entry import get_desktop_exec_names, get_desktop_icon, get_desktop_name
-from ..core.file_ops import (
+from .core.desktop_entry import get_desktop_exec_names, get_desktop_icon, get_desktop_name
+from .core.file_ops import (
     bytes_to_human,
     get_size_fast,
     parse_size_to_bytes,
     record_deletion_audit,
     safe_remove,
 )
-from ..core.history import record_history_session
-from ..core.whitelist import LINUX_USER_DATA_DIRS
+from .core.history import record_history_session
+from .core.whitelist import LINUX_USER_DATA_DIRS
 
 
 @dataclass(frozen=True, eq=False)

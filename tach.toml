@@ -40,15 +40,33 @@ depends_on = []
 path = "src.ui"
 depends_on = ["src.core"]
 
-# Interactive screens compose the toolkit above with the feature packages. They
+# Interactive screens compose the toolkit above with the feature modules. They
 # are a nested module precisely so that this wider allowance does NOT extend to
 # src.ui itself: navigator.py stays a toolkit that cannot import a feature.
 [[modules]]
 path = "src.ui.screens"
-depends_on = ["src.core", "src.ui", "src.clean"]
+depends_on = ["src.core", "src.ui", "src.uninstall"]
 
+# One feature each. clean is a package because it cleans four different things;
+# optimize, uninstall and status are single modules. The first two used to sit
+# inside clean despite importing nothing from it -- the package name claimed one
+# feature while holding three -- and status sat in core, which is meant to be
+# the infrastructure everything else builds on, not a home for a top-level
+# command.
 [[modules]]
 path = "src.clean"
+depends_on = ["src.core"]
+
+[[modules]]
+path = "src.optimize"
+depends_on = ["src.core"]
+
+[[modules]]
+path = "src.uninstall"
+depends_on = ["src.core"]
+
+[[modules]]
+path = "src.status"
 depends_on = ["src.core"]
 
 [[modules]]
@@ -57,4 +75,12 @@ depends_on = ["src.core"]
 
 [[modules]]
 path = "src.main"
-depends_on = ["src.core", "src.ui", "src.ui.screens", "src.clean", "src.manage"]
+depends_on = [
+    "src.core",
+    "src.ui",
+    "src.ui.screens",
+    "src.clean",
+    "src.optimize",
+    "src.status",
+    "src.manage",
+]

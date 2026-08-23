@@ -2,7 +2,8 @@ from unittest.mock import patch
 
 import pytest
 
-from src.clean import optimize, runner
+from src import optimize
+from src.clean import runner
 from src.core import terminal_state
 
 
@@ -140,7 +141,7 @@ def test_clean_sudo_cancel_prompt_has_no_trailing_blank_line():
 def test_optimize_sudo_cancel_prompt_has_no_trailing_blank_line():
     with (
         patch("builtins.print") as mock_print,
-        patch("src.clean.optimize.os.system"),
+        patch("src.optimize.os.system"),
         patch("src.core.terminal_state.read_sudo_choice", return_value="\r"),
         patch("src.core.system.ensure_sudo_session", return_value=False),
         patch.object(optimize.system, "SUDO_CANCELLED", True),

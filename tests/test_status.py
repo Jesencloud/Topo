@@ -5,7 +5,8 @@ from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 
-from src.core.status import (
+from src.core.text import display_width
+from src.status import (
     TEMP_HOT_C,
     TEMP_WARN_C,
     _get_default_route_interface,
@@ -22,7 +23,6 @@ from src.core.status import (
     get_uptime,
     show_status,
 )
-from src.core.text import display_width
 from src.ui.navigator import ANSI_CSI_RE
 
 # Every row show_status() can print, as (icon, label). Kept here rather than
@@ -69,7 +69,7 @@ def _marked_colors():
     """Patch the color names ``status`` reads with legible sentinels."""
     stack = ExitStack()
     for name, marker in COLOR_MARKERS.items():
-        stack.enter_context(patch(f"src.core.status.{name}", marker))
+        stack.enter_context(patch(f"src.status.{name}", marker))
     return stack
 
 
@@ -171,9 +171,9 @@ def test_get_default_route_interface_uses_lowest_metric(tmp_path):
 def test_get_ip_info_reads_local_interface_without_external_connect():
     ioctl_response = b"\x00" * 20 + b"\xc0\xa8\x01\x0a" + b"\x00" * 232
     with (
-        patch("src.core.status._get_default_route_interface", return_value="wlan0"),
-        patch("src.core.status.fcntl.ioctl", return_value=ioctl_response),
-        patch("src.core.status.socket.socket") as mock_socket,
+        patch("src.status._get_default_route_interface", return_value="wlan0"),
+        patch("src.status.fcntl.ioctl", return_value=ioctl_response),
+        patch("src.status.socket.socket") as mock_socket,
     ):
         sock = mock_socket.return_value.__enter__.return_value
         sock.fileno.return_value = 3
@@ -218,7 +218,7 @@ def test_get_network_traffic_falls_back_to_container_default_route():
     with (
         patch("builtins.open", mock_open(read_data=net_dev_content)),
         patch("pathlib.Path.exists", return_value=False),
-        patch("src.core.status._get_default_route_interface", return_value="eth0"),
+        patch("src.status._get_default_route_interface", return_value="eth0"),
     ):
         rx, tx = get_network_traffic()
 
@@ -320,8 +320,8 @@ def test_battery_details_are_not_pre_parenthesized():
 def test_get_gpu_info_multi_gpu_uses_first_line():
     out = "55, 10\n60, 20\n"
     with (
-        patch("src.core.status.shutil.which", return_value="/usr/bin/nvidia-smi"),
-        patch("src.core.status.run_command", return_value=MagicMock(ok=True, stdout=out)),
+        patch("src.status.shutil.which", return_value="/usr/bin/nvidia-smi"),
+        patch("src.status.run_command", return_value=MagicMock(ok=True, stdout=out)),
     ):
         result = get_gpu_info()
 
@@ -358,7 +358,7 @@ def test_get_gpu_info_drm_hwmon_junction_priority():
         return ""
 
     with (
-        patch("src.core.status.shutil.which", return_value=None),
+        patch("src.status.shutil.which", return_value=None),
         patch("pathlib.Path.exists", return_value=True),
         patch("pathlib.Path.glob", mock_drm_glob),
         patch("pathlib.Path.read_text", mock_read_text),
@@ -392,7 +392,7 @@ def test_get_gpu_info_drm_reads_temperature_without_utilization_node():
         return ""
 
     with (
-        patch("src.core.status.shutil.which", return_value=None),
+        patch("src.status.shutil.which", return_value=None),
         patch("pathlib.Path.exists", mock_exists),
         patch("pathlib.Path.glob", mock_drm_glob),
         patch("pathlib.Path.read_text", mock_read_text),
@@ -428,10 +428,10 @@ def _render_status_raw(capsys, label, disk=(1, 2), **overrides):
     used, total = disk
     with ExitStack() as stack:
         for name, value in probes.items():
-            stack.enter_context(patch(f"src.core.status.{name}", return_value=value))
+            stack.enter_context(patch(f"src.status.{name}", return_value=value))
         stack.enter_context(
             patch(
-                "src.core.status.shutil.disk_usage",
+                "src.status.shutil.disk_usage",
                 return_value=MagicMock(used=used, total=total),
             )
         )

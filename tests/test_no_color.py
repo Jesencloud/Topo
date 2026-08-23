@@ -78,7 +78,7 @@ def test_no_color_flag_reaches_from_imported_consumers(monkeypatch):
     constants.GREEN alone would pass even when the flag is a no-op.
     """
     monkeypatch.delenv("NO_COLOR", raising=False)
-    from src.core import status
+    from src import status
     from src.ui import navigator, tui
 
     with patch.object(sys.stdout, "isatty", return_value=True):

@@ -7,11 +7,11 @@ import struct
 from datetime import datetime
 from pathlib import Path
 
-from .constants import GREEN, PURPLE, RED, RESET, WHITE, YELLOW
-from .file_ops import bytes_to_human
-from .render import draw_bar, format_percent, get_color_for_percent
-from .system import run_command
-from .text import display_width
+from .core.constants import GREEN, PURPLE, RED, RESET, WHITE, YELLOW
+from .core.file_ops import bytes_to_human
+from .core.render import draw_bar, format_percent, get_color_for_percent
+from .core.system import run_command
+from .core.text import display_width
 
 DEFAULT_ROUTE_PATH = Path("/proc/net/route")
 SIOCGIFADDR = 0x8915

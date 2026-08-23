@@ -2,7 +2,6 @@ import argparse
 import sys
 from contextlib import contextmanager
 
-from .clean.optimize import optimize_system
 from .clean.runner import run_clean
 from .core import system, terminal_state
 from .core.constants import (
@@ -17,11 +16,12 @@ from .core.constants import (
 from .core.doctor import run_doctor
 from .core.history import show_history
 from .core.lock import SingleInstanceLock
-from .core.status import show_status
 from .core.whitelist import add_to_whitelist, remove_from_whitelist
 from .manage.install import run_install_link
 from .manage.remove import run_remove
 from .manage.update import run_update
+from .optimize import optimize_system
+from .status import show_status
 from .ui.navigator import Navigator
 from .ui.screens.analyze import run_deep_analysis
 from .ui.screens.uninstall import run_uninstall

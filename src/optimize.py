@@ -10,8 +10,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
-from ..core import system
-from ..core.constants import (
+from .core import system
+from .core.constants import (
     BOLD,
     CLEAR_LINE,
     CLEAR_SCREEN,
@@ -22,17 +22,17 @@ from ..core.constants import (
     RESET,
     SQLITE_PROGRESS_INTERVAL,
 )
-from ..core.desktop_entry import get_desktop_exec_command
-from ..core.file_ops import (
+from .core.desktop_entry import get_desktop_exec_command
+from .core.file_ops import (
     TRASH_UNAVAILABLE_REASON,
     bytes_to_human,
     get_size,
     parse_size_from_text,
     safe_remove,
 )
-from ..core.lock import is_file_locked, is_sqlite_busy
-from ..core.spinner import threaded_spinner
-from ..core.system import has_sudo, run_command
+from .core.lock import is_file_locked, is_sqlite_busy
+from .core.spinner import threaded_spinner
+from .core.system import has_sudo, run_command
 
 # Lock to ensure parallel tasks don't corrupt the terminal output
 print_lock = threading.Lock()
