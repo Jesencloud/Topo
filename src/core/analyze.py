@@ -26,6 +26,7 @@ from .file_ops import (
     safe_remove,
     validate_path_for_deletion,
 )
+from .file_types import icon_for_entry
 from .heavy_cache import get_analyze_cache_defs
 from .scan_cache import ScanCache
 from .sound import play_delete
@@ -266,7 +267,7 @@ def build_analysis_entry(name: str, path: Path, size: int, total_size: int) -> d
     """Build a disk-analysis row with Linux cache metadata."""
     cleanable_reason = get_cache_cleanable_reason(path)
     is_cleanable = bool(cleanable_reason)
-    icon = "🗂️" if path.is_dir() else "📄"
+    icon = icon_for_entry(path, is_dir=path.is_dir())
     return {
         "name": name,
         "path": path,
@@ -307,14 +308,18 @@ def get_old_items_info(dir_path: Path, days_threshold: int = 90) -> list[dict[st
     try:
         for item in dir_path.iterdir():
             try:
-                stat = item.stat()
-                if stat.st_mtime < cutoff:
+                stat_result = item.stat()
+                if stat_result.st_mtime < cutoff:
                     old_items.append(
                         {
                             "name": item.name,
                             "path": item,
                             "size": get_size_fast(item),
-                            "mtime": stat.st_mtime,
+                            "mtime": stat_result.st_mtime,
+                            # Taken from the stat already in hand: the row icon
+                            # needs it, and probing again per render would be a
+                            # syscall a keystroke.
+                            "is_dir": stat.S_ISDIR(stat_result.st_mode),
                         }
                     )
             except OSError:

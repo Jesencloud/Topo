@@ -1,4 +1,5 @@
 import json
+import os
 import stat
 import subprocess
 import sys
@@ -20,6 +21,7 @@ from src.core.analyze import (
     build_analysis_entry,
     build_linux_insights,
     get_fast_explore_data,
+    get_old_items_info,
     get_rust_scan_data,
     get_rust_tree_data,
     normalize_scan_path,
@@ -889,6 +891,29 @@ def test_analyze_delete_keeps_data_when_permanent_fallback_is_declined(test_env,
     assert (target / "payload.bin").exists()
     mock_play_delete.assert_not_called()
     assert "No trash utility available" in capsys.readouterr().out
+
+
+def test_old_items_info_reports_whether_each_entry_is_a_directory(tmp_path):
+    """The row icon needs is_dir, and it comes from the stat already taken.
+
+    Smart View lists whatever iterdir() yields, directories included, so a
+    90-day-old folder must not be handed to the UI looking like a file. The flag
+    is derived from st_mode rather than a second is_dir() probe because the
+    selector re-renders on every keystroke.
+    """
+    old = time.time() - 200 * 86400
+    directory = tmp_path / "stale-project"
+    directory.mkdir()
+    (directory / "payload.bin").write_text("x")
+    plain = tmp_path / "stale.mkv"
+    plain.write_text("x")
+    for path in (directory, plain, tmp_path):
+        os.utime(path, (old, old))
+
+    by_name = {entry["name"]: entry for entry in get_old_items_info(tmp_path)}
+
+    assert by_name["stale-project"]["is_dir"] is True
+    assert by_name["stale.mkv"]["is_dir"] is False
 
 
 def test_permanent_fallback_consent_declines_without_a_terminal(capsys):

@@ -26,6 +26,7 @@ from ..core.constants import (
     YELLOW,
 )
 from ..core.file_ops import bytes_to_human
+from ..core.file_types import DIRECTORY_ICON, icon_for_entry
 from ..core.render import draw_bar, format_percent, get_color_for_percent
 from ..core.sound import is_muted, play_click, toggle_mute
 from ..core.text import char_width, display_width, sanitize_for_display
@@ -792,7 +793,7 @@ class AnalyzeSelector(_PagedSelector):
                 # and the ▶ already shows where the cursor is.
                 style = PURPLE if is_selected else CYAN if is_hover else ""
                 name_padded = pad_and_truncate(sanitize_for_display(item["name"]), name_w)
-                icon = item.get("icon", "🗂️")
+                icon = item.get("icon", DIRECTORY_ICON)
                 gap = icon_gap(icon)
                 if is_hover:
                     focus_line = _frame_line_count(buf)
@@ -828,7 +829,7 @@ class AnalyzeSelector(_PagedSelector):
                 line = ""
                 for idx in pair:
                     item = self.items[idx]
-                    icon = item.get("icon", "🗂️")
+                    icon = item.get("icon", DIRECTORY_ICON)
                     name_padded = pad_and_truncate(sanitize_for_display(item["name"]), 35)
                     line += f"   {THEME_TITLE}•{RESET} {icon}{icon_gap(icon)}{name_padded}"
                 buf.append(line + "\033[K\n")
@@ -1251,13 +1252,27 @@ class TopFilesSelector:
         )
         if self.selected_items:
             buf.append(f"\n {THEME_TITLE}☉ Selected Large Files to Remove:{RESET}\033[K\n")
+            # Two entries a line, each costing three spaces, the bullet and its
+            # space, and the three cells icon_gap normalises every icon to.
+            # Derived from the terminal rather than fixed so the pair does not
+            # run off the right edge on a narrow window.
+            terminal_width = max(20, shutil.get_terminal_size(fallback=(80, 24)).columns)
+            name_width = max(8, min(35, (terminal_width - 2 * 8) // 2))
             selected_indices = sorted(list(self.selected_items))
             for i in range(0, len(selected_indices), 2):
                 pair = selected_indices[i : i + 2]
                 line = ""
                 for idx in pair:
-                    clean_fname = sanitize_for_display(Path(self.items[idx]["path"]).name)
-                    line += f"   {THEME_TITLE}•{RESET} 📄 {clean_fname}"
+                    item = self.items[idx]
+                    clean_fname = sanitize_for_display(Path(item["path"]).name)
+                    # icon_gap because the icons are not all the same width: a
+                    # bare space after a one-cell glyph would pull the second
+                    # column left on those rows. The name is padded for the same
+                    # reason one column down -- without it the second entry
+                    # starts wherever the first name happened to end.
+                    icon = icon_for_entry(item["path"], is_dir=item.get("is_dir", False))
+                    name_padded = pad_and_truncate(clean_fname, name_width)
+                    line += f"   {THEME_TITLE}•{RESET} {icon}{icon_gap(icon)}{name_padded}"
                 buf.append(line + "\033[K\n")
 
         if self.confirming_delete:

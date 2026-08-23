@@ -31,6 +31,7 @@ from ...core.analyze import (
     should_use_fast_explore,
 )
 from ...core.constants import BLUE, CYAN, ERASE_BELOW, GRAY, MAGENTA, PURPLE, RESET, YELLOW
+from ...core.file_types import DIRECTORY_ICON, icon_for_entry
 from ...core.scan_cache import ScanCache
 from ...core.spinner import DEFAULT_SPINNER_FRAMES
 from ...core.system import run_command
@@ -272,7 +273,7 @@ def run_deep_analysis(target_path: Path | None = None):
                                 "size": size,
                                 "percent": (size / total_used) * 100,
                                 "color": t["color"],
-                                "icon": "📊" if str(t["path"]) == "/" else "🗂️",
+                                "icon": "📊" if str(t["path"]) == "/" else DIRECTORY_ICON,
                                 "age_hint": get_age_hint(t["path"]),
                             }
                         )
@@ -322,7 +323,7 @@ def run_deep_analysis(target_path: Path | None = None):
                             "path": full_path,
                             "size": size,
                             "percent": (size / total_path_size) * 100 if size_known else 0.0,
-                            "icon": "🗂️" if is_dir else "📄",
+                            "icon": icon_for_entry(name, is_dir=is_dir),
                             "size_known": size_known,
                             "sort_group": 0 if is_dir else 1,
                         }
