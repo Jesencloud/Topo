@@ -5,6 +5,7 @@ from src.core.file_ops import validate_path_for_deletion
 from src.manage.remove import (
     _launcher_points_to_package,
     _launcher_points_to_topo,
+    _remove_package_user_residue,
     _strip_topo_path_lines,
     run_remove,
 )
@@ -142,27 +143,135 @@ def test_validate_path_for_deletion_allows_self_removal(test_env):
 
         get_hard_protection_reason_cached.cache_clear()
 
-        # Default app data removal blocks hard-protected Topo installation/configuration
         ok_config, reason_config = validate_path_for_deletion(
             config_dir, allow_app_data_removal=True
         )
         assert ok_config is False
         assert "Topo configuration" in reason_config
-
         ok_install, reason_install = validate_path_for_deletion(
             install_dir, allow_app_data_removal=True
         )
         assert ok_install is False
         assert "Topo installation" in reason_install
-
-        # With allow_self_removal=True, Topo installation and configuration paths are unblocked
         ok_config_self, _ = validate_path_for_deletion(
             config_dir, allow_app_data_removal=True, allow_self_removal=True
         )
         assert ok_config_self is True
-
         ok_install_self, _ = validate_path_for_deletion(
             install_dir, allow_app_data_removal=True, allow_self_removal=True
         )
         assert ok_install_self is True
         get_hard_protection_reason_cached.cache_clear()
+
+
+def test_launcher_helpers_handle_invalid_and_package_links(test_env):
+    internal = test_env / ".topo"
+    launcher = test_env / "launcher"
+    with patch("src.manage.remove.os.readlink", side_effect=OSError):
+        assert _launcher_points_to_topo(launcher, internal) is False
+    launcher.symlink_to("/usr/bin/topo")
+    assert _launcher_points_to_package(launcher) is True
+    broken = test_env / "broken"
+    broken.symlink_to(test_env / "missing")
+    with (
+        patch("src.manage.remove._resolve_launcher_symlink", return_value=None),
+        patch("src.manage.remove.os.readlink", side_effect=OSError),
+    ):
+        assert _launcher_points_to_package(broken) is False
+
+
+def test_strip_path_lines_handles_read_write_errors(test_env):
+    bashrc = test_env / ".bashrc"
+    bashrc.write_text("# Added by topo\nexport PATH=x\n")
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch.object(Path, "read_text", side_effect=OSError),
+    ):
+        assert _strip_topo_path_lines() is False
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch.object(Path, "write_text", side_effect=OSError),
+    ):
+        assert _strip_topo_path_lines() is False
+
+
+def test_package_residue_removes_matching_entries_and_path(test_env, monkeypatch):
+    launcher = test_env / ".local/bin/topo"
+    launcher.parent.mkdir(parents=True)
+    launcher.symlink_to(test_env / ".topo/topo")
+    (test_env / ".topo").mkdir()
+    (test_env / ".config/topo").mkdir(parents=True)
+    (test_env / ".bashrc").write_text("# Added by topo\nexport PATH=x\n")
+    monkeypatch.setattr("pathlib.Path.home", lambda: test_env)
+    with patch("src.manage.remove._remove_path", return_value=True):
+        removed = _remove_package_user_residue()
+    assert "Launcher compatibility entry" in removed
+    assert "Shell PATH entry" in removed
+
+
+@patch("src.manage.remove.get_install_source", return_value="package")
+@patch("src.manage.remove.get_package_remove_argv", return_value=None)
+def test_package_remove_unsupported_distribution(_argv, _source, capsys):
+    run_remove()
+    assert "Unsupported Linux distribution" in capsys.readouterr().out
+
+
+@patch("src.manage.remove.get_install_source", return_value="package")
+@patch("src.manage.remove.get_package_remove_argv", return_value=["sudo", "dnf", "remove", "topo"])
+@patch("src.manage.remove.subprocess.run", side_effect=OSError("denied"))
+def test_package_remove_subprocess_error(_run, _argv, _source, capsys):
+    run_remove()
+    assert "Package removal failed" in capsys.readouterr().out
+
+
+@patch("src.manage.remove.get_install_source", return_value="package")
+@patch("src.manage.remove.get_package_remove_argv", return_value=["sudo", "dnf", "remove", "topo"])
+@patch("src.manage.remove.subprocess.run", return_value=MagicMock(returncode=1))
+def test_package_remove_nonzero_exit(_run, _argv, _source, capsys):
+    run_remove()
+    assert "exit code 1" in capsys.readouterr().out
+
+
+def test_user_remove_no_integration_and_dry_run(test_env, monkeypatch, capsys):
+    monkeypatch.setattr("pathlib.Path.home", lambda: test_env)
+    with patch("src.manage.remove.get_install_source", return_value="script"):
+        run_remove()
+    assert "No system integration" in capsys.readouterr().out
+
+    (test_env / ".config/topo").mkdir(parents=True)
+    with (
+        patch("src.manage.remove.get_install_source", return_value="script"),
+        patch("src.manage.remove.get_size_fast", return_value=10),
+    ):
+        run_remove(dry_run=True)
+    assert "Dry run complete" in capsys.readouterr().out
+
+
+def test_user_remove_cancel_and_success_with_error(test_env, monkeypatch, capsys):
+    monkeypatch.setattr("pathlib.Path.home", lambda: test_env)
+    (test_env / ".topo").mkdir()
+    (test_env / ".config/topo").mkdir(parents=True)
+    with (
+        patch("src.manage.remove.get_install_source", return_value="script"),
+        patch("src.manage.remove.get_size_fast", return_value=1),
+        patch("sys.stdin.fileno", return_value=0),
+        patch("termios.tcgetattr", return_value=[]),
+        patch("tty.setraw"),
+        patch("sys.stdin.read", return_value="n"),
+        patch("src.manage.remove.terminal_state.restore_raw_state"),
+    ):
+        run_remove()
+    assert "cancelled" in capsys.readouterr().out
+
+    with (
+        patch("src.manage.remove.get_install_source", return_value="script"),
+        patch("src.manage.remove.get_size_fast", return_value=1),
+        patch("sys.stdin.fileno", return_value=0),
+        patch("termios.tcgetattr", return_value=[]),
+        patch("tty.setraw"),
+        patch("sys.stdin.read", return_value="\n"),
+        patch("src.manage.remove.terminal_state.restore_raw_state"),
+        patch("src.manage.remove.safe_remove", return_value=(False, "denied")),
+    ):
+        run_remove()
+    assert "completed with errors" in capsys.readouterr().out

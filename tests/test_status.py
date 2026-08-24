@@ -10,10 +10,12 @@ from src.status import (
     TEMP_HOT_C,
     TEMP_WARN_C,
     _get_default_route_interface,
+    _get_interface_ipv4,
     _status_row,
     get_battery_info,
     get_cpu_load_summary,
     get_cpu_temp,
+    get_fan_speed,
     get_gpu_info,
     get_ip_info,
     get_mem_info,
@@ -559,3 +561,154 @@ def test_system_health_assessment_warning_heavy_load():
     assert "Disk space low" in verdict
     assert "Memory load critical" in verdict
     assert "CPU temperature hot" in verdict
+
+
+def test_proc_readers_and_cpu_load_errors():
+    with patch("builtins.open", side_effect=OSError):
+        assert get_mem_info() == ("Unknown", "Unknown", 0)
+        assert get_uptime() == "Unknown"
+    with patch("os.getloadavg", side_effect=OSError), pytest.raises(OSError):
+        get_cpu_load_summary()
+
+
+def test_battery_missing_and_malformed_optional_fields():
+    with patch("src.status.Path.exists", return_value=False):
+        assert get_battery_info() is None
+
+    def opened(path):
+        if str(path).endswith("capacity"):
+            return mock_open(read_data="bad")()
+        raise OSError
+
+    with (
+        patch("src.status.Path.exists", return_value=True),
+        patch("builtins.open", side_effect=opened),
+    ):
+        assert get_battery_info() == (0, "N/A", "")
+
+    def partial(path):
+        if str(path).endswith("capacity"):
+            return mock_open(read_data="70")()
+        if str(path).endswith("energy_full_design"):
+            return mock_open(read_data="0")()
+        raise OSError
+
+    with (
+        patch("src.status.Path.exists", return_value=True),
+        patch("builtins.open", side_effect=partial),
+    ):
+        value = get_battery_info()
+        assert value[0:2] == (70, "70%") and value[2] == ""
+
+
+def test_network_and_route_error_branches(tmp_path):
+    with patch("builtins.open", side_effect=OSError):
+        assert get_network_traffic() == ("N/A", "N/A")
+    route = tmp_path / "route"
+    route.write_text("header\nmalformed\neth0 00000000 x bad 0 0 x\neth1 00000000 x 0000 0 0 20\n")
+    assert _get_default_route_interface(route) is None
+    with patch("src.status.socket.socket", side_effect=OSError):
+        assert _get_interface_ipv4("eth0") is None
+    assert _get_interface_ipv4("") is None
+
+
+def test_network_unselected_eligible_interface():
+    content = "h\nh\neth0: 10 0 0 0 0 0 0 0 20 0 0 0 0 0 0 0\n"
+    with (
+        patch("builtins.open", mock_open(read_data=content)),
+        patch("src.status.Path.exists", return_value=False),
+        patch("src.status._get_default_route_interface", return_value="wlan0"),
+    ):
+        assert get_network_traffic() == ("N/A", "N/A")
+
+
+def test_cpu_temp_fallback_thermal_and_invalid_hwmon():
+    def glob(self, pattern):
+        if str(self) == "/sys/class/hwmon":
+            return []
+        if "thermal_zone" in pattern:
+            return [Path("/sys/class/thermal/thermal_zone0")]
+        return []
+
+    def read(self):
+        return "x86_pkg_temp\n" if str(self).endswith("/type") else "65000\n"
+
+    with (
+        patch("src.status.Path.exists", return_value=True),
+        patch("src.status.Path.glob", glob),
+        patch("src.status.Path.read_text", read),
+    ):
+        assert get_cpu_temp() == (65.0, "65°C")
+
+
+def test_fan_speed_reads_labels_deduplicates_and_handles_empty():
+    def glob(self, pattern):
+        if "hwmon*" in pattern:
+            return [Path("/sys/class/hwmon/hwmon0")]
+        if "fan*_input" in pattern:
+            return [
+                Path("/sys/class/hwmon/hwmon0/fan1_input"),
+                Path("/sys/class/hwmon/hwmon0/fan2_input"),
+            ]
+        return []
+
+    def opened(path):
+        if str(path).endswith("fan1_input"):
+            return mock_open(read_data="1200")()
+        return mock_open(read_data="0")()
+
+    with (
+        patch("src.status.Path.exists", return_value=True),
+        patch("src.status.Path.glob", glob),
+        patch("builtins.open", side_effect=opened),
+    ):
+        assert get_fan_speed() == "0: 1200 RPM"
+
+
+def test_gpu_nvidia_invalid_and_drm_empty():
+    with (
+        patch("src.status.shutil.which", return_value="/usr/bin/nvidia-smi"),
+        patch("src.status.run_command", return_value=MagicMock(ok=True, stdout="bad")),
+        patch("src.status.Path.exists", return_value=False),
+    ):
+        assert get_gpu_info() is None
+    with (
+        patch("src.status.shutil.which", return_value=None),
+        patch("src.status.Path.exists", return_value=False),
+    ):
+        assert get_gpu_info() is None
+
+
+def test_top_processes_success_sorting_and_failure():
+    output = "chrome 204800\nchrome 1024\nvim bad\npython 100\n"
+    with patch("src.status.run_command", return_value=MagicMock(ok=True, stdout=output)):
+        result = __import__("src.status", fromlist=["get_top_processes"]).get_top_processes()
+        assert result[0].startswith("chrome")
+    with patch("src.status.run_command", return_value=MagicMock(ok=False, stdout="")):
+        assert __import__("src.status", fromlist=["get_top_processes"]).get_top_processes() == []
+
+
+def test_health_assessment_bad_load_and_battery_text():
+    icon, _, message = get_system_health_assessment(
+        50, "load invalid%", 40, 81, (80, "80%", "Health: bad%")
+    )
+    assert icon == "🟡" and "Disk usage high" in message
+
+
+def test_show_status_optional_rows(capsys):
+    overrides = {
+        **QUIET_PROBES,
+        "get_gpu_info": "55°C | load 10%",
+        "get_fan_speed": "1200 RPM",
+        "get_battery_info": (80, "80%", "Health: 90.0%"),
+        "get_top_processes": ["chrome (200MB)"],
+    }
+    with ExitStack() as stack:
+        for name, value in overrides.items():
+            stack.enter_context(patch(f"src.status.{name}", return_value=value))
+        stack.enter_context(
+            patch("src.status.shutil.disk_usage", return_value=MagicMock(used=1, total=2))
+        )
+        show_status()
+    output = capsys.readouterr().out
+    assert "GPU Status:" in output and "Fan Speed:" in output and "Top Processes:" in output

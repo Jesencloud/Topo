@@ -2,9 +2,12 @@ from unittest.mock import MagicMock, patch
 
 from src.clean.dev import (
     clean_ai_models,
+    clean_cargo_cache,
+    clean_container_and_virtualization_caches,
     clean_developer_tools,
     clean_docker,
     clean_multipass,
+    clean_package_manager_caches,
     clean_podman,
     clean_tool_cache,
 )
@@ -116,3 +119,10 @@ def test_clean_tool_cache_reports_actual_freed(test_env):
         size, items = clean_tool_cache("mytool", ["mytool", "clean"], str(cache), dry_run=False)
     assert items == 1
     assert size == 800  # 1000 - 200, not the pre-clean 1000
+
+
+def test_developer_cache_groups_are_noops_without_tools(monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda _name: None)
+    assert clean_package_manager_caches() == (0, 0)
+    assert clean_cargo_cache() == (0, 0)
+    assert clean_container_and_virtualization_caches() == (0, 0)

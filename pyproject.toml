@@ -59,3 +59,38 @@ quote-style = "double"
 indent-style = "space"
 skip-magic-trailing-comma = false
 line-ending = "auto"
+
+[tool.coverage.run]
+branch = true
+source = ["src"]
+# Interactive terminal rendering and raw keyboard/mouse handling require a
+# pseudo-terminal integration suite. Keep that work explicitly out of the
+# current unit-test coverage target instead of scattering no-cover markers
+# throughout UI code. Remove this omission when PTY-based UI tests are added.
+omit = [
+    "src/ui/**",
+    "src/__init__.py",
+    "src/**/__init__.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+precision = 0
+# Exclusions must describe code that cannot add meaningful behavioral coverage,
+# not merely code that is inconvenient to test. Business branches, error
+# handling, filesystem mutations, and command construction remain measurable.
+exclude_also = [
+    # Explicit, reviewable escape hatch for platform-only or process-replacing
+    # paths. Every use should include a nearby comment explaining why.
+    "# pragma: no cover",
+    # Static typing blocks never execute at runtime.
+    "if TYPE_CHECKING:",
+    # Abstract/protocol declarations define contracts rather than behavior.
+    "@(abc\\.)?abstractmethod",
+    "raise NotImplementedError",
+    # Standard defensive assertions that communicate an unreachable state.
+    "if __debug__:",
+    # Module entry points only delegate to the already-tested application API.
+    "if __name__ == .__main__.:",
+]

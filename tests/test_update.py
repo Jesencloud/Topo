@@ -1,12 +1,21 @@
 import subprocess
 from hashlib import sha256
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+
+import pytest
+from packaging.version import Version
 
 from src.manage.update import (
     TOPO_RELEASE_KEY_FINGERPRINT,
     _download_file,
+    _expected_sha256,
     _fetch_latest_release_tag,
+    _normalized_gpg_fingerprint,
+    _parse_version,
     _release_signature_status_matches,
+    _run_package_update,
+    _subprocess_stderr_tail,
     _verify_release_checksum,
     _verify_release_signature,
     run_update,
@@ -428,3 +437,77 @@ def test_run_update_rejects_non_script_payload(mock_check_output, mock_run, _moc
         run_update()
 
     mock_run.assert_not_called()
+
+
+def test_update_helpers_handle_invalid_inputs(tmp_path):
+    assert _parse_version("v1.2.3") == Version("1.2.3")
+    assert _parse_version("not-a-version") is None
+    assert _normalized_gpg_fingerprint("a" * 40) == "A" * 40
+    assert _normalized_gpg_fingerprint("short") is None
+    assert _subprocess_stderr_tail(SimpleNamespace(stderr="first\nlast\n")) == "last"
+    assert _subprocess_stderr_tail(SimpleNamespace(stderr=None)) == ""
+    sums = tmp_path / "SHA256SUMS"
+    sums.write_text("bad line\nabc *other.rpm\n" + "A" * 64 + "  topo.rpm\n")
+    assert _expected_sha256(sums, "topo.rpm") == "a" * 64
+    assert _expected_sha256(sums, "missing") is None
+
+
+def test_download_file_handles_os_error_and_retries(tmp_path):
+    destination = tmp_path / "asset"
+    with (
+        patch("src.manage.update.subprocess.run", side_effect=OSError("network")),
+        pytest.raises(OSError),
+    ):
+        _download_file("https://example.test/asset", destination, attempts=1)
+
+
+@patch("src.manage.update.shutil.which", return_value="/usr/bin/gpg")
+@patch("src.manage.update.subprocess.run")
+def test_verify_signature_import_and_verify_failures(mock_run, _which, tmp_path, capsys):
+    mock_run.return_value = MagicMock(returncode=1, stderr="bad key")
+    assert not _verify_release_signature(tmp_path / "sums", tmp_path / "sig", tmp_path / "key")
+    mock_run.reset_mock()
+    mock_run.side_effect = [MagicMock(returncode=0, stderr=""), OSError("gpg")]
+    assert not _verify_release_signature(tmp_path / "sums", tmp_path / "sig", tmp_path / "key")
+    assert "Failed to verify" in capsys.readouterr().out
+
+
+def test_run_update_invalid_local_and_fetch_failure(capsys):
+    with (
+        patch("src.manage.update._read_local_version", return_value="bad"),
+        patch("src.manage.update._fetch_latest_release_tag", return_value="v2.0.0"),
+    ):
+        run_update()
+    assert "Invalid local version" in capsys.readouterr().out
+    with (
+        patch("src.manage.update._read_local_version", return_value="1.0.0"),
+        patch("src.manage.update._fetch_latest_release_tag", side_effect=OSError("offline")),
+    ):
+        run_update()
+    assert "Failed to check latest release" in capsys.readouterr().out
+
+
+def test_run_update_package_unsupported_and_upgrade_failures(tmp_path, capsys):
+    with patch("src.manage.update.get_package_asset_name", return_value=None):
+        _run_package_update("1.0.0", "v2.0.0")
+    assert "Unsupported Linux distribution" in capsys.readouterr().out
+    with (
+        patch("src.manage.update.get_package_asset_name", return_value="topo.rpm"),
+        patch("src.manage.update._download_file") as download,
+        patch("src.manage.update._verify_release_signature", return_value=True),
+        patch(
+            "src.manage.update.get_package_upgrade_argv", return_value=["sudo", "dnf", "upgrade"]
+        ),
+        patch("src.manage.update.subprocess.run", return_value=MagicMock(returncode=2)),
+        patch("src.manage.update.shutil.which", return_value=None),
+    ):
+
+        def fake_download(_url, destination, timeout=60):
+            if destination.name == "SHA256SUMS":
+                destination.write_text("0" * 64 + "  topo.rpm\n")
+            else:
+                destination.write_bytes(b"x")
+
+        download.side_effect = fake_download
+        _run_package_update("1.0.0", "v2.0.0")
+    assert "Checksum mismatch" in capsys.readouterr().out

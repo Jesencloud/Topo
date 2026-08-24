@@ -4,20 +4,38 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+from src import optimize
+from src.core.file_ops import TRASH_UNAVAILABLE_REASON
 from src.core.system import CommandResult
 from src.optimize import (
     OptimizationRegistry,
+    _extract_service_exec_targets,
+    _is_any_process_running,
+    _is_sqlite_database,
     _points_at_transient_mount,
+    _service_exec_target_exists,
     opt_log,
     optimize_system,
     run_autostart_cleanup,
     run_broken_symlink_cleanup,
     run_coredump_cleanup,
     run_desktop_database_refresh,
+    run_fccache,
+    run_flatpak_repair,
+    run_fstrim,
+    run_journal_optimization,
+    run_ldconfig,
+    run_locale_gen,
+    run_man_db_refresh,
     run_mime_database_refresh,
+    run_package_repo_refresh,
+    run_swap_management,
     run_sysctl_optimize,
     run_systemd_user_service_cleanup,
     run_tmpfiles_cleanup,
+    run_tracker_miner_reset,
     run_user_systemd_reset_failed,
     run_vacuum_all,
     vacuum_single_db,
@@ -525,3 +543,190 @@ def test_vacuum_single_db_closes_connection_on_error(tmp_path):
 
     assert result == 0
     fake_conn.close.assert_called_once()
+
+
+def test_opt_log_skipped_and_process_helpers(capsys):
+    opt_log("preview", skipped=True)
+    assert "preview · skipped" in capsys.readouterr().out
+    with patch("src.optimize.shutil.which", return_value=None):
+        assert _is_any_process_running(["firefox"]) is False
+    with (
+        patch("src.optimize.shutil.which", return_value="/usr/bin/pgrep"),
+        patch(
+            "src.optimize.run_command",
+            side_effect=[CommandResult(["pgrep"], 1), CommandResult(["pgrep"], 0)],
+        ),
+    ):
+        assert _is_any_process_running(["firefox", "chrome"]) is True
+
+
+def test_sqlite_detection_and_vacuum_skip_guards(tmp_path):
+    good = tmp_path / "good.db"
+    good.write_bytes(b"SQLite format 3\x00" + b"\0" * 20)
+    bad = tmp_path / "bad.db"
+    bad.write_text("not sqlite")
+    assert _is_sqlite_database(good) is True
+    assert _is_sqlite_database(bad) is False
+    with patch("src.optimize._is_sqlite_database", return_value=False):
+        assert vacuum_single_db(bad) == 0
+    with patch("src.optimize._is_sqlite_database", return_value=True):
+        assert vacuum_single_db(tmp_path / "x-wal") == 0
+    with (
+        patch("src.optimize._is_sqlite_database", return_value=True),
+        patch("src.optimize.is_file_locked", return_value=True),
+    ):
+        assert vacuum_single_db(good) == 0
+    with (
+        patch("src.optimize._is_sqlite_database", return_value=True),
+        patch("src.optimize.is_file_locked", return_value=False),
+        patch("src.optimize.is_sqlite_busy", return_value=True),
+    ):
+        assert vacuum_single_db(good) == 0
+
+
+@pytest.mark.parametrize(
+    ("func", "tool", "dry_text", "command"),
+    [
+        (run_fstrim, "fstrim", "SSD partitions would be trimmed", ["fstrim", "-av"]),
+        (run_fccache, "fc-cache", "System font cache would be refreshed", ["fc-cache"]),
+        (run_ldconfig, "ldconfig", "Dynamic linker cache would be updated", ["ldconfig"]),
+        (
+            run_locale_gen,
+            "locale-gen",
+            "System locale archive would be regenerated",
+            ["locale-gen"],
+        ),
+        (
+            run_man_db_refresh,
+            "mandb",
+            "Manual page database index would be updated",
+            ["mandb", "-q"],
+        ),
+    ],
+)
+def test_simple_optimization_tasks_support_missing_dry_run_success_and_failure(
+    func, tool, dry_text, command
+):
+    with patch("src.optimize.shutil.which", return_value=None):
+        assert func() is None
+    with patch("src.optimize.shutil.which", return_value=f"/usr/bin/{tool}"):
+        assert dry_text in func(dry_run=True)
+    with (
+        patch("src.optimize.shutil.which", return_value=f"/usr/bin/{tool}"),
+        patch("src.optimize.run_command", return_value=CommandResult(command, 0)) as run,
+    ):
+        assert func() is not None
+        assert run.call_args.args[0] == command
+    with (
+        patch("src.optimize.shutil.which", return_value=f"/usr/bin/{tool}"),
+        patch("src.optimize.run_command", return_value=CommandResult(command, 1)),
+    ):
+        assert func() is None
+
+
+def test_sysctl_tmpfiles_and_flatpak_branches():
+    with patch("src.optimize.shutil.which", return_value=None):
+        assert run_sysctl_optimize() is None
+    with (
+        patch("src.optimize.shutil.which", return_value="/usr/bin/sysctl"),
+        patch("src.optimize.has_sudo", return_value=False),
+    ):
+        assert run_sysctl_optimize() is None
+    with (
+        patch("src.optimize.shutil.which", return_value="/usr/bin/systemd-tmpfiles"),
+        patch("src.optimize.run_command", return_value=CommandResult(["tmpfiles"], 1)),
+    ):
+        assert run_tmpfiles_cleanup() is None
+    with (
+        patch("src.optimize.shutil.which", return_value="/usr/bin/flatpak"),
+        patch("src.optimize.has_sudo", return_value=True),
+        patch("src.optimize.run_command", return_value=CommandResult(["flatpak"], 0)) as run,
+    ):
+        assert "verified" in run_flatpak_repair()
+        assert run.call_count == 2
+    with patch("src.optimize.shutil.which", return_value="/usr/bin/flatpak"):
+        assert "would be verified" in run_flatpak_repair(dry_run=True)
+
+
+def test_autostart_cleanup_no_dir_and_trash_failure_reason(test_env):
+    with patch("pathlib.Path.home", return_value=test_env):
+        assert run_autostart_cleanup() is None
+    d = test_env / ".config/autostart"
+    d.mkdir(parents=True)
+    f = d / "dead.desktop"
+    f.write_text("Exec=/missing/app\n")
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.optimize.safe_remove", return_value=(False, TRASH_UNAVAILABLE_REASON)),
+    ):
+        assert (
+            run_autostart_cleanup()
+            == "Kept 1 zombie autostart entries (no trash backend available)"
+        )
+
+
+def test_systemd_service_and_failed_reset_error_paths(test_env):
+    with patch("pathlib.Path.home", return_value=test_env):
+        assert run_systemd_user_service_cleanup() is None
+    d = test_env / ".config/systemd/user"
+    d.mkdir(parents=True)
+    (d / "bad.service").write_text("ExecStart=/missing/app\n")
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.optimize.safe_remove", return_value=(False, "error")),
+    ):
+        assert run_systemd_user_service_cleanup() is None
+    with (
+        patch("src.optimize.shutil.which", return_value="/usr/bin/systemctl"),
+        patch("src.optimize.run_command", return_value=CommandResult(["systemctl"], 1)),
+    ):
+        assert run_user_systemd_reset_failed() is None
+
+
+def test_service_helpers_and_database_refresh(tmp_path):
+    service = tmp_path / "x.service"
+    service.write_text('ExecStart=-/missing/app --x\nExecStart="unterminated\nExecStart=\n')
+    targets = _extract_service_exec_targets(service)
+    assert "/missing/app" in targets
+    with patch("src.optimize.shutil.which", return_value=None):
+        assert _service_exec_target_exists("missing") is False
+    with patch("src.optimize.shutil.which", return_value="/usr/bin/app"):
+        assert _service_exec_target_exists("app") is True
+    target = tmp_path / "apps"
+    target.mkdir()
+    with (
+        patch("src.optimize.shutil.which", return_value="/usr/bin/update"),
+        patch("src.optimize.run_command", return_value=CommandResult(["update"], 1)),
+    ):
+        assert optimize.run_desktop_database_refresh() is None
+
+
+def test_swap_journal_tracker_repo_and_coredump_error_paths(tmp_path):
+    with patch("src.optimize.shutil.which", return_value=None):
+        assert run_swap_management() is None
+        assert run_journal_optimization() is None
+        assert run_tracker_miner_reset() is None
+        assert run_package_repo_refresh() is None
+    with (
+        patch("src.optimize.shutil.which", return_value="/usr/bin/journalctl"),
+        patch("src.optimize.run_command", return_value=CommandResult(["journalctl"], 0, stdout="")),
+    ):
+        assert run_journal_optimization() == "Journal already optimized (under 3 days)"
+    with (
+        patch(
+            "src.optimize.shutil.which",
+            side_effect=lambda n: "/usr/bin/tracker" if n == "tracker" else None,
+        ),
+        patch("src.optimize.run_command", return_value=CommandResult(["tracker"], 1)),
+    ):
+        assert run_tracker_miner_reset() is None
+    with (
+        patch(
+            "src.optimize.shutil.which",
+            side_effect=lambda n: "/usr/bin/pkcon" if n == "pkcon" else None,
+        ),
+        patch("src.optimize.run_command", return_value=CommandResult(["pkcon"], 0)),
+    ):
+        assert run_package_repo_refresh() == "Software repository index refreshed"
+    with patch("src.optimize.COREDUMP_DIR", tmp_path / "missing"):
+        assert run_coredump_cleanup() is None

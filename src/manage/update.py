@@ -9,7 +9,7 @@ from typing import Any
 
 from packaging.version import InvalidVersion, Version
 
-from ..core.constants import BOLD, GRAY, GREEN, RED, RESET, YELLOW
+from ..core.constants import BOLD, GRAY, GREEN, RED, RESET
 from ..core.install_source import (
     PACKAGE_INSTALL,
     get_install_source,
@@ -276,7 +276,7 @@ def _run_package_update(local_version: str, remote_tag: str) -> None:
         print(f" {RED}❌ Refusing unsafe release tag: {remote_tag!r}{RESET}")
         return
 
-    print(f" {YELLOW}⬆️  New package available: {remote_tag}{RESET}")
+    print(f" {GREEN}✨ New package available: {remote_tag}{RESET}")
     print(f" {GRAY}Updating Topo from v{local_version} to {remote_tag}...{RESET}\n")
 
     with TemporaryDirectory(prefix="topo-update-") as temp_dir:
@@ -381,7 +381,7 @@ def run_update():
         print(f" {RED}❌ Refusing unsafe release tag: {remote_tag!r}{RESET}")
         return
 
-    print(f" {YELLOW}⬆️  New version available: {remote_tag}{RESET}")
+    print(f" {GREEN}✨ New version available: {remote_tag}{RESET}")
     print(f" {GRAY}Updating Topo from v{local_version} to {remote_tag}...{RESET}\n")
 
     # 4. Verify release signature and SHA256 checksum for install.sh before execution

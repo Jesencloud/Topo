@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
@@ -5,9 +6,12 @@ from src.clean.apps import (
     clean_app_generic,
     clean_apps_deep,
     clean_browser_caches,
+    clean_desktop_apps_caches,
     clean_generic_xdg_caches,
+    clean_ide_caches,
     clean_orphaned_remnants,
     clean_snap_cache,
+    clean_steam_shader_cache,
     proactive_app_detection,
 )
 from src.core.app_cache import (
@@ -566,3 +570,89 @@ def test_clean_snap_cache(test_env):
         size, items = clean_snap_cache(dry_run=True)
         assert size == 1024
         assert items == 1
+
+
+def test_flatpak_unused_paths(capsys):
+    from src.clean.apps import clean_flatpak_unused
+
+    with patch("src.clean.apps.shutil.which", return_value=None):
+        assert clean_flatpak_unused() == (0, 0)
+    with patch("src.clean.apps.shutil.which", return_value="/usr/bin/flatpak"):
+        assert clean_flatpak_unused(dry_run=True) == (0, 0)
+    with (
+        patch("src.clean.apps.shutil.which", return_value="/usr/bin/flatpak"),
+        patch(
+            "src.clean.apps.run_command",
+            return_value=MagicMock(ok=True, stdout="Uninstalling 10 MB"),
+        ),
+    ):
+        assert clean_flatpak_unused() == (10 * 1024 * 1024, 1)
+
+
+def test_clean_app_generic_file_and_failure(test_env):
+    path = test_env / "cache.bin"
+    path.write_bytes(b"abc")
+    with patch("src.clean.apps.safe_remove", return_value=(True, "ok")):
+        assert clean_app_generic("App Cache", [str(path)]) == (3, 1)
+    path.write_bytes(b"abc")
+    with patch("src.clean.apps.safe_remove", return_value=(False, "denied")):
+        assert clean_app_generic("App Cache", [str(path)]) == (0, 0)
+
+
+def test_orphaned_remnants_removes_old_cache(test_env):
+    import os
+
+    cache = test_env / ".cache/orphan-app"
+    cache.mkdir(parents=True)
+    old = time.time() - 100 * 86400
+    os.utime(cache, (old, old))
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.clean.apps.shutil.which", return_value=None),
+        patch("src.clean.apps.get_size_fast", return_value=20),
+        patch("src.clean.apps.safe_remove", return_value=(True, "ok")),
+    ):
+        assert clean_orphaned_remnants() == (20, 1)
+
+
+def test_snap_shader_ide_and_desktop_cleaners(test_env):
+    snap_cache = test_env / "snap/app/common/.cache"
+    snap_cache.mkdir(parents=True)
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.clean.apps.is_app_running", return_value=True),
+    ):
+        assert clean_snap_cache() == (0, 0)
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.clean.apps.clean_path_by_age", return_value=(5, 1)),
+        patch("src.clean.apps.is_app_running", return_value=False),
+    ):
+        assert clean_snap_cache() == (5, 1)
+
+    shader = test_env / ".cache/mesa_shader_cache"
+    shader.mkdir(parents=True)
+    ide = test_env / ".config/Code/Cache"
+    ide.mkdir(parents=True)
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.clean.apps.clean_path_by_age", return_value=(4, 1)),
+    ):
+        assert clean_steam_shader_cache()[0] > 0
+        assert clean_ide_caches()[0] > 0
+
+
+def test_clean_desktop_and_deep_aggregation():
+    with (
+        patch("src.clean.apps.get_desktop_app_cleanup_defs", return_value={}),
+        patch("src.clean.apps.clean_app_generic", return_value=(3, 2)),
+    ):
+        assert clean_desktop_apps_caches({"demo": {"paths": ["/tmp/demo"]}}) == (3, 2)
+    with (
+        patch("src.clean.apps.clean_desktop_apps_caches", return_value=(1, 2)),
+        patch(
+            "src.clean.apps.AppCleanerRegistry.cleaners",
+            [lambda dry_run=False: (3, 4), lambda dry_run=False: (5, 6, 2)],
+        ),
+    ):
+        assert clean_apps_deep(detected_apps={}) == (9, 12, 4)

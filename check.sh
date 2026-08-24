@@ -177,4 +177,4 @@ RS_COUNT=$(printf '%s\n' "$OUT" | awk '
 echo -e "  ${GREEN}✓${NC} ${GRAY}${RS_COUNT:-all passed} Rust core engine tests (cargo test)${NC}"
 echo -e "  ${GREEN}✓${NC} ${GRAY}All test suites passed successfully.${NC}\n"
 
-echo -e " ${GREEN}✓${NC} ${GRAY}All checks passed successfully! 🎉${NC}"
+echo -e " ✅${NC} All checks passed successfully! 🎉${NC}\n"

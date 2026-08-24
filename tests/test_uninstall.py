@@ -905,3 +905,89 @@ def test_execute_uninstall_residue_goes_to_trash(test_env):
     assert mock_safe_remove.call_args_list, "safe_remove was not called for residue"
     for call in mock_safe_remove.call_args_list:
         assert call.kwargs.get("use_trash") is True
+
+
+def test_uninstall_helpers_and_cache_state(test_env, monkeypatch):
+    mgr = UninstallManager()
+    assert mgr._name_matches("firefox-profile", "firefox")
+    assert not mgr._name_matches("app-data", "app")
+    assert mgr._requires_official_only_uninstall("org.example.vpn", "VPN")
+    assert mgr._is_system_component("libfoo", "libfoo")
+    assert mgr._strip_package_arch("foo:amd64") == "foo"
+    record = mgr._app_record("id", "Name", 10, "10 B", "CLI")
+    assert record["type"] == "CLI"
+    assert mgr.has_fresh_scan_cache() is False
+    mgr.__class__._scan_cache_apps = [record]
+    mgr.__class__._scan_cache_key = mgr._current_scan_cache_key()
+    import time
+
+    mgr.__class__._scan_cache_time = time.monotonic()
+    assert mgr.has_fresh_scan_cache() is True
+    mgr.clear_scan_cache()
+    assert mgr.has_fresh_scan_cache() is False
+
+
+def test_scan_package_managers_handles_missing_tools_and_bad_output():
+    mgr = UninstallManager()
+    with patch("src.uninstall.shutil.which", return_value=None):
+        assert mgr._scan_rpm_packages(set(), {}) == []
+        assert mgr._scan_apt_packages(set(), {}) == []
+        assert mgr._scan_pacman_packages(set(), {}) == []
+        assert mgr._scan_flatpak_apps() == []
+        assert mgr._scan_snap_apps({}) == []
+        assert mgr._scan_npm_global_packages() == []
+    with (
+        patch("src.uninstall.shutil.which", return_value="/usr/bin/rpm"),
+        patch("src.uninstall.system.run_command", return_value=MagicMock(ok=True, stdout="bad\n")),
+    ):
+        assert mgr._scan_rpm_packages(set(), {}) == []
+
+
+def test_run_full_scan_cache_and_failed_worker(monkeypatch):
+    mgr = UninstallManager()
+    monkeypatch.setattr(mgr, "_current_scan_cache_key", lambda: ("key",))
+    monkeypatch.setattr(mgr, "_pre_scan_package_desktop_names", lambda: (set(), {}))
+    monkeypatch.setattr(mgr, "_pre_scan_search_roots", lambda: {})
+    monkeypatch.setattr(mgr, "_calculate_app_sizes_and_residues", lambda apps, roots: None)
+    monkeypatch.setattr(
+        mgr, "_scan_rpm_packages", lambda *_: [{"id": "x", "install_time": 1, "size_bytes": 1}]
+    )
+    monkeypatch.setattr(mgr, "_scan_apt_packages", lambda *_: [])
+    monkeypatch.setattr(mgr, "_scan_pacman_packages", lambda *_: [])
+    monkeypatch.setattr(mgr, "_scan_flatpak_apps", lambda: [])
+    monkeypatch.setattr(mgr, "_scan_snap_apps", lambda *_: [])
+    monkeypatch.setattr(mgr, "_scan_npm_global_packages", lambda: [])
+    monkeypatch.setattr(mgr, "_scan_standalone_cli_apps", lambda: [])
+    assert len(mgr.run_full_scan(use_cache=True)) == 1
+    assert len(mgr.run_full_scan(use_cache=True)) == 1
+
+
+def test_build_targets_and_execute_cli_npm_and_systemd(test_env):
+    mgr = UninstallManager()
+    app = {"id": "@scope/tool", "name": "tool", "type": "NPM", "size_bytes": 10}
+    with (
+        patch.object(mgr, "find_residue_paths", return_value=[]),
+        patch.object(mgr, "_candidate_process_names", return_value=["tool"]),
+        patch("src.uninstall.system.run_command", return_value=MagicMock(ok=False)),
+    ):
+        assert mgr.build_removal_targets([app])[0][2] is False
+    with (
+        patch("src.uninstall.system.run_command", return_value=MagicMock(ok=True, stdout="")),
+        patch("src.uninstall.record_deletion_audit"),
+        patch("src.uninstall.record_history_session"),
+        patch("src.uninstall.safe_remove", return_value=(True, "ok")),
+    ):
+        result = mgr.execute_uninstall(app, [])
+    assert result["package_removed"] is True
+
+    service = test_env / ".config/systemd/user/app.service"
+    service.parent.mkdir(parents=True)
+    service.write_text("[Service]\nExecStart=/missing/app\n")
+    app2 = {"id": "app", "name": "app", "type": "DNF", "size_bytes": 1}
+    with (
+        patch("src.uninstall.system.run_command", return_value=MagicMock(ok=True)),
+        patch("src.uninstall.shutil.which", return_value="/usr/bin/systemctl"),
+        patch("src.uninstall.safe_remove", return_value=(True, "ok")),
+    ):
+        result = mgr.execute_uninstall(app2, [service])
+    assert result["removed_paths"]
