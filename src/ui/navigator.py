@@ -1156,6 +1156,12 @@ class UninstallSelector(_PagedSelector):
 
 
 class UninstallPreviewSelector:
+    # How many collateral package names are spelled out before the line turns into
+    # a count. Four fits an 80-column terminal next to the "also removes N:" lead.
+    _COLLATERAL_NAMES_SHOWN = 4
+    # "    ⚠ " -- the same indent the risky-path rows use.
+    _COLLATERAL_INDENT = "    ⚠ "
+
     def __init__(self, targets):
         self.targets = targets
         self.app_count = len(targets)
@@ -1168,14 +1174,39 @@ class UninstallPreviewSelector:
         except ValueError:
             return str(path)
 
+    @classmethod
+    def _collateral_label(cls, names, width):
+        """One line naming the packages that leave with the app.
+
+        The count leads so that it survives the clip: a dozen names do not fit on
+        one line, and a truncated list that ended in "..." would say only that
+        there is more, not how much more. Clipping is not cosmetic here -- the
+        scrollable frame counts physical lines, so a line long enough to wrap
+        would put every row below it one off.
+        """
+        shown = [sanitize_for_display(str(name)) for name in names[: cls._COLLATERAL_NAMES_SHOWN]]
+        label = f"also removes {len(names)}: {', '.join(shown)}"
+        remaining = len(names) - len(shown)
+        if remaining > 0:
+            label += f" +{remaining} more"
+        if display_width(label) > width:
+            label = pad_and_truncate(label, width)
+        return label
+
     def render(self):
         buf = ["\033[H"]
         buf.append(f"\n {THEME_TITLE}➔{RESET} {THEME_TITLE}Uninstallation Preview{RESET}\033[K\n")
         buf.append("\033[K\n")
+        columns = max(20, shutil.get_terminal_size(fallback=(80, 24)).columns)
+        collateral_width = columns - display_width(self._COLLATERAL_INDENT)
 
         for app, app_paths, is_running in self.targets:
             running_tag = f" {YELLOW}[Running]{RESET}" if is_running else ""
             buf.append(f"  {GREEN}✓{RESET} {BOLD}{app['name']}{RESET}{running_tag}\033[K\n")
+            collateral = app.get("collateral_packages") or []
+            if collateral:
+                label = self._collateral_label(collateral, collateral_width)
+                buf.append(f"{YELLOW}{self._COLLATERAL_INDENT}{label}{RESET}\033[K\n")
             for path in app_paths:
                 is_risky = path.parent == Path.home()
                 mark = f"{YELLOW}⚠{RESET}" if is_risky else f"{BLUE}✓{RESET}"

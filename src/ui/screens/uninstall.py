@@ -43,7 +43,7 @@ SCREEN_TITLE = "Uninstall Apps"
 # installation), NPM's global prefix and standalone CLI binaries under ~/.local
 # are all removed as the invoking user. Asking for a password to uninstall a
 # Flatpak buys nothing, and a mistyped or cancelled prompt ended the run.
-NEEDS_SUDO_TYPES = frozenset({"APT", "DNF", "Pacman", "Snap"})
+NEEDS_SUDO_TYPES = frozenset({"APT", "DNF", "Pacman", "Snap", "Zypper"})
 
 
 def run_uninstall():

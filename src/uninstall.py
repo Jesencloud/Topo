@@ -726,6 +726,16 @@ class UninstallManager:
     ) -> list[dict[str, Any]]:
         if not shutil.which("rpm"):
             return []
+        # openSUSE and SLES are rpm distros without dnf, so labelling everything
+        # rpm reports "DNF" sent their removals into a `dnf remove` that is not
+        # installed. The family is asked once, from os-release rather than from
+        # PATH: a Fedora box may well have zypper lying around, and the question
+        # is which manager owns the database, not which binaries exist. The family
+        # test rather than install_source's exact ZYPPER_OS_IDS, because that set
+        # answers a different question -- which release asset to download, where
+        # an unrecognised id must fail safe -- and it misses the derivatives
+        # (ID_LIKE=suse) whose removals would then go to a dnf they do not have.
+        app_type = "Zypper" if system.is_os_family("suse") else "DNF"
         apps = []
         try:
             res = system.run_command(
@@ -753,7 +763,7 @@ class UninstallManager:
                                     display_name,
                                     size_bytes,
                                     bytes_to_human(size_bytes),
-                                    "DNF",
+                                    app_type,
                                     install_time,
                                 )
                             )
@@ -1457,6 +1467,94 @@ class UninstallManager:
 
         return paths
 
+    def _collateral_packages(self, app: dict[str, Any]) -> list[str]:
+        """Which other installed packages this app's removal will take with it.
+
+        `apt-get purge`, `dnf remove`, `pacman -Rns` and `zypper remove` all pull
+        out whatever depends on the package being removed, so ticking one small
+        entry can drag out half a desktop -- and the preview only ever listed the
+        entry itself and the residue paths beside it.
+
+        Every query here is read-only and runs as the invoking user, because the
+        preview is drawn before the password is asked for, and asking for one
+        earlier just to draw it would undo the point of only asking when a removal
+        needs root. That rules out the exact dry-runs on the rpm side (`dnf remove
+        --assumeno`, `rpm -e --test` and `zypper remove --dry-run` all want the
+        database lock), so those two are asked what requires the package instead:
+        apt and pacman answer with the whole transitive set they would really
+        remove, the rpm family with its first level. The list is therefore a floor
+        rather than a promise, and a failed or unparsable reply yields an empty
+        one -- the preview then says nothing, exactly as it did before.
+        """
+        app_id = str(app.get("id") or "")
+        app_type = str(app.get("type") or "")
+        if not app_id:
+            return []
+        if app_type == "APT":
+            # -s simulates without root; the whole transaction is narrated, and
+            # the removal lines are the interesting ones.
+            argv = ["apt-get", "purge", "-s", app_id]
+            env = system.APT_NONINTERACTIVE_ENV
+        elif app_type == "Pacman":
+            # --print-format implies --print, and --print is what makes pacman
+            # skip the database lock it would otherwise need root for. %n asks
+            # for bare names, so nothing here goes through a message catalog.
+            argv = ["pacman", "-Rns", "--print-format", "%n", app_id]
+            env = system.C_LOCALE_ENV
+        elif app_type == "DNF":
+            dnf_cmd = "dnf5" if shutil.which("dnf5") else "dnf"
+            # -C keeps it off the network: the installed set is all we ask about.
+            argv = [
+                dnf_cmd,
+                "repoquery",
+                "-C",
+                "--installed",
+                "--whatrequires",
+                app_id,
+                "--qf",
+                "%{name}\n",
+            ]
+            env = system.C_LOCALE_ENV
+        elif app_type == "Zypper":
+            # zypper has no unprivileged dry-run, and rpm is on every zypper box.
+            argv = ["rpm", "-q", "--whatrequires", app_id, "--qf", "%{NAME}\n"]
+            env = system.C_LOCALE_ENV
+        else:
+            # A Flatpak, Snap, NPM or CLI removal takes nothing else with it.
+            return []
+
+        # run_command turns a missing binary or a timeout into a CommandResult
+        # rather than raising, and the parser below keeps only bare package names,
+        # so a failed or half-finished reply comes out as an empty list. rpm exits
+        # 1 with "no package requires X" on stdout when there are none, which is
+        # why the return code is not consulted.
+        res = system.run_command(argv, capture=True, timeout=30, env=env)
+        return self._parse_collateral(res.stdout, app_id, app_type)
+
+    @staticmethod
+    def _parse_collateral(stdout: str, app_id: str, app_type: str) -> list[str]:
+        """Package names out of a simulated removal or a reverse-dependency reply."""
+        names: list[str] = []
+        for line in stdout.splitlines():
+            entry = line.strip()
+            if app_type == "APT":
+                # "Remv firefox [1:2snap1-0ubuntu2]", among Inst/Conf lines and
+                # apt's own prose.
+                fields = entry.split()
+                if len(fields) < 2 or fields[0] not in ("Remv", "Purg"):
+                    continue
+                # A foreign-arch package is narrated qualified (libfoo:i386) while
+                # the scan stripped the qualifier off its id, so without this the
+                # app fails to recognise itself in its own transaction.
+                entry = UninstallManager._strip_package_arch(fields[1])
+            # rpm reports "no package requires X" on stdout, and a package name
+            # never holds whitespace, so this drops prose without matching on it.
+            if not entry or len(entry.split()) != 1 or entry == app_id:
+                continue
+            if entry not in names:
+                names.append(entry)
+        return names
+
     def build_removal_targets(
         self, apps: list[dict[str, Any]]
     ) -> list[tuple[dict[str, Any], list[Path], bool]]:
@@ -1472,11 +1570,27 @@ class UninstallManager:
         and pixmaps, directories that routinely hold tens of thousands of files.
         It is also the same snapshot the sizes in the app list were computed from,
         so the preview cannot disagree with the row the user just picked.
+
+        Each app also learns which other packages its removal would drag out, in
+        app["collateral_packages"]; the tuple keeps its three fields so callers
+        that only want the paths and the running flag are untouched.
         """
         # One /proc pass for the whole selection, instead of a `pgrep -x` fork per
         # candidate name per app -- ten apps with thirty candidate names each used
         # to mean three hundred forks, and the execution pass then repeated them.
         running = running_process_comms()
+        # Each collateral query is a fork that spends its time waiting on a package
+        # database, so the selection's queries overlap. There is no spinner on
+        # screen between the app list and the preview, which is the whole reason
+        # this is worth doing rather than accepting a stall per selected app. The
+        # types that take nothing else with them cost a return, not a fork, so
+        # they go through the same pool rather than being listed a second time.
+        if apps:
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                for app, collateral in zip(
+                    apps, pool.map(self._collateral_packages, apps), strict=True
+                ):
+                    app["collateral_packages"] = collateral
         targets = []
         for app in apps:
             app_paths = self.find_residue_paths(
@@ -1620,10 +1734,33 @@ class UninstallManager:
                     use_sudo=True,
                     capture=True,
                 )
-            else:
+            elif app["type"] == "Zypper":
+                res = system.run_command(
+                    # --clean-deps for the same reason the screen follows an apt
+                    # removal with `apt-get autoremove --purge`: dnf drops the
+                    # dependencies nothing needs any more by default and pacman is
+                    # asked to with -Rns, while zypper keeps them unless told,
+                    # which would leave openSUSE the one family where uninstalling
+                    # quietly leaves orphans on disk.
+                    ["zypper", "--non-interactive", "remove", "--clean-deps", app["id"]],
+                    use_sudo=True,
+                    capture=True,
+                    env=system.C_LOCALE_ENV,
+                )
+            elif app["type"] == "DNF":
                 dnf_cmd = "dnf5" if shutil.which("dnf5") else "dnf"
                 res = system.run_command(
                     [dnf_cmd, "remove", "-y", app["id"]], use_sudo=True, capture=True
+                )
+            else:
+                # Named explicitly rather than fallen through to: the old else ran
+                # `dnf remove` for anything it did not recognise, which on a
+                # zypper or an unlabelled entry meant a removal that could not
+                # work. Failing says so; guessing a package manager does not.
+                res = system.CommandResult(
+                    args=["unsupported"],
+                    returncode=1,
+                    error=f"unsupported package type: {app['type']}",
                 )
             package_status = "removed" if res.ok else "failed"
             record_deletion_audit(app["id"], package_mode, package_status, package_size)

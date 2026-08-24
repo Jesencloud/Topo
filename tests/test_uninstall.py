@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.core.history import parse_deletion_history
-from src.core.system import APT_NONINTERACTIVE_ENV
+from src.core.system import APT_NONINTERACTIVE_ENV, C_LOCALE_ENV
 from src.ui.screens.uninstall import run_uninstall
 from src.uninstall import UninstallManager, _ResidueEntryIndex
 
@@ -78,6 +78,7 @@ def _ui_app(app_type: str) -> dict[str, object]:
         ("DNF", True),
         ("Pacman", True),
         ("Snap", True),
+        ("Zypper", True),
         ("Flatpak", False),
         ("NPM", False),
         ("CLI", False),
@@ -1127,6 +1128,73 @@ def test_execute_uninstall_pacman(mock_run_cmd, test_env):
     )
 
 
+@pytest.mark.parametrize(
+    ("os_id", "id_like", "expected_type"),
+    [
+        ("opensuse-tumbleweed", "", "Zypper"),
+        ("sles", "suse", "Zypper"),
+        ("fedora", "", "DNF"),
+        ("rhel", "fedora", "DNF"),
+    ],
+)
+def test_rpm_scan_labels_suse_packages_zypper(os_id, id_like, expected_type):
+    """An rpm distro is not necessarily a dnf distro: openSUSE and SLES ship
+    zypper and no dnf, so a "DNF" label sent their removals nowhere (O5)."""
+    mgr = UninstallManager()
+    with (
+        patch("shutil.which", side_effect=lambda x: "/usr/bin/rpm" if x == "rpm" else None),
+        patch("src.core.system.get_os_info", return_value=(os_id, id_like)),
+        patch(
+            "src.uninstall.system.run_command",
+            return_value=MagicMock(ok=True, stdout="heavy-app\t150000000\t1700000000\n"),
+        ),
+    ):
+        apps = mgr._scan_rpm_packages(set(), {})
+
+    assert [app["type"] for app in apps] == [expected_type]
+
+
+@patch("src.core.system.run_command")
+def test_execute_uninstall_zypper(mock_run_cmd, test_env):
+    """zypper needs --non-interactive for the same reason apt needs debconf muted:
+    the prompt would sit invisible behind the spinner until the timeout (O5). And
+    --clean-deps because zypper, alone among the four, keeps the dependencies
+    nothing needs any more unless it is told to drop them."""
+    mgr = UninstallManager()
+    app = {"name": "Firefox", "id": "firefox", "type": "Zypper", "size_bytes": 150000000}
+    mock_run_cmd.return_value = MagicMock(ok=True)
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.uninstall.safe_remove", return_value=(True, "OK")),
+    ):
+        details = mgr.execute_uninstall(app, [])
+
+    assert details["package_removed"] is True
+    mock_run_cmd.assert_any_call(
+        ["zypper", "--non-interactive", "remove", "--clean-deps", "firefox"],
+        use_sudo=True,
+        capture=True,
+        env=C_LOCALE_ENV,
+    )
+
+
+@patch("src.core.system.run_command")
+def test_execute_uninstall_refuses_a_type_it_does_not_know(mock_run_cmd, test_env):
+    """The old else ran `dnf remove` for anything unrecognised, which on a zypper
+    box was a removal that could not work. Failing says so; guessing does not."""
+    mgr = UninstallManager()
+    app = {"name": "Mystery", "id": "mystery", "type": "Homebrew", "size_bytes": 10}
+    mock_run_cmd.return_value = MagicMock(ok=True)
+
+    with patch("pathlib.Path.home", return_value=test_env):
+        details = mgr.execute_uninstall(app, [])
+
+    assert details["package_removed"] is False
+    # Nothing was run at all: no `dnf remove` guessed on its behalf.
+    assert mock_run_cmd.call_args_list == []
+
+
 @patch("src.core.system.run_command")
 def test_execute_uninstall_writes_history_for_package_only(mock_run_cmd, test_env, monkeypatch):
     log_path = test_env / "state" / "topo" / "deletions.log"
@@ -1581,6 +1649,131 @@ def test_build_removal_targets_reuses_the_scan_index(monkeypatch):
     ):
         fresh.build_removal_targets([app])
     assert seen[-1] is None
+
+
+def _collateral(app_type: str, stdout: str, app_id: str = "vlc"):
+    """Run one collateral query against a canned reply, returning (names, argv, env)."""
+    mgr = UninstallManager()
+    with patch(
+        "src.uninstall.system.run_command", return_value=MagicMock(stdout=stdout)
+    ) as mock_run_cmd:
+        names = mgr._collateral_packages({"id": app_id, "type": app_type})
+    if not mock_run_cmd.call_args_list:
+        return names, None, None
+    call = mock_run_cmd.call_args
+    return names, call.args[0], call.kwargs.get("env")
+
+
+def test_collateral_packages_reads_an_apt_simulation():
+    """Ticking one small entry can drag out half a desktop, and the preview said
+    nothing about it. -s simulates the real transaction without needing root (O4)."""
+    names, argv, env = _collateral(
+        "APT",
+        "Reading package lists...\n"
+        "The following packages will be REMOVED:\n"
+        "Remv vlc [3:3.0.20-3]\n"
+        "Purg vlc-plugin-base [3:3.0.20-3]\n"
+        "Remv libvlc-bin:i386 [3:3.0.20-3]\n"
+        "Remv libvlc-bin:i386 [3:3.0.20-3]\n"
+        "Inst libfoo [1.0] (1.1 Ubuntu:24.04 [amd64])\n",
+    )
+
+    # The app itself is dropped -- including when apt narrates it qualified --
+    # duplicates collapse, and Inst/prose lines are not removals.
+    assert names == ["vlc-plugin-base", "libvlc-bin"]
+    assert argv == ["apt-get", "purge", "-s", "vlc"]
+    assert env == APT_NONINTERACTIVE_ENV
+
+
+def test_collateral_packages_asks_pacman_to_print_instead_of_removing():
+    """--print-format is what lets this run without the database lock, so the
+    preview can be drawn before the password is asked for (O4)."""
+    names, argv, env = _collateral("Pacman", "vlc\nqt5-base\nlibvlc\n")
+
+    assert names == ["qt5-base", "libvlc"]
+    assert argv == ["pacman", "-Rns", "--print-format", "%n", "vlc"]
+    assert env == C_LOCALE_ENV
+
+
+@pytest.mark.parametrize("dnf_binary", ["dnf5", "dnf"])
+def test_collateral_packages_asks_dnf_what_requires_the_package(dnf_binary):
+    """Every exact dnf dry-run wants the database lock, so the question becomes
+    "what requires this" -- a first level rather than the full closure (O4)."""
+    with patch("shutil.which", side_effect=lambda x: f"/usr/bin/{x}" if x == dnf_binary else None):
+        names, argv, env = _collateral("DNF", "vlc\nvlc-plugins-freeworld\n")
+
+    assert names == ["vlc-plugins-freeworld"]
+    assert argv == [
+        dnf_binary,
+        "repoquery",
+        "-C",
+        "--installed",
+        "--whatrequires",
+        "vlc",
+        "--qf",
+        "%{name}\n",
+    ]
+    assert env == C_LOCALE_ENV
+
+
+def test_collateral_packages_reads_rpm_on_a_zypper_box_and_ignores_its_prose():
+    """rpm answers "no package requires X" on stdout and exits 1, so the reply is
+    filtered by shape -- a package name never holds a space (O4)."""
+    names, argv, env = _collateral("Zypper", "no package requires vlc\n")
+
+    assert names == []
+    assert argv == ["rpm", "-q", "--whatrequires", "vlc", "--qf", "%{NAME}\n"]
+    assert env == C_LOCALE_ENV
+
+
+@pytest.mark.parametrize("app_type", ["Flatpak", "Snap", "NPM", "CLI"])
+def test_collateral_packages_asks_nothing_for_a_removal_that_takes_nothing(app_type):
+    """A Flatpak, Snap, NPM or CLI removal has no reverse dependencies to report,
+    so it must not cost a fork per selected app either."""
+    names, argv, _env = _collateral(app_type, "should not be read")
+
+    assert names == []
+    assert argv is None
+
+
+def test_collateral_packages_survives_a_query_that_fails():
+    """run_command turns a missing binary or a timeout into a result rather than
+    raising; the preview then says nothing, exactly as it did before (O4)."""
+    mgr = UninstallManager()
+    with patch(
+        "src.uninstall.system.run_command",
+        return_value=MagicMock(returncode=127, stdout="", ok=False),
+    ):
+        assert mgr._collateral_packages({"id": "vlc", "type": "DNF"}) == []
+    # An entry with no package id has nothing to ask about.
+    assert mgr._collateral_packages({"id": "", "type": "DNF"}) == []
+
+
+def test_build_removal_targets_records_the_collateral_for_every_app():
+    """The preview reads it off the app dict, so the tuple keeps its three fields
+    and every selected app carries a list -- empty when nothing comes with it."""
+    mgr = UninstallManager()
+    apps = [
+        {"id": "vlc", "name": "VLC", "type": "DNF", "size_bytes": 10},
+        {"id": "com.example.App", "name": "Example", "type": "Flatpak", "size_bytes": 10},
+    ]
+
+    with (
+        patch.object(mgr, "find_residue_paths", return_value=[]),
+        patch.object(mgr, "_candidate_process_names", return_value=[]),
+        patch.object(
+            mgr,
+            "_collateral_packages",
+            side_effect=lambda app: ["vlc-plugins"] if app["type"] == "DNF" else [],
+        ),
+    ):
+        targets = mgr.build_removal_targets(apps)
+
+    assert [len(target) for target in targets] == [3, 3]
+    assert [app["collateral_packages"] for app, _paths, _running in targets] == [
+        ["vlc-plugins"],
+        [],
+    ]
 
 
 def test_build_targets_and_execute_cli_npm_and_systemd(test_env):

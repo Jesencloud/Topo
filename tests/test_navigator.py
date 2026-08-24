@@ -993,6 +993,62 @@ def test_uninstall_preview_space_cancels(test_env):
         assert drive(selector, [Navigator.SPACE]) is False
 
 
+def test_uninstall_preview_names_the_packages_that_leave_with_the_app(test_env):
+    """`dnf remove` and friends take the reverse dependencies too, so ticking one
+    small entry can drag out half a desktop; the preview now says so (O4)."""
+    app = {
+        "id": "vlc",
+        "name": "VLC",
+        "size_bytes": 2048,
+        "size_str": "2.0 KiB",
+        "install_time": 0,
+        "collateral_packages": ["vlc-plugins-freeworld", "qt5-base"],
+    }
+    selector = UninstallPreviewSelector([(app, [], False)])
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch(
+            "src.ui.navigator.shutil.get_terminal_size",
+            return_value=os.terminal_size((100, 30)),
+        ),
+    ):
+        _result, writes = drive_with_writes(selector, ["\r"])
+
+    visible_output = ANSI_CSI_RE.sub("", "".join(call.args[0] for call in writes))
+    assert "also removes 2: vlc-plugins-freeworld, qt5-base" in visible_output
+
+
+def test_uninstall_preview_says_nothing_when_nothing_else_leaves(test_env):
+    """An empty list is the normal case for a Flatpak or a leaf package, and the
+    row it would draw has to stay off the screen entirely."""
+    app = {"name": "VLC", "size_bytes": 2048, "collateral_packages": []}
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch(
+            "src.ui.navigator.shutil.get_terminal_size",
+            return_value=os.terminal_size((100, 30)),
+        ),
+    ):
+        _result, writes = drive_with_writes(UninstallPreviewSelector([(app, [], False)]), ["\r"])
+
+    assert "also removes" not in ANSI_CSI_RE.sub("", "".join(c.args[0] for c in writes))
+
+
+def test_collateral_label_leads_with_the_count_and_fits_the_line():
+    """The frame counts physical lines, so a wrapped row would push everything
+    below it off by one -- and the count has to survive the clip that prevents it."""
+    names = [f"package-{i}" for i in range(9)]
+
+    label = UninstallPreviewSelector._collateral_label(names, 100)
+    assert label == "also removes 9: package-0, package-1, package-2, package-3 +5 more"
+
+    narrow = UninstallPreviewSelector._collateral_label(names, 30)
+    assert display_width(narrow) <= 30
+    assert narrow.startswith("also removes 9: package-0")
+
+
 def test_sgr_mouse_drag_sequence_is_parsed():
     assert Navigator._parse_sgr_mouse("\x1b[<0;40;2M") == MouseEvent("press", 0, 40, 2)
     assert Navigator._parse_sgr_mouse("\x1b[<32;40;5M") == MouseEvent("drag", 0, 40, 5)
