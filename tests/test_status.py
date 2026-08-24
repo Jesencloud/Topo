@@ -32,12 +32,15 @@ from src.ui.navigator import ANSI_CSI_RE
 # makes this list -- and the reviewer -- notice.
 STATUS_ROWS = [
     ("⏱️", "Uptime:"),
-    ("📟", "CPU Status:"),
+    ("🔲", "CPU Status:"),
     ("\U0001f3ae", "GPU Status:"),
-    ("⚙️", "Fan Speed:"),
+    ("❄️", "Fan Speed:"),
     ("\U0001f9e0", "Memory:"),
     ("\U0001f4be", "Disk:"),
     ("\U0001f50b", "Battery:"),
+    # The battery row swaps in the low-charge glyph under 20%, so both spellings
+    # have to hold the value column.
+    ("\U0001faab", "Battery:"),
     ("\U0001f310", "Network:"),
     ("\U0001f51d", "Top Processes:"),
 ]
@@ -523,6 +526,19 @@ def test_status_row_keeps_the_number_at_exactly_zero(capsys):
 
     assert "0.0%" in row
     assert "<" not in row
+
+
+def test_the_battery_icon_switches_at_the_low_charge_boundary(capsys):
+    """The icon marks low charge on the same 20% line the row's color uses.
+
+    20 itself is still the yellow band, so it keeps the full glyph -- the swap
+    belongs to the red band below it.
+    """
+    at_boundary = _render_status(capsys, "Battery:", get_battery_info=(20, "20%", ""))
+    below = _render_status(capsys, "Battery:", get_battery_info=(19, "19%", ""))
+
+    assert at_boundary.startswith("\U0001f50b"), at_boundary
+    assert below.startswith("\U0001faab"), below
 
 
 def test_system_health_assessment_optimal():

@@ -30,6 +30,11 @@ _LABEL_SLOT = len("Top Processes:")
 TEMP_WARN_C = 60.0
 TEMP_HOT_C = 80.0
 
+# One boundary for "the battery is low", shared by the row's colour and its icon
+# so the two cannot disagree about what counts as low.
+_BATTERY_LOW_PERCENT = 20
+_BATTERY_HIGH_PERCENT = 50
+
 
 def _status_row(icon: str, label: str, value: str) -> str:
     icon_pad = " " * max(0, _ICON_SLOT - display_width(icon))
@@ -593,20 +598,20 @@ def show_status():
     uptime_str = f"{uptime} (since boot)" if uptime != "Unknown" else uptime
     print(_status_row("⏱️", "Uptime:", uptime_str))
     cpu_status_str = f"{get_temp_color(temp_val)}{cpu_temp_str}{RESET} | {cpu_load}"
-    print(_status_row("📟", "CPU Status:", cpu_status_str))
+    print(_status_row("🔲", "CPU Status:", cpu_status_str))
 
     if gpu:
         print(_status_row("🎮", "GPU Status:", gpu))
 
     if fans:
-        print(_status_row("⚙️", "Fan Speed:", fans))
+        print(_status_row("❄️", "Fan Speed:", fans))
 
     # 2. Memory & Storage (RAM, Disk)
     mem_bar = draw_bar(mem_percent, width=20)
     mem_color = get_color_for_percent(mem_percent)
     print(
         _status_row(
-            "🧠",
+            "💾",
             "Memory:",
             f"{mem_bar}  {mem_color}{format_percent(mem_percent)}{RESET}  "
             f"({used_mem_str} / {total_mem_str})",
@@ -617,7 +622,7 @@ def show_status():
     disk_color = get_color_for_percent(disk_percent)
     print(
         _status_row(
-            "💾",
+            "💿",
             "Disk:",
             f"{disk_bar}  {disk_color}{format_percent(disk_percent)}{RESET}  "
             f"({bytes_to_human(home_stats.used)} / {bytes_to_human(home_stats.total)})",
@@ -627,18 +632,25 @@ def show_status():
     # 3. Hardware & Network (Battery, Network)
     if battery_data:
         bat_val, _bat_pct_str, bat_details = battery_data
-        bat_color = GREEN if bat_val >= 50 else (YELLOW if bat_val >= 20 else RED)
+        bat_color = (
+            GREEN
+            if bat_val >= _BATTERY_HIGH_PERCENT
+            else (YELLOW if bat_val >= _BATTERY_LOW_PERCENT else RED)
+        )
         bat_bar = draw_bar(bat_val, width=20, force_color=bat_color)
         details_fmt = f"  ({bat_details.strip()})" if bat_details.strip() else ""
+        # Same 20% boundary the colour uses, so the icon and the red bar agree.
+        # Both glyphs are two cells wide, so the row alignment is unchanged.
+        bat_icon = "🔋" if bat_val >= _BATTERY_LOW_PERCENT else "🪫"
         print(
             _status_row(
-                "🔋",
+                bat_icon,
                 "Battery:",
                 f"{bat_bar}  {bat_color}{format_percent(float(bat_val))}{RESET}{details_fmt}",
             )
         )
 
-    print(_status_row("🌐", "Network:", f"↓ {rx} / ↑ {tx} | {local_ip}"))
+    print(_status_row("🖧", "Network:", f"↓ {rx} / ↑ {tx} | {local_ip}"))
 
     # 4. Workload (Top Processes)
     if top_procs:
