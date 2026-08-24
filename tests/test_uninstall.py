@@ -1,3 +1,4 @@
+import os
 import zlib
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -5,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.core.history import parse_deletion_history
+from src.core.system import APT_NONINTERACTIVE_ENV
 from src.ui.screens.uninstall import run_uninstall
 from src.uninstall import UninstallManager, _ResidueEntryIndex
 
@@ -56,6 +58,151 @@ def test_run_uninstall_escape_selector():
         patch("src.ui.screens.uninstall.UninstallSelector.run", return_value=[]),
     ):
         run_uninstall()
+
+
+def _ui_app(app_type: str) -> dict[str, object]:
+    return {
+        "id": "test",
+        "name": "Test",
+        "size_bytes": 100,
+        "size_str": "100B",
+        "type": app_type,
+        "install_time": 0,
+    }
+
+
+@pytest.mark.parametrize(
+    ("app_type", "expect_prompt"),
+    [
+        ("APT", True),
+        ("DNF", True),
+        ("Pacman", True),
+        ("Snap", True),
+        ("Flatpak", False),
+        ("NPM", False),
+        ("CLI", False),
+    ],
+)
+def test_run_uninstall_asks_for_a_password_only_when_a_removal_needs_root(
+    app_type, expect_prompt, capsys
+):
+    """Flatpak, NPM and CLI removals all run as the invoking user, so a password
+    prompt for them is pure friction -- and a cancelled one ended the run (P5)."""
+    with (
+        patch("src.uninstall.UninstallManager.run_full_scan", return_value=[_ui_app(app_type)]),
+        patch("src.ui.screens.uninstall.UninstallSelector.run", return_value=[0]),
+        patch("src.ui.screens.uninstall.UninstallPreviewSelector.run", return_value=True),
+        patch("src.uninstall.UninstallManager.find_residue_paths", return_value=[]),
+        patch("src.uninstall.UninstallManager._candidate_process_names", return_value=[]),
+        patch(
+            "src.uninstall.UninstallManager.execute_uninstall",
+            return_value={"package_removed": True, "removed_paths": []},
+        ),
+        patch("src.ui.navigator.Navigator.wait_for_return", return_value=False),
+        patch("src.ui.screens.uninstall.system.run_command", return_value=MagicMock(ok=True)),
+        patch(
+            "src.ui.screens.uninstall.system.ensure_sudo_session", return_value=True
+        ) as mock_sudo,
+    ):
+        run_uninstall()
+
+    assert mock_sudo.called is expect_prompt
+    assert ("Authorization successful" in capsys.readouterr().out) is expect_prompt
+
+
+def test_run_uninstall_closes_the_whole_selection_before_removing_any():
+    """The SIGTERM grace period is waited through once per run, not once per app:
+    ten apps used to spend fifteen seconds staring at a spinner (P4)."""
+    order: list[str] = []
+    apps = [_ui_app("DNF"), _ui_app("DNF")]
+
+    with (
+        patch("src.uninstall.UninstallManager.run_full_scan", return_value=apps),
+        patch("src.ui.screens.uninstall.UninstallSelector.run", return_value=[0, 1]),
+        patch("src.ui.screens.uninstall.UninstallPreviewSelector.run", return_value=True),
+        patch("src.uninstall.UninstallManager.find_residue_paths", return_value=[]),
+        patch("src.uninstall.UninstallManager._candidate_process_names", return_value=["test"]),
+        patch("src.uninstall.running_process_comms", return_value={"test": [4242]}),
+        patch(
+            "src.uninstall.UninstallManager.terminate_apps",
+            side_effect=lambda targets: order.append(f"terminate:{len(targets)}"),
+        ),
+        patch(
+            "src.uninstall.UninstallManager.execute_uninstall",
+            side_effect=lambda app, paths: (
+                order.append("remove") or {"package_removed": True, "removed_paths": []}
+            ),
+        ),
+        patch("src.ui.navigator.Navigator.wait_for_return", return_value=False),
+        patch("src.ui.screens.uninstall.system.ensure_sudo_session", return_value=True),
+        patch("src.ui.screens.uninstall.system.run_command", return_value=MagicMock(ok=True)),
+    ):
+        run_uninstall()
+
+    assert order == ["terminate:2", "remove", "remove"]
+
+
+def test_terminate_apps_waits_once_for_the_whole_selection(mock_sleep):
+    """SIGTERM everything, wait once, SIGKILL what ignored it, wait once (P2/P4)."""
+    mgr = UninstallManager()
+    apps = [_ui_app("DNF"), _ui_app("Flatpak")]
+    apps[0]["id"], apps[1]["id"] = "editor", "com.example.Player"
+    targets = [(apps[0], [], True), (apps[1], [], True)]
+    # "player" ignores SIGTERM and is still there on the second pass.
+    tables = [
+        {"editor": [11], "player": [12], "unrelated": [13]},
+        {"player": [12]},
+    ]
+
+    with (
+        patch("src.uninstall.running_process_comms", side_effect=tables),
+        patch(
+            "src.uninstall.UninstallManager._candidate_process_names",
+            side_effect=[["editor", "editor"], ["player"]],
+        ),
+        patch("src.uninstall.system.run_command", return_value=MagicMock(ok=True)) as mock_run_cmd,
+    ):
+        mgr.terminate_apps(targets)
+
+    calls = [call.args[0] for call in mock_run_cmd.call_args_list]
+    assert calls == [
+        ["flatpak", "kill", "com.example.Player"],
+        # Deduplicated: the same comm pattern is not signalled twice.
+        ["pkill", "-15", "-x", "editor"],
+        ["pkill", "-15", "-x", "player"],
+        ["pkill", "-9", "-x", "player"],
+    ]
+    assert [call.args[0] for call in mock_sleep.call_args_list] == [1.0, 0.5]
+
+
+def test_terminate_apps_does_not_wait_for_a_kill_it_never_sent(mock_sleep):
+    """SIGTERM was enough, so there is nothing to give the kernel time to reap."""
+    mgr = UninstallManager()
+    with (
+        patch("src.uninstall.running_process_comms", side_effect=[{"editor": [11]}, {}]),
+        patch("src.uninstall.UninstallManager._candidate_process_names", return_value=["editor"]),
+        patch("src.uninstall.system.run_command", return_value=MagicMock(ok=True)) as mock_run_cmd,
+    ):
+        mgr.terminate_apps([(_ui_app("DNF"), [], True)])
+
+    assert [call.args[0] for call in mock_run_cmd.call_args_list] == [
+        ["pkill", "-15", "-x", "editor"]
+    ]
+    assert [call.args[0] for call in mock_sleep.call_args_list] == [1.0]
+
+
+def test_terminate_apps_does_not_wait_when_nothing_is_running(mock_sleep):
+    """This is what makes the per-app kill step free once terminate_apps has run."""
+    mgr = UninstallManager()
+    with (
+        patch("src.uninstall.running_process_comms", return_value={"unrelated": [1]}),
+        patch("src.uninstall.UninstallManager._candidate_process_names", return_value=["editor"]),
+        patch("src.uninstall.system.run_command") as mock_run_cmd,
+    ):
+        mgr.terminate_apps([(_ui_app("DNF"), [], False)])
+
+    assert mock_run_cmd.call_args_list == []
+    assert mock_sleep.call_args_list == []
 
 
 def test_run_uninstall_execute_and_exit():
@@ -501,9 +648,15 @@ def test_run_full_scan_keeps_user_libreoffice_apps(mock_run, mock_which):
 @patch("shutil.which")
 def test_run_full_scan_apt(mock_which, mock_run_cmd):
     mock_which.side_effect = lambda x: "/usr/bin/dpkg-query" if x == "dpkg-query" else None
+    # status<TAB>package<TAB>essential<TAB>priority<TAB>installed-size, the format
+    # _DPKG_QUERY_FORMAT asks dpkg-query for.
     mock_run_cmd.return_value = MagicMock(
         ok=True,
-        stdout=("firefox\t204800\nlinux-image-generic\t204800\nlibreoffice-writer:amd64\t204800\n"),
+        stdout=(
+            "ii \tfirefox\tno\toptional\t204800\n"
+            "ii \tlinux-image-generic\tno\toptional\t204800\n"
+            "ii \tlibreoffice-writer:amd64\tno\toptional\t204800\n"
+        ),
     )
 
     mgr = UninstallManager()
@@ -517,6 +670,73 @@ def test_run_full_scan_apt(mock_which, mock_run_cmd):
         ("firefox", "APT"),
         ("libreoffice-writer", "APT"),
     ]
+
+
+@patch("src.uninstall.system.run_command")
+@patch("shutil.which")
+def test_apt_scan_skips_packages_whose_files_are_gone(mock_which, mock_run_cmd):
+    """`dpkg -r` without purge leaves an "rc" row keeping its old Installed-Size.
+
+    Reporting it would promise back space that was freed whenever the package was
+    removed, and "uninstalling" it a second time frees nothing (D1).
+    """
+    mock_which.side_effect = lambda x: "/usr/bin/dpkg-query" if x == "dpkg-query" else None
+    mock_run_cmd.return_value = MagicMock(
+        ok=True,
+        stdout=(
+            "ii \tkept-app\tno\toptional\t204800\n"  # installed
+            "rc \tghost-app\tno\toptional\t204800\n"  # removed, config files only
+            "iU \tunpacked-app\tno\toptional\t204800\n"  # unpacked: files on disk
+            "iF \thalf-configured-app\tno\toptional\t204800\n"  # ditto
+            "iH \thalf-installed-app\tno\toptional\t204800\n"  # size unreliable
+            "in \tnever-installed-app\tno\toptional\t204800\n"
+            "i\tno-status-app\tno\toptional\t204800\n"  # too short to read
+        ),
+    )
+
+    mgr = UninstallManager()
+    with (
+        patch("src.core.system.get_os_id", return_value="ubuntu"),
+        patch("pathlib.Path.home", return_value=Path("/nonexistent_home_for_tests")),
+    ):
+        apps = mgr.run_full_scan()
+
+    assert sorted(app["id"] for app in apps) == [
+        "half-configured-app",
+        "kept-app",
+        "unpacked-app",
+    ]
+
+
+@patch("src.uninstall.system.run_command")
+@patch("shutil.which")
+def test_apt_scan_trusts_dpkg_over_the_hardcoded_name_lists(mock_which, mock_run_cmd):
+    """deb records its own answer to "may this be removed" (D6).
+
+    The name-based guard in _is_system_component was written against Fedora
+    package names, so it never matched network-manager or nvidia-dkms-535.
+    """
+    mock_which.side_effect = lambda x: "/usr/bin/dpkg-query" if x == "dpkg-query" else None
+    mock_run_cmd.return_value = MagicMock(
+        ok=True,
+        stdout=(
+            "ii \tbash\tyes\trequired\t204800\n"  # Essential: yes
+            "ii \tnetwork-manager\tno\timportant\t204800\n"
+            "ii \tinit-system-helpers\tno\trequired\t204800\n"
+            # An empty ${Priority} field must not be mistaken for a protected one.
+            "ii \tnvidia-dkms-535\tno\t\t204800\n"
+            "ii \tordinary-app\tno\toptional\t204800\n"
+        ),
+    )
+
+    mgr = UninstallManager()
+    with (
+        patch("src.core.system.get_os_id", return_value="ubuntu"),
+        patch("pathlib.Path.home", return_value=Path("/nonexistent_home_for_tests")),
+    ):
+        apps = mgr.run_full_scan()
+
+    assert sorted(app["id"] for app in apps) == ["nvidia-dkms-535", "ordinary-app"]
 
 
 @patch("src.uninstall.system.run_command")
@@ -650,6 +870,76 @@ def test_pre_scan_never_queries_a_dangling_desktop_symlink(mock_which, tmp_path)
     assert str(apps_dir / "ghost.desktop") not in queried
 
 
+def test_pre_scan_resolves_each_tool_once_and_skips_an_empty_deb_database(tmp_path, monkeypatch):
+    """PATH is searched once per tool, not once per batch, and a box that merely
+    has dpkg's tools installed never pays for their query (P3)."""
+    monkeypatch.setattr("src.uninstall.RPM_QUERY_BATCH_SIZE", 1)
+    # Installing dpkg on a non-deb distro leaves the status database empty, so
+    # every `dpkg-query -S` can only answer "no path found".
+    monkeypatch.setattr("src.uninstall._DPKG_STATUS_FILE", tmp_path / "dpkg-status")
+    (tmp_path / "dpkg-status").write_text("")
+    apps_dir = tmp_path / ".local/share/applications"
+    apps_dir.mkdir(parents=True)
+    for i in range(8):
+        (apps_dir / f"app{i}.desktop").write_text(f"[Desktop Entry]\nName=App {i}\n")
+
+    looked_up: list[str] = []
+
+    def which(name):
+        looked_up.append(name)
+        return f"/usr/bin/{name}" if name in ("rpm", "dpkg-query") else None
+
+    with (
+        patch("src.uninstall.shutil.which", side_effect=which),
+        patch("pathlib.Path.home", return_value=tmp_path),
+        patch(
+            "src.uninstall.system.run_command", return_value=MagicMock(ok=True, stdout="")
+        ) as mock_run_cmd,
+    ):
+        UninstallManager()._pre_scan_package_desktop_names()
+
+    assert looked_up.count("rpm") == 1
+    assert looked_up.count("dpkg-query") == 1
+    assert looked_up.count("pacman") == 1
+    tools_run = {call.args[0][0] for call in mock_run_cmd.call_args_list}
+    assert tools_run == {"rpm"}
+    # Batch size 1 means one command per .desktop file, and the lookups did not
+    # grow with them.
+    assert len(mock_run_cmd.call_args_list) >= 8
+    assert len(looked_up) == 3
+
+
+def test_pre_scan_queries_dpkg_even_when_rpm_is_also_installed(tmp_path, monkeypatch):
+    """The tools are additive: a deb box with rpm installed (for alien, or to
+    inspect an .rpm) must still have its .desktop owners looked up, or every APT
+    package falls back to the ">100 MB" guess and drops out of the list."""
+    monkeypatch.setattr("src.uninstall._DPKG_STATUS_FILE", tmp_path / "dpkg-status")
+    (tmp_path / "dpkg-status").write_text("Package: bash\nStatus: install ok installed\n")
+    apps_dir = tmp_path / ".local/share/applications"
+    apps_dir.mkdir(parents=True)
+    (apps_dir / "gimp.desktop").write_text("[Desktop Entry]\nName=GNU Image Manipulation\n")
+
+    def run_command(args, **kwargs):
+        if args[0] == "dpkg-query":
+            return MagicMock(ok=True, stdout=f"gimp: {apps_dir / 'gimp.desktop'}\n")
+        return MagicMock(ok=True, stdout="")
+
+    with (
+        patch(
+            "src.uninstall.shutil.which",
+            side_effect=lambda n: f"/usr/bin/{n}" if n in ("rpm", "dpkg-query") else None,
+        ),
+        patch("pathlib.Path.home", return_value=tmp_path),
+        patch("src.uninstall.system.run_command", side_effect=run_command) as mock_run_cmd,
+    ):
+        packages, names = UninstallManager()._pre_scan_package_desktop_names()
+
+    tools_run = {call.args[0][0] for call in mock_run_cmd.call_args_list}
+    assert tools_run == {"rpm", "dpkg-query"}
+    assert "gimp" in packages
+    assert names["gimp"] == "GNU Image Manipulation"
+
+
 @patch("shutil.which")
 @patch("subprocess.run")
 def test_run_full_scan_flatpaks(mock_run, mock_which):
@@ -755,7 +1045,8 @@ def test_execute_uninstall_dnf(mock_run, mock_run_cmd, test_env):
         "size_bytes": 150000000,
     }
 
-    # Simulate app is running, so pgrep returns 0, then pkill is called
+    # Simulate the app being up: the running check is one /proc pass, not a pgrep
+    # per candidate name.
     mock_run.return_value = MagicMock(returncode=0)
     mock_run_cmd.return_value = MagicMock(returncode=0)
 
@@ -763,6 +1054,7 @@ def test_execute_uninstall_dnf(mock_run, mock_run_cmd, test_env):
         patch("shutil.which", side_effect=lambda x: "/usr/bin/dnf" if x == "dnf" else None),
         patch("pathlib.Path.home", return_value=test_env),
         patch("src.uninstall.safe_remove", return_value=(True, "OK")),
+        patch("src.uninstall.running_process_comms", return_value={"heavy-app": [4242]}),
     ):
         # Pass a dummy path to ensure safe_remove logic is at least executed
         dummy_path = test_env / ".config/heavy-app"
@@ -775,8 +1067,12 @@ def test_execute_uninstall_dnf(mock_run, mock_run_cmd, test_env):
     mock_run_cmd.assert_called_with(
         ["dnf", "remove", "-y", "heavy-app"], use_sudo=True, capture=True
     )
-    # Check that pkill was called since we mocked pgrep to succeed
-    assert any("pkill" in str(call) for call in mock_run_cmd.call_args_list)
+    # The app was reported running, so it must have been signalled: SIGTERM first,
+    # then SIGKILL because the second /proc pass still lists it.
+    signals = [
+        call.args[0][:2] for call in mock_run_cmd.call_args_list if call.args[0][0] == "pkill"
+    ]
+    assert signals == [["pkill", "-15"], ["pkill", "-9"]]
 
 
 @patch("src.core.system.run_command")
@@ -797,7 +1093,15 @@ def test_execute_uninstall_apt(mock_run_cmd, test_env):
         details = mgr.execute_uninstall(app, [])
 
     assert details["removed_paths"] == []
-    mock_run_cmd.assert_any_call(["apt", "purge", "-y", "firefox"], use_sudo=True, capture=True)
+    # apt-get, and with debconf muted: apt warns about its unstable CLI when
+    # captured, and a maintainer-script prompt nobody can see would hang the
+    # removal until the command timeout (D3).
+    mock_run_cmd.assert_any_call(
+        ["apt-get", "purge", "-y", "firefox"],
+        use_sudo=True,
+        capture=True,
+        env=APT_NONINTERACTIVE_ENV,
+    )
 
 
 @patch("src.core.system.run_command")
@@ -1004,6 +1308,47 @@ def test_run_uninstall_failed_package_not_counted(capsys):
     assert "Failed:" in out
 
 
+def test_run_uninstall_purges_apt_orphans_without_a_debconf_prompt(capsys):
+    """The follow-up autoremove has to purge and to mute debconf.
+
+    Without --purge the packages dragged out as orphans leave their config files
+    behind, and without DEBIAN_FRONTEND a maintainer-script question would sit
+    invisible behind the spinner until the command timeout (D3).
+    """
+    mock_apps = [
+        {
+            "id": "firefox",
+            "name": "Firefox",
+            "size_bytes": 100,
+            "size_str": "100B",
+            "type": "APT",
+            "install_time": 0,
+        }
+    ]
+    with (
+        patch("src.uninstall.UninstallManager.run_full_scan", return_value=mock_apps),
+        patch("src.ui.screens.uninstall.UninstallSelector.run", return_value=[0]),
+        patch("src.ui.screens.uninstall.UninstallPreviewSelector.run", return_value=True),
+        patch("src.uninstall.UninstallManager.find_residue_paths", return_value=[]),
+        patch(
+            "src.uninstall.UninstallManager.execute_uninstall",
+            return_value={"package_removed": True, "removed_paths": []},
+        ),
+        patch("src.core.system.ensure_sudo_session", return_value=True),
+        patch("src.ui.navigator.Navigator.wait_for_return", return_value=False),
+        patch("src.ui.screens.uninstall.system.run_command") as mock_run_cmd,
+    ):
+        mock_run_cmd.return_value = MagicMock(ok=True, stdout="")
+        run_uninstall()
+
+    mock_run_cmd.assert_any_call(
+        ["apt-get", "autoremove", "--purge", "-y"],
+        use_sudo=True,
+        capture=True,
+        env=APT_NONINTERACTIVE_ENV,
+    )
+
+
 def test_find_residue_paths_skips_visible_home_workspace(test_env):
     """Regression (H1): a visible top-level home folder that fuzzily matches an
     app name (e.g. ~/notes-backup vs app 'Notes') must NOT be flagged as
@@ -1046,6 +1391,94 @@ def test_execute_uninstall_residue_goes_to_trash(test_env):
     assert mock_safe_remove.call_args_list, "safe_remove was not called for residue"
     for call in mock_safe_remove.call_args_list:
         assert call.kwargs.get("use_trash") is True
+
+
+def test_cjk_font_bundles_are_never_offered_for_removal():
+    """One 100 MB+ font package with no .desktop file used to fall through to the
+    "anything this big is a user app" rule, and removing it turns every CJK glyph
+    on the desktop into a box (D5)."""
+    mgr = UninstallManager()
+    for pkg in (
+        "fonts-noto-cjk",  # deb
+        "google-noto-sans-cjk-fonts",  # Fedora
+        "noto-fonts-cjk",  # Arch
+        "fonts-droid-fallback",
+    ):
+        assert mgr._is_system_component(pkg, pkg), pkg
+    # Font *applications* are ordinary user apps: neither name has a whole
+    # "fonts" segment.
+    for pkg in ("fontforge", "font-manager", "fontbase"):
+        assert not mgr._is_system_component(pkg, pkg), pkg
+
+
+def test_dpkg_install_time_prefers_the_arch_qualified_list(tmp_path, monkeypatch):
+    """More than half of /var/lib/dpkg/info on a stock ubuntu:24.04 is named
+    `pkg:arch.list`; missing that name loses the timestamp the "recently
+    installed first" ordering depends on (D2)."""
+    monkeypatch.setattr("src.uninstall._DPKG_INFO_DIR", tmp_path)
+    mgr = UninstallManager()
+
+    qualified = tmp_path / "libacl1:amd64.list"
+    qualified.write_text("/usr/lib\n")
+    os.utime(qualified, (1_700_000_000, 1_700_000_000))
+    assert mgr._dpkg_install_time("libacl1:amd64", "libacl1") == 1_700_000_000
+
+    plain = tmp_path / "firefox.list"
+    plain.write_text("/usr/bin/firefox\n")
+    os.utime(plain, (1_600_000_000, 1_600_000_000))
+    assert mgr._dpkg_install_time("firefox", "firefox") == 1_600_000_000
+
+    assert mgr._dpkg_install_time("not-installed:amd64", "not-installed") == 0
+
+
+@patch("src.uninstall.shutil.which")
+@patch("src.uninstall.system.run_command")
+def test_apt_scan_dates_a_multi_arch_package_from_its_qualified_list(
+    mock_run_cmd, mock_which, tmp_path, monkeypatch
+):
+    """The scan has to hand dpkg-query's own name to the lookup before the stripped
+    one, or a Multi-Arch package sorts as if it had never been installed (D2)."""
+    monkeypatch.setattr("src.uninstall._DPKG_INFO_DIR", tmp_path)
+    list_file = tmp_path / "firefox:amd64.list"
+    list_file.write_text("/usr/bin/firefox\n")
+    os.utime(list_file, (1_700_000_000, 1_700_000_000))
+
+    mock_which.side_effect = lambda n: "/usr/bin/dpkg-query" if n == "dpkg-query" else None
+    mock_run_cmd.return_value = MagicMock(
+        ok=True, stdout="ii \tfirefox:amd64\tno\toptional\t204800\n"
+    )
+
+    apps = UninstallManager()._scan_apt_packages({"firefox"}, {})
+
+    assert [(app["id"], app["install_time"]) for app in apps] == [("firefox", 1_700_000_000)]
+
+
+def test_pre_scan_reads_every_owner_of_a_shared_desktop_path(tmp_path, monkeypatch):
+    """dpkg-query -S puts all owners of a path on one comma-separated line and an
+    owner may carry its own :arch, so the path is what follows the LAST ": " (D4)."""
+    monkeypatch.setattr("src.uninstall._DPKG_STATUS_FILE", tmp_path / "dpkg-status")
+    (tmp_path / "dpkg-status").write_text("Package: bash\n")
+    apps_dir = tmp_path / ".local/share/applications"
+    apps_dir.mkdir(parents=True)
+    desktop = apps_dir / "shared.desktop"
+    desktop.write_text("[Desktop Entry]\nName=Shared App\nExec=shared\n")
+
+    mgr = UninstallManager()
+    with (
+        patch(
+            "src.uninstall.shutil.which",
+            side_effect=lambda n: "/usr/bin/dpkg-query" if n == "dpkg-query" else None,
+        ),
+        patch("pathlib.Path.home", return_value=tmp_path),
+        patch(
+            "src.uninstall.system.run_command",
+            return_value=MagicMock(ok=True, stdout=f"procps, libc6:amd64, bash: {desktop}\n"),
+        ),
+    ):
+        packages, names = mgr._pre_scan_package_desktop_names()
+
+    assert packages == {"procps", "libc6", "bash"}
+    assert names == {"procps": "Shared App", "libc6": "Shared App", "bash": "Shared App"}
 
 
 def test_uninstall_helpers_and_cache_state(test_env, monkeypatch):
@@ -1101,6 +1534,53 @@ def test_run_full_scan_cache_and_failed_worker(monkeypatch):
     monkeypatch.setattr(mgr, "_scan_standalone_cli_apps", lambda: [])
     assert len(mgr.run_full_scan(use_cache=True)) == 1
     assert len(mgr.run_full_scan(use_cache=True)) == 1
+
+
+def test_build_removal_targets_reuses_the_scan_index(monkeypatch):
+    """Without this the preview re-walks the search roots and fully recurses the
+    icon directories once per selected app (P1)."""
+    mgr = UninstallManager()
+    index = {Path("/nonexistent-root"): object()}
+    monkeypatch.setattr(mgr, "_current_scan_cache_key", lambda: ("key",))
+    monkeypatch.setattr(mgr, "_pre_scan_package_desktop_names", lambda: (set(), {}))
+    monkeypatch.setattr(mgr, "_pre_scan_search_roots", lambda: index)
+    monkeypatch.setattr(mgr, "_calculate_app_sizes_and_residues", lambda apps, roots: None)
+    for name in (
+        "_scan_rpm_packages",
+        "_scan_apt_packages",
+        "_scan_pacman_packages",
+        "_scan_snap_apps",
+    ):
+        monkeypatch.setattr(mgr, name, lambda *_: [])
+    for name in ("_scan_flatpak_apps", "_scan_npm_global_packages", "_scan_standalone_cli_apps"):
+        monkeypatch.setattr(mgr, name, lambda: [])
+
+    mgr.run_full_scan()
+    assert mgr._pre_scanned_entries is index
+
+    seen: list[object] = []
+
+    def record(app_id, app_name, pre_scanned_entries=None):
+        seen.append(pre_scanned_entries)
+        return []
+
+    app = {"id": "tool", "name": "Tool", "type": "NPM", "size_bytes": 10}
+    with (
+        patch.object(mgr, "find_residue_paths", side_effect=record),
+        patch.object(mgr, "_candidate_process_names", return_value=[]),
+    ):
+        mgr.build_removal_targets([app, app])
+
+    assert seen == [index, index]
+
+    # A manager that never scanned still has to work; it just pays for the walk.
+    fresh = UninstallManager()
+    with (
+        patch.object(fresh, "find_residue_paths", side_effect=record),
+        patch.object(fresh, "_candidate_process_names", return_value=[]),
+    ):
+        fresh.build_removal_targets([app])
+    assert seen[-1] is None
 
 
 def test_build_targets_and_execute_cli_npm_and_systemd(test_env):

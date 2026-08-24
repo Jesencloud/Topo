@@ -36,6 +36,12 @@ SUDO_INTERRUPT_EXTRA_CLEAR_LINES = 8
 # passes LANG/LANGUAGE/LC_* through, so this survives use_sudo=True as well.
 C_LOCALE_ENV = {"LC_ALL": "C", "LANGUAGE": "C", "LANG": "C"}
 
+# A deb package's prerm/postrm may ask debconf a question. run_command captures
+# output but leaves stdin attached, so the prompt would be swallowed while the
+# terminal shows a spinner and the removal would sit there until the command
+# timeout expires. noninteractive makes debconf take the defaults instead.
+APT_NONINTERACTIVE_ENV = {**C_LOCALE_ENV, "DEBIAN_FRONTEND": "noninteractive"}
+
 
 @dataclass
 class CommandResult:

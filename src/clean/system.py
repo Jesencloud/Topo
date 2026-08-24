@@ -5,7 +5,13 @@ from pathlib import Path
 from ..core.constants import OK
 from ..core.file_ops import bytes_to_human, get_size_fast, parse_size_from_text, safe_remove
 from ..core.heavy_cache import get_package_manager_cleaner
-from ..core.system import C_LOCALE_ENV, get_os_id, is_os_family, run_command
+from ..core.system import (
+    APT_NONINTERACTIVE_ENV,
+    C_LOCALE_ENV,
+    get_os_id,
+    is_os_family,
+    run_command,
+)
 
 
 class DryRunReporter:
@@ -169,7 +175,10 @@ def clean_orphaned_packages(dry_run: bool = False) -> tuple[int, int, int]:
             print(f"  {OK} Orphaned APT packages would be autoremoved")
             return 0, 0, 1
         res = run_command(
-            ["apt-get", "autoremove", "-y"], use_sudo=True, capture=True, env=C_LOCALE_ENV
+            ["apt-get", "autoremove", "-y"],
+            use_sudo=True,
+            capture=True,
+            env=APT_NONINTERACTIVE_ENV,
         )
         if res.ok:
             freed = parse_size_from_text(res.stdout)
@@ -280,7 +289,12 @@ def clean_old_kernels(dry_run: bool = False) -> tuple[int, int, int]:
             print(f"  {OK} {len(to_remove)} old kernel(s) would be removed")
             return 0, 0, 1
         for pkg in to_remove:
-            run_command(["apt-get", "purge", "-y", pkg], use_sudo=True, capture=True)
+            run_command(
+                ["apt-get", "purge", "-y", pkg],
+                use_sudo=True,
+                capture=True,
+                env=APT_NONINTERACTIVE_ENV,
+            )
         print(f"  {OK} Removed {len(to_remove)} old kernel(s)")
         return 0, len(to_remove), 1
 

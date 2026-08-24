@@ -261,6 +261,33 @@ def is_app_running(process_name: str) -> bool:
     return run_command(["pgrep", "-x", comm_pattern(process_name)], capture=True, timeout=5).ok
 
 
+def running_process_comms() -> dict[str, list[int]]:
+    """Map each running process's comm to the PIDs carrying it, in one /proc pass.
+
+    Every `pgrep -x` costs a fork, and a caller with a list of candidate names --
+    an app's id, its de-prefixed forms, each hyphen segment, every matching
+    .desktop Exec -- pays that fork per name, per app. Reading the table once
+    turns all of those questions into dict lookups: one directory listing plus a
+    one-line read per process.
+
+    The kernel already stores comm truncated to 15 characters, so the keys are
+    directly comparable to comm_pattern() output and to a `pgrep -x` pattern.
+    """
+    running: dict[str, list[int]] = {}
+    with contextlib.suppress(OSError):
+        for proc in Path("/proc").iterdir():
+            if not proc.name.isdigit():
+                continue
+            # A process can exit between the listing and the read, and a foreign
+            # namespace entry can refuse it; either way it is simply not running
+            # as far as the caller is concerned.
+            with contextlib.suppress(OSError, ValueError):
+                comm = (proc / "comm").read_text().strip()
+                if comm:
+                    running.setdefault(comm, []).append(int(proc.name))
+    return running
+
+
 def bytes_to_human(n_bytes: int) -> str:
     """Converts bytes to human readable format using binary units."""
     val = float(n_bytes)

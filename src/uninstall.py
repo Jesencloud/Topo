@@ -22,10 +22,44 @@ from .core.file_ops import (
     get_size_fast,
     parse_size_to_bytes,
     record_deletion_audit,
+    running_process_comms,
     safe_remove,
 )
 from .core.history import record_history_session
 from .core.whitelist import LINUX_USER_DATA_DIRS
+
+# dpkg-query -W reports every entry the status database knows about, installed or
+# not, so the status pair and deb's own protection metadata have to come back with
+# the size. ${Essential} is normalised to "yes"/"no"; ${Priority} can be empty.
+_DPKG_QUERY_FORMAT = (
+    "${db:Status-Abbrev}\t${binary:Package}\t${Essential}\t${Priority}\t${Installed-Size}\n"
+)
+# Status-Abbrev is want+status+error ("ii ", "rc "). Only the middle character
+# says whether the files are on disk: `dpkg -r` without purge leaves a package at
+# "rc" (config-files) with its old Installed-Size still recorded, so counting
+# anything outside this set reports space that was freed long ago. Left out: n
+# (not-installed), c (config-files) and H (half-installed, size unreliable).
+_DPKG_UNPACKED_STATUS = frozenset("iUFWt")
+# Where dpkg records the file list it writes on unpack; the list's mtime is the
+# only install timestamp the status database offers.
+_DPKG_INFO_DIR = Path("/var/lib/dpkg/info")
+# The database every dpkg-query answer comes out of. Installing the dpkg tools on
+# a non-deb distro creates it empty, and then `dpkg-query -S` can only ever reply
+# "no path found matching pattern" -- once per batch, at a fork apiece.
+_DPKG_STATUS_FILE = Path("/var/lib/dpkg/status")
+
+# How long a process gets to act on SIGTERM before it is killed, and how long the
+# kernel gets to reap it afterwards. Both are waited through once per selection,
+# not once per app.
+SIGTERM_GRACE_SECONDS = 1.0
+SIGKILL_GRACE_SECONDS = 0.5
+
+
+def _has_deb_database() -> bool:
+    """Whether dpkg-query has anything to answer from."""
+    with contextlib.suppress(OSError):
+        return _DPKG_STATUS_FILE.stat().st_size > 0
+    return False
 
 
 @dataclass(frozen=True, eq=False)
@@ -320,6 +354,10 @@ class UninstallManager:
 
     def __init__(self):
         self.apps: list[dict[str, Any]] = []
+        # The residue index run_full_scan built, kept so the preview can reuse it.
+        # Only ever valid inside the process that built it: _ResidueEntryIndex
+        # buckets grams with the per-process-randomized str.__hash__.
+        self._pre_scanned_entries: dict[Path, _ResidueEntryIndex] | None = None
 
     @classmethod
     def clear_scan_cache(cls) -> None:
@@ -414,7 +452,17 @@ class UninstallManager:
         if app_id_lower.startswith("libreoffice"):
             return any(app_id_lower.endswith(s) for s in sys_suffixes)
 
-        sys_prefixes = ("lib", "gsettings-", "desktop-file-", "shared-mime-")
+        # A CJK font package is shipped as one 100 MB+ bundle (fonts-noto-cjk on
+        # deb, google-noto-*-fonts on Fedora, noto-fonts-cjk on Arch) with no
+        # .desktop file, so the "anything over 100 MB is a user app" fallback used
+        # to offer it up for removal -- and removing it turns every Chinese,
+        # Japanese and Korean glyph on the desktop into a box. Matching a whole
+        # "fonts" segment protects all three naming styles while leaving font
+        # applications alone: fontforge and font-manager have no such segment.
+        if "fonts" in app_id_lower.replace("_", "-").split("-"):
+            return True
+
+        sys_prefixes = ("lib", "gsettings-", "desktop-file-", "shared-mime-", "ttf-", "otf-")
         return any(app_id_lower.endswith(s) for s in sys_suffixes) or any(
             app_id_lower.startswith(p) for p in sys_prefixes
         )
@@ -422,6 +470,24 @@ class UninstallManager:
     @staticmethod
     def _strip_package_arch(package_name: str) -> str:
         return package_name.split(":", 1)[0]
+
+    @staticmethod
+    def _dpkg_install_time(*package_names: str) -> int:
+        """When dpkg last wrote the package's file list, i.e. when it unpacked it.
+
+        A `Multi-Arch: same` package keeps the architecture qualifier in the file
+        name -- libacl1:amd64.list, not libacl1.list -- and more than half of the
+        entries in /var/lib/dpkg/info on a stock ubuntu:24.04 look like that. The
+        qualified name therefore has to be tried before the stripped one, or the
+        timestamp stays 0 and the whole "most recently installed first" ordering
+        collapses for those packages.
+        """
+        for name in package_names:
+            list_file = _DPKG_INFO_DIR / f"{name}.list"
+            if list_file.exists():
+                with contextlib.suppress(OSError):
+                    return int(list_file.stat().st_mtime)
+        return 0
 
     @staticmethod
     def _app_record(
@@ -562,10 +628,20 @@ class UninstallManager:
             if desktop_files:
                 batch_size = RPM_QUERY_BATCH_SIZE
                 str_desktop_files = [str(f) for f in desktop_files]
+                # One PATH search per tool, not one per batch: a desktop with a few
+                # thousand .desktop files splits into many batches, and the answer
+                # cannot change while the loop runs. The tools stay additive --
+                # a deb box with rpm installed for `alien` must still reach the
+                # dpkg branch, or every APT app falls out of the list -- so the
+                # box that merely has the *tools* of another distro is excluded by
+                # asking whether the database behind them holds anything.
+                has_rpm = bool(shutil.which("rpm"))
+                has_dpkg_query = bool(shutil.which("dpkg-query")) and _has_deb_database()
+                has_pacman = bool(shutil.which("pacman"))
                 for i in range(0, len(str_desktop_files), batch_size):
                     batch_str = str_desktop_files[i : i + batch_size]
                     batch_paths = desktop_files[i : i + batch_size]
-                    if shutil.which("rpm"):
+                    if has_rpm:
                         res = system.run_command(
                             ["rpm", "-qf", "--queryformat", "%{NAME}\n"] + batch_str,
                             capture=True,
@@ -589,24 +665,38 @@ class UninstallManager:
                                         dname = get_desktop_name(df_path)
                                         if dname:
                                             package_desktop_names[pkg] = dname
-                    if shutil.which("dpkg-query"):
+                    if has_dpkg_query:
                         res = system.run_command(
                             ["dpkg-query", "-S", *batch_str],
                             capture=True,
                             env=system.C_LOCALE_ENV,
                         )
                         for line in res.stdout.splitlines():
-                            if ":" in line:
-                                parts = line.split(":", 1)
-                                pkg = self._strip_package_arch(parts[0].strip())
-                                user_app_packages.add(pkg)
-                                if pkg not in package_desktop_names:
-                                    df_path = Path(parts[1].strip())
-                                    if df_path.exists():
-                                        dname = get_desktop_name(df_path)
-                                        if dname:
-                                            package_desktop_names[pkg] = dname
-                    if shutil.which("pacman"):
+                            # Every owner of a path shares one comma-separated line
+                            # ("procps, libc6:amd64, bash: /usr/share/doc") and an
+                            # owner may carry its own :arch, so the path is what
+                            # follows the LAST ": " -- splitting on the first colon
+                            # cuts libc6:amd64 in half and turns the rest into a
+                            # package name that does not exist.
+                            owner_str, sep, path_str = line.rpartition(": ")
+                            if not sep:
+                                continue
+                            owners = [
+                                pkg
+                                for pkg in (
+                                    self._strip_package_arch(owner.strip())
+                                    for owner in owner_str.split(", ")
+                                )
+                                if pkg
+                            ]
+                            user_app_packages.update(owners)
+                            if any(pkg not in package_desktop_names for pkg in owners):
+                                df_path = Path(path_str.strip())
+                                dname = get_desktop_name(df_path) if df_path.exists() else ""
+                                if dname:
+                                    for pkg in owners:
+                                        package_desktop_names.setdefault(pkg, dname)
+                    if has_pacman:
                         # " is owned by " sits in pacman's gettext catalog, so the
                         # split below only holds under a C locale.
                         res = system.run_command(
@@ -679,7 +769,7 @@ class UninstallManager:
         apps = []
         try:
             res = system.run_command(
-                ["dpkg-query", "-W", "-f=${binary:Package}\t${Installed-Size}\n"],
+                ["dpkg-query", "-W", f"-f={_DPKG_QUERY_FORMAT}"],
                 capture=True,
                 timeout=60,
                 env=system.C_LOCALE_ENV,
@@ -687,22 +777,27 @@ class UninstallManager:
             if res.ok:
                 for line in res.stdout.splitlines():
                     parts = line.split("\t")
-                    if len(parts) < 2:
+                    if len(parts) < 5:
                         continue
-                    app_id = self._strip_package_arch(parts[0].strip())
+                    status, raw_id, essential, priority, size_field = (
+                        part.strip() for part in parts[:5]
+                    )
+                    if len(status) < 2 or status[1] not in _DPKG_UNPACKED_STATUS:
+                        continue
+                    app_id = self._strip_package_arch(raw_id)
                     try:
-                        size_bytes = int(parts[1]) * 1024
+                        size_bytes = int(size_field) * 1024
                     except ValueError:
+                        continue
+                    # dpkg carries its own answer to "may this be removed", which
+                    # covers packages the hardcoded name lists were written for
+                    # Fedora and never matched (network-manager, nvidia-dkms-535).
+                    if essential == "yes" or priority in ("required", "important"):
                         continue
                     if self._is_system_component(app_id, app_id):
                         continue
                     if app_id in user_app_packages or size_bytes > 100 * 1024 * 1024:
-                        install_time = 0
-                        list_file = Path(f"/var/lib/dpkg/info/{app_id}.list")
-                        if list_file.exists():
-                            with contextlib.suppress(OSError):
-                                install_time = int(list_file.stat().st_mtime)
-
+                        install_time = self._dpkg_install_time(raw_id, app_id)
                         display_name = package_desktop_names.get(app_id, app_id)
                         apps.append(
                             self._app_record(
@@ -1170,6 +1265,7 @@ class UninstallManager:
                     apps.extend(future.result())
 
         pre_scanned_entries = self._pre_scan_search_roots()
+        self._pre_scanned_entries = pre_scanned_entries
         self._calculate_app_sizes_and_residues(apps, pre_scanned_entries)
 
         self.apps = sorted(
@@ -1367,25 +1463,79 @@ class UninstallManager:
         """Resolve residue paths and running state for each app about to be removed.
 
         Both answers cost real work -- residue discovery walks the filesystem and
-        the running check spawns one pgrep per candidate process name -- so they
+        the running check has to look at every process on the machine -- so they
         are computed once here rather than from inside a render loop. The result
         is exactly what UninstallPreviewSelector needs to draw the confirmation.
+
+        The index run_full_scan already built is reused: without it every selected
+        app re-scandirs the six search roots and fully recurses ~/.local/share/icons
+        and pixmaps, directories that routinely hold tens of thousands of files.
+        It is also the same snapshot the sizes in the app list were computed from,
+        so the preview cannot disagree with the row the user just picked.
         """
+        # One /proc pass for the whole selection, instead of a `pgrep -x` fork per
+        # candidate name per app -- ten apps with thirty candidate names each used
+        # to mean three hundred forks, and the execution pass then repeated them.
+        running = running_process_comms()
         targets = []
         for app in apps:
-            app_paths = self.find_residue_paths(app["id"], app["name"])
-            is_running = False
-            for proc in self._candidate_process_names(app, app_paths):
-                try:
-                    if system.run_command(
-                        ["pgrep", "-x", comm_pattern(proc)], capture=True, timeout=5
-                    ).ok:
-                        is_running = True
-                        break
-                except (OSError, subprocess.SubprocessError):
-                    pass
+            app_paths = self.find_residue_paths(
+                app["id"], app["name"], pre_scanned_entries=self._pre_scanned_entries
+            )
+            is_running = any(
+                comm_pattern(proc) in running
+                for proc in self._candidate_process_names(app, app_paths)
+            )
             targets.append((app, app_paths, is_running))
         return targets
+
+    def _terminate_process_patterns(self, patterns: list[str]) -> None:
+        """SIGTERM the given comm patterns, wait once, then SIGKILL the survivors.
+
+        The two waits are per call, not per pattern, so the caller decides how
+        often they are paid: terminate_apps closes a whole selection in one 1.5 s
+        window, where a per-app kill spent that on every app in turn.
+        """
+        if not patterns:
+            return
+        for pattern in patterns:
+            system.run_command(["pkill", "-15", "-x", pattern], capture=True, timeout=5)
+
+        time.sleep(SIGTERM_GRACE_SECONDS)
+
+        # One more /proc pass tells us who ignored SIGTERM; the alternative is a
+        # `pgrep -x` per pattern.
+        survivors = running_process_comms()
+        killed = False
+        for pattern in patterns:
+            if pattern in survivors:
+                system.run_command(["pkill", "-9", "-x", pattern], capture=True, timeout=5)
+                killed = True
+        if killed:
+            time.sleep(SIGKILL_GRACE_SECONDS)
+
+    def terminate_apps(self, targets: list[tuple[dict[str, Any], list[Path], bool]]) -> None:
+        """Close every selected app's processes before the removals start.
+
+        execute_uninstall still does this for its own app, so this method is an
+        optimisation rather than a prerequisite: doing it for the whole selection
+        at once means the SIGTERM grace period is waited through once instead of
+        once per app, and the per-app step then finds nothing left to kill and
+        waits not at all. Ten apps used to spend fifteen seconds here.
+        """
+        running = running_process_comms()
+        patterns: list[str] = []
+        for app, paths, _ in targets:
+            if app.get("type") == "Flatpak":
+                with contextlib.suppress(OSError, subprocess.SubprocessError):
+                    system.run_command(
+                        ["flatpak", "kill", str(app["id"])], capture=True, timeout=20
+                    )
+            for proc in self._candidate_process_names(app, paths):
+                pattern = comm_pattern(proc)
+                if pattern in running and pattern not in patterns:
+                    patterns.append(pattern)
+        self._terminate_process_patterns(patterns)
 
     def execute_uninstall(self, app: dict[str, Any], paths: list[Path]):
         """Terminates app and removes all files."""
@@ -1405,28 +1555,19 @@ class UninstallManager:
                 with contextlib.suppress(OSError, subprocess.SubprocessError):
                     system.run_command(["flatpak", "kill", app["id"]], capture=True, timeout=20)
 
-            # 1. Graceful Kill (Batched). Patterns go through comm_pattern so a
-            # long executable name still matches -- and still gets signalled.
-            processes_to_kill = []
+            # Patterns go through comm_pattern so a long executable name still
+            # matches -- and still gets signalled. Which of them are actually
+            # running is one /proc read for all of them; when terminate_apps has
+            # already closed the selection this list comes back empty and the
+            # grace periods are skipped entirely.
+            running = running_process_comms()
+            processes_to_kill: list[str] = []
             for proc in all_process_names:
-                try:
-                    if system.run_command(
-                        ["pgrep", "-x", comm_pattern(proc)], capture=True, timeout=5
-                    ).ok:
-                        processes_to_kill.append(comm_pattern(proc))
-                except (OSError, subprocess.SubprocessError):
-                    continue
+                pattern = comm_pattern(proc)
+                if pattern in running and pattern not in processes_to_kill:
+                    processes_to_kill.append(pattern)
 
-            if processes_to_kill:
-                for proc in processes_to_kill:
-                    system.run_command(["pkill", "-15", "-x", proc], capture=True, timeout=5)
-
-                time.sleep(1.0)
-
-                for proc in processes_to_kill:
-                    if system.run_command(["pgrep", "-x", proc], capture=True, timeout=5).ok:
-                        system.run_command(["pkill", "-9", "-x", proc], capture=True, timeout=5)
-                time.sleep(0.5)
+            self._terminate_process_patterns(processes_to_kill)
 
             # 2. Binary uninstall
             if app["type"] == "Flatpak":
@@ -1464,8 +1605,14 @@ class UninstallManager:
                     args=["cli_uninstall"], returncode=0, stdout="CLI uninstalled"
                 )
             elif app["type"] == "APT":
+                # apt-get, not apt: apt prints "WARNING: apt does not have a stable
+                # CLI interface" when its output is captured, and the rest of the
+                # repository already standardises on apt-get.
                 res = system.run_command(
-                    ["apt", "purge", "-y", app["id"]], use_sudo=True, capture=True
+                    ["apt-get", "purge", "-y", app["id"]],
+                    use_sudo=True,
+                    capture=True,
+                    env=system.APT_NONINTERACTIVE_ENV,
                 )
             elif app["type"] == "Pacman":
                 res = system.run_command(

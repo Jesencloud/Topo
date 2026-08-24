@@ -12,7 +12,7 @@ from src.clean.system import (
     clean_system_data,
     clean_zombies,
 )
-from src.core.system import C_LOCALE_ENV
+from src.core.system import APT_NONINTERACTIVE_ENV, C_LOCALE_ENV
 
 
 def test_package_cache_paths_cover_supported_managers(tmp_path, monkeypatch):
@@ -68,8 +68,13 @@ def test_clean_orphaned_packages_ubuntu(mock_get_os_id, mock_run, mock_which):
     assert s > 0
     assert i == 1
     assert c == 1
+    # apt-get, unlike dnf, runs maintainer scripts that may ask debconf a question
+    # with nobody able to see the prompt.
     mock_run.assert_called_with(
-        ["apt-get", "autoremove", "-y"], use_sudo=True, capture=True, env=C_LOCALE_ENV
+        ["apt-get", "autoremove", "-y"],
+        use_sudo=True,
+        capture=True,
+        env=APT_NONINTERACTIVE_ENV,
     )
 
 

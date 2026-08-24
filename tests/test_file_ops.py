@@ -19,6 +19,7 @@ from src.core.file_ops import (
     parse_size_to_bytes,
     record_deletion_audit,
     register_cleaned_path,
+    running_process_comms,
     safe_remove,
 )
 from src.core.lock import is_file_locked
@@ -73,6 +74,49 @@ def test_is_app_running_trims_the_pattern_to_the_kernel_comm_limit(mock_run):
     # Names that already fit are passed through untouched.
     assert is_app_running("firefox") is True
     assert mock_run.call_args.args[0] == ["pgrep", "-x", "firefox"]
+
+
+def test_running_process_comms_reads_the_whole_table_once(tmp_path, monkeypatch):
+    """One /proc pass replaces a `pgrep -x` fork per candidate name."""
+
+    class FakeProcRoot:
+        def __init__(self, real: Path) -> None:
+            self._real = real
+
+        def iterdir(self):
+            return self._real.iterdir()
+
+    for pid, comm in (("10", "firefox"), ("11", "firefox"), ("12", "gnome-shell")):
+        proc = tmp_path / pid
+        proc.mkdir()
+        (proc / "comm").write_text(comm + "\n")
+    # Not a PID, an unreadable entry, and one that exits between the listing and
+    # the read: all three must be skipped rather than raise.
+    (tmp_path / "self").mkdir()
+    (tmp_path / "self" / "comm").write_text("ignored\n")
+    (tmp_path / "13").mkdir()
+    (tmp_path / "14").mkdir()
+    (tmp_path / "14" / "comm").write_text("\n")
+
+    monkeypatch.setattr(
+        "src.core.file_ops.Path", lambda p: FakeProcRoot(tmp_path) if p == "/proc" else Path(p)
+    )
+
+    table = running_process_comms()
+    # /proc iteration order is the filesystem's, not numeric.
+    assert {comm: sorted(pids) for comm, pids in table.items()} == {
+        "firefox": [10, 11],
+        "gnome-shell": [12],
+    }
+
+
+def test_running_process_comms_survives_an_unreadable_proc(monkeypatch):
+    class Exploding:
+        def iterdir(self):
+            raise OSError("permission denied")
+
+    monkeypatch.setattr("src.core.file_ops.Path", lambda _: Exploding())
+    assert running_process_comms() == {}
 
 
 def test_whitelist_protection(test_env):

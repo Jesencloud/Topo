@@ -39,6 +39,12 @@ from ..navigator import Navigator, UninstallPreviewSelector, UninstallSelector
 # instruction without repeating the same verb twice.
 SCREEN_TITLE = "Uninstall Apps"
 
+# Only these ask a system package manager to remove something; Flatpak (user
+# installation), NPM's global prefix and standalone CLI binaries under ~/.local
+# are all removed as the invoking user. Asking for a password to uninstall a
+# Flatpak buys nothing, and a mistyped or cancelled prompt ended the run.
+NEEDS_SUDO_TYPES = frozenset({"APT", "DNF", "Pacman", "Snap"})
+
 
 def run_uninstall():
     manager = UninstallManager()
@@ -74,8 +80,9 @@ def run_uninstall():
         confirmed = UninstallPreviewSelector(all_targets).run()
 
         if confirmed:
+            needs_sudo = any(app["type"] in NEEDS_SUDO_TYPES for app, _, _ in all_targets)
             # Ensure sudo session (require password) outside raw mode so sudo can own input.
-            if not system.ensure_sudo_session(
+            if needs_sudo and not system.ensure_sudo_session(
                 f"{MAGENTA}➔{RESET} App removal requires admin access\n{MAGENTA}➔{RESET} Password: "
             ):
                 if system.SUDO_CANCELLED:
@@ -90,7 +97,8 @@ def run_uninstall():
                     print(f" {RED}✗{RESET} Authorization failed. Uninstall cancelled.\n")
                     return
 
-            print(f"{GREEN}ꗃ{RESET} Authorization successful.")
+            if needs_sudo:
+                print(f"{GREEN}ꗃ{RESET} Authorization successful.")
 
             # --- EXECUTION ---
             current_status = ["Processing..."]
@@ -106,6 +114,13 @@ def run_uninstall():
 
             try:
                 with threaded_spinner(render_removal_spinner):
+                    # Close everything first: the wait for SIGTERM to take effect
+                    # is paid once for the whole selection here, where doing it
+                    # inside the loop below charged it to every app in turn.
+                    if any(is_running for _, _, is_running in all_targets):
+                        current_status[0] = "Closing running applications..."
+                        manager.terminate_apps(all_targets)
+
                     for app, paths, _ in all_targets:
                         # `name` comes from a .desktop Name= field, so it is untrusted; these
                         # lists feed the summary lines only, never a filesystem operation.
@@ -125,7 +140,14 @@ def run_uninstall():
 
                     if has_apt and removed_names:
                         current_status[0] = "Cleaning up orphaned dependencies..."
-                        system.run_command(["apt", "autoremove", "-y"], use_sudo=True, capture=True)
+                        # --purge to match the purge above: without it the packages
+                        # dragged out as orphans leave their config files behind.
+                        system.run_command(
+                            ["apt-get", "autoremove", "--purge", "-y"],
+                            use_sudo=True,
+                            capture=True,
+                            env=system.APT_NONINTERACTIVE_ENV,
+                        )
             finally:
                 sys.stdout.write(f"{CLEAR_LINE}")
                 sys.stdout.flush()
