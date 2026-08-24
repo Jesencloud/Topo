@@ -5,7 +5,7 @@ from pathlib import Path
 from ..core.constants import OK
 from ..core.file_ops import bytes_to_human, get_size_fast, parse_size_from_text, safe_remove
 from ..core.heavy_cache import get_package_manager_cleaner
-from ..core.system import get_os_id, is_os_family, run_command
+from ..core.system import C_LOCALE_ENV, get_os_id, is_os_family, run_command
 
 
 class DryRunReporter:
@@ -41,7 +41,8 @@ def clean_snaps(dry_run: bool = False) -> tuple[int, int, int]:
         print(f"  {OK} Old Snap revisions would be removed")
         return 0, 0, 1
 
-    res = run_command(["snap", "list", "--all"], capture=True)
+    # The revision table is matched on the English word "disabled".
+    res = run_command(["snap", "list", "--all"], capture=True, env=C_LOCALE_ENV)
     if not res or not res.stdout:
         return 0, 0, 0
 
@@ -119,7 +120,7 @@ def clean_package_manager(dry_run: bool = False) -> tuple[int, int, int]:
     if cleaner.key == "dnf" and shutil.which("dnf5"):
         cmd = ["dnf5", "clean", "packages"]
 
-    res = run_command(cmd, use_sudo=True, capture=True)
+    res = run_command(cmd, use_sudo=True, capture=True, env=C_LOCALE_ENV)
     post_size = _measure_package_cache_size(cache_paths)
     measured_freed = max(0, pre_size - post_size)
 
@@ -145,7 +146,9 @@ def clean_journal(dry_run: bool = False) -> tuple[int, int, int]:
         print(f"  {OK} journal logs would be vacuumed")
         return 0, 0, 1
 
-    res = run_command(["journalctl", "--vacuum-size=1M"], use_sudo=True, capture=True)
+    res = run_command(
+        ["journalctl", "--vacuum-size=1M"], use_sudo=True, capture=True, env=C_LOCALE_ENV
+    )
     if res.ok and res.stdout:
         freed = parse_size_from_text(res.stdout)
         if freed > 0:
@@ -165,7 +168,9 @@ def clean_orphaned_packages(dry_run: bool = False) -> tuple[int, int, int]:
         if dry_run:
             print(f"  {OK} Orphaned APT packages would be autoremoved")
             return 0, 0, 1
-        res = run_command(["apt-get", "autoremove", "-y"], use_sudo=True, capture=True)
+        res = run_command(
+            ["apt-get", "autoremove", "-y"], use_sudo=True, capture=True, env=C_LOCALE_ENV
+        )
         if res.ok:
             freed = parse_size_from_text(res.stdout)
             print(f"  {OK} Removed orphaned APT packages")
@@ -178,7 +183,9 @@ def clean_orphaned_packages(dry_run: bool = False) -> tuple[int, int, int]:
         if dry_run:
             print(f"  {OK} Orphaned DNF packages would be autoremoved")
             return 0, 0, 1
-        res = run_command([dnf_cmd, "autoremove", "-y"], use_sudo=True, capture=True)
+        res = run_command(
+            [dnf_cmd, "autoremove", "-y"], use_sudo=True, capture=True, env=C_LOCALE_ENV
+        )
         if res.ok:
             freed = parse_size_from_text(res.stdout)
             items = res.stdout.count("\n") // 2
@@ -193,7 +200,10 @@ def clean_orphaned_packages(dry_run: bool = False) -> tuple[int, int, int]:
                 print(f"  {OK} {len(orphans)} orphaned Pacman packages would be removed")
                 return 0, 0, 1
             remove_res = run_command(
-                ["pacman", "-Rns", "--noconfirm"] + orphans, use_sudo=True, capture=True
+                ["pacman", "-Rns", "--noconfirm"] + orphans,
+                use_sudo=True,
+                capture=True,
+                env=C_LOCALE_ENV,
             )
             if remove_res.ok:
                 freed = parse_size_from_text(remove_res.stdout)
@@ -205,7 +215,8 @@ def clean_orphaned_packages(dry_run: bool = False) -> tuple[int, int, int]:
 
 def clean_zombies(dry_run: bool = False) -> tuple[int, int, int]:
     """Identify and attempt to reap zombie processes."""
-    res = run_command(["ps", "-eo", "state,pid,ppid,comm"], capture=True)
+    # The state column is read as the English "Z" code.
+    res = run_command(["ps", "-eo", "state,pid,ppid,comm"], capture=True, env=C_LOCALE_ENV)
     if not res.ok:
         return 0, 0, 0
 
@@ -245,7 +256,8 @@ def clean_old_kernels(dry_run: bool = False) -> tuple[int, int, int]:
     current_kernel = platform.release()
 
     if shutil.which("dpkg") and shutil.which("apt-get"):
-        res = run_command(["dpkg", "-l", "linux-image-*"], capture=True)
+        # Rows are matched on dpkg's English "ii" status pair.
+        res = run_command(["dpkg", "-l", "linux-image-*"], capture=True, env=C_LOCALE_ENV)
         if not res.ok or not res.stdout:
             return 0, 0, 0
         installed = []

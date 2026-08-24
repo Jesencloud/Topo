@@ -1,4 +1,5 @@
 import os
+import socket
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -186,6 +187,90 @@ def test_clean_system_temp_handles_dirs_recent_foreign_and_stat_errors(test_env)
         assert clean_system_temp(dry_run=True, min_age_days=3) == (5, 1, 1)
 
 
+def test_clean_system_temp_leaves_sockets_and_fifos_alone(test_env):
+    """A stale-looking socket belongs to a running program, not to junk.
+
+    Debian and Ubuntu default to "use-ssh-agent", which parks the session agent
+    at /tmp/ssh-XXXXXXXX/agent.PID. That socket's timestamps never move, so an
+    age-only rule deleted the agent of the session doing the cleaning -- while
+    reclaiming nothing, since sockets and FIFOs hold no data.
+    """
+    fake_tmp = test_env / "tmp"
+    fake_var_tmp = test_env / "var_tmp"
+    fake_tmp.mkdir()
+    fake_var_tmp.mkdir()
+
+    agent_dir = fake_tmp / "ssh-XXXXaBcDeF"
+    agent_dir.mkdir()
+    sock_path = agent_dir / "agent.1234"
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.bind(str(sock_path))
+    fifo_path = fake_tmp / "render.fifo"
+    os.mkfifo(fifo_path)
+    plain = fake_tmp / "leftover.log"
+    plain.write_text("junk")
+
+    old_time = time.time() - 10 * 86400
+    for target in (sock_path, agent_dir, fifo_path, plain):
+        os.utime(target, (old_time, old_time), follow_symlinks=False)
+
+    def fake_path(value):
+        if value == "/tmp":
+            return fake_tmp
+        if value == "/var/tmp":
+            return fake_var_tmp
+        return Path(value)
+
+    try:
+        with patch("src.clean.user.Path", side_effect=fake_path):
+            size, items, _categories = clean_system_temp(dry_run=False, min_age_days=3)
+    finally:
+        sock.close()
+
+    assert size == 4 and items == 1
+    assert not plain.exists()
+    assert sock_path.exists()
+    assert fifo_path.exists()
+    assert agent_dir.exists()
+
+
+def test_clean_user_logs_truncates_the_live_session_log(test_env):
+    """~/.xsession-errors is truncated, never unlinked.
+
+    The X session holds the file open for the whole login: unlinking frees no
+    blocks until logout and leaves the session writing to a nameless inode, so
+    the space is reported but never actually reclaimed.
+    """
+    live = test_env / ".xsession-errors"
+    live.write_bytes(b"x" * 64)
+    rotated = test_env / ".xsession-errors.old"
+    rotated.write_bytes(b"y" * 8)
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.clean.user.safe_remove", return_value=(True, 8)) as remove,
+    ):
+        assert clean_user_logs(dry_run=True) == (72, 2, 1)
+        assert live.stat().st_size == 64, "dry run must not touch the file"
+
+        assert clean_user_logs() == (72, 2, 1)
+
+    assert live.is_file(), "the session still needs somewhere to write"
+    assert live.stat().st_size == 0
+    # The dry run short-circuits before safe_remove, so only the real run deletes.
+    assert [Path(call.args[0]).name for call in remove.call_args_list] == [".xsession-errors.old"]
+
+
+def test_clean_user_logs_reports_nothing_when_truncation_fails(test_env):
+    live = test_env / ".xsession-errors"
+    live.write_bytes(b"x" * 16)
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.clean.user.os.truncate", side_effect=OSError("read-only")),
+    ):
+        assert clean_user_logs() == (0, 0, 0)
+
+
 def test_clean_user_logs_known_and_nested_files_dry_run_and_actual(test_env):
     known = test_env / ".xsession-errors"
     known.write_bytes(b"known")
@@ -229,12 +314,59 @@ def test_clean_backup_files_dry_run_and_actual(test_env):
     (root / "editor~").write_bytes(b"a")
     (root / "swap.swp").write_bytes(b"bb")
     (root / "normal.txt").write_bytes(b"ccc")
+    stale = time.time() - 30 * 86400
+    for name in ("editor~", "swap.swp", "normal.txt"):
+        os.utime(root / name, (stale, stale))
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.clean.user.safe_remove", return_value=(True, 1)),
+        patch("src.clean.user.safe_remove", return_value=(True, 1)) as remove,
     ):
         assert clean_backup_files(dry_run=True) == (3, 2, 1)
         assert clean_backup_files() == (3, 2, 1)
+
+    # Editor backups are documents, so they must be recoverable afterwards.
+    assert all(call.kwargs["use_trash"] is True for call in remove.call_args_list)
+
+
+def test_clean_backup_files_keeps_files_a_live_editor_is_still_touching(test_env):
+    """A swap file vim keeps rewriting stays out of range of the age gate.
+
+    Losing a .swp costs the user their crash-recovery state, so recent mtime is
+    treated as "still in use" rather than as junk to reclaim.
+    """
+    root = test_env / "Documents"
+    root.mkdir(parents=True)
+    (root / ".open-buffer.swp").write_bytes(b"live")
+    (root / "old.bak").write_bytes(b"stale")
+    stale = time.time() - 30 * 86400
+    os.utime(root / "old.bak", (stale, stale))
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.clean.user.safe_remove", return_value=(True, 1)) as remove,
+    ):
+        assert clean_backup_files() == (5, 1, 1)
+
+    assert [Path(call.args[0]).name for call in remove.call_args_list] == ["old.bak"]
+
+
+def test_clean_backup_files_skips_entries_that_cannot_be_stated(test_env):
+    root = test_env / "Documents"
+    root.mkdir(parents=True)
+    target = root / "gone.bak"
+    target.write_bytes(b"x")
+    real_stat = Path.stat
+
+    def stat(path, *args, **kwargs):
+        if path == target:
+            raise OSError("vanished")
+        return real_stat(path, *args, **kwargs)
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch.object(Path, "stat", stat),
+    ):
+        assert clean_backup_files() == (0, 0, 0)
 
 
 def test_clean_thumbnails_empty_failure_and_success(test_env):

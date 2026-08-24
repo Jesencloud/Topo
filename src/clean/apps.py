@@ -11,7 +11,7 @@ from ..core.app_cache import (
     find_xdg_cache_candidates,
     resolve_cache_path,
 )
-from ..core.browser_cache import BROWSER_CACHE_DEFS, BROWSER_CACHE_ROOT_NAMES
+from ..core.browser_paths import BROWSER_CACHE_DEFS, BROWSER_CACHE_ROOT_NAMES
 from ..core.constants import (
     CLEAN_CACHE_AGE_DAYS,
     DETECTED_APPS_FILE,
@@ -37,7 +37,7 @@ from ..core.file_ops import (
     register_cleaned_path,
     safe_remove,
 )
-from ..core.system import run_command
+from ..core.system import C_LOCALE_ENV, run_command
 from ..core.text import sanitize_for_display
 
 
@@ -188,17 +188,41 @@ def clean_browser_caches(dry_run=False):
 
 
 def clean_flatpak_unused(dry_run=False):
-    """Removes unused Flatpak runtimes."""
-    if shutil.which("flatpak"):
-        if dry_run:
-            print(f"  {OK} Flatpak runtimes would be checked")
-            return 0, 0
-        res = run_command(["flatpak", "uninstall", "--unused", "-y"], use_sudo=False, capture=True)
+    """Removes unused Flatpak runtimes from both installations.
+
+    Only the --user installation used to be swept, which misses where the
+    runtimes actually pile up on Debian and Ubuntu: Flathub's own setup
+    instructions add the remote system-wide, so the unused runtimes sit in
+    /var/lib/flatpak and clearing them needs root. The system pass is skipped
+    when there is no system installation, so a user-only setup never triggers a
+    password prompt for nothing.
+    """
+    if not shutil.which("flatpak"):
+        return 0, 0
+    if dry_run:
+        print(f"  {OK} Flatpak runtimes would be checked")
+        return 0, 0
+
+    scopes = [("--user", False)]
+    if Path("/var/lib/flatpak").is_dir():
+        scopes.append(("--system", True))
+
+    freed = 0
+    uninstalled_any = False
+    for scope, use_sudo in scopes:
+        res = run_command(
+            ["flatpak", "uninstall", scope, "--unused", "-y"],
+            use_sudo=use_sudo,
+            capture=True,
+            env=C_LOCALE_ENV,
+        )
         if res.ok and res.stdout and "Uninstalling" in res.stdout:
-            freed = parse_size_from_text(res.stdout)
-            msg = f"  {OK} Cleaned unused Flatpak runtimes ({bytes_to_human(freed)})"
-            print(msg)
-            return freed, 1
+            freed += parse_size_from_text(res.stdout)
+            uninstalled_any = True
+
+    if uninstalled_any:
+        print(f"  {OK} Cleaned unused Flatpak runtimes ({bytes_to_human(freed)})")
+        return freed, 1
     return 0, 0
 
 
@@ -320,13 +344,20 @@ def clean_orphaned_remnants(dry_run=False, max_age_days=60):
         "uim",
     }
 
-    # Gather executable/link targets from all system and local .desktop files
+    # Gather executable/link targets from all system and local .desktop files.
+    # A missing directory here is not harmless: the cache folder of an app that
+    # is still installed then looks orphaned and gets trashed. Snap keeps its
+    # launchers in snapd's own export directory, and a --user flatpak install
+    # exports under ~/.local/share/flatpak, neither of which the system-wide
+    # flatpak path below covers.
     desktop_links: dict[str, str] = {}
     desktop_dirs = [
         Path.home() / ".local/share/applications",
         Path("/usr/share/applications"),
         Path("/usr/local/share/applications"),
         Path("/var/lib/flatpak/exports/share/applications"),
+        Path.home() / ".local/share/flatpak/exports/share/applications",
+        Path("/var/lib/snapd/desktop/applications"),
     ]
     for d_dir in desktop_dirs:
         if not d_dir.exists():
@@ -334,8 +365,19 @@ def clean_orphaned_remnants(dry_run=False, max_age_days=60):
         try:
             for d in d_dir.glob("*.desktop"):
                 exec_cmd = get_desktop_exec_command(d)
-                if exec_cmd:
-                    desktop_links[d.stem.lower()] = exec_cmd
+                if not exec_cmd:
+                    continue
+                stem = d.stem.lower()
+                desktop_links[stem] = exec_cmd
+                # The lookup below is keyed on the cache folder's name, which a
+                # packaged entry's stem never equals: snapd generates
+                # "<snap>_<app>.desktop" and flatpak exports "<app.id>.desktop",
+                # while the app still caches into ~/.cache/<app>. Register those
+                # components too, so an installed app's cache is not mistaken for
+                # a remnant. setdefault keeps a real entry of that name winning.
+                for part in (stem.split("_")[-1], stem.split(".")[-1]):
+                    if part and part != stem:
+                        desktop_links.setdefault(part, exec_cmd)
         except OSError:
             pass
 
@@ -393,7 +435,7 @@ def clean_orphaned_remnants(dry_run=False, max_age_days=60):
 
 
 def clean_snap_cache(dry_run=False):
-    """Cleans user caches for Snap applications (located in ~/snap/*/common/.cache)."""
+    """Cleans user caches for Snap applications under ~/snap/<app>/."""
     snap_root = Path.home() / "snap"
     if not snap_root.exists():
         return 0, 0
@@ -409,17 +451,22 @@ def clean_snap_cache(dry_run=False):
             if is_app_running(app_dir.name):
                 continue
 
-            # Snap cache is usually in <app>/common/.cache
-            cache_path = app_dir / "common" / ".cache"
-            if cache_path.exists():
+            # $SNAP_USER_COMMON is the usual home for a snap's cache, but plenty
+            # of snaps write into $SNAP_USER_DATA instead -- that is the revision
+            # directory "current" points at -- so both have to be swept.
+            app_size = 0
+            for cache_path in (app_dir / "common" / ".cache", app_dir / "current" / ".cache"):
+                if not cache_path.is_dir():
+                    continue
                 # For app cache dirs, clean all cache files.
                 s, i = clean_path_by_age(cache_path, days=0, dry_run=dry_run)
                 if i > 0:
                     total_size += s
                     total_items += i
-                    if not dry_run and s > 0:
-                        safe_name = sanitize_for_display(app_dir.name)
-                        print(f"  {OK} Snap Cache: {safe_name} ({bytes_to_human(s)})")
+                    app_size += s
+            if not dry_run and app_size > 0:
+                safe_name = sanitize_for_display(app_dir.name)
+                print(f"  {OK} Snap Cache: {safe_name} ({bytes_to_human(app_size)})")
     except OSError:
         pass
 
@@ -428,24 +475,55 @@ def clean_snap_cache(dry_run=False):
     return total_size, total_items
 
 
+def _first_visit(path: Path, seen: set[Path]) -> bool:
+    """Return True the first time *path* names a directory, recording it in *seen*.
+
+    ~/.steam/steam is normally a symlink to ~/.local/share/Steam, so the native
+    roots below name one directory that must not be swept -- or counted -- twice.
+    """
+    try:
+        resolved = path.resolve()
+    except OSError:
+        resolved = path
+    if resolved in seen:
+        return False
+    seen.add(resolved)
+    return True
+
+
 def clean_steam_shader_cache(dry_run=False):
     """Clean Steam, Proton, NVIDIA, and Mesa shader caches."""
     total_size = 0
     total_items = 0
     home = Path.home()
 
-    shader_paths = [
-        home / ".steam" / "steam" / "shadercache",
-        home / ".local" / "share" / "Steam" / "shadercache",
-        home / ".nv" / "ComputeCache",
-        home / ".nv" / "GLCache",
-        home / ".cache" / "nvidia" / "ComputeCache",
-        home / ".cache" / "nvidia" / "GLCache",
-        home / ".cache" / "mesa_shader_cache",
-        home / ".cache" / "mesa_shader_cache_db",
+    # Steam and the GPU drivers write into whatever HOME and XDG_CACHE_HOME the
+    # process sees, and both sandbox formats move them: flatpak redirects the
+    # cache to <app>/cache and snap to $SNAP_USER_COMMON/.cache. A flatpak or
+    # snap Steam is exactly the install with tens of gigabytes of shader cache to
+    # reclaim, and none of it sat under the native paths.
+    flatpak_home = home / ".var" / "app" / "com.valvesoftware.Steam"
+    snap_home = home / "snap" / "steam" / "common"
+    steam_homes = [home, flatpak_home, snap_home]
+    cache_homes = [home / ".cache", flatpak_home / "cache", snap_home / ".cache"]
+    # Steam's data directory holds both the shader cache and the Proton prefixes.
+    steam_roots = [
+        home / ".steam" / "steam",
+        *(steam_home / ".local" / "share" / "Steam" for steam_home in steam_homes),
     ]
+
+    shader_paths = [
+        *(root / "shadercache" for root in steam_roots),
+        *(steam_home / ".nv" / "ComputeCache" for steam_home in steam_homes),
+        *(steam_home / ".nv" / "GLCache" for steam_home in steam_homes),
+        *(cache_home / "nvidia" / "ComputeCache" for cache_home in cache_homes),
+        *(cache_home / "nvidia" / "GLCache" for cache_home in cache_homes),
+        *(cache_home / "mesa_shader_cache" for cache_home in cache_homes),
+        *(cache_home / "mesa_shader_cache_db" for cache_home in cache_homes),
+    ]
+    seen: set[Path] = set()
     for shader_dir in shader_paths:
-        if not shader_dir.is_dir():
+        if not shader_dir.is_dir() or not _first_visit(shader_dir, seen):
             continue
         s, i = clean_path_by_age(shader_dir, days=30, dry_run=dry_run)
         if i > 0:
@@ -453,8 +531,10 @@ def clean_steam_shader_cache(dry_run=False):
             total_items += i
 
     # Proton/Wine prefix shader caches
-    compatdata = home / ".steam" / "steam" / "steamapps" / "compatdata"
-    if compatdata.is_dir():
+    for steam_root in steam_roots:
+        compatdata = steam_root / "steamapps" / "compatdata"
+        if not compatdata.is_dir() or not _first_visit(compatdata, seen):
+            continue
         try:
             for prefix_dir in compatdata.iterdir():
                 shader_cache = prefix_dir / "pfx" / "drive_c" / "windows" / "temp"
@@ -478,17 +558,27 @@ def clean_ide_caches(dry_run=False):
     total_items = 0
     home = Path.home()
 
-    # Static known IDE cache paths
-    ide_caches = [
-        ("VS Code", home / ".config" / "Code" / "CachedData"),
-        ("VS Code", home / ".config" / "Code" / "CachedExtensionVSIXs"),
-        ("VS Code", home / ".config" / "Code" / "Cache"),
-        ("VS Codium", home / ".config" / "VSCodium" / "CachedData"),
-        ("VS Codium", home / ".config" / "VSCodium" / "Cache"),
-        ("Cursor", home / ".config" / "Cursor" / "CachedData"),
-        ("Cursor", home / ".config" / "Cursor" / "Cache"),
+    # Static known IDE cache paths. Each editor is listed by its config
+    # directory name, then expanded across the native and flatpak locations:
+    # flatpak redirects XDG_CONFIG_HOME into ~/.var/app/<id>/config, so a flatpak
+    # VS Code -- and CachedData alone routinely reaches a gigabyte -- was
+    # completely out of reach. The snap builds of these editors all use classic
+    # confinement and so write to the real ~/.config, which is already covered.
+    editor_config_dirs = [
+        ("Code", "com.visualstudio.code"),
+        ("VSCodium", "com.vscodium.codium"),
+        ("Cursor", None),
     ]
-    for _label, cache_dir in ide_caches:
+    cache_subdirs = ("CachedData", "CachedExtensionVSIXs", "Cache")
+
+    ide_caches: list[Path] = []
+    for config_name, flatpak_id in editor_config_dirs:
+        config_roots = [home / ".config" / config_name]
+        if flatpak_id:
+            config_roots.append(home / ".var" / "app" / flatpak_id / "config" / config_name)
+        ide_caches.extend(root / subdir for root in config_roots for subdir in cache_subdirs)
+
+    for cache_dir in ide_caches:
         if cache_dir.is_dir():
             s, i = clean_path_by_age(cache_dir, days=30, dry_run=dry_run)
             if i > 0:

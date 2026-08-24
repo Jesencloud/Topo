@@ -27,6 +27,15 @@ SUDO_CANCELLED = False
 DEFAULT_COMMAND_TIMEOUT = 300
 SUDO_INTERRUPT_EXTRA_CLEAR_LINES = 8
 
+# Every output parser in Topo matches English words ("Uninstalling", "disabled",
+# "Total reclaimed space") and English unit suffixes, so any command whose stdout
+# is read rather than shown has to be asked for the C locale -- otherwise a
+# zh_CN, de_DE or fr_FR desktop silently parses nothing. All three variables are
+# pinned because LC_ALL outranks LC_MESSAGES and LANG, while LANGUAGE (a GNU
+# gettext extension) outranks both for message catalogs. sudo's default env_keep
+# passes LANG/LANGUAGE/LC_* through, so this survives use_sudo=True as well.
+C_LOCALE_ENV = {"LC_ALL": "C", "LANGUAGE": "C", "LANG": "C"}
+
 
 @dataclass
 class CommandResult:
@@ -74,8 +83,18 @@ def get_invoking_user():
     return os.environ.get("SUDO_USER") or os.environ.get("USER") or "unknown"
 
 
-def run_command(args: list[str], use_sudo=False, capture=True, timeout=DEFAULT_COMMAND_TIMEOUT):
+def run_command(
+    args: list[str],
+    use_sudo=False,
+    capture=True,
+    timeout=DEFAULT_COMMAND_TIMEOUT,
+    env: dict[str, str] | None = None,
+):
     cmd = (["sudo", "-n"] + args if SUDO_CANCELLED else ["sudo"] + args) if use_sudo else args
+    # Overlay rather than replace: dropping PATH, HOME or DISPLAY would break the
+    # very tools being called. Pass C_LOCALE_ENV here whenever the output is
+    # parsed instead of displayed.
+    child_env = {**os.environ, **env} if env else None
 
     try:
         result = subprocess.run(
@@ -84,6 +103,7 @@ def run_command(args: list[str], use_sudo=False, capture=True, timeout=DEFAULT_C
             text=True,
             check=False,
             timeout=timeout,
+            env=child_env,
         )
         return CommandResult(
             args=cmd,

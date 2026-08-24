@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .core import system
+from .core.browser_paths import BROWSER_PROFILE_TARGETS
 from .core.constants import (
     BOLD,
     CLEAR_LINE,
@@ -27,13 +28,14 @@ from .core.desktop_entry import get_desktop_exec_command
 from .core.file_ops import (
     TRASH_UNAVAILABLE_REASON,
     bytes_to_human,
+    comm_pattern,
     get_size,
     parse_size_from_text,
     safe_remove,
 )
 from .core.lock import is_file_locked, is_sqlite_busy
 from .core.spinner import threaded_spinner
-from .core.system import has_sudo, run_command
+from .core.system import C_LOCALE_ENV, has_sudo, run_command
 
 # Lock to ensure parallel tasks don't corrupt the terminal output
 print_lock = threading.Lock()
@@ -107,8 +109,13 @@ register_optimization_task = OptimizationRegistry.register
 def _is_any_process_running(process_names: list[str]) -> bool:
     if not shutil.which("pgrep"):
         return False
+    # "chromium-browser" is 16 characters, one over what the kernel's comm field
+    # holds, and pgrep rejects a pattern that long instead of matching the
+    # truncated name -- so an untruncated check reported a running Chromium as
+    # idle and let its databases be vacuumed underneath it.
     return any(
-        run_command(["pgrep", "-x", name], capture=True, timeout=1).ok for name in process_names
+        run_command(["pgrep", "-x", comm_pattern(name)], capture=True, timeout=1).ok
+        for name in process_names
     )
 
 
@@ -172,16 +179,6 @@ def vacuum_single_db(db_file):
         return 0
 
 
-def _profile_db_patterns(roots: tuple[str, ...], names: tuple[str, ...]) -> tuple[str, ...]:
-    """Cross a browser's profile roots with its database names.
-
-    Both browser families keep one directory per profile under a root, so the
-    patterns are a product rather than a list: writing them out by hand is where
-    a profile root silently loses half its databases.
-    """
-    return tuple(f"{root}/*/{name}" for root in roots for name in names)
-
-
 # The biggest ones first: favicons.sqlite and places.sqlite routinely outgrow
 # everything else in a profile, and webappsstore.sqlite grows with localStorage.
 _FIREFOX_DB_NAMES = (
@@ -204,67 +201,25 @@ _CHROMIUM_DB_NAMES = (
     "Network/Cookies",
 )
 
-# (app label, process names, home-relative glob patterns). Native, Flatpak and
-# Snap layouts are listed side by side because one machine can hold more than
-# one of them, and a wildcard may appear in any component -- the patterns are
-# matched with Path.home().glob(). The label is what a "skipped running app"
-# message names, so the same browser installed twice stays one label.
-_BROWSER_DB_TARGETS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
+# The label is what a "skipped running app" message names, so the same browser
+# installed twice stays one label. Everything else -- where the profiles sit for
+# each install format, and which database family they hold -- comes from
+# core.browser_paths, the same table protection and cache cleanup read. A snap's
+# relocated profile root is then declared once instead of in three modules that
+# drift apart, and tests/test_browser_paths.py keeps it that way.
+_DB_NAMES_BY_ENGINE = {"gecko": _FIREFOX_DB_NAMES, "chromium": _CHROMIUM_DB_NAMES}
+
+_BROWSER_DB_TARGETS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = tuple(
     (
-        "Firefox",
-        ("firefox", "firefox-bin", "firefox-esr"),
-        _profile_db_patterns(
-            (
-                ".mozilla/firefox",
-                ".var/app/org.mozilla.firefox/.mozilla/firefox",
-                "snap/firefox/common/.mozilla/firefox",
-            ),
-            _FIREFOX_DB_NAMES,
+        target.name,
+        target.procs,
+        tuple(
+            f"{glob}/{name}"
+            for glob in target.profile_globs
+            for name in _DB_NAMES_BY_ENGINE[target.engine]
         ),
-    ),
-    (
-        "Chrome",
-        ("chrome", "google-chrome"),
-        _profile_db_patterns(
-            (".config/google-chrome", ".var/app/com.google.Chrome/config/google-chrome"),
-            _CHROMIUM_DB_NAMES,
-        ),
-    ),
-    (
-        "Chromium",
-        ("chromium", "chromium-browser"),
-        _profile_db_patterns(
-            (
-                ".config/chromium",
-                ".var/app/org.chromium.Chromium/config/chromium",
-                # Ubuntu ships chromium only as a snap, so this is the default
-                # layout there rather than an alternative one.
-                "snap/chromium/common/chromium",
-            ),
-            _CHROMIUM_DB_NAMES,
-        ),
-    ),
-    (
-        "Brave",
-        ("brave", "brave-browser"),
-        _profile_db_patterns(
-            (
-                ".config/BraveSoftware/Brave-Browser",
-                ".var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser",
-            ),
-            _CHROMIUM_DB_NAMES,
-        ),
-    ),
-    (
-        "Edge",
-        ("msedge", "microsoft-edge"),
-        _profile_db_patterns((".config/microsoft-edge",), _CHROMIUM_DB_NAMES),
-    ),
-    (
-        "Vivaldi",
-        ("vivaldi-bin", "vivaldi"),
-        _profile_db_patterns((".config/vivaldi",), _CHROMIUM_DB_NAMES),
-    ),
+    )
+    for target in BROWSER_PROFILE_TARGETS
 )
 
 
@@ -616,7 +571,9 @@ def run_journal_optimization(dry_run=False):
     if dry_run:
         return "System journal would be vacuumed to 3 days"
 
-    res = run_command(["journalctl", "--vacuum-time=3d"], use_sudo=True, capture=True)
+    res = run_command(
+        ["journalctl", "--vacuum-time=3d"], use_sudo=True, capture=True, env=C_LOCALE_ENV
+    )
     if res.ok and res.stdout:
         freed = parse_size_from_text(res.stdout)
         if freed > 0:

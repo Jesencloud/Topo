@@ -1,4 +1,5 @@
 import os
+import socket
 import stat
 import time
 from pathlib import Path
@@ -51,6 +52,27 @@ def test_is_app_running(mock_run):
 
     mock_run.side_effect = OSError("error")
     assert is_app_running("test_app") is False
+
+
+@patch("subprocess.run")
+def test_is_app_running_trims_the_pattern_to_the_kernel_comm_limit(mock_run):
+    """Long process names have to be cut to what the kernel actually stores.
+
+    comm holds 15 characters plus a NUL, and pgrep -x rejects a longer pattern
+    with exit 1 instead of matching the truncated name -- so guards like
+    "google-chrome-stable" reported "not running" for a browser that was.
+    """
+    mock_run.return_value = MagicMock(returncode=0)
+
+    assert is_app_running("google-chrome-stable") is True
+
+    argv = mock_run.call_args.args[0]
+    assert argv == ["pgrep", "-x", "google-chrome-s"]
+    assert len(argv[2]) == 15
+
+    # Names that already fit are passed through untouched.
+    assert is_app_running("firefox") is True
+    assert mock_run.call_args.args[0] == ["pgrep", "-x", "firefox"]
 
 
 def test_whitelist_protection(test_env):
@@ -579,6 +601,67 @@ def test_safe_remove_reports_permission_error(test_env):
 
     assert success is False
     assert "denied" in msg
+
+
+def test_clean_path_by_age_leaves_sockets_and_fifos_in_place(test_env):
+    """The age pruner skips entry types that hold no reclaimable bytes.
+
+    A bound socket's timestamps never move, so age alone always eventually
+    classifies it as stale -- and deleting it costs a running process its
+    endpoint while freeing nothing.
+    """
+    cache_dir = test_env / "mixed"
+    cache_dir.mkdir()
+    stale_file = cache_dir / "payload.bin"
+    stale_file.write_bytes(b"junk")
+    fifo = cache_dir / "pipe"
+    os.mkfifo(fifo)
+    sock_path = cache_dir / "agent.4321"
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.bind(str(sock_path))
+
+    old_time = time.time() - 20 * 86400
+    for target in (stale_file, fifo, sock_path):
+        os.utime(target, (old_time, old_time), follow_symlinks=False)
+
+    try:
+        size, items = clean_path_by_age(cache_dir, days=10)
+    finally:
+        sock.close()
+
+    assert (size, items) == (4, 1)
+    assert not stale_file.exists()
+    assert fifo.exists()
+    assert sock_path.exists()
+
+
+def test_clean_path_by_age_keeps_a_directory_holding_a_live_socket(test_env):
+    """Skipping the socket is only half a guard if its directory still goes.
+
+    Removing a directory takes its whole tree with it, so an ssh-agent directory
+    -- whose one socket has timestamps that never move -- has to be kept as well.
+    """
+    agent_dir = test_env / "ssh-XXXXaBcDeF"
+    agent_dir.mkdir()
+    sock_path = agent_dir / "agent.4321"
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.bind(str(sock_path))
+    junk_dir = test_env / "stale-build"
+    junk_dir.mkdir()
+    (junk_dir / "payload.bin").write_bytes(b"junk")
+
+    old_time = time.time() - 20 * 86400
+    for target in (sock_path, agent_dir, junk_dir / "payload.bin", junk_dir):
+        os.utime(target, (old_time, old_time), follow_symlinks=False)
+
+    try:
+        size, items = clean_path_by_age(test_env, days=10)
+    finally:
+        sock.close()
+
+    assert (size, items) == (4, 1)
+    assert sock_path.exists()
+    assert not junk_dir.exists()
 
 
 def test_clean_path_by_age(test_env):

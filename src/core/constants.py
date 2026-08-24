@@ -175,6 +175,10 @@ ERASE_BELOW = "\033[J"
 CLEAN_CACHE_AGE_DAYS = 30
 CLEAN_CARGO_AGE_DAYS = 7
 CLEAN_TEMP_AGE_DAYS = 3
+# Editor backups and swap files are user documents, so they get a wider window
+# than scratch data: long enough that an open editor session can never fall
+# inside it, short enough to still be worth reclaiming.
+CLEAN_BACKUP_AGE_DAYS = 7
 
 # Time conversion
 SECONDS_PER_DAY = 86400

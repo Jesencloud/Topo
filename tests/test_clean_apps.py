@@ -26,6 +26,23 @@ from src.core.desktop_app_cache import (
     is_desktop_app_cache_path,
 )
 from src.core.file_ops import CACHEDIR_TAG_SIGNATURE
+from src.core.system import CommandResult
+
+
+def _no_real_package_tooling():
+    """Stop ``clean_apps_deep`` from running the one privileged command it owns.
+
+    The call runs the whole cleaner registry, and ``clean_flatpak_unused`` is in
+    it: left alone it really executes ``sudo flatpak uninstall --system``, which
+    both waits for a password (sudo reads it from /dev/tty, which pytest does
+    not capture) and, once given one, uninstalls this machine's system runtimes.
+    ``apps.py`` has a single ``run_command`` call site, so patching it names
+    that command and nothing else.
+    """
+    return patch(
+        "src.clean.apps.run_command",
+        return_value=CommandResult(args=["flatpak"], returncode=1),
+    )
 
 
 def test_proactive_app_detection():
@@ -253,7 +270,7 @@ def test_clean_apps_deep_keeps_wechat_user_data(test_env):
         path.mkdir(parents=True)
         (path / "message.db").write_text("keep")
 
-    with patch("src.clean.apps.is_app_running", return_value=False):
+    with patch("src.clean.apps.is_app_running", return_value=False), _no_real_package_tooling():
         size, items, categories = clean_apps_deep(dry_run=False, detected_apps={})
 
     assert size >= len(b"cache")
@@ -272,7 +289,7 @@ def test_clean_apps_deep_uses_desktop_app_cache_defs(test_env):
     cache_file = discord_cache / "blob.bin"
     cache_file.write_bytes(b"d" * 256)
 
-    with patch("src.clean.apps.is_app_running", return_value=False):
+    with patch("src.clean.apps.is_app_running", return_value=False), _no_real_package_tooling():
         size, items, categories = clean_apps_deep(dry_run=False, detected_apps={})
 
     assert size >= 256
@@ -581,12 +598,52 @@ def test_flatpak_unused_paths(capsys):
         assert clean_flatpak_unused(dry_run=True) == (0, 0)
     with (
         patch("src.clean.apps.shutil.which", return_value="/usr/bin/flatpak"),
+        patch("src.clean.apps.Path.is_dir", return_value=False),
         patch(
             "src.clean.apps.run_command",
             return_value=MagicMock(ok=True, stdout="Uninstalling 10 MB"),
         ),
     ):
         assert clean_flatpak_unused() == (10 * 1024 * 1024, 1)
+
+
+def test_flatpak_unused_also_sweeps_the_system_installation():
+    """Debian and Ubuntu users follow Flathub's system-wide setup.
+
+    The unused runtimes then sit in /var/lib/flatpak, which only root can clear,
+    so a --user-only pass reported success while reclaiming nothing.
+    """
+    from src.clean.apps import clean_flatpak_unused
+
+    with (
+        patch("src.clean.apps.shutil.which", return_value="/usr/bin/flatpak"),
+        patch("src.clean.apps.Path.is_dir", return_value=True),
+        patch(
+            "src.clean.apps.run_command",
+            return_value=MagicMock(ok=True, stdout="Uninstalling 4 MB"),
+        ) as run,
+    ):
+        assert clean_flatpak_unused() == (8 * 1024 * 1024, 1)
+
+    scopes = [(call.args[0][2], call.kwargs["use_sudo"]) for call in run.call_args_list]
+    assert scopes == [("--user", False), ("--system", True)]
+
+
+def test_flatpak_unused_skips_the_system_pass_without_a_system_install():
+    """No /var/lib/flatpak means no reason to ask for a sudo password."""
+    from src.clean.apps import clean_flatpak_unused
+
+    with (
+        patch("src.clean.apps.shutil.which", return_value="/usr/bin/flatpak"),
+        patch("src.clean.apps.Path.is_dir", return_value=False),
+        patch(
+            "src.clean.apps.run_command",
+            return_value=MagicMock(ok=True, stdout="nothing unused to uninstall"),
+        ) as run,
+    ):
+        assert clean_flatpak_unused() == (0, 0)
+
+    assert [call.kwargs["use_sudo"] for call in run.call_args_list] == [False]
 
 
 def test_clean_app_generic_file_and_failure(test_env):
@@ -656,3 +713,127 @@ def test_clean_desktop_and_deep_aggregation():
         ),
     ):
         assert clean_apps_deep(detected_apps={}) == (9, 12, 4)
+
+
+def test_clean_snap_cache_covers_the_revision_data_directory(test_env):
+    """$SNAP_USER_DATA holds a cache too, not just $SNAP_USER_COMMON.
+
+    "current" is a symlink to the installed revision, which is where snaps that
+    honour XDG_CACHE_HOME put their cache; sweeping only common/.cache missed it.
+    """
+    (test_env / "snap/app/common/.cache").mkdir(parents=True)
+    (test_env / "snap/app/x1/.cache").mkdir(parents=True)
+    (test_env / "snap/app/current").symlink_to(test_env / "snap/app/x1")
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.clean.apps.is_app_running", return_value=False),
+        patch("src.clean.apps.clean_path_by_age", return_value=(5, 1)) as by_age,
+    ):
+        assert clean_snap_cache() == (10, 2)
+
+    swept = sorted(str(c.args[0]).replace(str(test_env), "") for c in by_age.call_args_list)
+    assert swept == ["/snap/app/common/.cache", "/snap/app/current/.cache"]
+
+
+def test_clean_steam_shader_cache_covers_sandboxed_steam(test_env):
+    """A flatpak or snap Steam relocates the shader cache, the prefixes and HOME."""
+    flatpak_home = test_env / ".var/app/com.valvesoftware.Steam"
+    snap_home = test_env / "snap/steam/common"
+    (flatpak_home / ".local/share/Steam/shadercache").mkdir(parents=True)
+    (snap_home / ".local/share/Steam/shadercache").mkdir(parents=True)
+    (flatpak_home / "cache/mesa_shader_cache").mkdir(parents=True)
+    (snap_home / ".nv/GLCache").mkdir(parents=True)
+    prefix_temp = flatpak_home / ".local/share/Steam/steamapps/compatdata/570/pfx"
+    (prefix_temp / "drive_c/windows/temp").mkdir(parents=True)
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.clean.apps.clean_path_by_age", return_value=(4, 1)) as by_age,
+    ):
+        assert clean_steam_shader_cache() == (20, 5)
+
+    swept = {str(c.args[0]).replace(str(test_env), "") for c in by_age.call_args_list}
+    assert swept == {
+        "/.var/app/com.valvesoftware.Steam/.local/share/Steam/shadercache",
+        "/snap/steam/common/.local/share/Steam/shadercache",
+        "/.var/app/com.valvesoftware.Steam/cache/mesa_shader_cache",
+        "/snap/steam/common/.nv/GLCache",
+        (
+            "/.var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/compatdata"
+            "/570/pfx/drive_c/windows/temp"
+        ),
+    }
+
+
+def test_clean_steam_shader_cache_counts_a_symlinked_steam_root_once(test_env):
+    """~/.steam/steam is normally a symlink to ~/.local/share/Steam."""
+    real_root = test_env / ".local/share/Steam"
+    (real_root / "shadercache").mkdir(parents=True)
+    (real_root / "steamapps/compatdata/620/pfx/drive_c/windows/temp").mkdir(parents=True)
+    (test_env / ".steam").mkdir(parents=True)
+    (test_env / ".steam/steam").symlink_to(real_root)
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.clean.apps.clean_path_by_age", return_value=(4, 1)) as by_age,
+    ):
+        assert clean_steam_shader_cache() == (8, 2)
+
+    assert len(by_age.call_args_list) == 2
+
+
+def test_clean_ide_caches_covers_the_flatpak_install(test_env):
+    """Flatpak redirects XDG_CONFIG_HOME, so ~/.config/Code matches nothing there."""
+    flatpak_code = test_env / ".var/app/com.visualstudio.code/config/Code"
+    (flatpak_code / "CachedData").mkdir(parents=True)
+    (flatpak_code / "Cache").mkdir(parents=True)
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.clean.apps.clean_path_by_age", return_value=(4, 1)) as by_age,
+    ):
+        assert clean_ide_caches() == (8, 2)
+
+    swept = sorted(str(c.args[0]).replace(str(test_env), "") for c in by_age.call_args_list)
+    assert swept == [
+        "/.var/app/com.visualstudio.code/config/Code/Cache",
+        "/.var/app/com.visualstudio.code/config/Code/CachedData",
+    ]
+
+
+def test_orphaned_remnants_keeps_caches_of_packaged_apps(test_env):
+    """A --user flatpak exports its launcher under home, not /var/lib/flatpak.
+
+    Missing that directory is not harmless: the app is installed, but its cache
+    folder looks orphaned and gets trashed. The stem of a packaged entry is also
+    never the cache folder's name -- flatpak exports "<app.id>.desktop" and snapd
+    generates "<snap>_<app>.desktop" -- so those components have to be indexed
+    too or the lookup misses every packaged app.
+    """
+    import os
+
+    old = time.time() - 100 * 86400
+    for name in ("keepme", "snappy"):
+        cache = test_env / ".cache" / name
+        cache.mkdir(parents=True)
+        os.utime(cache, (old, old))
+    binary = test_env / "flatpak-run"
+    binary.write_text("#!/bin/sh\n")
+
+    exports = test_env / ".local/share/flatpak/exports/share/applications"
+    exports.mkdir(parents=True)
+    (exports / "com.example.Keepme.desktop").write_text(f"[Desktop Entry]\nExec={binary} %U\n")
+    local = test_env / ".local/share/applications"
+    local.mkdir(parents=True)
+    (local / "snappy_snappy.desktop").write_text(f"[Desktop Entry]\nExec={binary} %U\n")
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.clean.apps.shutil.which", return_value=None),
+        patch("src.clean.apps.get_size_fast", return_value=20),
+        patch("src.clean.apps.safe_remove", return_value=(True, "ok")) as remove,
+    ):
+        assert clean_orphaned_remnants() == (0, 0)
+
+    remove.assert_not_called()

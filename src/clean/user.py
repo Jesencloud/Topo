@@ -1,11 +1,23 @@
 import contextlib
 import os
 import shutil
+import stat
 import time
 from pathlib import Path
 
-from ..core.constants import CLEAN_TEMP_AGE_DAYS, OK, SECONDS_PER_DAY
-from ..core.file_ops import bytes_to_human, clean_path_by_age, get_size_fast, safe_remove
+from ..core.constants import (
+    CLEAN_BACKUP_AGE_DAYS,
+    CLEAN_TEMP_AGE_DAYS,
+    OK,
+    SECONDS_PER_DAY,
+)
+from ..core.file_ops import (
+    bytes_to_human,
+    clean_path_by_age,
+    get_size_fast,
+    is_reclaimable_entry_type,
+    safe_remove,
+)
 from ..core.system import run_command
 
 
@@ -59,9 +71,12 @@ def clean_trash(dry_run=False):
 def clean_system_temp(dry_run=False, min_age_days=CLEAN_TEMP_AGE_DAYS):
     """Clean stale temporary files from /tmp and /var/tmp.
 
-    Only removes entries that are (a) owned by the current user and (b) untouched
-    (both mtime and atime) for at least ``min_age_days`` days. This avoids deleting
-    sockets, locks and scratch files that belong to running programs or other users.
+    Only removes entries that are (a) a regular file, a directory or a symlink,
+    (b) owned by the current user and (c) untouched (both mtime and atime) for at
+    least ``min_age_days`` days. Sockets, FIFOs and device nodes are left alone:
+    none of them hold reclaimable space, and some of them -- the session
+    ssh-agent socket above all -- belong to a program that is still running. A
+    stale symlink stays in scope, since unlinking it never touches its target.
     """
     total_size = 0
     total_items = 0
@@ -82,12 +97,18 @@ def clean_system_temp(dry_run=False, min_age_days=CLEAN_TEMP_AGE_DAYS):
                     st = item.stat(follow_symlinks=False)
                 except OSError:
                     continue
+                # Sockets, FIFOs and device nodes never free space and may well
+                # belong to a running program -- the session ssh-agent socket
+                # above all. The rule lives in file_ops so the recursive pass
+                # below applies exactly the same one.
+                if not is_reclaimable_entry_type(st.st_mode):
+                    continue
                 # Skip files owned by others, and anything still recently active
                 if st.st_uid != uid:
                     continue
                 if st.st_mtime > cutoff or st.st_atime > cutoff:
                     continue
-                if item.is_dir() and not item.is_symlink():
+                if stat.S_ISDIR(st.st_mode):
                     # For directories, clean stale contents individually
                     # instead of deleting the entire tree.
                     s, i = clean_path_by_age(item, days=min_age_days, dry_run=dry_run)
@@ -118,9 +139,26 @@ def clean_user_logs(dry_run=False):
     home = Path.home()
     cutoff = time.time() - (30 * SECONDS_PER_DAY)  # 30 days
 
-    # Specific known oversized log files
+    # ~/.xsession-errors is held open by the X session for the whole login, so
+    # unlinking it reclaims nothing until logout (the inode outlives the name)
+    # and leaves the session writing to a file that no longer has a path.
+    # Truncating releases the blocks immediately and keeps the writer's fd
+    # valid -- the same reason logrotate offers "copytruncate".
+    live_log = home / ".xsession-errors"
+    live_size = get_size_fast(live_log) if live_log.is_file() else 0
+    if live_size > 0:
+        truncated = True
+        if not dry_run:
+            try:
+                os.truncate(live_log, 0)
+            except OSError:
+                truncated = False
+        if truncated:
+            total_size += live_size
+            total_items += 1
+
+    # Rotated copies have no writer left, so removing them is the right move.
     known_logs = [
-        home / ".xsession-errors",
         home / ".xsession-errors.old",
         home / ".local/share/xorg" / "Xorg.0.log.old",
         home / ".local/share/xorg" / "Xorg.1.log.old",
@@ -175,11 +213,20 @@ def clean_user_logs(dry_run=False):
     return 0, 0, 0
 
 
-def clean_backup_files(dry_run=False):
-    """Clean editor backup and swap files from user directories."""
+def clean_backup_files(dry_run=False, min_age_days=CLEAN_BACKUP_AGE_DAYS):
+    """Clean editor backup and swap files from user directories.
+
+    These are documents, not caches: a ``.bak`` or ``file~`` is often the only
+    copy of an earlier revision, and a ``.swp`` is vim's crash-recovery state for
+    a buffer that may still be open. So they go to the trash rather than being
+    unlinked, and only once untouched for ``min_age_days`` -- vim rewrites its
+    swap file as you type (see 'updatetime' and 'updatecount'), which keeps a
+    live session's mtime well inside the window.
+    """
     total_size = 0
     total_items = 0
     home = Path.home()
+    cutoff = time.time() - (min_age_days * SECONDS_PER_DAY)
     # Only scan common user document directories, not all of home
     scan_dirs = [
         home / "Desktop",
@@ -196,16 +243,25 @@ def clean_backup_files(dry_run=False):
                 if not item.is_file():
                     continue
                 # Match *~ files or backup suffixes
-                if item.name.endswith("~") or item.suffix in backup_suffixes:
-                    size = get_size_fast(item)
-                    if dry_run or safe_remove(item, use_trash=False)[0]:
-                        total_size += size
-                        total_items += 1
+                if not (item.name.endswith("~") or item.suffix in backup_suffixes):
+                    continue
+                try:
+                    st = item.stat()
+                except OSError:
+                    continue
+                if st.st_mtime > cutoff:
+                    continue
+                # st already carries the size for a regular file; asking
+                # get_size_fast would just stat it a second time.
+                size = st.st_size
+                if dry_run or safe_remove(item, use_trash=True)[0]:
+                    total_size += size
+                    total_items += 1
         except OSError:
             continue
 
     if total_items > 0:
-        status = "would be cleaned" if dry_run else "cleaned"
+        status = "would be trashed" if dry_run else "moved to trash"
         print(f"  {OK} Backup/swap files ({bytes_to_human(total_size)}) {status}")
         return total_size, total_items, 1
     return 0, 0, 0

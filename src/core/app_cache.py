@@ -2,7 +2,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from .browser_cache import CLEANABLE_APP_CACHE_DIR_NAMES
+from .browser_paths import CLEANABLE_APP_CACHE_DIR_NAMES
 from .desktop_app_cache import is_desktop_app_cache_path
 from .file_ops import has_valid_cachedir_tag
 from .whitelist import (

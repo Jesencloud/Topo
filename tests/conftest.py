@@ -1,9 +1,40 @@
 import os
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def no_real_sudo(monkeypatch):
+    """Turn a test that reaches real sudo into a failure instead of a prompt.
+
+    Nothing in the suite is meant to run a privileged command: the sudo-related
+    tests all assert on the argv that ``run_command`` would build. A test that
+    slips through and executes it does two things silently. sudo reads the
+    password from /dev/tty rather than stdin, so pytest's capture does not stop
+    it -- the run simply sits there until a human types something. And if one
+    does, the command lands on the real machine, not on the temporary home.
+
+    Which branch a cleaner takes depends on what is installed, so this has to be
+    a runtime guard rather than a grep: a call that is unreachable here can be
+    live on a machine that has flatpak, snap or docker.
+    """
+    real_run = subprocess.run
+
+    def guarded(args, *rest, **kwargs):
+        argv = list(args) if isinstance(args, (list, tuple)) else [args]
+        if argv and Path(str(argv[0])).name == "sudo":
+            raise AssertionError(
+                f"test executed real sudo: {argv!r}\n"
+                "Patch run_command (or the caller) instead -- this would ask the "
+                "developer for a password and then act on their machine."
+            )
+        return real_run(args, *rest, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", guarded)
 
 
 @pytest.fixture

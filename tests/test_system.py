@@ -21,7 +21,28 @@ def test_run_command_success_result(mock_run):
         text=True,
         check=False,
         timeout=5,
+        env=None,
     )
+
+
+@patch("subprocess.run")
+def test_run_command_overlays_env_instead_of_replacing_it(mock_run, monkeypatch):
+    """An env override is layered onto the inherited one.
+
+    Replacing the environment outright would strip PATH, HOME and DISPLAY, which
+    the tools being called need; the override only has to win where it overlaps.
+    """
+    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.setenv("LC_ALL", "zh_CN.UTF-8")
+
+    run_command(["snap", "list"], env=system.C_LOCALE_ENV)
+
+    child_env = mock_run.call_args.kwargs["env"]
+    assert child_env["PATH"] == "/usr/bin"
+    assert child_env["LC_ALL"] == "C"
+    assert child_env["LANGUAGE"] == "C"
+    assert child_env["LANG"] == "C"
 
 
 @patch("subprocess.run")

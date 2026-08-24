@@ -12,6 +12,7 @@ from src.clean.system import (
     clean_system_data,
     clean_zombies,
 )
+from src.core.system import C_LOCALE_ENV
 
 
 def test_package_cache_paths_cover_supported_managers(tmp_path, monkeypatch):
@@ -45,7 +46,9 @@ def test_clean_orphaned_packages_fedora(mock_get_os_id, mock_run, mock_which):
     assert s > 0
     assert i > 0
     assert c == 1
-    mock_run.assert_called_with(["dnf", "autoremove", "-y"], use_sudo=True, capture=True)
+    mock_run.assert_called_with(
+        ["dnf", "autoremove", "-y"], use_sudo=True, capture=True, env=C_LOCALE_ENV
+    )
 
     s, i, c = clean_orphaned_packages(dry_run=True)
     assert c == 1
@@ -65,7 +68,9 @@ def test_clean_orphaned_packages_ubuntu(mock_get_os_id, mock_run, mock_which):
     assert s > 0
     assert i == 1
     assert c == 1
-    mock_run.assert_called_with(["apt-get", "autoremove", "-y"], use_sudo=True, capture=True)
+    mock_run.assert_called_with(
+        ["apt-get", "autoremove", "-y"], use_sudo=True, capture=True, env=C_LOCALE_ENV
+    )
 
 
 @patch("src.clean.system.run_command")
@@ -142,7 +147,9 @@ def test_clean_package_manager_fedora(mock_get_os_id, mock_run, mock_which):
     s, i, c = clean_package_manager(dry_run=False)
     assert i == 1
     assert c == 1
-    mock_run.assert_called_with(["dnf", "clean", "packages"], use_sudo=True, capture=True)
+    mock_run.assert_called_with(
+        ["dnf", "clean", "packages"], use_sudo=True, capture=True, env=C_LOCALE_ENV
+    )
 
     s, i, c = clean_package_manager(dry_run=True)
     assert c == 1
@@ -159,7 +166,7 @@ def test_clean_package_manager_ubuntu(mock_get_os_id, mock_run, mock_which):
     s, i, c = clean_package_manager(dry_run=False)
     assert i == 1
     assert c == 1
-    mock_run.assert_any_call(["apt-get", "clean"], use_sudo=True, capture=True)
+    mock_run.assert_any_call(["apt-get", "clean"], use_sudo=True, capture=True, env=C_LOCALE_ENV)
 
 
 @patch("shutil.which")
@@ -172,7 +179,9 @@ def test_clean_journal(mock_run, mock_which):
     assert s > 0
     assert i == 1
     assert c == 1
-    mock_run.assert_called_with(["journalctl", "--vacuum-size=1M"], use_sudo=True, capture=True)
+    mock_run.assert_called_with(
+        ["journalctl", "--vacuum-size=1M"], use_sudo=True, capture=True, env=C_LOCALE_ENV
+    )
 
     s, i, c = clean_journal(dry_run=True)
     assert c == 1
@@ -250,7 +259,9 @@ def test_package_manager_dnf5_measured_and_failed_paths():
         ) as run,
     ):
         assert clean_package_manager() == (80, 1, 1)
-        run.assert_called_once_with(["dnf5", "clean", "packages"], use_sudo=True, capture=True)
+        run.assert_called_once_with(
+            ["dnf5", "clean", "packages"], use_sudo=True, capture=True, env=C_LOCALE_ENV
+        )
     with (
         patch("src.clean.system.get_os_id", return_value="fedora"),
         patch("shutil.which", side_effect=lambda n: "/usr/bin/dnf" if n == "dnf" else None),

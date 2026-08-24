@@ -18,6 +18,7 @@ from .core.constants import (
 from .core.desktop_entry import get_desktop_exec_names, get_desktop_icon, get_desktop_name
 from .core.file_ops import (
     bytes_to_human,
+    comm_pattern,
     get_size_fast,
     parse_size_to_bytes,
     record_deletion_audit,
@@ -690,7 +691,11 @@ class UninstallManager:
             return []
         apps = []
         try:
-            res = system.run_command(["pacman", "-Qi"], capture=True, timeout=60)
+            # "Installed Size" is a translated field label with a localized
+            # number, so the C locale is required to read it back.
+            res = system.run_command(
+                ["pacman", "-Qi"], capture=True, timeout=60, env=system.C_LOCALE_ENV
+            )
             if res.ok:
                 package: dict[str, str] = {}
                 for line in [*res.stdout.splitlines(), ""]:
@@ -726,10 +731,13 @@ class UninstallManager:
             return []
         apps = []
         try:
+            # The size column is formatted for the locale ("1,2 GB" in de_DE),
+            # which parse_size_to_bytes cannot read.
             res = system.run_command(
                 ["flatpak", "list", "--app", "--columns=name,application,size,installation"],
                 capture=True,
                 timeout=60,
+                env=system.C_LOCALE_ENV,
             )
             if res.ok:
                 for line in res.stdout.splitlines():
@@ -1330,7 +1338,9 @@ class UninstallManager:
             is_running = False
             for proc in self._candidate_process_names(app, app_paths):
                 try:
-                    if system.run_command(["pgrep", "-x", proc], capture=True, timeout=5).ok:
+                    if system.run_command(
+                        ["pgrep", "-x", comm_pattern(proc)], capture=True, timeout=5
+                    ).ok:
                         is_running = True
                         break
                 except (OSError, subprocess.SubprocessError):
@@ -1356,12 +1366,15 @@ class UninstallManager:
                 with contextlib.suppress(OSError, subprocess.SubprocessError):
                     system.run_command(["flatpak", "kill", app["id"]], capture=True, timeout=20)
 
-            # 1. Graceful Kill (Batched)
+            # 1. Graceful Kill (Batched). Patterns go through comm_pattern so a
+            # long executable name still matches -- and still gets signalled.
             processes_to_kill = []
             for proc in all_process_names:
                 try:
-                    if system.run_command(["pgrep", "-x", proc], capture=True, timeout=5).ok:
-                        processes_to_kill.append(proc)
+                    if system.run_command(
+                        ["pgrep", "-x", comm_pattern(proc)], capture=True, timeout=5
+                    ).ok:
+                        processes_to_kill.append(comm_pattern(proc))
                 except (OSError, subprocess.SubprocessError):
                     continue
 

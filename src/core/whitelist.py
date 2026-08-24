@@ -3,7 +3,7 @@ import json
 import os
 from pathlib import Path
 
-from .browser_cache import (
+from .browser_paths import (
     BROWSER_FLATPAK_APP_IDS,
     BROWSER_PROFILE_PATHS,
     CLEANABLE_APP_CACHE_DIR_NAMES,

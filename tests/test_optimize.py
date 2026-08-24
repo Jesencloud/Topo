@@ -529,6 +529,12 @@ def test_run_system_systemd_reset_failed_uses_sudo_and_the_system_scope():
 
 
 def test_run_vacuum_all_skips_when_browser_is_running(test_env):
+    """The label list doubles as the record of which browsers are covered.
+
+    Both families are now taken from core.browser_paths rather than a private
+    table, so every browser protection and cache cleanup already know about is
+    vacuumed too -- a Zen Browser places.sqlite bloats exactly like Firefox's.
+    """
     with (
         patch("pathlib.Path.home", return_value=test_env),
         patch("src.optimize._is_any_process_running", return_value=True),
@@ -536,8 +542,9 @@ def test_run_vacuum_all_skips_when_browser_is_running(test_env):
         result = run_vacuum_all(dry_run=False)
 
     assert (
-        result == "Brave, Chrome, Chromium, Edge, Firefox, Vivaldi running; "
-        "database optimization skipped"
+        result == "Brave Browser, Chromium, Firefox, Floorp, Google Chrome, LibreWolf, "
+        "Microsoft Edge, Opera, Thorium, Vivaldi, Waterfox, Yandex Browser, Zen Browser "
+        "running; database optimization skipped"
     )
 
 
@@ -584,16 +591,50 @@ def test_vacuum_covers_flatpak_and_non_default_chromium_profiles(test_env):
 def test_every_browser_pattern_is_relative_and_wildcards_one_profile_level():
     """home.glob() rejects an absolute pattern, and "~" is not expanded by it.
 
-    Exactly one "*" per pattern: _profile_db_patterns() appends the profile
-    wildcard itself, so a root written with a trailing "*" produces
-    ".mozilla/firefox/*/*/places.sqlite" -- one level too deep, matching nothing
-    and failing silently, which is the same class of bug this table just fixed.
+    At most one "*" per pattern: the profile globs from core.browser_paths
+    already end at a single profile directory, so a root that carried its own
+    trailing "*" would produce ".mozilla/firefox/*/*/places.sqlite" -- one level
+    too deep, matching nothing and failing silently, which is the same class of
+    bug this table once fixed. Zero is legitimate for the one browser whose root
+    is its profile.
     """
     for _label, processes, patterns in optimize._BROWSER_DB_TARGETS:
         assert processes, _label
         for pattern in patterns:
             assert not pattern.startswith(("/", "~")), pattern
-            assert pattern.count("*") == 1, pattern
+            assert pattern.count("*") <= 1, pattern
+
+
+def test_vacuum_reaches_snap_and_non_firefox_gecko_profiles(test_env):
+    """The paths come from core.browser_paths, so both quirks are covered at once.
+
+    The chromium snap's user-data-dir is ~/snap/chromium/common/chromium, and
+    every Gecko browser except Firefox keeps its profiles directly under the
+    root instead of one level down under "firefox/".
+    """
+    _write_sqlite_db(test_env / "snap/chromium/common/chromium/Default/History")
+    _write_sqlite_db(test_env / ".zen/abc.default/places.sqlite")
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.optimize._is_any_process_running", return_value=False),
+    ):
+        assert run_vacuum_all(dry_run=True) == "Found 2 database(s) to optimize"
+
+
+def test_vacuum_reaches_a_browser_whose_root_is_its_profile(test_env):
+    """Opera's profile folder is ~/.config/opera itself, with no Default/ below.
+
+    Assuming the usual Chromium container layout for every Chromium build looks
+    one directory too deep and finds nothing, which is invisible in a size total.
+    """
+    _write_sqlite_db(test_env / ".config/opera/History")
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.optimize._is_any_process_running", return_value=False),
+    ):
+        assert run_vacuum_all(dry_run=True) == "Found 1 database(s) to optimize"
 
 
 def test_run_desktop_database_refresh_dry_run(test_env):
@@ -655,6 +696,22 @@ def test_opt_log_skipped_and_process_helpers(capsys):
         ),
     ):
         assert _is_any_process_running(["firefox", "chrome"]) is True
+
+
+def test_is_any_process_running_trims_to_the_kernel_comm_limit():
+    """Ubuntu's "chromium-browser" is 16 characters, one over what comm holds.
+
+    pgrep rejects a pattern that long instead of matching the truncated name, and
+    the non-zero exit read as "not running" -- which let a live Chromium's
+    databases be vacuumed underneath it.
+    """
+    with (
+        patch("src.optimize.shutil.which", return_value="/usr/bin/pgrep"),
+        patch("src.optimize.run_command", return_value=CommandResult(["pgrep"], 1)) as run,
+    ):
+        assert _is_any_process_running(["chromium-browser"]) is False
+
+    assert run.call_args.args[0] == ["pgrep", "-x", "chromium-browse"]
 
 
 def test_sqlite_detection_and_vacuum_skip_guards(tmp_path):

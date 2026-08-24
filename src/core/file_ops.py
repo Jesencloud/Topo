@@ -238,9 +238,27 @@ def register_cleaned_path(path: str | Path | None):
         CLEANED_PATHS.add(str(p))
 
 
+# The kernel stores a task's name in comm, which holds TASK_COMM_LEN (16) bytes
+# including the NUL, so anything the process was started as gets cut to 15
+# characters.
+_COMM_MAX_LEN = 15
+
+
+def comm_pattern(process_name: str) -> str:
+    """Return *process_name* cut to what ``pgrep -x`` and ``pkill -x`` can match.
+
+    Both match against the kernel's comm field, and procps-ng refuses a pattern
+    longer than that field can hold -- a warning on stderr and exit 1 -- rather
+    than matching the truncated name. Untruncated, every name over 15 characters
+    ("google-chrome-stable", "chromium-browser", "brave-browser-stable") reported
+    "not running" for a process that was running, and no signal ever reached it.
+    """
+    return process_name[:_COMM_MAX_LEN]
+
+
 def is_app_running(process_name: str) -> bool:
     """Check if an application is currently running."""
-    return run_command(["pgrep", "-x", process_name], capture=True, timeout=5).ok
+    return run_command(["pgrep", "-x", comm_pattern(process_name)], capture=True, timeout=5).ok
 
 
 def bytes_to_human(n_bytes: int) -> str:
@@ -477,6 +495,43 @@ def _get_path_stats(path: Path) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+def is_reclaimable_entry_type(mode: int) -> bool:
+    """Return True when a stat mode describes something worth deleting for space.
+
+    Sockets, FIFOs and device nodes hold no data, so removing one frees nothing
+    while breaking whatever process is on the other end. The case that actually
+    bites is /tmp: Debian and Ubuntu ship "use-ssh-agent" in
+    /etc/X11/Xsession.options, so the session's agent lives at
+    /tmp/ssh-XXXXXXXX/agent.PID, and a socket's mtime and atime never move after
+    it is bound -- which made every login older than the age threshold look like
+    abandoned junk. Regular files, directories and symlinks all stay in scope.
+    """
+    return not (
+        stat.S_ISSOCK(mode) or stat.S_ISFIFO(mode) or stat.S_ISBLK(mode) or stat.S_ISCHR(mode)
+    )
+
+
+def _holds_special_file(path: Path) -> bool:
+    """Return True when *path* directly contains a socket, FIFO or device node.
+
+    Skipping a socket while still deleting the directory it sits in unlinks the
+    socket anyway, so the entry-type rule needs this companion check on the
+    directory branch. /tmp/ssh-XXXXXXXX/agent.PID is exactly that shape: one
+    directory holding one socket whose timestamps never move once it is bound.
+    A directory that cannot be read is kept too -- deleting it blind is the one
+    outcome that cannot be undone.
+    """
+    try:
+        with os.scandir(path) as it:
+            for entry in it:
+                with contextlib.suppress(OSError):
+                    if not is_reclaimable_entry_type(entry.stat(follow_symlinks=False).st_mode):
+                        return True
+    except OSError:
+        return True
+    return False
+
+
 def clean_path_by_age(path: str | Path, days: int, dry_run: bool = False) -> tuple[int, int]:
     """Cleans items within a path that haven't been touched in 'days' days."""
     path = Path(path).expanduser()
@@ -499,8 +554,12 @@ def clean_path_by_age(path: str | Path, days: int, dry_run: bool = False) -> tup
                     continue
                 if st.st_atime >= cutoff or st.st_mtime >= cutoff:
                     continue
+                if not is_reclaimable_entry_type(st.st_mode):
+                    continue
                 item = Path(entry.path)
                 if entry.is_dir(follow_symlinks=False):
+                    if _holds_special_file(item):
+                        continue
                     stats = _get_path_stats(item)
                     if stats is not None:
                         if float(stats.get("newest_activity_secs", 0)) >= cutoff:
