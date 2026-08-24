@@ -2,7 +2,7 @@ import inspect
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 
@@ -10,12 +10,17 @@ from src import optimize
 from src.core.file_ops import TRASH_UNAVAILABLE_REASON
 from src.core.system import CommandResult
 from src.optimize import (
+    _REPO_REFRESH_COMMANDS,
     OptimizationRegistry,
     _extract_service_exec_targets,
     _is_any_process_running,
     _is_sqlite_database,
     _points_at_transient_mount,
     _service_exec_target_exists,
+    _swap_is_zram_backed,
+    _systemd_timer_enabled,
+    _updatedb_is_scheduled,
+    _which_admin_tool,
     opt_log,
     optimize_system,
     run_autostart_cleanup,
@@ -25,17 +30,19 @@ from src.optimize import (
     run_fccache,
     run_flatpak_repair,
     run_fstrim,
+    run_glib_schema_compile,
+    run_icon_cache_refresh,
     run_journal_optimization,
     run_ldconfig,
     run_locale_gen,
+    run_locate_db_refresh,
     run_man_db_refresh,
     run_mime_database_refresh,
     run_package_repo_refresh,
     run_swap_management,
-    run_sysctl_optimize,
+    run_system_systemd_reset_failed,
     run_systemd_user_service_cleanup,
     run_tmpfiles_cleanup,
-    run_tracker_miner_reset,
     run_user_systemd_reset_failed,
     run_vacuum_all,
     vacuum_single_db,
@@ -401,17 +408,6 @@ def test_run_broken_symlink_cleanup_skips_user_dirs_unless_opted_in(test_env, mo
     assert broken_link.is_symlink()
 
 
-def test_run_sysctl_optimize():
-    with (
-        patch("src.optimize.shutil.which", return_value="/usr/sbin/sysctl"),
-        patch("src.optimize.has_sudo", return_value=True),
-        patch("src.optimize.run_command") as mock_run,
-    ):
-        mock_run.return_value = CommandResult(["sysctl"], 0)
-        res = run_sysctl_optimize(dry_run=False)
-        assert res == "Kernel memory & cache parameters tuned (sysctl)"
-
-
 def test_run_tmpfiles_cleanup():
     with (
         patch("src.optimize.shutil.which", return_value="/usr/bin/systemd-tmpfiles"),
@@ -489,6 +485,49 @@ def test_run_user_systemd_reset_failed_skips_when_no_failed_units():
     assert mock_run.call_count == 1
 
 
+def test_run_system_systemd_reset_failed_skips_without_sudo():
+    with (
+        patch("src.optimize.has_sudo", return_value=False),
+        patch("src.optimize.run_command") as mock_run,
+    ):
+        assert run_system_systemd_reset_failed(dry_run=False) is None
+
+    mock_run.assert_not_called()
+
+
+def test_run_system_systemd_reset_failed_uses_sudo_and_the_system_scope():
+    list_result = CommandResult(
+        ["systemctl"],
+        0,
+        stdout="nfs-mount.service loaded failed failed NFS mount\n",
+    )
+
+    with (
+        patch("src.optimize.has_sudo", return_value=True),
+        patch("src.optimize.shutil.which", return_value="/usr/bin/systemctl"),
+        patch(
+            "src.optimize.run_command",
+            side_effect=[list_result, CommandResult(["systemctl"], 0)],
+        ) as mock_run,
+    ):
+        result = run_system_systemd_reset_failed(dry_run=False)
+
+    assert result == "Reset 1 failed system systemd unit state(s)"
+    # No --user anywhere: the system manager is the default scope, and the reset
+    # is the only half that needs privileges -- listing must not ask for them.
+    assert mock_run.call_args_list[0].args[0] == [
+        "systemctl",
+        "list-units",
+        "--state=failed",
+        "--no-legend",
+        "--no-pager",
+        "--plain",
+    ]
+    assert mock_run.call_args_list[0].kwargs.get("use_sudo") is not True
+    assert mock_run.call_args_list[1].args[0] == ["systemctl", "reset-failed"]
+    assert mock_run.call_args_list[1].kwargs["use_sudo"] is True
+
+
 def test_run_vacuum_all_skips_when_browser_is_running(test_env):
     with (
         patch("pathlib.Path.home", return_value=test_env),
@@ -496,7 +535,65 @@ def test_run_vacuum_all_skips_when_browser_is_running(test_env):
     ):
         result = run_vacuum_all(dry_run=False)
 
-    assert result == "Brave, Chrome, Edge, Firefox running; database optimization skipped"
+    assert (
+        result == "Brave, Chrome, Chromium, Edge, Firefox, Vivaldi running; "
+        "database optimization skipped"
+    )
+
+
+def _write_sqlite_db(path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"SQLite format 3\x00" + b"\x00" * 64)
+    return path
+
+
+def test_vacuum_finds_databases_behind_a_wildcard_profile_directory(test_env):
+    """A wildcard mid-path used to match nothing, so Firefox was never vacuumed.
+
+    The old resolver took Path(pattern).parent and required it to exist, which
+    for "~/.mozilla/firefox/*/places.sqlite" asked about a directory literally
+    named "*". It never existed, so both Firefox entries were dead weight.
+    """
+    profile = test_env / ".mozilla/firefox/abc123.default-release"
+    _write_sqlite_db(profile / "places.sqlite")
+    _write_sqlite_db(profile / "favicons.sqlite")
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.optimize._is_any_process_running", return_value=False),
+    ):
+        assert run_vacuum_all(dry_run=True) == "Found 2 database(s) to optimize"
+
+
+def test_vacuum_covers_flatpak_and_non_default_chromium_profiles(test_env):
+    """Every profile dir counts, not just Default, and Flatpak layouts too."""
+    _write_sqlite_db(test_env / ".config/google-chrome/Default/History")
+    _write_sqlite_db(test_env / ".config/google-chrome/Profile 1/History")
+    _write_sqlite_db(test_env / ".config/google-chrome/Default/Network/Cookies")
+    _write_sqlite_db(
+        test_env / ".var/app/org.mozilla.firefox/.mozilla/firefox/x.default/places.sqlite"
+    )
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.optimize._is_any_process_running", return_value=False),
+    ):
+        assert run_vacuum_all(dry_run=True) == "Found 4 database(s) to optimize"
+
+
+def test_every_browser_pattern_is_relative_and_wildcards_one_profile_level():
+    """home.glob() rejects an absolute pattern, and "~" is not expanded by it.
+
+    Exactly one "*" per pattern: _profile_db_patterns() appends the profile
+    wildcard itself, so a root written with a trailing "*" produces
+    ".mozilla/firefox/*/*/places.sqlite" -- one level too deep, matching nothing
+    and failing silently, which is the same class of bug this table just fixed.
+    """
+    for _label, processes, patterns in optimize._BROWSER_DB_TARGETS:
+        assert processes, _label
+        for pattern in patterns:
+            assert not pattern.startswith(("/", "~")), pattern
+            assert pattern.count("*") == 1, pattern
 
 
 def test_run_desktop_database_refresh_dry_run(test_env):
@@ -588,7 +685,6 @@ def test_sqlite_detection_and_vacuum_skip_guards(tmp_path):
     ("func", "tool", "dry_text", "command"),
     [
         (run_fstrim, "fstrim", "SSD partitions would be trimmed", ["fstrim", "-av"]),
-        (run_fccache, "fc-cache", "System font cache would be refreshed", ["fc-cache"]),
         (run_ldconfig, "ldconfig", "Dynamic linker cache would be updated", ["ldconfig"]),
         (
             run_locale_gen,
@@ -607,7 +703,12 @@ def test_sqlite_detection_and_vacuum_skip_guards(tmp_path):
 def test_simple_optimization_tasks_support_missing_dry_run_success_and_failure(
     func, tool, dry_text, command
 ):
-    with patch("src.optimize.shutil.which", return_value=None):
+    # Both lookups: the sbin-aware one would otherwise find the real
+    # /usr/sbin/fstrim on the host and the "not installed" branch would never run.
+    with (
+        patch("src.optimize.shutil.which", return_value=None),
+        patch("src.optimize._which_admin_tool", return_value=None),
+    ):
         assert func() is None
     with patch("src.optimize.shutil.which", return_value=f"/usr/bin/{tool}"):
         assert dry_text in func(dry_run=True)
@@ -624,14 +725,7 @@ def test_simple_optimization_tasks_support_missing_dry_run_success_and_failure(
         assert func() is None
 
 
-def test_sysctl_tmpfiles_and_flatpak_branches():
-    with patch("src.optimize.shutil.which", return_value=None):
-        assert run_sysctl_optimize() is None
-    with (
-        patch("src.optimize.shutil.which", return_value="/usr/bin/sysctl"),
-        patch("src.optimize.has_sudo", return_value=False),
-    ):
-        assert run_sysctl_optimize() is None
+def test_tmpfiles_and_flatpak_branches():
     with (
         patch("src.optimize.shutil.which", return_value="/usr/bin/systemd-tmpfiles"),
         patch("src.optimize.run_command", return_value=CommandResult(["tmpfiles"], 1)),
@@ -701,25 +795,19 @@ def test_service_helpers_and_database_refresh(tmp_path):
         assert optimize.run_desktop_database_refresh() is None
 
 
-def test_swap_journal_tracker_repo_and_coredump_error_paths(tmp_path):
-    with patch("src.optimize.shutil.which", return_value=None):
+def test_swap_journal_repo_and_coredump_error_paths(tmp_path):
+    with (
+        patch("src.optimize.shutil.which", return_value=None),
+        patch("src.optimize._which_admin_tool", return_value=None),
+    ):
         assert run_swap_management() is None
         assert run_journal_optimization() is None
-        assert run_tracker_miner_reset() is None
         assert run_package_repo_refresh() is None
     with (
         patch("src.optimize.shutil.which", return_value="/usr/bin/journalctl"),
         patch("src.optimize.run_command", return_value=CommandResult(["journalctl"], 0, stdout="")),
     ):
         assert run_journal_optimization() == "Journal already optimized (under 3 days)"
-    with (
-        patch(
-            "src.optimize.shutil.which",
-            side_effect=lambda n: "/usr/bin/tracker" if n == "tracker" else None,
-        ),
-        patch("src.optimize.run_command", return_value=CommandResult(["tracker"], 1)),
-    ):
-        assert run_tracker_miner_reset() is None
     with (
         patch(
             "src.optimize.shutil.which",
@@ -730,3 +818,351 @@ def test_swap_journal_tracker_repo_and_coredump_error_paths(tmp_path):
         assert run_package_repo_refresh() == "Software repository index refreshed"
     with patch("src.optimize.COREDUMP_DIR", tmp_path / "missing"):
         assert run_coredump_cleanup() is None
+
+
+# Enough free RAM to clear the _MIN_RAM_SWAP_RATIO gate, so anything that stops
+# the reset in these tests is the zram guard and not the RAM arithmetic.
+_MEMINFO_RAM_RICH = "MemAvailable: 16000000 kB\nSwapTotal: 8000000 kB\nSwapFree: 2000000 kB\n"
+_SWAPS_HEADER = "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n"
+
+
+def _swaps_table(tmp_path, device):
+    table = tmp_path / "swaps"
+    table.write_text(f"{_SWAPS_HEADER}{device}\tpartition\t8388604\t\t524288\t\t100\n")
+    return table
+
+
+def test_zram_backed_swap_is_never_reset(tmp_path):
+    """swapoff -a would strand a zram box with no swap until it reboots.
+
+    swapon -a only re-enables /etc/fstab entries, and zram swap has none -- it is
+    brought up by systemd-zram-setup@zramN.service. The dry run must stay quiet
+    too, or it promises a reset that will not happen.
+    """
+    run_command = MagicMock()
+    with (
+        patch("src.optimize.shutil.which", return_value="/usr/sbin/swapoff"),
+        patch("src.optimize._SWAPS_TABLE", _swaps_table(tmp_path, "/dev/zram0")),
+        patch("builtins.open", mock_open(read_data=_MEMINFO_RAM_RICH)),
+        patch("src.optimize.run_command", run_command),
+    ):
+        assert run_swap_management() is None
+        assert run_swap_management(dry_run=True) is None
+    run_command.assert_not_called()
+
+
+def test_fstab_backed_swap_is_still_reset(tmp_path):
+    """The guard must not disable the task on machines swapon -a can restore."""
+    with (
+        patch("src.optimize.shutil.which", return_value="/usr/sbin/swapoff"),
+        patch("src.optimize._SWAPS_TABLE", _swaps_table(tmp_path, "/dev/sda2")),
+        patch("builtins.open", mock_open(read_data=_MEMINFO_RAM_RICH)),
+        patch("src.optimize.run_command", return_value=CommandResult(["swapoff"], 0)),
+    ):
+        assert run_swap_management(dry_run=True).startswith("Swap would be reset")
+        assert run_swap_management().startswith("Swap reset successful")
+
+
+def test_unreadable_swap_table_counts_as_unsafe(tmp_path):
+    """No proof the reset is reversible is not the same as proof that it is."""
+    with patch("src.optimize._SWAPS_TABLE", tmp_path / "missing"):
+        assert _swap_is_zram_backed() is True
+
+
+def test_glib_schema_compile_follows_the_shared_refresh_helper(test_env):
+    schemas = test_env / ".local/share/glib-2.0/schemas"
+    with patch("pathlib.Path.home", return_value=test_env):
+        assert run_glib_schema_compile() is None  # directory absent
+    schemas.mkdir(parents=True)
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.optimize.shutil.which", return_value="/usr/bin/glib-compile-schemas"),
+        patch("src.optimize.run_command", return_value=CommandResult(["glib"], 0)) as run,
+    ):
+        assert (
+            run_glib_schema_compile(dry_run=True)
+            == "User GSettings schema cache would be refreshed"
+        )
+        assert run_glib_schema_compile() == "User GSettings schema cache refreshed"
+        assert run.call_args.args[0] == ["glib-compile-schemas", str(schemas)]
+
+
+def test_icon_cache_refresh_targets_theme_directories_not_the_root(test_env):
+    """gtk-update-icon-cache exits non-zero on a directory without index.theme.
+
+    So the themes are enumerated by that file: a bare ~/.local/share/icons, or a
+    subdirectory holding loose icons, must not be handed to the tool.
+    """
+    icons = test_env / ".local/share/icons"
+    theme = icons / "MyTheme"
+    theme.mkdir(parents=True)
+    (theme / "index.theme").write_text("[Icon Theme]\nName=MyTheme\n")
+    (icons / "loose").mkdir()
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.optimize.shutil.which", return_value="/usr/bin/gtk-update-icon-cache"),
+        patch("src.optimize.run_command", return_value=CommandResult(["gtk"], 0)) as run,
+    ):
+        assert run_icon_cache_refresh(dry_run=True) == "1 user icon theme cache(s) would be rebuilt"
+        assert run_icon_cache_refresh() == "Rebuilt 1 user icon theme cache(s)"
+        # -q and -f only: GTK3 reads -t as --ignore-theme-index, GTK4 as --index-only.
+        assert run.call_args.args[0] == ["gtk-update-icon-cache", "-q", "-f", str(theme)]
+
+
+def test_icon_cache_refresh_error_paths(test_env):
+    with patch("src.optimize.shutil.which", return_value=None):
+        assert run_icon_cache_refresh() is None
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.optimize.shutil.which", return_value="/usr/bin/gtk-update-icon-cache"),
+    ):
+        assert run_icon_cache_refresh() is None  # no themes installed
+    theme = test_env / ".local/share/icons/Broken"
+    theme.mkdir(parents=True)
+    (theme / "index.theme").write_text("[Icon Theme]\n")
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.optimize.shutil.which", return_value="/usr/bin/gtk-update-icon-cache"),
+        patch("src.optimize.run_command", return_value=CommandResult(["gtk"], 1)),
+    ):
+        assert run_icon_cache_refresh() is None
+
+
+def test_font_cache_refresh_covers_the_user_cache_before_the_system_one():
+    """The user cache is the one that goes stale, so it must not need sudo.
+
+    Plain ``fc-cache`` writes ~/.cache/fontconfig only; /var/cache/fontconfig is a
+    second, privileged pass. A machine without sudo still gets the first.
+    """
+    with patch("src.optimize.shutil.which", return_value=None):
+        assert run_fccache() is None
+    with patch("src.optimize.shutil.which", return_value="/usr/bin/fc-cache"):
+        assert run_fccache(dry_run=True) == "Font caches would be refreshed (fc-cache)"
+    with (
+        patch("src.optimize.shutil.which", return_value="/usr/bin/fc-cache"),
+        patch("src.optimize.has_sudo", return_value=False),
+        patch("src.optimize.run_command", return_value=CommandResult(["fc-cache"], 0)) as run,
+    ):
+        assert run_fccache() == "User font cache refreshed (fc-cache)"
+        assert run.call_count == 1
+        assert run.call_args.kwargs.get("use_sudo") is not True
+    with (
+        patch("src.optimize.shutil.which", return_value="/usr/bin/fc-cache"),
+        patch("src.optimize.has_sudo", return_value=True),
+        patch("src.optimize.run_command", return_value=CommandResult(["fc-cache"], 0)) as run,
+    ):
+        assert run_fccache() == "User & system font caches refreshed (fc-cache)"
+        assert run.call_args_list[1].kwargs["use_sudo"] is True
+    # A failed system pass still leaves the user cache rebuilt, so the task
+    # reports what it actually did rather than nothing.
+    with (
+        patch("src.optimize.shutil.which", return_value="/usr/bin/fc-cache"),
+        patch("src.optimize.has_sudo", return_value=True),
+        patch(
+            "src.optimize.run_command",
+            side_effect=[CommandResult(["fc-cache"], 0), CommandResult(["fc-cache"], 1)],
+        ),
+    ):
+        assert run_fccache() == "User font cache refreshed (fc-cache)"
+    with (
+        patch("src.optimize.shutil.which", return_value="/usr/bin/fc-cache"),
+        patch("src.optimize.run_command", return_value=CommandResult(["fc-cache"], 1)),
+    ):
+        assert run_fccache() is None
+
+
+def test_systemd_timer_enabled_reads_the_verdict_lines_not_the_exit_code():
+    """is-enabled exits non-zero as soon as one listed unit is not enabled.
+
+    The list deliberately names units that only some distros ship, so a non-zero
+    status is the normal case and the answer has to come from stdout.
+    """
+    with patch("src.optimize.shutil.which", return_value=None):
+        assert _systemd_timer_enabled(("a.timer",)) is False
+    with (
+        patch("src.optimize.shutil.which", return_value="/usr/bin/systemctl"),
+        patch(
+            "src.optimize.run_command",
+            return_value=CommandResult(["systemctl"], 1, stdout="not-found\nenabled\n"),
+        ),
+    ):
+        assert _systemd_timer_enabled(("mlocate-updatedb.timer", "plocate-updatedb.timer")) is True
+    with (
+        patch("src.optimize.shutil.which", return_value="/usr/bin/systemctl"),
+        patch(
+            "src.optimize.run_command",
+            return_value=CommandResult(["systemctl"], 1, stdout="not-found\nstatic\n"),
+        ),
+    ):
+        assert _systemd_timer_enabled(("a.timer", "b.timer")) is False
+
+
+def test_locate_db_refresh_defers_to_an_enabled_distro_timer():
+    """updatedb walks every filesystem; doing that twice a day buys nothing."""
+    with (
+        patch("src.optimize.shutil.which", return_value=None),
+        patch("src.optimize._which_admin_tool", return_value=None),
+    ):
+        assert run_locate_db_refresh() is None
+    with (
+        patch("src.optimize._which_admin_tool", return_value="/usr/sbin/updatedb"),
+        patch("src.optimize.has_sudo", return_value=False),
+        patch("src.optimize.run_command") as run,
+    ):
+        assert run_locate_db_refresh() is None
+        run.assert_not_called()
+    with (
+        patch("src.optimize._which_admin_tool", return_value="/usr/sbin/updatedb"),
+        patch("src.optimize.has_sudo", return_value=True),
+        patch("src.optimize._updatedb_is_scheduled", return_value=True),
+        patch("src.optimize.run_command") as run,
+    ):
+        assert run_locate_db_refresh() is None
+        assert run_locate_db_refresh(dry_run=True) is None
+        run.assert_not_called()
+
+
+def test_updatedb_schedule_check_covers_cron_as_well_as_timers(tmp_path):
+    """Debian schedules the same rebuild with cron, sometimes only with cron.
+
+    plocate on Debian 13 ships /etc/cron.daily/plocate beside its timer, and
+    mlocate on older releases ships nothing but the cron entry -- a systemd-only
+    check reads both as "nobody maintains this index".
+    """
+    cron_job = tmp_path / "plocate"
+    with (
+        patch("src.optimize._systemd_timer_enabled", return_value=False),
+        patch("src.optimize._UPDATEDB_CRON_JOBS", (cron_job,)),
+    ):
+        assert _updatedb_is_scheduled() is False
+        cron_job.write_text("#!/bin/sh\n")
+        # run-parts skips a non-executable entry, so a disabled job is not a job.
+        cron_job.chmod(0o644)
+        assert _updatedb_is_scheduled() is False
+        cron_job.chmod(0o755)
+        assert _updatedb_is_scheduled() is True
+    # An enabled timer short-circuits before any file is touched.
+    with (
+        patch("src.optimize._systemd_timer_enabled", return_value=True),
+        patch("src.optimize._UPDATEDB_CRON_JOBS", ()),
+    ):
+        assert _updatedb_is_scheduled() is True
+
+
+def test_locate_db_refresh_runs_when_nothing_else_maintains_the_index():
+    with (
+        patch("src.optimize._which_admin_tool", return_value="/usr/sbin/updatedb"),
+        patch("src.optimize.has_sudo", return_value=True),
+        patch("src.optimize._updatedb_is_scheduled", return_value=False),
+        patch("src.optimize.run_command", return_value=CommandResult(["updatedb"], 0)) as run,
+    ):
+        assert run_locate_db_refresh(dry_run=True) == "locate database would be rebuilt (updatedb)"
+        assert run_locate_db_refresh() == "locate database rebuilt (updatedb)"
+        assert run.call_args.args[0] == ["updatedb"]
+        assert run.call_args.kwargs["use_sudo"] is True
+        # A full filesystem walk must not be cut off by the default ceiling.
+        assert run.call_args.kwargs["timeout"] == optimize.UPDATEDB_TIMEOUT
+    with (
+        patch("src.optimize._which_admin_tool", return_value="/usr/sbin/updatedb"),
+        patch("src.optimize.has_sudo", return_value=True),
+        patch("src.optimize._updatedb_is_scheduled", return_value=False),
+        patch("src.optimize.run_command", return_value=CommandResult(["updatedb"], 1)),
+    ):
+        assert run_locate_db_refresh() is None
+
+
+def test_repo_refresh_prefers_the_native_package_manager_over_packagekit():
+    """pkcon only proxies the backend below it, and hides its errors one layer up."""
+    order = [tool for tool, _ in _REPO_REFRESH_COMMANDS]
+    assert order.index("dnf5") < order.index("dnf") < order.index("pkcon")
+    assert order.index("zypper") < order.index("pkcon")
+    assert order.index("pacman") < order.index("pkcon")
+    assert order.index("apt-get") < order.index("pkcon")
+    assert order.index("pkcon") < order.index("apt-file")
+    # -Sy without a matching upgrade is what leaves an Arch box half-upgraded;
+    # only the files database may be synced on its own.
+    pacman = next(cmd for tool, cmd in _REPO_REFRESH_COMMANDS if tool == "pacman")
+    assert "-Sy" not in pacman
+    assert "-Fy" in pacman
+    # apt, not apt-get, is the one that warns its CLI is unfit for scripts.
+    apt = next(cmd for tool, cmd in _REPO_REFRESH_COMMANDS if tool == "apt-get")
+    assert apt[:2] == ["apt-get", "update"]
+
+    with (
+        patch(
+            "src.optimize.shutil.which",
+            side_effect=lambda n: f"/usr/bin/{n}" if n in {"dnf", "pkcon"} else None,
+        ),
+        patch("src.optimize.run_command", return_value=CommandResult(["dnf"], 0)) as run,
+    ):
+        assert (
+            run_package_repo_refresh(dry_run=True) == "Software repository index would be refreshed"
+        )
+        assert run_package_repo_refresh() == "Software repository index refreshed"
+        assert run.call_args.args[0] == ["dnf", "makecache"]
+        assert run.call_args.kwargs["timeout"] == optimize.REPO_REFRESH_TIMEOUT
+    with (
+        patch(
+            "src.optimize.shutil.which",
+            side_effect=lambda n: "/usr/bin/dnf5" if n == "dnf5" else None,
+        ),
+        patch("src.optimize.run_command", return_value=CommandResult(["dnf5"], 1)),
+    ):
+        assert run_package_repo_refresh() is None
+
+
+def test_repo_refresh_reaches_apt_on_debian_and_ubuntu():
+    """Without apt in the table, a deb machine falls through to nothing.
+
+    pkcon needs PackageKit installed and apt-file is rarely present, so the task
+    was a no-op on the whole Debian family while every other package manager got
+    a native command.
+    """
+    with (
+        patch(
+            "src.optimize.shutil.which",
+            side_effect=lambda n: f"/usr/bin/{n}" if n in {"apt-get", "apt-file"} else None,
+        ),
+        patch("src.optimize.run_command", return_value=CommandResult(["apt-get"], 0)) as run,
+    ):
+        assert run_package_repo_refresh() == "Software repository index refreshed"
+        assert run.call_args.args[0][:2] == ["apt-get", "update"]
+        assert run.call_args.kwargs["use_sudo"] is True
+
+
+def test_which_admin_tool_falls_back_to_the_sbin_directories(tmp_path):
+    """Debian leaves /usr/sbin out of a normal user's PATH, so which() misses.
+
+    The commands themselves are fine -- they run under sudo, whose secure_path
+    covers sbin -- but the lookup gating them would report fstrim, swapoff,
+    ldconfig, locale-gen and updatedb as not installed and skip all five.
+    """
+    with patch("src.optimize.shutil.which", return_value="/usr/bin/fstrim"):
+        assert _which_admin_tool("fstrim") == "/usr/bin/fstrim"
+
+    sbin = tmp_path / "sbin"
+    sbin.mkdir()
+    tool = sbin / "fstrim"
+    with (
+        patch("src.optimize.shutil.which", return_value=None),
+        patch("src.optimize._SBIN_DIRS", (str(sbin),)),
+    ):
+        assert _which_admin_tool("fstrim") is None  # nothing there yet
+        tool.write_text("#!/bin/sh\n")
+        tool.chmod(0o644)
+        assert _which_admin_tool("fstrim") is None  # present but not executable
+        tool.chmod(0o755)
+        assert _which_admin_tool("fstrim") == str(tool)
+
+
+def test_chromium_snap_profiles_are_covered(test_env):
+    """Ubuntu ships chromium only as a snap, so this is its default layout."""
+    db = _write_sqlite_db(test_env / "snap/chromium/common/chromium/Default/History")
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.optimize._is_any_process_running", return_value=False),
+    ):
+        assert run_vacuum_all(dry_run=True) == "Found 1 database(s) to optimize"
+    assert db.exists()

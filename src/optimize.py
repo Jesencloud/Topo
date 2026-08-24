@@ -1,5 +1,6 @@
 import contextlib
 import os
+import re
 import shlex
 import shutil
 import sqlite3
@@ -42,7 +43,38 @@ SQLITE_MIN_FREE_RATIO = 0.10
 SQLITE_VACUUM_TIMEOUT = 20
 COREDUMP_DIR = Path("/var/lib/systemd/coredump")
 _MIN_RAM_SWAP_RATIO = 2
+_SWAPS_TABLE = Path("/proc/swaps")
+_ZRAM_DEVICE_RE = re.compile(r"^zram\d+$")
+REPO_REFRESH_TIMEOUT = 120
+UPDATEDB_TIMEOUT = 600
 OPTIMIZATION_MAX_WORKERS = 4
+
+# Debian keeps /sbin and /usr/sbin out of a non-root PATH on purpose, and Debian
+# 13 still ships them unmerged -- its release notes call merging them by hand
+# unsupported. Fedora folded them into /usr/bin, and Ubuntu lists them for every
+# user, so shutil.which() alone answers "is fstrim installed?" correctly on those
+# two and with a flat False on Debian for every tool that lives there.
+_SBIN_DIRS = ("/usr/local/sbin", "/usr/sbin", "/sbin")
+
+
+def _which_admin_tool(name: str) -> str | None:
+    """Locate an administrative tool that a user's PATH may not cover.
+
+    Only the lookup needs this: every caller runs the command through
+    run_command(..., use_sudo=True), and sudo's secure_path already includes the
+    sbin directories. Without the fallback the task does not fail, it reports the
+    tool as absent and skips -- which is why this went unnoticed.
+    """
+    found = shutil.which(name)
+    if found:
+        return found
+    for directory in _SBIN_DIRS:
+        candidate = Path(directory) / name
+        # is_file() follows symlinks, so this still resolves on a merged layout
+        # where /usr/sbin points into /usr/bin.
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
 
 
 def opt_log(message, success=True, skipped=False):
@@ -140,38 +172,123 @@ def vacuum_single_db(db_file):
         return 0
 
 
+def _profile_db_patterns(roots: tuple[str, ...], names: tuple[str, ...]) -> tuple[str, ...]:
+    """Cross a browser's profile roots with its database names.
+
+    Both browser families keep one directory per profile under a root, so the
+    patterns are a product rather than a list: writing them out by hand is where
+    a profile root silently loses half its databases.
+    """
+    return tuple(f"{root}/*/{name}" for root in roots for name in names)
+
+
+# The biggest ones first: favicons.sqlite and places.sqlite routinely outgrow
+# everything else in a profile, and webappsstore.sqlite grows with localStorage.
+_FIREFOX_DB_NAMES = (
+    "places.sqlite",
+    "favicons.sqlite",
+    "cookies.sqlite",
+    "webappsstore.sqlite",
+    "formhistory.sqlite",
+    "storage.sqlite",
+)
+
+# Chromium's databases carry no extension, which is why _is_sqlite_database()
+# checks the file header rather than trusting the name.
+_CHROMIUM_DB_NAMES = (
+    "History",
+    "Favicons",
+    "Web Data",
+    "Top Sites",
+    "Shortcuts",
+    "Network/Cookies",
+)
+
+# (app label, process names, home-relative glob patterns). Native, Flatpak and
+# Snap layouts are listed side by side because one machine can hold more than
+# one of them, and a wildcard may appear in any component -- the patterns are
+# matched with Path.home().glob(). The label is what a "skipped running app"
+# message names, so the same browser installed twice stays one label.
+_BROWSER_DB_TARGETS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
+    (
+        "Firefox",
+        ("firefox", "firefox-bin", "firefox-esr"),
+        _profile_db_patterns(
+            (
+                ".mozilla/firefox",
+                ".var/app/org.mozilla.firefox/.mozilla/firefox",
+                "snap/firefox/common/.mozilla/firefox",
+            ),
+            _FIREFOX_DB_NAMES,
+        ),
+    ),
+    (
+        "Chrome",
+        ("chrome", "google-chrome"),
+        _profile_db_patterns(
+            (".config/google-chrome", ".var/app/com.google.Chrome/config/google-chrome"),
+            _CHROMIUM_DB_NAMES,
+        ),
+    ),
+    (
+        "Chromium",
+        ("chromium", "chromium-browser"),
+        _profile_db_patterns(
+            (
+                ".config/chromium",
+                ".var/app/org.chromium.Chromium/config/chromium",
+                # Ubuntu ships chromium only as a snap, so this is the default
+                # layout there rather than an alternative one.
+                "snap/chromium/common/chromium",
+            ),
+            _CHROMIUM_DB_NAMES,
+        ),
+    ),
+    (
+        "Brave",
+        ("brave", "brave-browser"),
+        _profile_db_patterns(
+            (
+                ".config/BraveSoftware/Brave-Browser",
+                ".var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser",
+            ),
+            _CHROMIUM_DB_NAMES,
+        ),
+    ),
+    (
+        "Edge",
+        ("msedge", "microsoft-edge"),
+        _profile_db_patterns((".config/microsoft-edge",), _CHROMIUM_DB_NAMES),
+    ),
+    (
+        "Vivaldi",
+        ("vivaldi-bin", "vivaldi"),
+        _profile_db_patterns((".config/vivaldi",), _CHROMIUM_DB_NAMES),
+    ),
+)
+
+
 @register_optimization_task
 def run_vacuum_all(dry_run=False):
     """Task to optimize all browser databases."""
-    targets = [
-        ("Firefox", ["firefox"], "~/.mozilla/firefox/*/places.sqlite"),
-        ("Firefox", ["firefox"], "~/.mozilla/firefox/*/cookies.sqlite"),
-        (
-            "Chrome",
-            ["google-chrome", "chrome", "chromium"],
-            "~/.config/google-chrome/Default/History",
-        ),
-        (
-            "Brave",
-            ["brave", "brave-browser"],
-            "~/.config/BraveSoftware/Brave-Browser/Default/History",
-        ),
-        ("Edge", ["microsoft-edge"], "~/.config/microsoft-edge/Default/History"),
-    ]
-
-    db_files = []
+    db_files: list[Path] = []
     busy_apps = set()
-    for app_name, process_names, pattern in targets:
-        if _is_any_process_running(process_names):
+    home = Path.home()
+    for app_name, process_names, patterns in _BROWSER_DB_TARGETS:
+        if _is_any_process_running(list(process_names)):
             busy_apps.add(app_name)
             continue
-        path_obj = Path(pattern).expanduser()
-        parent = path_obj.parent
-        if not parent.exists():
-            continue
-        for f in parent.glob(path_obj.name):
-            if f.is_file():
-                db_files.append(f)
+        for pattern in patterns:
+            # home.glob(pattern), not the old parent.exists() + parent.glob(name)
+            # pair: that could only expand a wildcard in the final component, so
+            # every ".mozilla/firefox/*/…" pattern asked whether a directory
+            # literally named "*" existed, got False, and silently matched
+            # nothing -- Firefox was never vacuumed at all.
+            with contextlib.suppress(OSError):
+                db_files.extend(f for f in home.glob(pattern) if f.is_file())
+    # Profile globs from different roots cannot collide, but a duplicate would
+    # VACUUM the same file twice and double-count it in the total.
+    db_files = sorted(set(db_files))
 
     if busy_apps and not db_files:
         return f"{', '.join(sorted(busy_apps))} running; database optimization skipped"
@@ -193,7 +310,7 @@ def run_vacuum_all(dry_run=False):
 
 @register_optimization_task
 def run_fstrim(dry_run=False):
-    if not shutil.which("fstrim"):
+    if not _which_admin_tool("fstrim"):
         return None
     if dry_run:
         return "SSD partitions would be trimmed (fstrim)"
@@ -204,29 +321,23 @@ def run_fstrim(dry_run=False):
 
 @register_optimization_task
 def run_fccache(dry_run=False):
+    """Rebuild the fontconfig caches, user first and system too when possible.
+
+    Plain ``fc-cache`` only writes ~/.cache/fontconfig -- the task used to run
+    exactly that and report it as the system cache. /var/cache/fontconfig needs
+    root, so it is a second pass rather than a replacement: the user cache is
+    the one that goes stale after dropping a font into ~/.local/share/fonts, and
+    it must still be refreshed on a machine with no sudo.
+    """
     if not shutil.which("fc-cache"):
         return None
     if dry_run:
-        return "System font cache would be refreshed"
-    if run_command(["fc-cache"], capture=True).ok:
-        return "System font cache refreshed"
-    return None
-
-
-@register_optimization_task
-def run_sysctl_optimize(dry_run=False):
-    """Optimize kernel memory/swap parameters if sysctl is available."""
-    if not shutil.which("sysctl"):
+        return "Font caches would be refreshed (fc-cache)"
+    if not run_command(["fc-cache"], capture=True).ok:
         return None
-    if dry_run:
-        return "Kernel memory & cache parameters would be tuned (sysctl)"
-    if not has_sudo():
-        return None
-    # Tune swappiness and vfs_cache_pressure to optimal desktop defaults
-    cmd = ["sysctl", "vm.swappiness=10", "vm.vfs_cache_pressure=50"]
-    if run_command(cmd, use_sudo=True, capture=True).ok:
-        return "Kernel memory & cache parameters tuned (sysctl)"
-    return None
+    if has_sudo() and run_command(["fc-cache"], use_sudo=True, capture=True).ok:
+        return "User & system font caches refreshed (fc-cache)"
+    return "User font cache refreshed (fc-cache)"
 
 
 @register_optimization_task
@@ -244,7 +355,7 @@ def run_tmpfiles_cleanup(dry_run=False):
 @register_optimization_task
 def run_ldconfig(dry_run=False):
     """Refresh dynamic linker bindings cache."""
-    if not shutil.which("ldconfig"):
+    if not _which_admin_tool("ldconfig"):
         return None
     if dry_run:
         return "Dynamic linker cache would be updated (ldconfig)"
@@ -256,7 +367,7 @@ def run_ldconfig(dry_run=False):
 @register_optimization_task
 def run_locale_gen(dry_run=False):
     """Regenerate locale archive files if locale-gen is available."""
-    if not shutil.which("locale-gen"):
+    if not _which_admin_tool("locale-gen"):
         return None
     if dry_run:
         return "System locale archive would be regenerated"
@@ -356,16 +467,23 @@ def run_systemd_user_service_cleanup(dry_run=False):
     return f"Found {len(broken_units)} broken user systemd service(s)"
 
 
-@register_optimization_task
-def run_user_systemd_reset_failed(dry_run=False):
-    """Reset failed user-level systemd unit states without touching D-Bus runtime files."""
+def _reset_failed_units(
+    scope_args: list[str], label: str, dry_run: bool, *, use_sudo: bool
+) -> str | None:
+    """Clear failed unit state for one systemd scope, counting what was cleared.
+
+    The units are listed first so the message can name a number: bare
+    ``reset-failed`` succeeds on a clean system too, which would report work that
+    did not happen. Listing needs no privileges at either scope; only the reset
+    itself does, and only for the system manager.
+    """
     if not shutil.which("systemctl"):
         return None
 
     list_result = run_command(
         [
             "systemctl",
-            "--user",
+            *scope_args,
             "list-units",
             "--state=failed",
             "--no-legend",
@@ -383,22 +501,79 @@ def run_user_systemd_reset_failed(dry_run=False):
         return None
 
     if dry_run:
-        return f"Found {len(failed_units)} failed user systemd unit(s)"
+        return f"Found {len(failed_units)} failed {label} systemd unit(s)"
 
     reset_result = run_command(
-        ["systemctl", "--user", "reset-failed"],
+        ["systemctl", *scope_args, "reset-failed"],
         capture=True,
         timeout=10,
+        use_sudo=use_sudo,
     )
     if reset_result.ok:
-        return f"Reset {len(failed_units)} failed user systemd unit state(s)"
+        return f"Reset {len(failed_units)} failed {label} systemd unit state(s)"
     return None
+
+
+@register_optimization_task
+def run_user_systemd_reset_failed(dry_run=False):
+    """Reset failed user-level systemd unit states without touching D-Bus runtime files."""
+    return _reset_failed_units(["--user"], "user", dry_run, use_sudo=False)
+
+
+@register_optimization_task
+def run_system_systemd_reset_failed(dry_run=False):
+    """Reset failed system-level unit states, which only root can clear.
+
+    Failed state is bookkeeping, not the failure itself: clearing it makes the
+    next ``systemctl --failed`` show what has broken *since*, rather than a list
+    that also carries units nobody has looked at in months. Gated on sudo so a
+    machine without it skips instead of logging a permission error every run.
+    """
+    if not has_sudo():
+        return None
+    return _reset_failed_units([], "system", dry_run, use_sudo=True)
+
+
+def _swap_is_zram_backed() -> bool:
+    """True when any active swap device is a zram block device.
+
+    ``swapoff -a`` disables every swap device, but ``swapon -a`` only re-enables
+    what /etc/fstab lists. zram swap is created and enabled by
+    systemd-zram-setup@zramN.service and has no fstab entry, so the pair below
+    would leave the machine with no swap at all until the next boot -- the
+    opposite of the reclaim it advertises. Fedora enables zram swap out of the
+    box, and so does anything carrying zram-generator or Debian's zram-tools.
+    Ubuntu is not in that group: since 17.04 its installer creates a /swap.img
+    swapfile and lists it in fstab, which swapon -a does restore.
+
+    One zram device disables the task even alongside a real swap partition,
+    because ``swapoff -a`` is all-or-nothing: the partition would come back and
+    the zram device would not.
+
+    Reading /proc/swaps rather than shelling out to swapon(8): it is the table
+    swapon itself reports, and this runs in a pool worker where a subprocess per
+    task adds up.
+    """
+    try:
+        table = _SWAPS_TABLE.read_text().splitlines()
+    except OSError:
+        # Nothing proves the reset is reversible, so call it unsafe -- the same
+        # bias as _points_at_transient_mount: on unreadable input, keep what is.
+        return True
+    # First line is the column header; the first field is the device or file.
+    for line in table[1:]:
+        fields = line.split()
+        if fields and _ZRAM_DEVICE_RE.match(os.path.basename(fields[0])):
+            return True
+    return False
 
 
 @register_optimization_task
 def run_swap_management(dry_run=False):
     """Reset swap if RAM is plentiful to reduce micro-stutter."""
-    if not shutil.which("swapoff") or not shutil.which("swapon"):
+    if not _which_admin_tool("swapoff") or not _which_admin_tool("swapon"):
+        return None
+    if _swap_is_zram_backed():
         return None
 
     try:
@@ -638,6 +813,54 @@ def run_mime_database_refresh(dry_run=False):
 
 
 @register_optimization_task
+def run_glib_schema_compile(dry_run=False):
+    """Recompile locally installed GSettings schemas into gschemas.compiled."""
+    return _refresh_database(
+        "glib-compile-schemas",
+        Path.home() / ".local/share/glib-2.0/schemas",
+        "User GSettings schema cache",
+        dry_run,
+    )
+
+
+@register_optimization_task
+def run_icon_cache_refresh(dry_run=False):
+    """Rebuild the icon cache of every theme under ~/.local/share/icons.
+
+    gtk-update-icon-cache takes one theme directory, not the icons root, and
+    exits non-zero on a directory without index.theme -- so the themes are
+    enumerated by that file here rather than handed the root or discovered with
+    iterdir. Only user-installed themes are touched; the ones under /usr are
+    rebuilt by package triggers.
+
+    Passing just -q and -f: GTK3 reads -t as --ignore-theme-index while GTK4
+    reads it as --index-only, so the flag means two different things depending on
+    which build is on PATH.
+    """
+    if not shutil.which("gtk-update-icon-cache"):
+        return None
+    try:
+        themes = sorted(
+            p.parent for p in (Path.home() / ".local/share/icons").glob("*/index.theme")
+        )
+    except OSError:
+        return None
+    if not themes:
+        return None
+    if dry_run:
+        return f"{len(themes)} user icon theme cache(s) would be rebuilt"
+    rebuilt = 0
+    for theme in themes:
+        if run_command(
+            ["gtk-update-icon-cache", "-q", "-f", str(theme)], capture=True, timeout=30
+        ).ok:
+            rebuilt += 1
+    if rebuilt == 0:
+        return None
+    return f"Rebuilt {rebuilt} user icon theme cache(s)"
+
+
+@register_optimization_task
 def run_flatpak_repair(dry_run=False):
     """Verify and repair Flatpak system and user installations."""
     if not shutil.which("flatpak"):
@@ -651,36 +874,98 @@ def run_flatpak_repair(dry_run=False):
     return "Flatpak storage objects verified (flatpak repair)"
 
 
+def _systemd_timer_enabled(unit_names: tuple[str, ...]) -> bool:
+    """True when systemd already owns one of these periodic jobs.
+
+    ``systemctl is-enabled`` prints one verdict per unit and exits non-zero when
+    any of them is not enabled, so the answer is in the output lines rather than
+    the status code -- a units list that includes a name this distro does not
+    ship is normal here, not an error.
+    """
+    if not shutil.which("systemctl"):
+        return False
+    result = run_command(["systemctl", "is-enabled", *unit_names], capture=True, timeout=10)
+    return any(line.strip() == "enabled" for line in result.stdout.splitlines())
+
+
+# plocate and mlocate name their timer differently, and some distros ship a
+# plain updatedb.timer. Any one of them being enabled means the index is already
+# being rebuilt on a schedule.
+_UPDATEDB_TIMERS = ("plocate-updatedb.timer", "mlocate-updatedb.timer", "updatedb.timer")
+
+# The same job is just as often a cron entry: Debian 13's plocate ships
+# /etc/cron.daily/plocate next to its timer, and mlocate on older Debian and
+# Ubuntu ships only the cron half. A systemd-only check would rebuild the index a
+# second time on exactly those machines.
+_UPDATEDB_CRON_JOBS = (
+    Path("/etc/cron.daily/plocate"),
+    Path("/etc/cron.daily/mlocate"),
+    Path("/etc/cron.daily/updatedb"),
+    Path("/etc/cron.daily/locate"),
+)
+
+
+def _updatedb_is_scheduled() -> bool:
+    """True when a timer or a cron job already rebuilds the locate index."""
+    if _systemd_timer_enabled(_UPDATEDB_TIMERS):
+        return True
+    # run-parts skips a cron.daily entry that is not executable, so presence
+    # alone would read a disabled job as an active one.
+    return any(job.is_file() and os.access(job, os.X_OK) for job in _UPDATEDB_CRON_JOBS)
+
+
 @register_optimization_task
-def run_tracker_miner_reset(dry_run=False):
-    """Reset GNOME Tracker miner database if indices are corrupt/fragmented."""
-    cmd = None
-    if shutil.which("tracker3"):
-        cmd = ["tracker3", "reset", "-s"]
-    elif shutil.which("tracker"):
-        cmd = ["tracker", "reset", "-r"]
-    if not cmd:
+def run_locate_db_refresh(dry_run=False):
+    """Rebuild the locate(1) index, unless the distro already owns that job.
+
+    updatedb walks every mounted filesystem, which makes it the one task here
+    that can outlast all the others combined. So it is skipped whenever a timer
+    or a cron entry is in place -- plocate ships one enabled by default on Fedora
+    and Debian, and running it again would only duplicate work that already
+    happens daily. What is left is the case neither covers: an index that exists
+    because someone installed plocate, with nothing scheduled to keep it current.
+    """
+    if not _which_admin_tool("updatedb") or not has_sudo():
+        return None
+    if _updatedb_is_scheduled():
         return None
     if dry_run:
-        return "GNOME Tracker search index would be reset"
-    if run_command(cmd, capture=True).ok:
-        return "GNOME Tracker search index reset"
+        return "locate database would be rebuilt (updatedb)"
+    if run_command(["updatedb"], use_sudo=True, capture=True, timeout=UPDATEDB_TIMEOUT).ok:
+        return "locate database rebuilt (updatedb)"
     return None
+
+
+# Native package manager first, PackageKit after: pkcon reaches the same backend
+# but only where PackageKit is installed and configured, and it reports failures
+# one layer removed from whatever actually broke.
+_REPO_REFRESH_COMMANDS: tuple[tuple[str, list[str]], ...] = (
+    ("dnf5", ["dnf5", "makecache"]),
+    ("dnf", ["dnf", "makecache"]),
+    ("zypper", ["zypper", "--non-interactive", "refresh"]),
+    # -Fy syncs the *files* database only. Never -Sy: refreshing the package
+    # database without upgrading is what leaves an Arch box half-upgraded.
+    ("pacman", ["pacman", "-Fy", "--noconfirm"]),
+    # apt-get rather than apt, which prints a warning that its CLI is not meant
+    # for scripts. ``update`` only downloads metadata; nothing is installed or
+    # upgraded, so it is the exact counterpart of dnf makecache.
+    ("apt-get", ["apt-get", "update", "-q"]),
+    ("pkcon", ["pkcon", "refresh"]),
+    ("apt-file", ["apt-file", "update"]),
+)
 
 
 @register_optimization_task
 def run_package_repo_refresh(dry_run=False):
-    """Refresh PackageKit or APT-File software repository metadata."""
-    cmd = None
-    if shutil.which("pkcon"):
-        cmd = ["pkcon", "refresh"]
-    elif shutil.which("apt-file"):
-        cmd = ["apt-file", "update"]
+    """Refresh the software repository metadata index."""
+    cmd = next((command for tool, command in _REPO_REFRESH_COMMANDS if shutil.which(tool)), None)
     if not cmd:
         return None
     if dry_run:
         return "Software repository index would be refreshed"
-    if run_command(cmd, use_sudo=True, capture=True, timeout=30).ok:
+    # This downloads metadata, so the old 30s ceiling was really a slow-mirror
+    # detector. A cut-off refresh is retried next run, never left half-applied.
+    if run_command(cmd, use_sudo=True, capture=True, timeout=REPO_REFRESH_TIMEOUT).ok:
         return "Software repository index refreshed"
     return None
 
