@@ -497,14 +497,25 @@ class UninstallManager:
             Path("/var/lib/flatpak/exports/share/applications"),
             Path.home() / ".local/share/flatpak/exports/share/applications",
         ]
+        targets = {t for t in (app_id.lower(), app_name.lower()) if t}
         for ddir in desktop_dirs:
             if not ddir.is_dir():
                 continue
             with contextlib.suppress(OSError):
                 for entry in ddir.glob("*.desktop"):
-                    entry_name = entry.name.lower()
-                    if any(
-                        t in entry_name for t in (app_id.lower(), app_name.lower()) if len(t) >= 2
+                    # Everything collected here ends up as an argument to `pkill -9`,
+                    # so the match has to be as strict as the one guarding residue
+                    # deletion: a bare substring test would let a two-letter id like
+                    # "go" or "qq" pull in half of /usr/share/applications and kill
+                    # whatever those entries happen to run. A file named exactly after
+                    # the app is still taken, even for a token _name_matches rejects as
+                    # generic -- go.desktop is unambiguously the entry for id "go".
+                    stem = entry.stem.lower()
+                    # Reverse-DNS entries carry the app's own name last:
+                    # org.gnome.Music.desktop for org.gnome.Music.
+                    haystacks = {stem, stem.rsplit(".", 1)[-1]}
+                    if stem in targets or any(
+                        self._name_matches(h, t) for h in haystacks for t in targets
                     ):
                         names.update(get_desktop_exec_names(entry))
 
@@ -538,11 +549,15 @@ class UninstallManager:
                 "/usr/share/applications",
                 str(Path.home() / ".local/share/applications"),
             ]
-            desktop_files = []
+            # glob() still yields a dangling symlink, and rpm reports an unreadable
+            # path on stderr instead of stdout -- that drops a line from the batch
+            # and shifts every later name onto the wrong package. Dropping the
+            # unreadable entries here keeps the reply one line per queried path.
+            desktop_files: list[Path] = []
             for d in desktop_dirs:
                 p = Path(d)
                 if p.exists():
-                    desktop_files.extend(list(p.glob("*.desktop")))
+                    desktop_files.extend(e for e in p.glob("*.desktop") if e.exists())
 
             if desktop_files:
                 batch_size = RPM_QUERY_BATCH_SIZE
@@ -555,11 +570,18 @@ class UninstallManager:
                             ["rpm", "-qf", "--queryformat", "%{NAME}\n"] + batch_str,
                             capture=True,
                             timeout=60,
+                            env=system.C_LOCALE_ENV,
                         )
-                        if res.stdout:
-                            lines = res.stdout.splitlines()
-                            for df_path, line in zip(batch_paths, lines, strict=False):
+                        lines = res.stdout.splitlines()
+                        # rpm answers positionally and prints its "not owned by any
+                        # package" notice on stdout, so a reply of the wrong length
+                        # means the answers no longer line up with the questions.
+                        # Losing a few display names beats attaching them to the
+                        # wrong package.
+                        if len(lines) == len(batch_paths):
+                            for df_path, line in zip(batch_paths, lines, strict=True):
                                 line_str = line.strip()
+                                # C_LOCALE_ENV above keeps this marker in English.
                                 if line_str and not line_str.startswith("file "):
                                     pkg = line_str
                                     user_app_packages.add(pkg)
@@ -568,7 +590,11 @@ class UninstallManager:
                                         if dname:
                                             package_desktop_names[pkg] = dname
                     if shutil.which("dpkg-query"):
-                        res = system.run_command(["dpkg-query", "-S", *batch_str], capture=True)
+                        res = system.run_command(
+                            ["dpkg-query", "-S", *batch_str],
+                            capture=True,
+                            env=system.C_LOCALE_ENV,
+                        )
                         for line in res.stdout.splitlines():
                             if ":" in line:
                                 parts = line.split(":", 1)
@@ -581,7 +607,13 @@ class UninstallManager:
                                         if dname:
                                             package_desktop_names[pkg] = dname
                     if shutil.which("pacman"):
-                        res = system.run_command(["pacman", "-Qo", *batch_str], capture=True)
+                        # " is owned by " sits in pacman's gettext catalog, so the
+                        # split below only holds under a C locale.
+                        res = system.run_command(
+                            ["pacman", "-Qo", *batch_str],
+                            capture=True,
+                            env=system.C_LOCALE_ENV,
+                        )
                         for line in res.stdout.splitlines():
                             if " is owned by " in line:
                                 df_str, owned_str = line.split(" is owned by ", 1)
@@ -610,6 +642,7 @@ class UninstallManager:
                 ["rpm", "-qa", "--queryformat", "%{NAME}\t%{SIZE}\t%{INSTALLTIME}\n"],
                 capture=True,
                 timeout=60,
+                env=system.C_LOCALE_ENV,
             )
             if res.ok:
                 for line in res.stdout.splitlines():
@@ -649,6 +682,7 @@ class UninstallManager:
                 ["dpkg-query", "-W", "-f=${binary:Package}\t${Installed-Size}\n"],
                 capture=True,
                 timeout=60,
+                env=system.C_LOCALE_ENV,
             )
             if res.ok:
                 for line in res.stdout.splitlines():
@@ -778,7 +812,9 @@ class UninstallManager:
             return []
         apps = []
         try:
-            res = system.run_command(["snap", "list"], capture=True, timeout=60)
+            res = system.run_command(
+                ["snap", "list"], capture=True, timeout=60, env=system.C_LOCALE_ENV
+            )
             if res.ok:
                 for line in res.stdout.splitlines()[1:]:
                     parts = line.split()
@@ -813,7 +849,10 @@ class UninstallManager:
                                     if install_time == 0:
                                         install_time = int(snap_path.stat().st_mtime)
                                     res_size = system.run_command(
-                                        ["du", "-sk", str(snap_path)], capture=True, timeout=5
+                                        ["du", "-sk", str(snap_path)],
+                                        capture=True,
+                                        timeout=5,
+                                        env=system.C_LOCALE_ENV,
                                     )
                                     if res_size.ok and res_size.stdout:
                                         kb = int(res_size.stdout.split()[0])

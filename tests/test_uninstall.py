@@ -550,6 +550,106 @@ def test_run_full_scan_pacman(mock_which, mock_run_cmd):
     ]
 
 
+@patch("src.uninstall.system.run_command")
+@patch("shutil.which")
+def test_every_scanned_command_asks_for_the_c_locale(mock_which, mock_run_cmd):
+    """Each of these replies gets parsed, and every one of them is translatable.
+
+    rpm prints "file X is not owned by any package" and pacman "X is owned by Y"
+    through gettext, so a zh_CN or de_DE desktop hands back text the parsers below
+    do not recognise -- or worse, text they mistake for a package name.
+    """
+    mock_which.side_effect = lambda x: f"/usr/bin/{x}"
+    mock_run_cmd.return_value = MagicMock(ok=True, stdout="")
+
+    with (
+        patch("src.core.system.get_os_id", return_value="fedora"),
+        patch("pathlib.Path.home", return_value=Path("/nonexistent_home_for_tests")),
+    ):
+        UninstallManager().run_full_scan()
+
+    assert mock_run_cmd.call_args_list, "the scan ran no commands, so it proves nothing"
+    for call in mock_run_cmd.call_args_list:
+        env = call.kwargs.get("env") or {}
+        assert env.get("LC_ALL") == "C", call.args[0]
+        assert env.get("LANG") == "C", call.args[0]
+
+
+@patch("shutil.which")
+def test_pre_scan_drops_a_batch_whose_rpm_reply_is_a_line_short(mock_which, tmp_path):
+    """rpm answers positionally, so a missing line shifts every later name.
+
+    An unreadable path -- /usr/share/applications/firefox.desktop is a dangling
+    symlink on some Fedora installs -- is reported on stderr, so stdout comes back
+    one line short and each remaining name lands on the wrong package.
+    """
+    mock_which.side_effect = lambda x: "/usr/bin/rpm" if x == "rpm" else None
+    apps_dir = tmp_path / ".local/share/applications"
+    apps_dir.mkdir(parents=True)
+    (apps_dir / "kept.desktop").write_text("[Desktop Entry]\nName=Kept\n")
+    (apps_dir / "other.desktop").write_text("[Desktop Entry]\nName=Other\n")
+
+    def one_answer_short(args, **kwargs):
+        queried = [a for a in args if a.endswith(".desktop")]
+        return MagicMock(ok=True, stdout="".join(f"pkg{i}\n" for i in range(len(queried) - 1)))
+
+    with (
+        patch("src.uninstall.system.run_command", side_effect=one_answer_short),
+        patch("pathlib.Path.home", return_value=tmp_path),
+    ):
+        packages, names = UninstallManager()._pre_scan_package_desktop_names()
+
+    assert packages == set()
+    assert names == {}
+
+
+@patch("shutil.which")
+def test_pre_scan_maps_display_names_when_the_rpm_reply_lines_up(mock_which, tmp_path):
+    """The length check above must not cost us the names in the normal case."""
+    mock_which.side_effect = lambda x: "/usr/bin/rpm" if x == "rpm" else None
+    apps_dir = tmp_path / ".local/share/applications"
+    apps_dir.mkdir(parents=True)
+    (apps_dir / "kept.desktop").write_text("[Desktop Entry]\nName=Kept\n")
+
+    def one_answer_each(args, **kwargs):
+        queried = [a for a in args if a.endswith(".desktop")]
+        return MagicMock(ok=True, stdout="".join(f"pkg-{Path(p).stem}\n" for p in queried))
+
+    with (
+        patch("src.uninstall.system.run_command", side_effect=one_answer_each),
+        patch("pathlib.Path.home", return_value=tmp_path),
+    ):
+        packages, names = UninstallManager()._pre_scan_package_desktop_names()
+
+    assert "pkg-kept" in packages
+    assert names["pkg-kept"] == "Kept"
+
+
+@patch("shutil.which")
+def test_pre_scan_never_queries_a_dangling_desktop_symlink(mock_which, tmp_path):
+    """Keeping unreadable paths out of the batch is what keeps the reply aligned."""
+    mock_which.side_effect = lambda x: "/usr/bin/rpm" if x == "rpm" else None
+    apps_dir = tmp_path / ".local/share/applications"
+    apps_dir.mkdir(parents=True)
+    (apps_dir / "real.desktop").write_text("[Desktop Entry]\nName=Real\n")
+    (apps_dir / "ghost.desktop").symlink_to(tmp_path / "gone.desktop")
+
+    queried: list[str] = []
+
+    def record(args, **kwargs):
+        queried.extend(a for a in args if a.endswith(".desktop"))
+        return MagicMock(ok=True, stdout="")
+
+    with (
+        patch("src.uninstall.system.run_command", side_effect=record),
+        patch("pathlib.Path.home", return_value=tmp_path),
+    ):
+        UninstallManager()._pre_scan_package_desktop_names()
+
+    assert str(apps_dir / "real.desktop") in queried
+    assert str(apps_dir / "ghost.desktop") not in queried
+
+
 @patch("shutil.which")
 @patch("subprocess.run")
 def test_run_full_scan_flatpaks(mock_run, mock_which):
@@ -828,6 +928,47 @@ def test_executable_names_from_desktop(test_env):
         app = {"id": "com.example.App", "name": "Fancy App", "type": "Flatpak"}
         names = mgr._candidate_process_names(app)
     assert "fancy-bin" in names
+
+
+def test_candidate_process_names_ignores_unrelated_desktop_entries(test_env):
+    """A short id must not drag in every entry that happens to contain those letters.
+
+    Every name returned here is handed to `pkill -9`, and ids as short as "go",
+    "qq" or "ai" appear inside plenty of unrelated .desktop file names -- matching
+    those would kill programs the user never asked to remove.
+    """
+    mgr = UninstallManager()
+    app_dir = test_env / ".local/share/applications"
+    app_dir.mkdir(parents=True, exist_ok=True)
+    (app_dir / "go.desktop").write_text("[Desktop Entry]\nName=Go\nExec=/usr/bin/go-gui\n")
+    (app_dir / "gomuks.desktop").write_text("[Desktop Entry]\nName=Gomuks\nExec=gomuks\n")
+    (app_dir / "django-admin.desktop").write_text("[Desktop Entry]\nName=Dj\nExec=django-admin\n")
+
+    with patch("pathlib.Path.home", return_value=test_env):
+        names = mgr._candidate_process_names({"id": "go", "name": "Go", "type": "DNF"})
+
+    assert "go-gui" in names  # go.desktop is the app's own entry
+    assert "gomuks" not in names
+    assert "django-admin" not in names
+
+
+def test_candidate_process_names_still_matches_boundary_and_reverse_dns(test_env):
+    """Tightening the match must not cost the entries that really do belong."""
+    mgr = UninstallManager()
+    app_dir = test_env / ".local/share/applications"
+    app_dir.mkdir(parents=True, exist_ok=True)
+    (app_dir / "telegram-desktop.desktop").write_text(
+        "[Desktop Entry]\nName=Telegram\nExec=telegram-desktop -- %u\n"
+    )
+    (app_dir / "org.telegram.Telegram.desktop").write_text(
+        "[Desktop Entry]\nName=Telegram\nExec=/usr/bin/telegram-flatpak\n"
+    )
+
+    with patch("pathlib.Path.home", return_value=test_env):
+        names = mgr._candidate_process_names({"id": "telegram", "name": "Telegram", "type": "DNF"})
+
+    assert "telegram-desktop" in names  # word-boundary prefix
+    assert "telegram-flatpak" in names  # reverse-DNS last segment
 
 
 def test_run_uninstall_failed_package_not_counted(capsys):
