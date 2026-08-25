@@ -487,6 +487,39 @@ def test_run_update_invalid_local_and_fetch_failure(capsys):
     assert "Failed to check latest release" in capsys.readouterr().out
 
 
+def test_run_update_separates_a_missing_curl_from_a_failed_lookup(capsys):
+    # _fetch_latest_release_tag() swallows every curl failure and returns "",
+    # which used to surface as `Invalid release tag: ''` -- blaming the release
+    # for a missing tool or a dropped network.
+    with (
+        patch("src.manage.update._read_local_version", return_value="1.0.0"),
+        patch("src.manage.update._fetch_latest_release_tag", return_value=""),
+        patch("src.manage.update.shutil.which", return_value=None),
+    ):
+        run_update()
+    output = capsys.readouterr().out
+    assert "curl not found" in output
+    assert "Invalid release tag" not in output
+
+    with (
+        patch("src.manage.update._read_local_version", return_value="1.0.0"),
+        patch("src.manage.update._fetch_latest_release_tag", return_value=""),
+        patch("src.manage.update.shutil.which", return_value="/usr/bin/curl"),
+    ):
+        run_update()
+    output = capsys.readouterr().out
+    assert "Could not determine the latest release version" in output
+    assert "Invalid release tag" not in output
+
+    # A non-empty tag that does not parse is still reported as a bad tag.
+    with (
+        patch("src.manage.update._read_local_version", return_value="1.0.0"),
+        patch("src.manage.update._fetch_latest_release_tag", return_value="nightly"),
+    ):
+        run_update()
+    assert "Invalid release tag" in capsys.readouterr().out
+
+
 def test_run_update_package_unsupported_and_upgrade_failures(tmp_path, capsys):
     with patch("src.manage.update.get_package_asset_name", return_value=None):
         _run_package_update("1.0.0", "v2.0.0")

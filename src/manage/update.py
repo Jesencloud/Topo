@@ -352,6 +352,23 @@ def run_update():
         return
 
     # 3. Compare and act
+    #
+    # An empty tag is not a bad tag: _fetch_latest_release_tag() swallows every
+    # curl failure and returns "". Reporting that as `Invalid release tag: ''`
+    # blamed the release for a missing curl or a dropped network, so separate the
+    # two. curl is checked here rather than up front because this is the first
+    # thing that needs it -- if it is missing, the fetch has already failed.
+    if not remote_tag:
+        if shutil.which("curl"):
+            print(f" {RED}❌ Could not determine the latest release version.{RESET}")
+            print(
+                f" {GRAY}Check your network connection or GitHub availability, then retry.{RESET}"
+            )
+        else:
+            print(f" {RED}❌ curl not found in system PATH. Cannot check for updates.{RESET}")
+            print(f" {GRAY}Install the 'curl' package, or update manually.{RESET}")
+        return
+
     local_parsed = _parse_version(local_version)
     remote_parsed = _parse_version(remote_tag)
     if remote_parsed is None:
