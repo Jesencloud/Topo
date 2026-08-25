@@ -8,6 +8,7 @@ on:
       - "packaging/**"
       - "src/manage/**"
       - "src/core/install_source.py"
+      - "src/core/paths.py"
       - "topo-core/**"
       - "topo"
       - "VERSION"
@@ -20,6 +21,7 @@ on:
       - "packaging/**"
       - "src/manage/**"
       - "src/core/install_source.py"
+      - "src/core/paths.py"
       - "topo-core/**"
       - "topo"
       - "VERSION"
@@ -76,10 +78,15 @@ jobs:
 
           # Uninstall last: the script install had no removal smoke at all, so
           # nothing verified that what install.sh creates is what topo remove
-          # deletes. Keep the output before judging the exit code (see I1).
-          remove_output="$("$TOPO_LINK_DIR/topo" remove --yes)" && remove_status=0 || remove_status=$?
+          # deletes. Deliberately the checkout's remover and not the installed
+          # one -- install.sh can only unpack a signed *release*, so
+          # "$TOPO_LINK_DIR/topo" is whatever the last release shipped, and the
+          # TOPO_LINK_DIR-aware launcher sweep being asserted here lives in this
+          # commit. Keep the output before judging the exit code (see I1).
+          remove_output="$(./topo remove --yes)" && remove_status=0 || remove_status=$?
           printf '%s\n' "$remove_output"
           test "$remove_status" -eq 0
+          # -e alone would pass on a dangling symlink, which is the exact bug.
           test ! -e "$TOPO_LINK_DIR/topo" && test ! -L "$TOPO_LINK_DIR/topo"
           test ! -e "$HOME/.topo"
 

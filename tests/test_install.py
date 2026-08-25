@@ -1,8 +1,9 @@
 import os
 import re
 import subprocess
-import sys
 from pathlib import Path
+
+import pytest
 
 from src.core.paths import get_link_target_dir
 from src.manage.install import run_install_link
@@ -24,31 +25,72 @@ def test_install_script_fails_early_when_curl_is_missing(tmp_path):
     assert "python3 is required" not in result.stdout
 
 
-def test_install_script_can_still_resolve_the_launcher_path_it_asks_for(tmp_path, monkeypatch):
-    """install.sh imports get_link_target_dir() to learn the launcher path.
+def _run_installer_link_helpers(env, expr="resolve_link_target_dir"):
+    """Evaluate install.sh's launcher-path helpers without running the installer.
 
-    That import is a plain string as far as ruff, mypy, vulture and tach are
-    concerned, so renaming or moving the function used to break the installer
-    with no local gate turning red -- only the CI smoke job, and only when its
-    path filter happened to match. This test runs the script's own line.
+    The script must not import get_link_target_dir() from the tree it installs
+    (that tree is an arbitrary older release -- doing so raised ImportError and
+    aborted the install), so it reimplements the rule in shell. Nothing else
+    would notice the two drifting apart: ruff, mypy, vulture and tach never read
+    shell. This extracts the two functions and runs them.
     """
-    snippet = re.search(
-        r"^LAUNCHER_PATH=\$\(python3 -c '(.+)'\)", (REPO_ROOT / "install.sh").read_text(), re.M
+    script = (REPO_ROOT / "install.sh").read_text()
+    blocks = re.findall(
+        r"^(?:resolve_link_target_dir|absolute_link_dir)\(\) \{\n.*?^\}$", script, re.M | re.S
     )
-    assert snippet, "install.sh no longer resolves LAUNCHER_PATH the way this test expects"
+    assert len(blocks) == 2, "install.sh no longer defines the launcher-path helpers by name"
 
-    target = tmp_path / "bin"
-    monkeypatch.setenv("TOPO_LINK_DIR", str(target))
     result = subprocess.run(
-        [sys.executable, "-c", snippet.group(1)],
-        cwd=REPO_ROOT,
+        ["/bin/bash", "-c", "\n".join(blocks) + "\n" + expr],
+        env=env,
         capture_output=True,
         text=True,
         check=False,
     )
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == str(target / "topo")
+    return result.stdout.strip()
+
+
+@pytest.mark.parametrize("override", [None, "/opt/bin", "~/xbin", "relbin"])
+def test_install_script_resolves_the_same_launcher_dir_as_python(tmp_path, monkeypatch, override):
+    env = {"HOME": str(tmp_path), "PATH": os.environ["PATH"]}
+    monkeypatch.setenv("HOME", str(tmp_path))
+    if override is None:
+        monkeypatch.delenv("TOPO_LINK_DIR", raising=False)
+    else:
+        env["TOPO_LINK_DIR"] = override
+        monkeypatch.setenv("TOPO_LINK_DIR", override)
+
+    assert _run_installer_link_helpers(env) == str(get_link_target_dir())
+
+
+def test_install_script_matches_python_for_a_root_install(tmp_path, monkeypatch):
+    # The one branch the test runner cannot be in: fake `id` for the shell side
+    # and geteuid() for the Python side, and require both to say the same thing.
+    fake_bin = tmp_path / "fakebin"
+    fake_bin.mkdir()
+    fake_id = fake_bin / "id"
+    fake_id.write_text("#!/bin/sh\necho 0\n")
+    fake_id.chmod(0o755)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("TOPO_LINK_DIR", raising=False)
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+
+    env = {"HOME": str(tmp_path), "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}"}
+
+    assert _run_installer_link_helpers(env) == str(get_link_target_dir()) == "/usr/local/bin"
+
+
+def test_install_script_puts_a_relative_override_under_the_install_tree(tmp_path):
+    # get_link_target_dir() leaves a relative override relative because `topo
+    # link` runs from ~/.topo; install.sh has to reach the same absolute path for
+    # its own symlink verification and failure cleanup.
+    env = {"HOME": str(tmp_path), "PATH": os.environ["PATH"], "TOPO_LINK_DIR": "relbin"}
+
+    resolved = _run_installer_link_helpers(env, 'absolute_link_dir "$(resolve_link_target_dir)"')
+
+    assert resolved == str(tmp_path / ".topo/relbin")
 
 
 def test_get_link_target_dir_uses_override(monkeypatch, tmp_path):

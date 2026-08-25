@@ -20,17 +20,17 @@ def get_state_dir() -> Path:
 def get_link_target_dir() -> Path:
     """Where the `topo` launcher symlink belongs: TOPO_LINK_DIR, or a default.
 
-    PUBLIC CROSS-LANGUAGE CONTRACT: install.sh imports this function by name to
-    resolve the launcher path before running `topo link`, so renaming it or
-    changing what it returns means editing install.sh in the same commit.
-    tests/test_install.py runs the script's own snippet to keep that honest --
-    nothing else would catch it, since ruff/mypy/vulture/tach never read shell
-    strings.
+    install.sh needs the same answer before it runs `topo link`, but it must not
+    import this function: the script comes from main while the tree it installs
+    is whichever release was requested, so an import would bind the installer to
+    that release's API and break every older version. It reimplements the three
+    branches in shell (`resolve_link_target_dir`), and
+    tests/test_install.py diffs the two implementations on every branch --
+    changing the rule here means changing that function in the same commit.
 
     A relative TOPO_LINK_DIR is deliberately left relative (expanduser, not
-    resolve): install.sh runs `topo link` with the install tree as its working
-    directory, so a relative override lands under ~/.topo, and the script's own
-    fast path mirrors that.
+    resolve): `topo link` runs with the install tree as its working directory, so
+    a relative override lands under ~/.topo, and install.sh mirrors that.
     """
     if override := os.environ.get("TOPO_LINK_DIR"):
         return Path(override).expanduser()

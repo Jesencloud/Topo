@@ -180,6 +180,40 @@ PY
 fi
 if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓${NC} ${GRAY}target release ${TARGET_REF}${NC}"; fi
 
+# The launcher directory `topo link` will use, resolved the way
+# src/core/paths.py::get_link_target_dir() resolves it: TOPO_LINK_DIR, else
+# /usr/local/bin for root, else ~/.local/bin. Deliberately reimplemented in shell
+# instead of imported from the tree being installed -- this script comes from
+# main, but the tree it installs is whichever release was requested, so an import
+# binds install.sh to *that* release's Python API. Importing get_link_target_dir
+# did exactly that and broke every install of a release predating it
+# (ImportError, then "Could not resolve the launcher path"); the private
+# _get_link_target_dir it replaced only worked by accident of still existing.
+# The answer may be relative, exactly as Python's is; only python3's stdlib
+# expanduser() is borrowed, because ~user has no safe shell equivalent.
+# tests/test_install.py runs this function and diffs it against
+# get_link_target_dir() on every branch, root included.
+resolve_link_target_dir() {
+    if [ -n "${TOPO_LINK_DIR:-}" ]; then
+        python3 -c 'import os; from pathlib import Path; print(Path(os.environ["TOPO_LINK_DIR"]).expanduser())' </dev/null 2>/dev/null || return 1
+        return 0
+    fi
+    if [ "$(id -u)" -eq 0 ]; then
+        printf '%s\n' "/usr/local/bin"
+        return 0
+    fi
+    printf '%s\n' "$HOME/.local/bin"
+}
+
+# Where that directory actually lands: `topo link` runs with the install tree as
+# its working directory, so a relative TOPO_LINK_DIR resolves under ~/.topo.
+absolute_link_dir() {
+    case "$1" in
+        /*) printf '%s\n' "$1" ;;
+        *) printf '%s\n' "$HOME/.topo/$1" ;;
+    esac
+}
+
 # A repeated curl install should be cheap when the requested release is already
 # complete. Only skip the verified download when every runtime artifact and
 # the launcher/PATH setup match this release; missing, non-executable, or
@@ -203,21 +237,8 @@ installed_version_matches() {
     [ -x "$HOME/.topo/topo" ] || return 1
     [ -f "$HOME/.topo/src/main.py" ] || return 1
 
-    if [ -n "${TOPO_LINK_DIR:-}" ]; then
-        # topo link resolves relative overrides from ~/.topo after activation.
-        path_entry=$(python3 -c 'import os; from pathlib import Path; print(Path(os.environ["TOPO_LINK_DIR"]).expanduser())' </dev/null 2>/dev/null) || return 1
-        if [[ "$path_entry" = /* ]]; then
-            link_dir="$path_entry"
-        else
-            link_dir="$HOME/.topo/$path_entry"
-        fi
-    elif [ "$(id -u)" -eq 0 ]; then
-        link_dir="/usr/local/bin"
-        path_entry="$link_dir"
-    else
-        link_dir="$HOME/.local/bin"
-        path_entry="$link_dir"
-    fi
+    path_entry=$(resolve_link_target_dir) || return 1
+    link_dir=$(absolute_link_dir "$path_entry")
     launcher_path="$link_dir/topo"
     [ -L "$launcher_path" ] || return 1
     [ "$(readlink -f "$launcher_path" 2>/dev/null || true)" = "$(readlink -f "$HOME/.topo/topo" 2>/dev/null || true)" ] || return 1
@@ -492,13 +513,13 @@ fi
 chmod +x topo
 snapshot_shell_configs
 
-# Resolve the same target directory used by run_install_link(), including root
-# installs and TOPO_LINK_DIR overrides. Resolve it before creating the link so
-# failure cleanup always knows which first-install launcher belongs to us.
-# get_link_target_dir() is a public contract for exactly this call; renaming it
-# breaks tests/test_install.py, which runs the line below.
-LAUNCHER_PATH=$(python3 -c 'from src.core.paths import get_link_target_dir; print(get_link_target_dir() / "topo")') ||
+# Resolve the launcher path before creating the link so failure cleanup always
+# knows which first-install launcher belongs to us. resolve_link_target_dir()
+# mirrors run_install_link()'s own choice of directory; see its comment for why
+# this is shell and not an import of the tree we just unpacked.
+LINK_TARGET_DIR=$(resolve_link_target_dir) ||
     abort_verification "Could not resolve the launcher path before running topo link."
+LAUNCHER_PATH="$(absolute_link_dir "$LINK_TARGET_DIR")/topo"
 
 # Updates and minimal installs suppress presentation while still performing the
 # PATH repair inside run_install_link().
