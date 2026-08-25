@@ -95,8 +95,14 @@ def _print_cleanup_summary(
         print(f"\n{GRAY}ℹ️  Run without --dry-run to actually delete these files.{RESET}")
 
 
-def run_clean(dry_run: bool = False) -> bool | None:
-    """Orchestrates system, user, app, and developer tool cleanup pipelines."""
+def run_clean(dry_run: bool = False) -> bool:
+    """Orchestrates system, user, app, and developer tool cleanup pipelines.
+
+    False means the cleanup never ran (sudo declined). Individual delete
+    failures are reported per line by the sub-cleaners but do not fail the run:
+    a cache file another process is holding is expected, not an error the caller
+    should act on.
+    """
     detected_apps = proactive_app_detection()
 
     print(f"\n{PURPLE}Clean Your Linux{RESET}\n")
@@ -138,4 +144,4 @@ def run_clean(dry_run: bool = False) -> bool | None:
         ScanCache.clear()
 
     record_history_session(session_command, "ended")
-    return None
+    return True

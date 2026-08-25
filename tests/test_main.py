@@ -1,4 +1,5 @@
 from contextlib import nullcontext
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -102,6 +103,9 @@ def test_main_cleans_direct_command_output_on_interrupt():
 
 
 def test_main_menu_clean_action_routes_to_clean():
+    # Also pins the menu half of the exit-code contract: the menu is a session,
+    # not an operation, so an action that returned False (a cleanup that declined
+    # sudo) ends the loop without making `topo` itself exit non-zero.
     with (
         patch("sys.argv", ["topo"]),
         patch("sys.stdin.isatty", return_value=True),
@@ -113,6 +117,23 @@ def test_main_menu_clean_action_routes_to_clean():
         topo_main.main()
 
     run_terminal.assert_called_once_with(topo_main.run_clean, False)
+
+
+def test_menu_reopens_on_the_entry_just_run():
+    # The highlighted entry is derived from the route table's own order, so a
+    # route inserted in the wrong place would move the cursor to another entry.
+    with (
+        patch("src.main.alternate_screen", return_value=nullcontext()),
+        patch("src.main.terminal_state.hide_cursor"),
+        patch("src.main.terminal_state.show_cursor"),
+        patch("src.main._run_alternate_tui", return_value=None),
+        patch(
+            "src.main.main_menu", side_effect=["analyze", topo_main.QUIT_ACTION]
+        ) as main_menu_mock,
+    ):
+        topo_main._run_menu_loop(False)
+
+    assert [call.args[0] for call in main_menu_mock.call_args_list] == [0, 3]
 
 
 @pytest.mark.parametrize(
@@ -138,8 +159,12 @@ def test_interactive_commands_refuse_a_non_tty_instead_of_crashing(argv, target,
         # QUIT_ACTION so a regressed guard fails on the assertions below instead
         # of spinning forever in the menu loop on an unroutable MagicMock.
         patch(f"src.main.{target}", return_value=topo_main.QUIT_ACTION) as mocked,
+        # Refusing to run is a failure, not a quiet no-op: exit 1 so a script
+        # that pipes into topo can tell it never did the work.
+        pytest.raises(SystemExit) as exit_info,
     ):
         topo_main.main()
+    assert exit_info.value.code == 1
 
     output = capsys.readouterr().out
     assert f"{label} needs an interactive terminal" in output
@@ -326,3 +351,65 @@ def test_main_screen_context_restores_alternate_screen():
         pass
     exit_screen.assert_called_once_with()
     enter.assert_called_once_with()
+
+
+# --- Exit-code contract (see the comment above main() in src/main.py) ---
+
+
+@pytest.mark.parametrize(
+    ("argv", "target"),
+    [
+        (["topo", "clean"], "run_clean"),
+        (["topo", "optimize"], "optimize_system"),
+        (["topo", "update"], "run_update"),
+        (["topo", "remove", "--yes"], "run_remove"),
+        (["topo", "doctor"], "run_doctor"),
+        (["topo", "authorize"], "system.setup_passwordless_sudo"),
+    ],
+)
+def test_failing_commands_exit_nonzero(argv, target):
+    # Every one of these used to exit 0 no matter what it printed, so
+    # `topo update && deploy` deployed after a refused signature check and
+    # `topo doctor && run` ran against a dead engine.
+    with (
+        patch("sys.argv", argv),
+        patch("src.main.terminal_state.install_signal_handlers"),
+        patch("src.main.system.get_os_id", return_value="test-os"),
+        patch("src.main.SingleInstanceLock", return_value=nullcontext()),
+        patch(f"src.main.{target}", return_value=False),
+        pytest.raises(SystemExit) as exit_info,
+    ):
+        topo_main.main()
+    assert exit_info.value.code == 1
+
+
+@pytest.mark.parametrize(
+    ("argv", "target", "result"),
+    [
+        # "Nothing to do" is success: the system is already in the state the
+        # caller asked for. One command covers it -- the per-command semantics
+        # live in that command's own test module; this only pins the conversion.
+        (["topo", "update"], "run_update", True),
+        # Report-only commands have no failure to report and return None.
+        (["topo", "status"], "show_status", None),
+        (["topo", "history"], "show_history", None),
+    ],
+)
+def test_successful_commands_exit_zero(argv, target, result):
+    with (
+        patch("sys.argv", argv),
+        patch("src.main.terminal_state.install_signal_handlers"),
+        patch("src.main.system.get_os_id", return_value="test-os"),
+        patch("src.main.SingleInstanceLock", return_value=nullcontext()),
+        patch(f"src.main.{target}", return_value=result),
+    ):
+        topo_main.main()
+
+
+def test_unrouted_command_reports_a_missing_handler(capsys):
+    # argparse rejects unknown commands with exit 2, so this only fires for a
+    # subparser added without a dispatch entry -- which used to print the banner
+    # and exit 0.
+    args = SimpleNamespace(command="ghost", limit=10, silent=False, yes=False)
+    assert topo_main._execute_main_router(args, False) is False
+    assert "has no handler" in capsys.readouterr().err

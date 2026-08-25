@@ -120,7 +120,7 @@ def test_clean_sudo_cancel_prompt_has_no_trailing_blank_line():
         patch("src.clean.runner.proactive_app_detection", return_value={}),
         patch.object(runner.system, "SUDO_CANCELLED", True),
     ):
-        runner.run_clean(dry_run=False)
+        assert runner.run_clean(dry_run=False) is False
 
     cancel_calls = [
         call
@@ -140,7 +140,7 @@ def test_optimize_sudo_cancel_prompt_has_no_trailing_blank_line():
         patch("src.core.system.ensure_sudo_session", return_value=False),
         patch.object(optimize.system, "SUDO_CANCELLED", True),
     ):
-        optimize.optimize_system(dry_run=False)
+        assert optimize.optimize_system(dry_run=False) is False
 
     cancel_calls = [
         call

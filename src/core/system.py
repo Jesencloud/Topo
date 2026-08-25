@@ -229,8 +229,14 @@ def _clear_interrupted_sudo_prompt(prompt: str | None = None) -> None:
         return
 
 
-def setup_passwordless_sudo():
-    """Generate a command to enable permanent passwordless sudo for the current user."""
+def setup_passwordless_sudo() -> bool:
+    """Print the sudoers rule to enable passwordless sudo; False when it refused.
+
+    Every refusal path prints a ⚠️ and produces no usable rule for this script,
+    so a caller that pipes the output somewhere has to be able to tell. The
+    user-writable case still prints a *different*, safe rule as advice -- it is
+    deliberately still a failure: the rule the caller asked for was refused.
+    """
     user = get_invoking_user()
     script_path = os.path.realpath(sys.argv[0])
 
@@ -240,13 +246,13 @@ def setup_passwordless_sudo():
         print(
             f"{YELLOW}⚠️  Could not determine a safe username; refusing to generate a sudoers rule.{RESET}"
         )
-        return
+        return False
 
     if not _SAFE_SUDOERS_PATH_RE.match(script_path):
         print(
             f"{YELLOW}⚠️  Could not generate a safe sudoers rule for path with special characters or spaces: {script_path!r}{RESET}"
         )
-        return
+        return False
 
     # Check if script is owned by root and not writable by non-root users
     script_p = Path(script_path)
@@ -272,9 +278,10 @@ def setup_passwordless_sudo():
         print(
             f"\n{YELLOW}echo '{user} ALL=(root) NOPASSWD: /usr/sbin/fstrim -a, /usr/bin/journalctl --vacuum-time=3d' | sudo tee /etc/sudoers.d/topo{RESET}\n"
         )
-        return
+        return False
 
     rule = f"{user} ALL=(ALL) NOPASSWD: {script_path}"
     print("To allow topo to run without ever asking for a password, run this command once:")
     print(f"\n{YELLOW}echo '{rule}' | sudo tee /etc/sudoers.d/topo{RESET}\n")
     print("This will create a specific rule for the system-installed topo binary.")
+    return True

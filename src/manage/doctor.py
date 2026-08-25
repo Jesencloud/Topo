@@ -82,7 +82,18 @@ def _check_rust_size_probe(engine: Path | None) -> tuple[bool | None, str]:
     return True, "OK"
 
 
-def run_doctor():
+def run_doctor() -> bool:
+    """Print the diagnostic report; False when a hard problem was found.
+
+    "Hard" is deliberately narrow. Only what breaks topo itself counts: an
+    unreadable VERSION (broken install tree), a missing or non-responding Rust
+    engine, and a failing size probe. Optional tooling is not a failure --
+    `apt` is *supposed* to be absent on Fedora, `trash-put` on a headless box,
+    and a sudo password prompt is the normal case. A doctor that exited non-zero
+    for those would be as useless to a script as one that always exited 0.
+    """
+    failures: list[str] = []
+
     print(f"\n{BOLD}{PURPLE}🩺 Topo Diagnostic Report{RESET}\n")
 
     # 1. System Environment
@@ -97,6 +108,8 @@ def run_doctor():
     print(f"{BOLD}{BLUE}Topo Installation{RESET}")
     install_root = get_install_root()
     version = _read_topo_version(install_root)
+    if version.startswith("Unavailable"):
+        failures.append("VERSION unreadable")
     print(f"  Version:       {CYAN}{version}{RESET}")
     print(f"  Source:        {CYAN}{get_install_source()}{RESET}")
     print(f"  Install Root:  {CYAN}{install_root}{RESET}")
@@ -111,8 +124,10 @@ def run_doctor():
         if engine_ok:
             print(f"  {GREEN}✓{RESET} Execution:  {GREEN}{engine_detail}{RESET}")
         else:
+            failures.append("Rust engine does not run")
             print(f"  {RED}✗{RESET} Execution:  {RED}Failed{RESET} ({engine_detail})")
     else:
+        failures.append("Rust engine missing")
         print(f"  {RED}✗{RESET} Executable: {RED}Not found{RESET} at {engine}")
     print()
 
@@ -149,6 +164,7 @@ def run_doctor():
     elif size_ok is None:
         print(f"  {GRAY}-{RESET} Rust Fast Size Calculation: {GRAY}{size_detail}{RESET}")
     else:
+        failures.append("Rust size probe failed")
         print(f"  {RED}✗{RESET} Rust Fast Size Calculation: {RED}Failed{RESET} ({size_detail})")
     print()
 
@@ -169,4 +185,11 @@ def run_doctor():
         print(f"  {GRAY}-{RESET} Config Dir:  {GRAY}{config_dir}{RESET} (Missing)")
     print()
 
+    if failures:
+        print(f"{BOLD}{RED}Diagnostic complete: {len(failures)} problem(s) found.{RESET}")
+        for failure in failures:
+            print(f"  {RED}✗{RESET} {failure}")
+        return False
+
     print(f"{BOLD}Diagnostic complete.{RESET}")
+    return True

@@ -1,5 +1,6 @@
 import argparse
 import sys
+from collections.abc import Callable
 from contextlib import contextmanager
 
 from .clean.runner import run_clean
@@ -10,6 +11,7 @@ from .core.constants import (
     CLEAR_LINE,
     CLEAR_SCREEN,
     GRAY,
+    RED,
     RESET,
     THEME_TITLE,
     TOPO_VERSION,
@@ -161,16 +163,39 @@ def _run_alternate_tui(command, *args):
         return command(*args)
 
 
+# Exit-code contract (the reason every run_xxx() below returns a bool)
+#
+# 0  the command did what it was asked to do -- including "nothing to do"
+#    (already up to date, no residue to remove, an empty whitelist)
+# 1  it did not: a failure, a refusal, or a cancellation
+# 2  argparse rejected the arguments (argparse's own convention)
+# 130 interrupted (see main())
+#
+# Before this contract every command exited 0 no matter what, so a failed
+# signature verification, a package manager that returned non-zero, a `remove`
+# that could not delete anything and a `doctor` that found a dead engine were
+# all indistinguishable from success -- `topo update && echo ok` printed ok.
+# That made topo unusable in a script, which is exactly where doctor and update
+# belong.
+#
+# The convention that keeps this cheap: an action returning None counts as
+# success. Pure report commands (status, history, analyze, uninstall) have no
+# failure to report and stay annotation-free; only commands with a real
+# pass/fail outcome return a bool. A user cancelling a confirmation counts as
+# failure, not success: the operation did not happen, and `topo remove && ...`
+# must not run the rest.
 def main():
     terminal_state.install_signal_handlers()
     try:
-        _main()
+        ok = _main()
     except KeyboardInterrupt:
         _print_interrupted(clear_screen=True)
         raise SystemExit(130) from None
+    if not ok:
+        raise SystemExit(1)
 
 
-def _main():
+def _main() -> bool:
     parser = argparse.ArgumentParser(
         prog="topo",
         description="topo - Linux cleanup, app removal, disk analysis, and status checks.",
@@ -295,9 +320,12 @@ def _main():
     dry_run = getattr(args, "dry_run", False)
 
     # Authorization setup command
+    #
+    # authorize and whitelist stay ahead of the dispatch table on purpose: they
+    # run before the version banner (both are quiet, script-friendly commands)
+    # and they need neither the interactive-terminal guard nor the lock.
     if args.command == "authorize":
-        system.setup_passwordless_sudo()
-        return
+        return system.setup_passwordless_sudo()
 
     # Whitelist Management CLI
     if args.command == "whitelist":
@@ -307,6 +335,9 @@ def _main():
             wl_parser.error("list does not accept PATH")
 
         if args.action == "add":
+            # A duplicate is not a failure: adding a path that is already
+            # protected leaves the system in the state the caller asked for, so
+            # `topo whitelist add` is safe to run unconditionally in a script.
             if add_to_whitelist(args.path):
                 print(f"✅ Added to whitelist: {args.path}")
             else:
@@ -316,7 +347,7 @@ def _main():
                 print(f"✅ Removed from whitelist: {args.path}")
             else:
                 print(f"❌ Path not found in whitelist: {args.path}")
-                sys.exit(1)
+                return False
         elif args.action == "list":
             from .core.whitelist import get_whitelist
 
@@ -326,7 +357,7 @@ def _main():
                 print("   (Empty)")
             for p in w:
                 print(f"   - {p}")
-        return
+        return True
 
     # Commands that cannot work without a terminal.
     #
@@ -346,7 +377,7 @@ def _main():
             f"  {GRAY}Run it from a terminal, or use a non-interactive command such as{RESET} "
             f"{BOLD}topo status{RESET}{GRAY} or{RESET} {BOLD}topo clean --dry-run{RESET}{GRAY}.{RESET}"
         )
-        return
+        return False
 
     # Commands requiring single-instance concurrency lock.
     #
@@ -369,45 +400,48 @@ def _main():
 
     if args.command in LOCK_REQUIRED_COMMANDS:
         with SingleInstanceLock():
-            _execute_main_router(args, dry_run)
-    else:
-        _execute_main_router(args, dry_run)
+            return _execute_main_router(args, dry_run)
+    return _execute_main_router(args, dry_run)
 
 
-def _execute_main_router(args, dry_run):
-    # If no command is provided, enter TUI
+def _run_menu_loop(dry_run):
+    # Keyed in the order main_menu() draws the entries: the cursor position the
+    # menu reopens on is this dict's index for the action just run, so a second
+    # action -> index table cannot drift out of sync with the routes.
+    menu_routes = {
+        CLEAN_ACTION: lambda: _run_terminal_tui_command(run_clean, dry_run),
+        UNINSTALL_ACTION: lambda: _run_alternate_tui(run_uninstall) or True,
+        OPTIMIZE_ACTION: lambda: _run_terminal_tui_command(optimize_system, dry_run),
+        ANALYZE_ACTION: lambda: _run_alternate_tui(run_deep_analysis) or True,
+        STATUS_ACTION: lambda: _run_terminal_tui_command(show_status),
+    }
+    menu_order = list(menu_routes)
+    selected_menu_index = 0
+    with alternate_screen():
+        terminal_state.hide_cursor()
+        try:
+            while True:
+                choice = main_menu(selected_menu_index)
+
+                if choice == QUIT_ACTION:
+                    break
+                action = menu_routes.get(choice)
+                if action is None:
+                    continue
+                selected_menu_index = menu_order.index(choice)
+                if not action():
+                    break
+        finally:
+            terminal_state.show_cursor()
+
+
+def _execute_main_router(args, dry_run) -> bool:
+    # If no command is provided, enter TUI. The menu is a session, not an
+    # operation: quitting it is success even if a cleanup inside it failed, and
+    # the per-action result is what ends the loop (see _run_terminal_tui_command).
     if args.command is None:
-        menu_routes = {
-            CLEAN_ACTION: lambda: _run_terminal_tui_command(run_clean, dry_run),
-            UNINSTALL_ACTION: lambda: _run_alternate_tui(run_uninstall) or True,
-            OPTIMIZE_ACTION: lambda: _run_terminal_tui_command(optimize_system, dry_run),
-            ANALYZE_ACTION: lambda: _run_alternate_tui(run_deep_analysis) or True,
-            STATUS_ACTION: lambda: _run_terminal_tui_command(show_status),
-        }
-        menu_indices = {
-            CLEAN_ACTION: 0,
-            UNINSTALL_ACTION: 1,
-            OPTIMIZE_ACTION: 2,
-            ANALYZE_ACTION: 3,
-            STATUS_ACTION: 4,
-        }
-        selected_menu_index = 0
-        with alternate_screen():
-            terminal_state.hide_cursor()
-            try:
-                while True:
-                    choice = main_menu(selected_menu_index)
-
-                    if choice == QUIT_ACTION:
-                        break
-                    if choice in menu_indices:
-                        selected_menu_index = menu_indices[choice]
-                    action = menu_routes.get(choice)
-                    if action and not action():
-                        break
-            finally:
-                terminal_state.show_cursor()
-        return
+        _run_menu_loop(dry_run)
+        return True
 
     # CLI Mode Execution
     # Suppress version banner for silent link command to keep installation log clean
@@ -418,37 +452,34 @@ def _execute_main_router(args, dry_run):
         os_id = system.get_os_id()
         print(f"System: {os_id}")
 
-    if args.command == "clean":
-        run_clean(dry_run)
+    # One dispatch table instead of eleven sequential `if args.command == ...`
+    # comparisons: a command can no longer be silently unroutable (adding a
+    # subparser without a branch used to run, print the banner and exit 0), and
+    # every route funnels through the same success/failure conversion below.
+    dispatch: dict[str, Callable[[], bool | None]] = {
+        "clean": lambda: run_clean(dry_run),
+        "uninstall": lambda: _run_alternate_tui(run_uninstall),
+        "analyze": lambda: _run_alternate_tui(run_deep_analysis),
+        "optimize": lambda: optimize_system(dry_run),
+        "status": show_status,
+        "doctor": run_doctor,
+        "history": lambda: show_history(limit=max(args.limit, 1)),
+        "link": lambda: run_install_link(silent=args.silent),
+        "update": run_update,
+        "remove": lambda: run_remove(dry_run, args.yes),
+    }
 
-    if args.command == "uninstall":
-        with alternate_screen():
-            run_uninstall()
+    action = dispatch.get(args.command)
+    if action is None:
+        # Unreachable through argparse, which rejects unknown commands with
+        # exit 2. It fires for a subparser added without a route -- a mistake
+        # that used to be invisible.
+        print(f"\n {RED}✗{RESET} Command {args.command!r} has no handler.", file=sys.stderr)
+        return False
 
-    if args.command == "analyze":
-        with alternate_screen():
-            run_deep_analysis()
-
-    if args.command == "status":
-        show_status()
-
-    if args.command == "doctor":
-        run_doctor()
-
-    if args.command == "history":
-        show_history(limit=max(args.limit, 1))
-
-    if args.command == "optimize":
-        optimize_system(dry_run)
-
-    if args.command == "link" and not run_install_link(silent=args.silent):
-        sys.exit(1)
-
-    if args.command == "update":
-        run_update()
-
-    if args.command == "remove":
-        run_remove(dry_run, args.yes)
+    # None means "no failure to report" (status, history, analyze, uninstall);
+    # only an explicit False is a failure.
+    return action() is not False
 
 
 if __name__ == "__main__":

@@ -58,7 +58,7 @@ def test_run_remove_executes_package_manager_removal(
     monkeypatch.setenv("XDG_STATE_HOME", str(test_env / ".local/state"))
     monkeypatch.setattr("pathlib.Path.home", lambda: test_env)
 
-    run_remove()
+    assert run_remove() is True
 
     output = capsys.readouterr().out
     assert "sudo apt remove -y topo" in output
@@ -101,7 +101,7 @@ def test_package_removal_does_not_report_a_lock_only_config_dir(
     monkeypatch.setenv("XDG_STATE_HOME", str(test_env / ".local/state"))
     monkeypatch.setattr("pathlib.Path.home", lambda: test_env)
 
-    run_remove()
+    assert run_remove() is True
 
     output = capsys.readouterr().out
     assert "Topo package removal completed" in output
@@ -118,7 +118,7 @@ def test_package_removal_does_not_report_a_lock_only_config_dir(
 def test_run_remove_dry_run_does_not_execute_package_manager(
     mock_run, _mock_command, _mock_install_source, capsys
 ):
-    run_remove(dry_run=True)
+    assert run_remove(dry_run=True) is True
 
     output = capsys.readouterr().out
     assert "sudo dnf remove -y topo" in output
@@ -257,7 +257,7 @@ def test_package_residue_removes_matching_entries_and_path(test_env, monkeypatch
 @patch("src.manage.remove.get_install_source", return_value="package")
 @patch("src.manage.remove.get_package_remove_argv", return_value=None)
 def test_package_remove_unsupported_distribution(_argv, _source, capsys):
-    run_remove()
+    assert run_remove() is False
     assert "Unsupported Linux distribution" in capsys.readouterr().out
 
 
@@ -266,7 +266,7 @@ def test_package_remove_unsupported_distribution(_argv, _source, capsys):
 @patch("src.manage.remove.subprocess.run", side_effect=OSError("denied"))
 @patch("src.manage.remove._confirm_removal", return_value=True)
 def test_package_remove_subprocess_error(_confirm, _run, _argv, _source, capsys):
-    run_remove()
+    assert run_remove() is False
     assert "Package removal failed" in capsys.readouterr().out
 
 
@@ -275,7 +275,7 @@ def test_package_remove_subprocess_error(_confirm, _run, _argv, _source, capsys)
 @patch("src.manage.remove.subprocess.run", return_value=MagicMock(returncode=1))
 @patch("src.manage.remove._confirm_removal", return_value=True)
 def test_package_remove_nonzero_exit(_confirm, _run, _argv, _source, capsys):
-    run_remove()
+    assert run_remove() is False
     assert "exit code 1" in capsys.readouterr().out
 
 
@@ -293,7 +293,7 @@ def test_package_remove_asks_before_running_the_package_manager(_run, _argv, _so
         patch("sys.stdin.read", return_value="n"),
         patch("src.manage.remove.terminal_state.restore_raw_state"),
     ):
-        run_remove()
+        assert run_remove() is False
 
     output = capsys.readouterr().out
     assert "Remove the topo package" in output
@@ -312,7 +312,7 @@ def test_package_remove_refuses_to_confirm_without_a_terminal(_run, _argv, _sour
         patch("sys.stdin.isatty", return_value=False),
         patch("termios.tcgetattr", side_effect=fail_if_called),
     ):
-        run_remove()
+        assert run_remove() is False
 
     output = capsys.readouterr().out
     assert "needs an interactive confirmation" in output
@@ -343,7 +343,7 @@ def test_package_remove_yes_skips_the_prompt_without_a_terminal(
         patch("sys.stdin.isatty", return_value=False),
         patch("termios.tcgetattr", side_effect=fail_if_called),
     ):
-        run_remove(assume_yes=True)
+        assert run_remove(assume_yes=True) is True
 
     output = capsys.readouterr().out
     assert "needs an interactive confirmation" not in output
@@ -367,7 +367,7 @@ def test_script_remove_yes_skips_the_prompt_without_a_terminal(test_env, monkeyp
         patch("termios.tcgetattr", side_effect=fail_if_called),
         patch("src.manage.remove.safe_remove", side_effect=lambda p, **kw: (_do_remove(p), "ok")),
     ):
-        run_remove(assume_yes=True)
+        assert run_remove(assume_yes=True) is True
 
     output = capsys.readouterr().out
     assert "needs an interactive confirmation" not in output
@@ -378,7 +378,7 @@ def test_script_remove_yes_skips_the_prompt_without_a_terminal(test_env, monkeyp
 def test_user_remove_no_integration_and_dry_run(test_env, monkeypatch, capsys):
     monkeypatch.setattr("pathlib.Path.home", lambda: test_env)
     with patch("src.manage.remove.get_install_source", return_value="script"):
-        run_remove()
+        assert run_remove() is True
     assert "No system integration" in capsys.readouterr().out
 
     (test_env / ".config/topo").mkdir(parents=True)
@@ -386,7 +386,7 @@ def test_user_remove_no_integration_and_dry_run(test_env, monkeypatch, capsys):
         patch("src.manage.remove.get_install_source", return_value="script"),
         patch("src.manage.remove.get_size_fast", return_value=10),
     ):
-        run_remove(dry_run=True)
+        assert run_remove(dry_run=True) is True
     assert "Dry run complete" in capsys.readouterr().out
 
 
@@ -400,7 +400,7 @@ def test_config_dir_holding_only_the_lock_file_is_not_leftover(test_env, monkeyp
     (config_dir / "topo.lock").write_text("4242\n")
 
     with patch("src.manage.remove.get_install_source", return_value="script"):
-        run_remove()
+        assert run_remove() is True
     assert "No system integration" in capsys.readouterr().out
 
     (config_dir / "config.json").write_text("{}")
@@ -408,7 +408,7 @@ def test_config_dir_holding_only_the_lock_file_is_not_leftover(test_env, monkeyp
         patch("src.manage.remove.get_install_source", return_value="script"),
         patch("src.manage.remove.get_size_fast", return_value=10),
     ):
-        run_remove(dry_run=True)
+        assert run_remove(dry_run=True) is True
     assert "Configuration and whitelist" in capsys.readouterr().out
 
 
@@ -426,7 +426,7 @@ def test_user_remove_cancel_and_success_with_error(test_env, monkeypatch, capsys
         patch("sys.stdin.read", return_value="n"),
         patch("src.manage.remove.terminal_state.restore_raw_state"),
     ):
-        run_remove()
+        assert run_remove() is False
     assert "cancelled" in capsys.readouterr().out
 
     with (
@@ -440,7 +440,7 @@ def test_user_remove_cancel_and_success_with_error(test_env, monkeypatch, capsys
         patch("src.manage.remove.terminal_state.restore_raw_state"),
         patch("src.manage.remove.safe_remove", return_value=(False, "denied")),
     ):
-        run_remove()
+        assert run_remove() is False
     assert "completed with errors" in capsys.readouterr().out
 
 
@@ -462,7 +462,7 @@ def test_remove_refuses_to_confirm_without_a_terminal(test_env, monkeypatch, cap
         patch("termios.tcgetattr", side_effect=fail_if_called),
         patch("src.manage.remove.safe_remove", side_effect=fail_if_called),
     ):
-        run_remove()
+        assert run_remove() is False
 
     output = capsys.readouterr().out
     assert "needs an interactive confirmation" in output

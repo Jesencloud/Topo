@@ -292,7 +292,7 @@ def test_run_update_downloads_and_installs_package_update(
     ]
     mock_run.return_value = MagicMock(returncode=0)
 
-    run_update()
+    assert run_update() is True
 
     output = capsys.readouterr().out
     assert "New package available: v0.9.3" in output
@@ -344,7 +344,7 @@ def test_run_update_downloads_signature_assets_when_gpg_is_available(
     ]
     mock_run.return_value = MagicMock(returncode=0)
 
-    run_update()
+    assert run_update() is True
 
     assert downloaded == [
         "topo-0.9.3-1.x86_64.rpm",
@@ -359,7 +359,7 @@ def test_run_update_downloads_signature_assets_when_gpg_is_available(
 def test_run_update_does_not_install_when_remote_is_older(mock_check_output, mock_run):
     mock_check_output.return_value = '{"tag_name": "v0.0.1"}'
 
-    run_update()
+    assert run_update() is True
 
     mock_run.assert_not_called()
 
@@ -369,7 +369,7 @@ def test_run_update_does_not_install_when_remote_is_older(mock_check_output, moc
 def test_run_update_does_not_install_when_remote_version_is_invalid(mock_check_output, mock_run):
     mock_check_output.return_value = '{"tag_name": "latest"}'
 
-    run_update()
+    assert run_update() is False
 
     mock_run.assert_not_called()
 
@@ -393,7 +393,7 @@ def test_run_update_installs_only_when_remote_is_newer(mock_check_output, mock_r
         mock_check_output.side_effect = ['{"tag_name": "v999.0.0"}', script_content.encode("utf-8")]
         mock_run.return_value = MagicMock(returncode=0)
 
-        run_update()
+        assert run_update() is True
 
     # Executed without a shell, with the tag as a separate argv element.
     mock_run.assert_called_once()
@@ -409,7 +409,7 @@ def test_run_update_rejects_unsafe_tag(mock_check_output, mock_run):
     # refused before being used in a URL or handed to the installer.
     mock_check_output.return_value = '{"tag_name": "1!2.3"}'
 
-    run_update()
+    assert run_update() is False
 
     mock_run.assert_not_called()
 
@@ -434,7 +434,7 @@ def test_run_update_rejects_non_script_payload(mock_check_output, mock_run, _moc
             non_script.encode("utf-8"),
         ]
 
-        run_update()
+        assert run_update() is False
 
     mock_run.assert_not_called()
 
@@ -477,13 +477,13 @@ def test_run_update_invalid_local_and_fetch_failure(capsys):
         patch("src.manage.update._read_local_version", return_value="bad"),
         patch("src.manage.update._fetch_latest_release_tag", return_value="v2.0.0"),
     ):
-        run_update()
+        assert run_update() is False
     assert "Invalid local version" in capsys.readouterr().out
     with (
         patch("src.manage.update._read_local_version", return_value="1.0.0"),
         patch("src.manage.update._fetch_latest_release_tag", side_effect=OSError("offline")),
     ):
-        run_update()
+        assert run_update() is False
     assert "Failed to check latest release" in capsys.readouterr().out
 
 
@@ -496,7 +496,7 @@ def test_run_update_separates_a_missing_curl_from_a_failed_lookup(capsys):
         patch("src.manage.update._fetch_latest_release_tag", return_value=""),
         patch("src.manage.update.shutil.which", return_value=None),
     ):
-        run_update()
+        assert run_update() is False
     output = capsys.readouterr().out
     assert "curl not found" in output
     assert "Invalid release tag" not in output
@@ -506,7 +506,7 @@ def test_run_update_separates_a_missing_curl_from_a_failed_lookup(capsys):
         patch("src.manage.update._fetch_latest_release_tag", return_value=""),
         patch("src.manage.update.shutil.which", return_value="/usr/bin/curl"),
     ):
-        run_update()
+        assert run_update() is False
     output = capsys.readouterr().out
     assert "Could not determine the latest release version" in output
     assert "Invalid release tag" not in output
@@ -516,7 +516,7 @@ def test_run_update_separates_a_missing_curl_from_a_failed_lookup(capsys):
         patch("src.manage.update._read_local_version", return_value="1.0.0"),
         patch("src.manage.update._fetch_latest_release_tag", return_value="nightly"),
     ):
-        run_update()
+        assert run_update() is False
     assert "Invalid release tag" in capsys.readouterr().out
 
 

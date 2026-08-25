@@ -190,14 +190,20 @@ jobs:
           fi
           topo --version
 
-          update_output="$(topo update)"
+          # topo now reports failures through its exit code, so capture the
+          # status instead of letting `set -e` abort on the assignment -- the
+          # output has to be printed before the check or the log is empty on the
+          # very run that failed.
+          update_output="$(topo update)" && update_status=0 || update_status=$?
           printf '%s\n' "$update_output"
+          test "$update_status" -eq 0
           grep -F "Checking for updates" <<<"$update_output"
           ! grep -F "sudo apt upgrade topo" <<<"$update_output"
           ! grep -F "sudo dnf upgrade topo" <<<"$update_output"
 
-          remove_output="$(topo remove --yes)"
+          remove_output="$(topo remove --yes)" && remove_status=0 || remove_status=$?
           printf '%s\n' "$remove_output"
+          test "$remove_status" -eq 0
           grep -F "apt remove -y topo" <<<"$remove_output"
           ! grep -F "dnf remove -y topo" <<<"$remove_output"
           if dpkg-query -W -f='${Status}' topo 2>/dev/null | grep -F "install ok installed"; then
@@ -226,14 +232,16 @@ jobs:
           topo --version
           test "$(cat /usr/lib/topo/.topo-install-source)" = "package"
 
-          update_output="$(topo update)"
+          update_output="$(topo update)" && update_status=0 || update_status=$?
           printf '%s\n' "$update_output"
+          test "$update_status" -eq 0
           grep -F "Checking for updates" <<<"$update_output"
           ! grep -F "sudo apt upgrade topo" <<<"$update_output"
           ! grep -F "sudo dnf upgrade topo" <<<"$update_output"
 
-          remove_output="$(topo remove --yes)"
+          remove_output="$(topo remove --yes)" && remove_status=0 || remove_status=$?
           printf '%s\n' "$remove_output"
+          test "$remove_status" -eq 0
           grep -F "dnf remove -y topo" <<<"$remove_output"
           ! grep -F "apt remove -y topo" <<<"$remove_output"
           ! rpm -q topo

@@ -226,33 +226,39 @@ def _confirm_removal(prompt: str, assume_yes: bool = False) -> bool:
     return True
 
 
-def run_remove(dry_run=False, assume_yes=False):
-    """Removes topo from the system."""
+def run_remove(dry_run=False, assume_yes=False) -> bool:
+    """Remove topo from the system; False when the removal did not fully happen.
+
+    A cancelled confirmation and a non-TTY refusal are failures for the same
+    reason a delete error is: topo is still installed, so `topo remove && ...`
+    must not continue. "Nothing to remove" is a success -- the system is already
+    in the state the caller asked for.
+    """
 
     if get_install_source() == PACKAGE_INSTALL:
         command = get_package_remove_argv()
         if not command:
             print(f"\n {RED}✗ Unsupported Linux distribution for package removal.{RESET}")
-            return
+            return False
         print(f"\n {MAGENTA}☉ Removing Topo through the system package manager.{RESET}\n")
         # "Command:" and not "Running:": this line is printed before the
         # confirmation, so on the --dry-run and declined paths nothing runs.
         print(f" {GRAY}Command:{RESET} {BOLD}{' '.join(command)}{RESET}")
         if dry_run:
             print(f" {GREEN}✓{RESET} Dry run complete. Package removal command was not executed.")
-            return
+            return True
         if not _confirm_removal(
             f"\n {PURPLE}●{RESET} Remove the topo package: "
             f"Press {GREEN}Enter{RESET} confirm, {GREEN}ESC{RESET} cancel: ",
             assume_yes,
         ):
-            return
+            return False
         print()
         try:
             process = subprocess.run(command, timeout=300)
         except (OSError, subprocess.SubprocessError) as e:
             print(f" {RED}✗ Package removal failed: {e}{RESET}")
-            return
+            return False
         if process.returncode == 0:
             print(f"\n {GREEN}✓{RESET} Topo package removal completed.")
             for label in _remove_package_user_residue():
@@ -260,9 +266,9 @@ def run_remove(dry_run=False, assume_yes=False):
             print(
                 f" {GRAY}If your shell still uses an old command path, run:{RESET} {BOLD}hash -r{RESET}"
             )
-        else:
-            print(f"\n {RED}✗ Package removal failed with exit code {process.returncode}.{RESET}")
-        return
+            return True
+        print(f"\n {RED}✗ Package removal failed with exit code {process.returncode}.{RESET}")
+        return False
 
     # 1. Identify files to remove
     to_remove: list[_RemoveItem] = []
@@ -301,7 +307,7 @@ def run_remove(dry_run=False, assume_yes=False):
 
     if not to_remove:
         print(f" {GREEN}✓{RESET} No system integration found to remove.")
-        return
+        return True
 
     # Calculate total size and prepare detailed list
     for item in to_remove:
@@ -320,7 +326,7 @@ def run_remove(dry_run=False, assume_yes=False):
             f"\n {GREEN}✓{RESET} {GRAY}Dry run complete. Total to free: {bytes_to_human(total_size)}{RESET}"
         )
         print(f"  {GRAY}(Shell PATH entries added by topo would also be removed.){RESET}")
-        return
+        return True
 
     # 3. Confirmation (Mole-style)
     if not _confirm_removal(
@@ -328,7 +334,7 @@ def run_remove(dry_run=False, assume_yes=False):
         f"Press {GREEN}Enter{RESET} confirm, {GREEN}ESC{RESET} cancel: ",
         assume_yes,
     ):
-        return
+        return False
 
     # 4. Execution
     print()
@@ -370,5 +376,7 @@ def run_remove(dry_run=False, assume_yes=False):
 
     if had_errors:
         print(f"\n {YELLOW}⚠{RESET} {GRAY}Topo removal completed with errors (see above).{RESET}\n")
-    else:
-        print(f"\n {GREEN}✨ Topo has been successfully removed from your system!{RESET}\n")
+        return False
+
+    print(f"\n {GREEN}✨ Topo has been successfully removed from your system!{RESET}\n")
+    return True

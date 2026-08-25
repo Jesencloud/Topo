@@ -88,7 +88,7 @@ def test_run_clean_executes_tasks_records_history_and_clears_scan_cache(capsys):
             return_value=SimpleNamespace(free=10 * 1024**3),
         ),
     ):
-        assert run_clean() is None
+        assert run_clean() is True
 
     assert calls == [False]
     assert history.call_args_list[0].args == ("clean", "started")

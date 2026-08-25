@@ -927,7 +927,13 @@ def run_package_repo_refresh(dry_run=False):
     return None
 
 
-def optimize_system(dry_run: bool = False) -> bool | None:
+def optimize_system(dry_run: bool = False) -> bool:
+    """Run the maintenance task batch; False when it never ran (sudo declined).
+
+    A task that raises is logged and the batch continues, and that stays a
+    success: the tasks are independent maintenance chores, so one unavailable
+    tool (no fstrim, no fc-cache) must not make `topo optimize` look broken.
+    """
     sys.stdout.write(CLEAR_SCREEN)
     sys.stdout.flush()
     print(f"\n{PURPLE}System Optimization{RESET}\n")
@@ -975,4 +981,4 @@ def optimize_system(dry_run: bool = False) -> bool | None:
 
     duration = time.time() - start_time
     print(f"\n{GREEN}{BOLD}✔ All tasks completed in {duration:.1f}s.{RESET}")
-    return None
+    return True

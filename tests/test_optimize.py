@@ -87,7 +87,9 @@ def test_optimize_system_caps_worker_pool_and_reports_task_failures(capsys):
             ).ThreadPoolExecutor,
         ) as executor,
     ):
-        optimize_system(dry_run=True)
+        # A task that raises is logged and the batch continues; that stays a
+        # success, so `topo optimize` on a box without fstrim still exits 0.
+        assert optimize_system(dry_run=True) is True
 
     executor.assert_called_once_with(max_workers=4)
     output = capsys.readouterr().out

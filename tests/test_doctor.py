@@ -33,11 +33,17 @@ def test_run_doctor_continues_when_version_file_is_missing(tmp_path, capsys):
             return_value=_command_result(["sudo"], returncode=1),
         ),
     ):
-        doctor.run_doctor()
+        assert doctor.run_doctor() is False
 
     output = capsys.readouterr().out
     assert "Unavailable (VERSION missing or unreadable)" in output
-    assert "Diagnostic complete." in output
+    # An unreadable VERSION and a missing engine are both hard failures: the
+    # install tree is broken. The report still prints in full -- doctor's job is
+    # to describe the environment, not to bail on the first problem -- but the
+    # exit code has to say something went wrong.
+    assert "Diagnostic complete: 2 problem(s) found." in output
+    assert "✗ VERSION unreadable" in output
+    assert "✗ Rust engine missing" in output
 
 
 def test_run_doctor_uses_temporary_size_probe_with_short_timeout(tmp_path):
@@ -73,7 +79,7 @@ def test_run_doctor_uses_temporary_size_probe_with_short_timeout(tmp_path):
         patch("src.manage.doctor.Path.home", return_value=home),
         patch("src.manage.doctor.run_command", side_effect=fake_run_command),
     ):
-        doctor.run_doctor()
+        assert doctor.run_doctor() is True
 
     assert len(engine_calls) == 2
     assert all(
