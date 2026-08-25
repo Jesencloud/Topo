@@ -4,12 +4,12 @@ from pathlib import Path
 
 from ..core.constants import OK
 from ..core.file_ops import bytes_to_human, get_size_fast, parse_size_from_text, safe_remove
-from ..core.heavy_cache import get_package_manager_cleaner
+from ..core.heavy_cache import PACKAGE_MANAGER_CACHE_DEFS
+from ..core.package_manager import detect_package_manager, resolve_admin_tool
 from ..core.system import (
     APT_NONINTERACTIVE_ENV,
     C_LOCALE_ENV,
     get_os_id,
-    is_os_family,
     run_command,
 )
 
@@ -72,25 +72,18 @@ def clean_snaps(dry_run: bool = False) -> tuple[int, int, int]:
 
 
 def _get_package_manager_cache_paths(cleaner_key: str) -> list[Path]:
-    """Determines the physical cache directory paths for a package manager."""
-    if cleaner_key == "dnf":
-        for p in (
-            Path("/var/cache/libdnf5"),
-            Path("/var/cache/dnf5daemon-server"),
-            Path("/var/cache/dnf"),
-        ):
-            if p.exists():
-                return [p]
-        return []
-    elif cleaner_key == "apt":
-        paths = [Path("/var/cache/apt/archives")]
-        partial_path = Path("/var/cache/apt/archives/partial")
-        if partial_path.exists():
-            paths.append(partial_path)
-        return paths
-    elif cleaner_key == "pacman":
-        pkg_path = Path("/var/cache/pacman/pkg")
-        return [pkg_path] if pkg_path.exists() else []
+    """The cache directories to measure, from the table Analyze reads too.
+
+    Every path of the family that exists, not just the first: dnf5 moved the
+    cache to /var/cache/libdnf5 and leaves the old /var/cache/dnf behind, and one
+    `dnf clean packages` empties both. apt's own `partial/` subdirectory is
+    deliberately not listed -- get_size_fast() already recurses into it, so
+    naming it separately only counted its bytes twice.
+    """
+    for definition in PACKAGE_MANAGER_CACHE_DEFS:
+        if definition.key == cleaner_key:
+            candidates = (definition.path, *definition.fallback_paths)
+            return [path for path in map(Path, candidates) if path.exists()]
     return []
 
 
@@ -101,32 +94,34 @@ def _measure_package_cache_size(cache_paths: list[Path]) -> int:
 
 def clean_package_manager(dry_run: bool = False) -> tuple[int, int, int]:
     """Clean system package manager caches."""
+    manager = detect_package_manager(get_os_id())
+    if manager is None:
+        return 0, 0, 0
+
     freed = 0
     snap_items = 0
     snap_cats = 0
-    os_id = get_os_id()
-    cleaner = get_package_manager_cleaner(os_id)
-
-    if cleaner and cleaner.key == "apt" and shutil.which(cleaner.executable):
+    if manager.key == "apt":
         s, snap_items, snap_cats = clean_snaps(dry_run=dry_run)
         freed += s
 
-    if not cleaner or not shutil.which(cleaner.executable):
+    # The resolved tool, so a dnf5-only box is cleaned rather than skipped -- and
+    # so the skip below asks about the binary that would actually run.
+    tool = resolve_admin_tool(manager)
+    if not shutil.which(tool):
         return freed, snap_items, snap_cats
 
-    cache_paths = _get_package_manager_cache_paths(cleaner.key)
+    cache_paths = _get_package_manager_cache_paths(manager.key)
     pre_size = _measure_package_cache_size(cache_paths)
 
     if dry_run:
         size_hint = f" ({bytes_to_human(pre_size)})" if pre_size > 0 else ""
-        print(f"  {OK} {cleaner.label}{size_hint} would be cleaned")
+        print(f"  {OK} {manager.label} cache{size_hint} would be cleaned")
         return freed + pre_size, snap_items, snap_cats + 1
 
-    cmd = list(cleaner.command)
-    if cleaner.key == "dnf" and shutil.which("dnf5"):
-        cmd = ["dnf5", "clean", "packages"]
-
-    res = run_command(cmd, use_sudo=True, capture=True, env=C_LOCALE_ENV)
+    res = run_command(
+        [tool, *manager.cache_clean_args], use_sudo=True, capture=True, env=C_LOCALE_ENV
+    )
     post_size = _measure_package_cache_size(cache_paths)
     measured_freed = max(0, pre_size - post_size)
 
@@ -137,7 +132,7 @@ def clean_package_manager(dry_run: bool = False) -> tuple[int, int, int]:
 
     if res.ok:
         freed_str = f" ({bytes_to_human(freed)})" if freed > 0 else ""
-        print(f"  {OK} Cleaned {cleaner.label}{freed_str}")
+        print(f"  {OK} Cleaned {manager.label} cache{freed_str}")
         return freed, snap_items + 1, snap_cats + 1
 
     return freed, snap_items, snap_cats
@@ -165,58 +160,56 @@ def clean_journal(dry_run: bool = False) -> tuple[int, int, int]:
 
 def clean_orphaned_packages(dry_run: bool = False) -> tuple[int, int, int]:
     """Remove orphaned dependencies that are no longer needed."""
-    os_id = get_os_id()
-    freed = 0
+    manager = detect_package_manager(get_os_id())
+    if manager is None or not manager.orphan_removal:
+        return 0, 0, 0
 
-    if (
-        os_id in ("ubuntu", "debian", "linuxmint", "pop", "elementary") or is_os_family("debian")
-    ) and shutil.which("apt-get"):
+    tool = resolve_admin_tool(manager)
+    if not shutil.which(tool):
+        return 0, 0, 0
+
+    if manager.key == "apt":
         if dry_run:
-            print(f"  {OK} Orphaned APT packages would be autoremoved")
+            print(f"  {OK} Orphaned {manager.label} packages would be autoremoved")
             return 0, 0, 1
         res = run_command(
-            ["apt-get", "autoremove", "-y"],
+            [tool, "autoremove", "-y"],
             use_sudo=True,
             capture=True,
             env=APT_NONINTERACTIVE_ENV,
         )
         if res.ok:
             freed = parse_size_from_text(res.stdout)
-            print(f"  {OK} Removed orphaned APT packages")
+            print(f"  {OK} Removed orphaned {manager.label} packages")
             return freed, 1, 1
 
-    elif (
-        os_id in ("fedora", "rhel", "centos", "rocky", "almalinux") or is_os_family("fedora")
-    ) and (shutil.which("dnf5") or shutil.which("dnf")):
-        dnf_cmd = "dnf5" if shutil.which("dnf5") else "dnf"
+    elif manager.key == "dnf":
         if dry_run:
-            print(f"  {OK} Orphaned DNF packages would be autoremoved")
+            print(f"  {OK} Orphaned {manager.label} packages would be autoremoved")
             return 0, 0, 1
-        res = run_command(
-            [dnf_cmd, "autoremove", "-y"], use_sudo=True, capture=True, env=C_LOCALE_ENV
-        )
+        res = run_command([tool, "autoremove", "-y"], use_sudo=True, capture=True, env=C_LOCALE_ENV)
         if res.ok:
             freed = parse_size_from_text(res.stdout)
             items = res.stdout.count("\n") // 2
-            print(f"  {OK} Removed orphaned DNF packages ({bytes_to_human(freed)})")
+            print(f"  {OK} Removed orphaned {manager.label} packages ({bytes_to_human(freed)})")
             return freed, items, 1
 
-    elif shutil.which("pacman"):
-        list_res = run_command(["pacman", "-Qtdq"], capture=True)
+    elif manager.key == "pacman":
+        list_res = run_command([tool, "-Qtdq"], capture=True)
         if list_res.ok and list_res.stdout.strip():
             orphans = list_res.stdout.split()
             if dry_run:
-                print(f"  {OK} {len(orphans)} orphaned Pacman packages would be removed")
+                print(f"  {OK} {len(orphans)} orphaned {manager.label} packages would be removed")
                 return 0, 0, 1
             remove_res = run_command(
-                ["pacman", "-Rns", "--noconfirm"] + orphans,
+                [tool, "-Rns", "--noconfirm"] + orphans,
                 use_sudo=True,
                 capture=True,
                 env=C_LOCALE_ENV,
             )
             if remove_res.ok:
                 freed = parse_size_from_text(remove_res.stdout)
-                print(f"  {OK} Removed {len(orphans)} orphaned Pacman packages")
+                print(f"  {OK} Removed {len(orphans)} orphaned {manager.label} packages")
                 return freed, len(orphans), 1
 
     return 0, 0, 0
@@ -263,8 +256,18 @@ def clean_zombies(dry_run: bool = False) -> tuple[int, int, int]:
 def clean_old_kernels(dry_run: bool = False) -> tuple[int, int, int]:
     """Remove old kernel packages, keeping current and one previous version."""
     current_kernel = platform.release()
+    # Asked from os-release rather than from PATH, like every other
+    # package-manager decision: a Fedora box with the dpkg tools installed for
+    # `alien` used to take the deb branch, find no linux-image-* rows, and return
+    # without ever asking dnf about its kernels.
+    manager = detect_package_manager(get_os_id())
+    if manager is None:
+        return 0, 0, 0
+    tool = resolve_admin_tool(manager)
+    if not shutil.which(tool):
+        return 0, 0, 0
 
-    if shutil.which("dpkg") and shutil.which("apt-get"):
+    if manager.key == "apt" and shutil.which("dpkg"):
         # Rows are matched on dpkg's English "ii" status pair.
         res = run_command(["dpkg", "-l", "linux-image-*"], capture=True, env=C_LOCALE_ENV)
         if not res.ok or not res.stdout:
@@ -290,7 +293,7 @@ def clean_old_kernels(dry_run: bool = False) -> tuple[int, int, int]:
             return 0, 0, 1
         for pkg in to_remove:
             run_command(
-                ["apt-get", "purge", "-y", pkg],
+                [tool, "purge", "-y", pkg],
                 use_sudo=True,
                 capture=True,
                 env=APT_NONINTERACTIVE_ENV,
@@ -298,9 +301,8 @@ def clean_old_kernels(dry_run: bool = False) -> tuple[int, int, int]:
         print(f"  {OK} Removed {len(to_remove)} old kernel(s)")
         return 0, len(to_remove), 1
 
-    elif shutil.which("dnf5") or shutil.which("dnf"):
-        dnf_cmd = "dnf5" if shutil.which("dnf5") else "dnf"
-        res = run_command([dnf_cmd, "repoquery", "--installonly", "--installed"], capture=True)
+    elif manager.key == "dnf":
+        res = run_command([tool, "repoquery", "--installonly", "--installed"], capture=True)
         if not res.ok or not res.stdout:
             return 0, 0, 0
         kernels = [k.strip() for k in res.stdout.splitlines() if k.strip()]
@@ -312,7 +314,7 @@ def clean_old_kernels(dry_run: bool = False) -> tuple[int, int, int]:
             print(f"  {OK} {len(to_remove)} old kernel(s) would be removed")
             return 0, 0, 1
         for pkg in to_remove:
-            run_command([dnf_cmd, "remove", "-y", pkg], use_sudo=True, capture=True)
+            run_command([tool, "remove", "-y", pkg], use_sudo=True, capture=True)
         print(f"  {OK} Removed {len(to_remove)} old kernel(s)")
         return 0, len(to_remove), 1
 

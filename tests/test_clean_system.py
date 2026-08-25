@@ -15,15 +15,15 @@ from src.clean.system import (
 from src.core.system import APT_NONINTERACTIVE_ENV, C_LOCALE_ENV
 
 
-def test_package_cache_paths_cover_supported_managers(tmp_path, monkeypatch):
+def test_package_cache_paths_cover_supported_managers(monkeypatch):
     from src.clean import system as module
 
-    apt = tmp_path / "apt"
-    (apt / "partial").mkdir(parents=True)
     monkeypatch.setattr(module.Path, "exists", lambda self: True)
+    # One path per family, taken from the table Analyze reads: apt's own
+    # `partial/` subdirectory is not listed, because get_size_fast() recurses into
+    # it and naming it separately counted its bytes twice.
     assert [str(p) for p in module._get_package_manager_cache_paths("apt")] == [
-        "/var/cache/apt/archives",
-        "/var/cache/apt/archives/partial",
+        "/var/cache/apt/archives"
     ]
     assert module._get_package_manager_cache_paths("unknown") == []
 
@@ -241,13 +241,24 @@ def test_snap_empty_and_malformed_output():
 def test_package_cache_paths_dnf_and_pacman(monkeypatch):
     from src.clean import system as module
 
-    existing = {"/var/cache/dnf5daemon-server", "/var/cache/pacman/pkg"}
+    existing = {
+        "/var/cache/dnf",
+        "/var/cache/dnf5daemon-server",
+        "/var/cache/pacman/pkg",
+        "/var/cache/zypp/packages",
+    }
     monkeypatch.setattr(module.Path, "exists", lambda self: str(self) in existing)
+    # Both dnf caches are measured, not just the first found: dnf5 moved the cache
+    # and leaves the old directory behind, and one `clean packages` empties both.
     assert [str(p) for p in module._get_package_manager_cache_paths("dnf")] == [
-        "/var/cache/dnf5daemon-server"
+        "/var/cache/dnf",
+        "/var/cache/dnf5daemon-server",
     ]
     assert [str(p) for p in module._get_package_manager_cache_paths("pacman")] == [
         "/var/cache/pacman/pkg"
+    ]
+    assert [str(p) for p in module._get_package_manager_cache_paths("zypper")] == [
+        "/var/cache/zypp/packages"
     ]
 
 
@@ -310,8 +321,12 @@ def test_zombies_failure_and_empty_output():
 
 
 def test_old_kernels_debian_and_dnf_paths():
+    # The branch follows os-release, not whichever tools happen to be installed:
+    # with dpkg present for `alien`, a Fedora box used to take the deb branch,
+    # find no linux-image-* rows and never ask dnf about its kernels.
     deb = "ii linux-image-5.10.1 x\nii linux-image-5.10.2 x\nii linux-image-6.1.0 x\n"
     with (
+        patch("src.clean.system.get_os_id", return_value="ubuntu"),
         patch("src.clean.system.platform.release", return_value="6.1.0-generic"),
         patch("shutil.which", side_effect=lambda n: "/usr/bin/" + n),
         patch("src.clean.system.run_command", return_value=SimpleNamespace(ok=True, stdout=deb)),
@@ -320,12 +335,39 @@ def test_old_kernels_debian_and_dnf_paths():
         assert clean_old_kernels() == (0, 1, 1)
     rpm = "5.10.1-1\n5.10.2-1\n6.1.0-1\n"
     with (
+        patch("src.clean.system.get_os_id", return_value="fedora"),
         patch("src.clean.system.platform.release", return_value="6.1.0-1"),
         patch("shutil.which", side_effect=lambda n: "/usr/bin/dnf" if n == "dnf" else None),
         patch("src.clean.system.run_command", return_value=SimpleNamespace(ok=True, stdout=rpm)),
     ):
         assert clean_old_kernels(dry_run=True) == (0, 0, 1)
         assert clean_old_kernels() == (0, 1, 1)
+
+
+def test_opensuse_cleans_its_package_cache_but_has_no_orphan_sweep():
+    """openSUSE used to fall through every branch: no zypper row existed at all.
+
+    Orphans stay out on purpose -- `zypper remove --clean-deps` needs the list of
+    packages to remove, and zypper has no unprivileged equivalent of
+    `apt-get autoremove` or `pacman -Qtdq` to produce one.
+    """
+    with (
+        patch("src.clean.system.get_os_id", return_value="opensuse-leap"),
+        patch("shutil.which", side_effect=lambda n: "/usr/bin/zypper" if n == "zypper" else None),
+        patch("src.clean.system._get_package_manager_cache_paths", return_value=[]),
+        patch("src.clean.system._measure_package_cache_size", side_effect=[500, 200]),
+        patch(
+            "src.clean.system.run_command", return_value=SimpleNamespace(ok=True, stdout="")
+        ) as run,
+    ):
+        assert clean_package_manager() == (300, 1, 1)
+        run.assert_called_once_with(
+            ["zypper", "--non-interactive", "clean"],
+            use_sudo=True,
+            capture=True,
+            env=C_LOCALE_ENV,
+        )
+        assert clean_orphaned_packages() == (0, 0, 0)
 
 
 def test_rotated_logs_and_system_aggregation(tmp_path, monkeypatch):

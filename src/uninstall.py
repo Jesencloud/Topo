@@ -27,6 +27,12 @@ from .core.file_ops import (
     safe_remove,
 )
 from .core.history import record_history_session
+from .core.package_manager import (
+    DNF,
+    PACKAGE_QUERY_TOOLS,
+    get_rpm_family_manager,
+    resolve_admin_tool,
+)
 from .core.whitelist import LINUX_USER_DATA_DIRS
 
 # dpkg-query -W reports every entry the status database knows about, installed or
@@ -384,9 +390,7 @@ class UninstallManager:
     def _current_scan_cache_key(cls) -> tuple[Any, ...]:
         return (
             system.get_os_id(),
-            bool(shutil.which("rpm")),
-            bool(shutil.which("dpkg-query")),
-            bool(shutil.which("pacman")),
+            tuple(bool(shutil.which(tool)) for tool in PACKAGE_QUERY_TOOLS),
             bool(shutil.which("flatpak")),
             bool(shutil.which("snap")),
             cls._desktop_dirs_signature(),
@@ -729,14 +733,12 @@ class UninstallManager:
             return []
         # openSUSE and SLES are rpm distros without dnf, so labelling everything
         # rpm reports "DNF" sent their removals into a `dnf remove` that is not
-        # installed. The family is asked once, from os-release rather than from
-        # PATH: a Fedora box may well have zypper lying around, and the question
-        # is which manager owns the database, not which binaries exist. The family
-        # test rather than install_source's exact ZYPPER_OS_IDS, because that set
-        # answers a different question -- which release asset to download, where
-        # an unrecognised id must fail safe -- and it misses the derivatives
-        # (ID_LIKE=suse) whose removals would then go to a dnf they do not have.
-        app_type = "Zypper" if system.is_os_family("suse") else "DNF"
+        # installed. get_rpm_family_manager() asks os-release once, and covers the
+        # derivatives (ID_LIKE=suse) an exact id list would miss -- deliberately
+        # not the strict find_package_manager(), which answers a different
+        # question (which release asset to download, where an unrecognised id
+        # must fail safe).
+        app_type = get_rpm_family_manager().label
         apps = []
         try:
             res = system.run_command(
@@ -1503,7 +1505,7 @@ class UninstallManager:
             argv = ["pacman", "-Rns", "--print-format", "%n", app_id]
             env = system.C_LOCALE_ENV
         elif app_type == "DNF":
-            dnf_cmd = "dnf5" if shutil.which("dnf5") else "dnf"
+            dnf_cmd = resolve_admin_tool(DNF)
             # -C keeps it off the network: the installed set is all we ask about.
             argv = [
                 dnf_cmd,
@@ -1749,7 +1751,7 @@ class UninstallManager:
                     env=system.C_LOCALE_ENV,
                 )
             elif app["type"] == "DNF":
-                dnf_cmd = "dnf5" if shutil.which("dnf5") else "dnf"
+                dnf_cmd = resolve_admin_tool(DNF)
                 res = system.run_command(
                     [dnf_cmd, "remove", "-y", app["id"]], use_sudo=True, capture=True
                 )

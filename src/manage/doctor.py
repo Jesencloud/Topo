@@ -19,11 +19,18 @@ from ..core.constants import (
 )
 from ..core.engine import get_core_binary
 from ..core.install_source import get_install_root, get_install_source
+from ..core.package_manager import PACKAGE_MANAGERS, detect_package_manager, resolve_admin_tool
 from ..core.paths import get_config_dir
 from ..core.system import get_invoking_user, get_os_id, run_command
 
 DOCTOR_COMMAND_TIMEOUT = 5
 VERSION_UNAVAILABLE = "Unavailable (VERSION missing, empty or unreadable)"
+# What `topo update` cannot do without: the download and the signature check.
+# Warned about rather than failed on -- see run_doctor's docstring.
+UPDATE_PREREQUISITES = (
+    ("curl", "topo update cannot download a release"),
+    ("gpg", "release signatures cannot be verified"),
+)
 
 
 def _check_tool(name: str, args: list[str] | None = None) -> tuple[bool, str]:
@@ -37,6 +44,21 @@ def _check_tool(name: str, args: list[str] | None = None) -> tuple[bool, str]:
         first_line = res.stdout.splitlines()[0] if res.stdout else "Installed"
         return True, first_line
     return True, "Installed (version check failed)"
+
+
+def _print_tool_row(tool: str, args: list[str] | None = None, missing_note: str = "") -> None:
+    """One report row: ✓ and the version when installed, otherwise a grey dash.
+
+    A tool with a missing_note is a soft requirement: absent, it gets a ⚠ and the
+    consequence spelled out, never an entry in `failures`.
+    """
+    ok, detail = _check_tool(tool, args)
+    if ok:
+        print(f"  {GREEN}✓{RESET} {tool:<10} {CYAN}{detail}{RESET}")
+    elif missing_note:
+        print(f"  {YELLOW}⚠{RESET} {tool:<10} {YELLOW}{detail} -- {missing_note}{RESET}")
+    else:
+        print(f"  {GRAY}-{RESET} {tool:<10} {GRAY}{detail}{RESET}")
 
 
 def _command_failure_detail(result) -> str:
@@ -93,9 +115,14 @@ def run_doctor() -> bool:
     "Hard" is deliberately narrow. Only what breaks topo itself counts: an
     unreadable VERSION (broken install tree), a missing or non-responding Rust
     engine, and a failing size probe. Optional tooling is not a failure --
-    `apt` is *supposed* to be absent on Fedora, `trash-put` on a headless box,
-    and a sudo password prompt is the normal case. A doctor that exited non-zero
-    for those would be as useless to a script as one that always exited 0.
+    `apt-get` is *supposed* to be absent on Fedora, `trash-put` on a headless
+    box, and a sudo password prompt is the normal case. A doctor that exited
+    non-zero for those would be as useless to a script as one that always
+    exited 0.
+
+    curl and gpg are the one grey area: without them `topo update` cannot work,
+    but everything else can, and a package install never updates itself. They
+    get a ⚠ with the consequence spelled out, not a failure.
     """
     failures: list[str] = []
 
@@ -138,32 +165,34 @@ def run_doctor() -> bool:
         print(f"  {RED}✗{RESET} Executable: {RED}Not found{RESET} at {engine}")
     print()
 
-    # 4. Package Managers
-    print(f"{BOLD}{BLUE}Package Managers & Tools{RESET}")
-    for tool, args in [
-        ("apt", ["--version"]),
-        ("dpkg", ["--version"]),
-        ("dnf", ["--version"]),
-        ("rpm", ["--version"]),
-        ("flatpak", ["--version"]),
-        ("snap", ["--version"]),
-    ]:
-        ok, detail = _check_tool(tool, args)
-        icon = f"{GREEN}✓{RESET}" if ok else f"{GRAY}-{RESET}"
-        color = CYAN if ok else GRAY
-        print(f"  {icon} {tool:<10} {color}{detail}{RESET}")
+    # 4. Update Prerequisites
+    print(f"{BOLD}{BLUE}Update Prerequisites{RESET}")
+    for tool, consequence in UPDATE_PREREQUISITES:
+        _print_tool_row(tool, missing_note=consequence)
     print()
 
-    # 5. File System & Trash
+    # 5. Package Managers
+    print(f"{BOLD}{BLUE}Package Managers & Tools{RESET}")
+    manager = detect_package_manager()
+    if manager is None:
+        supported = ", ".join(m.label for m in PACKAGE_MANAGERS)
+        print(f"  {GRAY}-{RESET} No supported package manager detected ({supported})")
+    else:
+        print(f"    {'Detected':<10} {CYAN}{manager.label}{RESET}")
+        # The binaries topo actually runs, not the family's front-end names: it
+        # used to probe `apt` and `dpkg` while running apt-get and dpkg-query, and
+        # `dnf` on a Fedora where dnf is only a compat symlink to dnf5.
+        for tool in dict.fromkeys([resolve_admin_tool(manager), manager.query_tool]):
+            _print_tool_row(tool)
+    # Cross-distro app sources, scanned by `topo uninstall` whatever the distro is.
+    for tool in ("flatpak", "snap"):
+        _print_tool_row(tool)
+    print()
+
+    # 6. File System & Trash
     print(f"{BOLD}{BLUE}File System Utilities{RESET}")
-    for tool, args in [
-        ("gio", ["version"]),
-        ("trash-put", ["--version"]),
-    ]:
-        ok, detail = _check_tool(tool, args)
-        icon = f"{GREEN}✓{RESET}" if ok else f"{GRAY}-{RESET}"
-        color = CYAN if ok else GRAY
-        print(f"  {icon} {tool:<10} {color}{detail}{RESET}")
+    _print_tool_row("gio", ["version"])
+    _print_tool_row("trash-put")
 
     size_ok, size_detail = _check_rust_size_probe(engine)
     if size_ok is True:
@@ -175,7 +204,7 @@ def run_doctor() -> bool:
         print(f"  {RED}✗{RESET} Rust Fast Size Calculation: {RED}Failed{RESET} ({size_detail})")
     print()
 
-    # 6. Sudo Access
+    # 7. Sudo Access
     print(f"{BOLD}{BLUE}Permissions{RESET}")
     has_sudo_session = run_command(
         ["sudo", "-n", "true"], capture=True, timeout=DOCTOR_COMMAND_TIMEOUT

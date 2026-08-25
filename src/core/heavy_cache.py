@@ -5,7 +5,6 @@ actual cleanup actions because package managers, containers, and model tools
 usually need command-specific behavior rather than direct path deletion.
 """
 
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -43,15 +42,6 @@ class AgeCleanupDef:
         return Path(self.path).expanduser()
 
 
-@dataclass(frozen=True)
-class PackageManagerCleanerDef:
-    key: str
-    label: str
-    os_ids: tuple[str, ...]
-    executable: str
-    command: tuple[str, ...]
-
-
 PACKAGE_MANAGER_CACHE_DEFS = (
     CachePathDef(
         key="apt",
@@ -66,35 +56,17 @@ PACKAGE_MANAGER_CACHE_DEFS = (
         icon="📦",
     ),
     CachePathDef(
+        key="zypper",
+        label="Zypper Cache",
+        path="/var/cache/zypp/packages",
+        icon="📦",
+    ),
+    CachePathDef(
         key="dnf",
         label="Dnf Cache",
         path="/var/cache/dnf",
         icon="📦",
         fallback_paths=("/var/cache/libdnf5", "/var/cache/dnf5daemon-server"),
-    ),
-)
-
-PACKAGE_MANAGER_CLEANER_DEFS = (
-    PackageManagerCleanerDef(
-        key="dnf",
-        label="DNF cache",
-        os_ids=("fedora", "rhel", "centos"),
-        executable="dnf",
-        command=("dnf", "clean", "packages"),
-    ),
-    PackageManagerCleanerDef(
-        key="apt",
-        label="APT cache",
-        os_ids=("ubuntu", "debian"),
-        executable="apt-get",
-        command=("apt-get", "clean"),
-    ),
-    PackageManagerCleanerDef(
-        key="pacman",
-        label="Pacman cache",
-        os_ids=("arch",),
-        executable="pacman",
-        command=("pacman", "-Sc", "--noconfirm"),
     ),
 )
 
@@ -222,19 +194,6 @@ def get_analyze_cache_defs() -> tuple[CachePathDef, ...]:
         for d in (*PACKAGE_MANAGER_CACHE_DEFS, *CONTAINER_CACHE_DEFS, *AI_MODEL_CACHE_DEFS)
         if d.key not in ("flatpak-data", "dnf")
     )
-
-
-def get_package_manager_cleaner(os_id: str) -> PackageManagerCleanerDef | None:
-    # 1. Match by exact os_id if specified in definition
-    for definition in PACKAGE_MANAGER_CLEANER_DEFS:
-        if os_id in definition.os_ids:
-            return definition
-    # 2. Fallback to executable tool presence (covers derivatives), but skip if os_id is 'unknown' (e.g. tests)
-    if os_id != "unknown":
-        for definition in PACKAGE_MANAGER_CLEANER_DEFS:
-            if shutil.which(definition.executable):
-                return definition
-    return None
 
 
 def get_container_cache_def(key: str) -> CachePathDef:

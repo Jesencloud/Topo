@@ -8,6 +8,7 @@ state directory was derived three times -- twice by the command that deletes it.
 
 from pathlib import Path
 
+from src.clean import system as clean_system
 from src.core import constants
 from src.core.config import get_config_file
 from src.core.constants import (
@@ -17,11 +18,14 @@ from src.core.constants import (
     read_topo_version,
 )
 from src.core.file_ops import get_deletion_log_path
+from src.core.heavy_cache import PACKAGE_MANAGER_CACHE_DEFS
 from src.core.install_source import get_install_root
 from src.core.lock import LOCK_FILE_PATH
+from src.core.package_manager import PACKAGE_MANAGERS
 from src.core.paths import get_config_dir, get_state_dir
 from src.core.whitelist import get_whitelist_file
 from src.manage.update import _parse_version
+from src.ui.screens.uninstall import NEEDS_SUDO_TYPES
 
 
 def test_read_topo_version_strips_the_stored_value(tmp_path):
@@ -82,3 +86,24 @@ def test_the_audit_log_and_topo_remove_agree_on_the_state_dir(monkeypatch):
 
     monkeypatch.delenv("XDG_STATE_HOME")
     assert get_state_dir() == Path.home() / ".local/state/topo"
+
+
+def test_every_layer_knows_every_package_manager_in_the_matrix(monkeypatch):
+    """Adding a row to the matrix must not leave a layer behind.
+
+    Each of these used to be a hand-kept copy, and each had already drifted:
+    Analyze had no zypper row, so `topo clean` never touched the package cache on
+    openSUSE, and the removal screen decided which app types need root from its
+    own frozenset.
+    """
+    keys = {manager.key for manager in PACKAGE_MANAGERS}
+    labels = {manager.label for manager in PACKAGE_MANAGERS}
+
+    assert {definition.key for definition in PACKAGE_MANAGER_CACHE_DEFS} == keys
+    # Removing a distro package is always a privileged operation, so the UI must
+    # already know to ask for a password for every manager topo can drive.
+    assert labels <= NEEDS_SUDO_TYPES
+
+    monkeypatch.setattr(clean_system.Path, "exists", lambda self: True)
+    for key in keys:
+        assert clean_system._get_package_manager_cache_paths(key), key

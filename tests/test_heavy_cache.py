@@ -11,14 +11,18 @@ from src.core.heavy_cache import (
     get_ai_model_cleanup_defs,
     get_analyze_cache_defs,
     get_container_cache_def,
-    get_package_manager_cleaner,
 )
 
 
 def test_analyze_cache_defs_cover_heavy_cache_families(test_env):
     defs = {definition.key: definition for definition in get_analyze_cache_defs()}
 
-    assert {definition.key for definition in PACKAGE_MANAGER_CACHE_DEFS} == {"apt", "pacman", "dnf"}
+    assert {definition.key for definition in PACKAGE_MANAGER_CACHE_DEFS} == {
+        "apt",
+        "pacman",
+        "zypper",
+        "dnf",
+    }
     assert {definition.key for definition in CONTAINER_CACHE_DEFS} == {
         "docker-user",
         "docker-system",
@@ -38,20 +42,6 @@ def test_analyze_cache_defs_cover_heavy_cache_families(test_env):
     assert defs["docker-system"].resolved_path() == Path("/var/lib/docker")
     assert defs["huggingface"].resolved_path() == test_env / ".cache/huggingface/hub"
     assert defs["ollama-models"].resolved_path() == test_env / ".ollama/models"
-
-
-def test_package_manager_cleaners_define_commands():
-    apt = get_package_manager_cleaner("ubuntu")
-    dnf = get_package_manager_cleaner("fedora")
-    pacman = get_package_manager_cleaner("arch")
-
-    assert apt is not None
-    assert apt.command == ("apt-get", "clean")
-    assert dnf is not None
-    assert dnf.command == ("dnf", "clean", "packages")
-    assert pacman is not None
-    assert pacman.command == ("pacman", "-Sc", "--noconfirm")
-    assert get_package_manager_cleaner("unknown") is None
 
 
 def test_container_and_ai_clean_targets_resolve_home_dynamically(test_env):
