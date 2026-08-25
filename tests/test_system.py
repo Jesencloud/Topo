@@ -22,7 +22,21 @@ def test_run_command_success_result(mock_run):
         check=False,
         timeout=5,
         env=None,
+        stdin=None,
     )
+
+
+@patch("subprocess.run")
+def test_run_command_keeps_stdin_unless_detaching_is_asked_for(mock_run):
+    """A child that inherits stdin can read the keystrokes a TUI is waiting for,
+    but `sudo` asking for a password needs that stdin, so detaching is opt-in."""
+    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+    run_command(["-v"], use_sudo=True)
+    assert mock_run.call_args.kwargs["stdin"] is None
+
+    run_command(["xdg-open", "/tmp/x"], detach_stdin=True)
+    assert mock_run.call_args.kwargs["stdin"] is subprocess.DEVNULL
 
 
 @patch("subprocess.run")

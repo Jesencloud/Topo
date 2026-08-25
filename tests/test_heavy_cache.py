@@ -7,6 +7,7 @@ from src.core.heavy_cache import (
     AI_MODEL_CACHE_DEFS,
     CONTAINER_CACHE_DEFS,
     PACKAGE_MANAGER_CACHE_DEFS,
+    CachePathDef,
     get_ai_model_cleanup_defs,
     get_analyze_cache_defs,
     get_container_cache_def,
@@ -23,6 +24,7 @@ def test_analyze_cache_defs_cover_heavy_cache_families(test_env):
         "docker-system",
         "podman-cache",
         "flatpak-data",
+        "snapd",
     }
     assert {definition.key for definition in AI_MODEL_CACHE_DEFS} == {
         "ollama-models",
@@ -66,3 +68,40 @@ def test_container_and_ai_clean_targets_resolve_home_dynamically(test_env):
 
 def test_dev_caches_do_not_duplicate_ai_model_definitions():
     assert set(DEV_CACHES) == {"npm", "pip", "cargo", "go"}
+
+
+def test_snap_packages_reach_the_analyze_root_view():
+    """Snap is Ubuntu's largest block outside Home, so Analyze has to show it
+    even though Clean, not a generic delete, owns the cleanup."""
+    defs = {definition.key: definition for definition in get_analyze_cache_defs()}
+
+    assert defs["snapd"].resolved_path() == Path("/var/lib/snapd")
+    assert defs["snapd"].label == "Snap Packages"
+
+
+def test_fallback_paths_pick_up_a_relocated_cache(tmp_path):
+    """dnf5 moved its cache and a snap-packaged Docker keeps its data under
+    /var/snap; both are the same family under a different path, so the primary
+    path being absent must not turn the row into an empty one."""
+    moved = tmp_path / "relocated"
+    moved.mkdir()
+    definition = CachePathDef(
+        key="probe",
+        label="Probe",
+        path=str(tmp_path / "absent"),
+        fallback_paths=(str(tmp_path / "also-absent"), str(moved)),
+    )
+
+    assert definition.resolved_path() == moved
+    # With nothing to fall back to the primary path is still what gets reported,
+    # so the row shows the canonical location rather than disappearing.
+    assert CachePathDef(key="p", label="P", path=str(tmp_path / "absent")).resolved_path() == (
+        tmp_path / "absent"
+    )
+
+
+def test_snap_packaged_docker_data_is_found_under_var_snap():
+    docker_system = get_container_cache_def("docker-system")
+
+    assert docker_system.fallback_paths == ("/var/snap/docker/common/var-lib-docker",)
+    assert get_container_cache_def("snapd").fallback_paths == ()

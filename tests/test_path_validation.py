@@ -78,6 +78,21 @@ def test_allowlisted_package_cache_content_is_still_cleanable():
         assert reason == ""
 
 
+def test_package_manager_container_directories_are_protected():
+    """apt refuses to run at all once archives/partial is gone and never
+    recreates it, so the directory itself is off limits while its contents and
+    its siblings stay cleanable."""
+    ok, reason = validate_path_for_deletion("/var/cache/apt/archives/partial")
+    assert ok is False
+    assert reason in {"Path is whitelisted", "Refusing to delete critical system path"}
+    assert is_system_cleanable_content(Path("/var/cache/apt/archives/partial")) is False
+
+    for path in ["/var/cache/apt/archives/partial/half.deb", "/var/cache/apt/archives/foo.deb"]:
+        ok, reason = validate_path_for_deletion(path)
+        assert ok is True, path
+        assert reason == ""
+
+
 def test_var_tmp_content_owned_by_another_user_is_protected(monkeypatch):
     """Only the current user's own /var/tmp entries are cleanable (M-3)."""
     entry = Path("/var/tmp") / "topo-owned-by-someone-else"  # nosec B108 - test path only

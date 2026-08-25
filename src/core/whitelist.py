@@ -75,6 +75,14 @@ SYSTEM_CLEANABLE_ALLOWLIST = frozenset(
         "/var/cache/zypp",
     }
 )
+# Container directories inside those caches whose *contents* are cleanable but
+# which must themselves keep existing. apt refuses to run at all once
+# archives/partial is gone ("E: Archives directory
+# /var/cache/apt/archives/partial is missing") and never recreates it, so the
+# generic `rm -rf` behind an Analyze row would leave the package manager
+# unusable. `apt-get clean` -- what Topo's own Clean path uses -- empties the
+# directory instead, which is why only Analyze could hit this.
+SYSTEM_CLEANABLE_CONTAINER_PATHS = frozenset({"/var/cache/apt/archives/partial"})
 
 LINUX_PROTECTED_HOME_PATHS = [
     # Credentials and encryption material
@@ -359,13 +367,18 @@ def is_system_cleanable_content(path: Path) -> bool:
     /var/cache/ldconfig or /var/cache/private) and every other user's private
     data under /var/tmp. It is now split by what actually makes a path safe:
 
-    * /var/cache — membership in an explicit package-manager cache allowlist.
+    * /var/cache — membership in an explicit package-manager cache allowlist,
+      minus the container directories the package manager needs to find in place
+      (SYSTEM_CLEANABLE_CONTAINER_PATHS).
     * /var/tmp   — ownership by the current user, matching the same rule
       clean_system_temp() already applies to its entries.
 
     The roots themselves are never cleanable, only their contents.
     """
     if not any(root in path.parents for root in SYSTEM_CLEANABLE_ROOTS):
+        return False
+
+    if str(path) in SYSTEM_CLEANABLE_CONTAINER_PATHS:
         return False
 
     for entry in SYSTEM_CLEANABLE_ALLOWLIST:

@@ -17,13 +17,18 @@ class CachePathDef:
     path: str
     min_display_bytes: int = 10 * 1024 * 1024
     icon: str = "👀"
+    # Where the same data lives when the primary path is absent: dnf5 moved its
+    # cache, and a snap-packaged Docker keeps its data under /var/snap.
+    fallback_paths: tuple[str, ...] = ()
 
     def resolved_path(self) -> Path:
         raw_p = Path(self.path).expanduser()
-        if not raw_p.exists() and self.key == "dnf":
-            for dnf5_path in (Path("/var/cache/libdnf5"), Path("/var/cache/dnf5daemon-server")):
-                if dnf5_path.exists():
-                    return dnf5_path
+        if raw_p.exists():
+            return raw_p
+        for candidate in self.fallback_paths:
+            candidate_path = Path(candidate).expanduser()
+            if candidate_path.exists():
+                return candidate_path
         return raw_p
 
 
@@ -65,6 +70,7 @@ PACKAGE_MANAGER_CACHE_DEFS = (
         label="Dnf Cache",
         path="/var/cache/dnf",
         icon="📦",
+        fallback_paths=("/var/cache/libdnf5", "/var/cache/dnf5daemon-server"),
     ),
 )
 
@@ -104,6 +110,7 @@ CONTAINER_CACHE_DEFS = (
         label="Docker System",
         path="/var/lib/docker",
         icon="🐳",
+        fallback_paths=("/var/snap/docker/common/var-lib-docker",),
     ),
     CachePathDef(
         key="podman-cache",
@@ -115,6 +122,16 @@ CONTAINER_CACHE_DEFS = (
         key="flatpak-data",
         label="Flatpak App Data",
         path="~/.local/share/flatpak",
+        icon="📦",
+    ),
+    # Ubuntu's largest block outside Home and /usr: snapd keeps up to two
+    # squashfs revisions per snap under snaps/, plus a download cache. Display
+    # only -- /var/lib/snapd is outside the cleanable allowlist, so deletion is
+    # refused, and `snap remove --revision` in Clean owns the actual cleanup.
+    CachePathDef(
+        key="snapd",
+        label="Snap Packages",
+        path="/var/lib/snapd",
         icon="📦",
     ),
 )

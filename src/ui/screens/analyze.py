@@ -21,11 +21,12 @@ from ...analyze import (
     build_analysis_entry,
     build_linux_insights,
     delete_and_refresh_cache,
+    filesystem_used_bytes,
     get_age_hint,
     get_fast_explore_data,
     get_old_items_info,
     parallel_scan_sizes,
-    should_use_fast_explore,
+    percent_of,
 )
 from ...core.constants import BLUE, CYAN, ERASE_BELOW, GRAY, MAGENTA, PURPLE, RESET, YELLOW
 from ...core.engine import get_rust_scan_data, get_rust_tree_data, normalize_scan_path
@@ -130,17 +131,42 @@ def _get_rust_scan_data_with_spinner(
 
 
 def _fast_explore_with_spinner(
-    path: Path, scan_reason: str, target_label: str, view_title: str
+    path: Path,
+    scan_reason: str,
+    target_label: str,
+    view_title: str,
+    *,
+    only_when_wide: bool = False,
 ) -> dict[str, Any] | None:
     return _scan_with_spinner(
-        lambda: get_fast_explore_data(path), scan_reason, target_label, view_title
+        lambda: get_fast_explore_data(
+            path, FAST_EXPLORE_ENTRY_LIMIT, only_when_wide=only_when_wide
+        ),
+        scan_reason,
+        target_label,
+        view_title,
     )
 
 
-def _open_in_file_manager(path: Path) -> None:
+XDG_OPEN_MISSING_NOTICE = "Could not open it: install xdg-utils (xdg-open) to open files here."
+
+
+def _open_path(path: Path, timeout: int = 5) -> str:
+    """Hand *path* to the desktop opener, returning a notice when that failed.
+
+    Debian's minimal and server images ship without xdg-utils, where pressing
+    "open" used to do nothing at all with no explanation. stdin is detached
+    because a session without a desktop falls through to a terminal handler that
+    would otherwise read the keys this screen is waiting for.
+    """
+    res = run_command(["xdg-open", str(path)], capture=True, timeout=timeout, detach_stdin=True)
+    return "" if res.ok else XDG_OPEN_MISSING_NOTICE
+
+
+def _open_in_file_manager(path: Path) -> str:
     """Open the parent directory of *path* in the system file manager."""
     target = path.parent if path.is_file() else path
-    run_command(["xdg-open", str(target)], capture=True, timeout=5)
+    return _open_path(target)
 
 
 def run_deep_analysis(target_path: Path | None = None):
@@ -156,6 +182,7 @@ def run_deep_analysis(target_path: Path | None = None):
     scan_reason = "scan"
     selected_index = 0
     current_page = 0
+    action_notice = ""
 
     while True:
         target_to_scan = current_target or normalize_scan_path(Path.home())
@@ -164,14 +191,17 @@ def run_deep_analysis(target_path: Path | None = None):
         if needs_scan:
             target_label = target_to_scan.name if current_target else "Home"
             if current_target is not None:
-                if should_use_fast_explore(target_to_scan):
-                    data = _fast_explore_with_spinner(
-                        target_to_scan,
-                        "refresh" if scan_reason == "refresh" else "explore",
-                        target_label,
-                        view_title,
-                    )
-                else:
+                # One pass decides between preview mode and a full scan: the
+                # listing comes back only when the directory really is too wide
+                # to size child by child.
+                data = _fast_explore_with_spinner(
+                    target_to_scan,
+                    "refresh" if scan_reason == "refresh" else "explore",
+                    target_label,
+                    view_title,
+                    only_when_wide=True,
+                )
+                if data is None:
                     data = _get_rust_scan_data_with_spinner(
                         target_to_scan, scan_reason, target_label, view_title
                     )
@@ -260,18 +290,18 @@ def run_deep_analysis(target_path: Path | None = None):
                     if t["path"].exists():
                         if t["path"] == home:
                             size = total_scan_size
-                        elif str(t["path"]) == "/":
-                            size = total_used
                         else:
                             size = scan_sizes.get(t["path"], 0)
+                        base = filesystem_used_bytes(t["path"])
                         results.append(
                             {
                                 "name": t["name"],
                                 "path": t["path"],
                                 "size": size,
-                                "percent": (size / total_used) * 100,
+                                "percent": percent_of(size, base),
+                                "percent_base": base,
                                 "color": t["color"],
-                                "icon": "📊" if str(t["path"]) == "/" else DIRECTORY_ICON,
+                                "icon": DIRECTORY_ICON,
                                 "age_hint": get_age_hint(t["path"]),
                             }
                         )
@@ -289,12 +319,14 @@ def run_deep_analysis(target_path: Path | None = None):
 
                         min_display_bytes = ins.get("min_display_bytes", 10 * 1024 * 1024)
                         if size > min_display_bytes:  # Only show large entries to keep Root clean
+                            base = filesystem_used_bytes(p)
                             results.append(
                                 {
                                     "name": ins["name"],
                                     "path": p,
                                     "size": size,
-                                    "percent": (size / total_used) * 100,
+                                    "percent": percent_of(size, base),
+                                    "percent_base": base,
                                     "color": YELLOW,
                                     "icon": ins.get("icon", "👀"),
                                     "age_hint": get_age_hint(p),
@@ -310,7 +342,18 @@ def run_deep_analysis(target_path: Path | None = None):
                 subdir_map = data.get("subdirs", {})
                 entry_meta = data.get("entry_meta", {})
                 is_fast_explore = data.get("is_fast_explore", False)
-                for name, size in subdir_map.items():
+                if is_fast_explore:
+                    ranked = list(subdir_map.items())
+                else:
+                    # Rank first, build rows second: every row costs ~10 syscalls
+                    # of cache/age metadata, and only the 50 that survive the cut
+                    # are ever drawn. Ordering needs nothing but the sizes the
+                    # scan already returned, so this is also the size order the
+                    # view is drawn in -- no second sort afterwards.
+                    ranked = sorted(subdir_map.items(), key=lambda item: item[1], reverse=True)[
+                        :ANALYZE_RESULT_LIMIT
+                    ]
+                for name, size in ranked:
                     full_path = current_target / name
                     meta = entry_meta.get(name, {})
                     if is_fast_explore and meta:
@@ -320,7 +363,8 @@ def run_deep_analysis(target_path: Path | None = None):
                             "name": name,
                             "path": full_path,
                             "size": size,
-                            "percent": (size / total_path_size) * 100 if size_known else 0.0,
+                            "percent": percent_of(size, total_path_size) if size_known else 0.0,
+                            "percent_base": total_path_size,
                             "icon": icon_for_entry(name, is_dir=is_dir),
                             "size_known": size_known,
                             "sort_group": 0 if is_dir else 1,
@@ -330,9 +374,6 @@ def run_deep_analysis(target_path: Path | None = None):
                     results.append(entry)
                 if is_fast_explore:
                     results.sort(key=lambda x: (x.get("sort_group", 1), x["name"].lower()))
-                else:
-                    results.sort(key=lambda x: x["size"], reverse=True)
-                    results = results[:ANALYZE_RESULT_LIMIT]
             needs_scan = False
             scan_reason = "scan"
 
@@ -340,9 +381,12 @@ def run_deep_analysis(target_path: Path | None = None):
             view_title,
             results,
             can_select=(current_target is not None),
-            notice=_explore_notice(data),
+            notice=action_notice or _explore_notice(data),
             sort_mode="name" if data and data.get("is_fast_explore") else "size",
         )
+        # A notice raised by the last keypress is shown once and then drops away,
+        # so it cannot outlive the action that caused it.
+        action_notice = ""
         # Restore the cursor/page belonging to this view.  Parent views keep
         # these values on the navigation stack while a child directory is open.
         selector.selected_index = min(selected_index, max(0, len(results) - 1))
@@ -365,9 +409,13 @@ def run_deep_analysis(target_path: Path | None = None):
                 selected_index = prev.get("selected_index", 0)
                 current_page = prev.get("current_page", 0)
                 # Recalculate parent percentages to reflect any deletions done in child
-                if total_scan_size > 0:
-                    for r in results:
-                        r["percent"] = (r["size"] / total_scan_size) * 100
+                for r in results:
+                    # Each row keeps the total it was measured against: in the
+                    # root view that is the filesystem the row lives on, which is
+                    # not the parent total.
+                    base = r.get("percent_base") or total_scan_size
+                    if base > 0:
+                        r["percent"] = percent_of(r["size"], base)
                 needs_scan = False
             else:
                 break
@@ -377,7 +425,7 @@ def run_deep_analysis(target_path: Path | None = None):
             scan_reason = "refresh"
         elif action == "OPEN":
             path = results[idx]["path"]
-            _open_in_file_manager(path)
+            action_notice = _open_in_file_manager(path)
         elif action == "DRILL_DOWN":
             item = results[idx]
             if item.get("is_smart"):
@@ -433,9 +481,9 @@ def run_deep_analysis(target_path: Path | None = None):
 
                 if is_archive or is_exec or is_launchable:
                     # Open parent directory instead for safety
-                    _open_in_file_manager(p)
+                    action_notice = _open_in_file_manager(p)
                 else:
-                    run_command(["xdg-open", str(p)], capture=True, timeout=10)
+                    action_notice = _open_path(p, timeout=10)
         elif action == "DELETE_BATCH":
             selected_idxs = idx  # action was DELETE_BATCH, idx contains the list
             paths = [results[s_idx]["path"] for s_idx in selected_idxs]
@@ -448,4 +496,4 @@ def run_deep_analysis(target_path: Path | None = None):
             selected_idxs = idx
             for s_idx in selected_idxs:
                 p = results[s_idx]["path"]
-                _open_in_file_manager(p)
+                action_notice = _open_in_file_manager(p) or action_notice

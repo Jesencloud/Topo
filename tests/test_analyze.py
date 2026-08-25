@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -7,6 +8,7 @@ import threading
 import time
 from functools import cache
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -14,25 +16,27 @@ import pytest
 from src.analyze import (
     PERMANENT_DELETE_QUESTION,
     _delete_analyze_paths,
-    _direct_child_count_exceeds,
     _needs_admin_for_deletion,
     _permanent_fallback_consent,
     _sudo_remove,
     build_analysis_entry,
     build_linux_insights,
+    filesystem_used_bytes,
     get_fast_explore_data,
     get_old_items_info,
     get_rust_scan_data,
     get_rust_tree_data,
     normalize_scan_path,
     parallel_scan_sizes,
-    should_use_fast_explore,
+    percent_of,
 )
 from src.core.file_ops import CACHEDIR_TAG_SIGNATURE, has_valid_cachedir_tag
 from src.core.scan_cache import ScanCache
 from src.ui.screens.analyze import (
+    XDG_OPEN_MISSING_NOTICE,
     _confirm_permanent_delete,
     _explore_notice,
+    _open_in_file_manager,
     _render_scan_header,
     _scan_status_message,
     _scan_with_spinner,
@@ -480,40 +484,69 @@ def test_render_scan_header_repaints_in_place_without_full_clear(capsys):
 
 
 @patch("src.ui.screens.analyze.AnalyzeSelector")
-@patch("src.ui.screens.analyze.should_use_fast_explore", return_value=True)
+@patch("src.ui.screens.analyze.FAST_EXPLORE_ENTRY_LIMIT", 1)
 @patch("src.ui.screens.analyze._get_rust_scan_data_with_spinner")
-def test_fast_explore_ignores_rust_scan_cache(
-    mock_single, _mock_should_fast, mock_selector, test_env
-):
+def test_fast_explore_ignores_rust_scan_cache(mock_single, mock_selector, test_env):
     """Wide-directory preview should show the live direct listing, not stale Rust cache data."""
     ScanCache.clear()
     dir_a = test_env / "A"
-    dir_b = dir_a / "B"
-    dir_b.mkdir(parents=True)
+    (dir_a / "B").mkdir(parents=True)
     (dir_a / "fresh.txt").write_bytes(b"fresh")
     ScanCache.set(dir_a, {"total_size_bytes": 1000, "subdirs": {"stale-only": 1000}})
-    ScanCache.set(dir_b, {"total_size_bytes": 500, "subdirs": {}})
 
-    mock_selector.return_value.run.side_effect = [("DRILL_DOWN", 0), ("QUIT", None)]
+    mock_selector.return_value.run.side_effect = [("QUIT", None)]
 
     run_deep_analysis(dir_a)
 
     mock_single.assert_not_called()
-    first_items = mock_selector.call_args_list[0].args[1]
-    shown_names = {item["name"] for item in first_items}
-    assert shown_names == {"B", "fresh.txt"}
+    shown_names = {item["name"] for item in mock_selector.call_args.args[1]}
+    assert "stale-only" not in shown_names
+    assert shown_names and shown_names <= {"B", "fresh.txt"}
 
 
-def test_should_use_fast_explore_only_for_wide_directories(test_env):
+def test_fast_explore_data_only_previews_wide_directories(test_env):
+    """One pass answers both questions: a narrow directory returns None so the
+    caller runs the full scan, without a second traversal to count entries."""
     root = test_env / "wide"
     root.mkdir()
     for index in range(3):
         (root / f"item-{index}").write_text("x")
 
-    assert _direct_child_count_exceeds(root, limit=2) is True
-    assert _direct_child_count_exceeds(root, limit=3) is False
-    assert should_use_fast_explore(root, direct_entry_limit=2) is True
-    assert should_use_fast_explore(root, direct_entry_limit=3) is False
+    assert get_fast_explore_data(root, 2, only_when_wide=True) is not None
+    assert get_fast_explore_data(root, 3, only_when_wide=True) is None
+    # Without the flag the listing is always built -- that is the engine-failure
+    # fallback, which has no full scan to defer to.
+    assert get_fast_explore_data(root, 3, only_when_wide=False) is not None
+
+
+class _NoStatScandir:
+    """Stand-in for os.scandir whose entries refuse to be stat'd."""
+
+    class _Entry:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def is_dir(self, follow_symlinks: bool = True) -> bool:
+            return False
+
+        def stat(self, follow_symlinks: bool = True):
+            raise AssertionError("a narrow directory must not stat its entries")
+
+    def __init__(self, names: list[str]) -> None:
+        self._entries = [self._Entry(name) for name in names]
+
+    def __enter__(self):
+        return iter(self._entries)
+
+    def __exit__(self, *_exc_info) -> bool:
+        return False
+
+
+def test_narrow_directory_costs_no_per_entry_stat(test_env):
+    """A directory that turns out to be narrow must not pay for the sample it
+    never returns: names are collected first and stat'd only once wide."""
+    with patch("src.analyze.os.scandir", return_value=_NoStatScandir(["only"])):
+        assert get_fast_explore_data(test_env, 5, only_when_wide=True) is None
 
 
 def test_fast_explore_data_is_direct_listing_and_non_recursive(test_env):
@@ -572,11 +605,8 @@ def test_fast_explore_notice_explains_truncation():
 
 
 @patch("src.ui.screens.analyze.AnalyzeSelector")
-@patch("src.ui.screens.analyze.should_use_fast_explore", return_value=False)
 @patch("src.ui.screens.analyze._get_rust_scan_data_with_spinner")
-def test_regular_directory_uses_rust_size_view(
-    mock_single, _mock_should_fast, mock_selector, test_env
-):
+def test_regular_directory_uses_rust_size_view(mock_single, mock_selector, test_env):
     ScanCache.clear()
     dir_a = test_env / "A"
     (dir_a / "B").mkdir(parents=True)
@@ -599,11 +629,11 @@ def test_regular_directory_uses_rust_size_view(
 
 
 @patch("src.ui.screens.analyze.AnalyzeSelector")
-@patch("src.ui.screens.analyze.should_use_fast_explore", return_value=True)
+@patch("src.ui.screens.analyze.FAST_EXPLORE_ENTRY_LIMIT", 1)
 @patch("src.ui.screens.analyze._get_rust_scan_data_with_spinner")
 @patch("src.ui.screens.analyze.build_analysis_entry")
 def test_fast_explore_builds_rows_without_per_path_analysis(
-    mock_build_entry, mock_single, _mock_should_fast, mock_selector, test_env
+    mock_build_entry, mock_single, mock_selector, test_env
 ):
     ScanCache.clear()
     directory = test_env / "many"
@@ -618,11 +648,9 @@ def test_fast_explore_builds_rows_without_per_path_analysis(
 
 
 @patch("src.ui.screens.analyze.AnalyzeSelector")
-@patch("src.ui.screens.analyze.should_use_fast_explore", return_value=True)
+@patch("src.ui.screens.analyze.FAST_EXPLORE_ENTRY_LIMIT", 2)
 @patch("src.ui.screens.analyze._get_rust_scan_data_with_spinner")
-def test_wide_cache_directory_uses_fast_explore_not_rust(
-    mock_single, _mock_should_fast, mock_selector, test_env
-):
+def test_wide_cache_directory_uses_fast_explore_not_rust(mock_single, mock_selector, test_env):
     ScanCache.clear()
     icon_cache = test_env / ".cache/gnome-software/icons"
     icon_cache.mkdir(parents=True)
@@ -634,7 +662,10 @@ def test_wide_cache_directory_uses_fast_explore_not_rust(
 
     mock_single.assert_not_called()
     shown_names = {item["name"] for item in mock_selector.call_args.args[1]}
-    assert "icon-0.png" in shown_names
+    # Which two of the three land in the sample depends on readdir order; what
+    # matters is that the rows came from the live listing.
+    assert len(shown_names) == 2
+    assert shown_names <= {f"icon-{index}.png" for index in range(3)}
 
 
 @patch("src.ui.screens.analyze.AnalyzeSelector")
@@ -916,6 +947,89 @@ def test_old_items_info_reports_whether_each_entry_is_a_directory(tmp_path):
     assert by_name["stale.mkv"]["is_dir"] is False
 
 
+def test_old_items_info_sizes_rows_from_the_parent_scan(tmp_path):
+    """The parent's single scan already holds every direct child's size.
+
+    Sizing each row on its own forked the engine once per old entry, serially,
+    and every one of those scans also evicted the tree the root view had just
+    filled from the shared cache.
+    """
+    old = time.time() - 200 * 86400
+    directory = tmp_path / "stale-project"
+    directory.mkdir()
+    plain = tmp_path / "stale.mkv"
+    plain.write_text("0123456789")
+    empty_dir = tmp_path / "stale-empty"
+    empty_dir.mkdir()
+    for path in (directory, plain, empty_dir, tmp_path):
+        os.utime(path, (old, old))
+
+    with (
+        patch(
+            "src.analyze.get_direct_child_sizes_fast", return_value={"stale-project": 4096}
+        ) as mock_children,
+        patch("src.analyze.get_size_fast") as mock_size,
+    ):
+        by_name = {entry["name"]: entry for entry in get_old_items_info(tmp_path)}
+
+    mock_children.assert_called_once_with(tmp_path)
+    mock_size.assert_not_called()
+    assert by_name["stale-project"]["size"] == 4096
+    # A file's size is in the stat already taken; a directory the engine left out
+    # of a successful scan holds nothing worth reclaiming here.
+    assert by_name["stale.mkv"]["size"] == 10
+    assert by_name["stale-empty"]["size"] == 0
+
+
+def test_old_items_info_falls_back_when_no_fast_scan_is_available(tmp_path):
+    """Only a failed scan still costs a per-item measurement."""
+    old = time.time() - 200 * 86400
+    directory = tmp_path / "stale-project"
+    directory.mkdir()
+    for path in (directory, tmp_path):
+        os.utime(path, (old, old))
+
+    with (
+        patch("src.analyze.get_direct_child_sizes_fast", return_value=None),
+        patch("src.analyze.get_size_fast", return_value=777) as mock_size,
+    ):
+        rows = get_old_items_info(tmp_path)
+
+    mock_size.assert_called_once_with(directory)
+    assert rows[0]["size"] == 777
+
+
+def test_percent_of_caps_a_share_that_measures_past_its_total():
+    """A scanned tree sums apparent sizes while disk_usage reports allocated
+    blocks, so hard links or sparse files can push the ratio just past 1."""
+    assert percent_of(512, 1024) == 50
+    assert percent_of(2048, 1024) == 100.0
+    assert percent_of(10, 0) == 100.0
+    assert percent_of(0, 0) == 0.0
+
+
+def test_filesystem_used_bytes_measures_the_disk_the_row_lives_on(tmp_path):
+    """Root-view shares need a per-filesystem denominator: a single "/" total
+    printed 2500% for 500 GB of Home over a 20 GB root."""
+    assert filesystem_used_bytes(tmp_path) > 0
+
+    missing = tmp_path / "gone" / "deeper"
+    real_usage = shutil.disk_usage
+
+    def usage_only_for_existing(path):
+        if not Path(path).exists():
+            raise OSError("no such filesystem")
+        return real_usage(path)
+
+    with patch("src.analyze.shutil.disk_usage", side_effect=usage_only_for_existing):
+        # An unreadable target walks up to the nearest mountable ancestor rather
+        # than answering 0 and printing every row as 100%.
+        assert filesystem_used_bytes(missing) == real_usage(tmp_path).used
+
+    with patch("src.analyze.shutil.disk_usage", side_effect=OSError("nothing works")):
+        assert filesystem_used_bytes(tmp_path) == 0
+
+
 def test_permanent_fallback_consent_declines_without_a_terminal(capsys):
     """A non-interactive run answers "no" instead of deleting unrecoverably."""
     consent = _permanent_fallback_consent()
@@ -971,6 +1085,26 @@ def test_screen_confirm_drives_the_selector_dialog():
         mock_confirm.return_value.run.return_value = True
         assert _confirm_permanent_delete("Delete permanently?") is True
     mock_confirm.assert_called_once_with("Delete permanently?")
+
+
+def test_open_reports_a_missing_xdg_open_instead_of_doing_nothing(tmp_path):
+    """Debian's minimal and server images ship without xdg-utils, where pressing
+    "open" used to do nothing at all with no explanation."""
+    target = tmp_path / "file.txt"
+    target.write_text("x")
+
+    with patch("src.ui.screens.analyze.run_command") as mock_run:
+        mock_run.return_value = SimpleNamespace(ok=False)
+        assert _open_in_file_manager(target) == XDG_OPEN_MISSING_NOTICE
+
+        # A file opens its containing directory, not itself.
+        assert mock_run.call_args.args[0] == ["xdg-open", str(tmp_path)]
+        # Without a desktop session xdg-open falls through to a terminal handler
+        # that would otherwise read the keys this screen is waiting for.
+        assert mock_run.call_args.kwargs["detach_stdin"] is True
+
+        mock_run.return_value = SimpleNamespace(ok=True)
+        assert _open_in_file_manager(target) == ""
 
 
 def test_analyze_delete_system_path_requires_admin():

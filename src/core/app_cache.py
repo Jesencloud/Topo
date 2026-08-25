@@ -1,3 +1,4 @@
+import functools
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,13 +53,25 @@ def get_xdg_cache_root() -> Path:
     return Path.home() / ".cache"
 
 
+@functools.lru_cache(maxsize=8)
+def _resolved_cache_root(root_str: str) -> Path:
+    """Resolve the XDG cache root once per HOME.
+
+    Every analysis row asks whether it sits under ~/.cache, and resolving that
+    root costs a readlink per path component each time. The key is the raw string
+    so a different HOME (a test fixture, sudo) gets its own entry instead of the
+    first one answered.
+    """
+    return resolve_cache_path(root_str)
+
+
 def is_generic_xdg_cache_path(path: str | Path) -> bool:
     raw_path = Path(path).expanduser()
     if raw_path.is_symlink():
         return False
 
     resolved_path = resolve_cache_path(raw_path)
-    resolved_root = resolve_cache_path(get_xdg_cache_root())
+    resolved_root = _resolved_cache_root(str(get_xdg_cache_root()))
     return resolved_path != resolved_root and resolved_root in resolved_path.parents
 
 

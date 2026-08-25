@@ -1,4 +1,5 @@
 import os
+import shutil
 import stat
 import sys
 import time
@@ -19,6 +20,7 @@ from .core.constants import (
 from .core.engine import get_rust_scan_data, get_rust_tree_data, normalize_scan_path
 from .core.file_ops import (
     TRASH_UNAVAILABLE_REASON,
+    get_direct_child_sizes_fast,
     get_size_fast,
     record_deletion_audit,
     safe_remove,
@@ -43,64 +45,62 @@ ANALYZE_RESULT_LIMIT = 50
 FAST_EXPLORE_ENTRY_LIMIT = 500
 
 
-def _direct_child_count_exceeds(path: Path, limit: int = FAST_EXPLORE_ENTRY_LIMIT) -> bool:
-    try:
-        with os.scandir(path) as entries:
-            for count, _entry in enumerate(entries, 1):
-                if count > limit:
-                    return True
-    except OSError:
-        return False
-    return False
-
-
-def should_use_fast_explore(path: Path, direct_entry_limit: int = FAST_EXPLORE_ENTRY_LIMIT) -> bool:
-    return _direct_child_count_exceeds(path, direct_entry_limit)
-
-
 def get_fast_explore_data(
-    path: Path, entry_limit: int = FAST_EXPLORE_ENTRY_LIMIT
+    path: Path, entry_limit: int = FAST_EXPLORE_ENTRY_LIMIT, *, only_when_wide: bool = False
 ) -> dict[str, Any] | None:
     """Build a bounded direct-child listing without recursively scanning.
 
     Used only for very wide directories where calculating every direct child
     size would make opening the view feel stuck.
+
+    With *only_when_wide* the result is ``None`` unless the directory really is
+    wider than *entry_limit*, which lets the caller decide between preview mode
+    and a full scan from this single pass. The names are collected first and
+    stat'd afterwards, so a directory that turns out to be narrow costs one
+    ``readdir`` sweep and no per-entry syscalls -- the deciding walk and the
+    sampling walk used to be two separate traversals, i.e. two round trips on an
+    NFS or sshfs mount.
     """
     subdirs: dict[str, int] = {}
     entry_meta: dict[str, dict[str, bool]] = {}
     total_size = 0
     file_count = 0
-    sampled_entries = 0
     truncated = False
+    sampled: list[os.DirEntry[str]] = []
     try:
         with os.scandir(path) as entries:
             for count, entry in enumerate(entries, 1):
                 if count > entry_limit:
                     truncated = True
                     break
-                sampled_entries = count
-                try:
-                    is_dir = entry.is_dir(follow_symlinks=False)
-                    if is_dir:
-                        size = 0
-                        size_known = False
-                    else:
-                        stat_result = entry.stat(follow_symlinks=False)
-                        size = stat_result.st_size
-                        size_known = True
-                        file_count += 1
-                except OSError:
-                    continue
-
-                subdirs[entry.name] = size
-                entry_meta[entry.name] = {
-                    "is_dir": is_dir,
-                    "size_known": size_known,
-                }
-                if size_known:
-                    total_size += size
+                sampled.append(entry)
     except OSError:
         return None
+
+    if only_when_wide and not truncated:
+        return None
+
+    for entry in sampled:
+        try:
+            is_dir = entry.is_dir(follow_symlinks=False)
+            if is_dir:
+                size = 0
+                size_known = False
+            else:
+                stat_result = entry.stat(follow_symlinks=False)
+                size = stat_result.st_size
+                size_known = True
+                file_count += 1
+        except OSError:
+            continue
+
+        subdirs[entry.name] = size
+        entry_meta[entry.name] = {
+            "is_dir": is_dir,
+            "size_known": size_known,
+        }
+        if size_known:
+            total_size += size
 
     data = {
         "path": str(path),
@@ -111,10 +111,36 @@ def get_fast_explore_data(
         "top_files": [],
         "is_fast_explore": True,
         "preview_entry_limit": entry_limit,
-        "preview_sampled_entries": sampled_entries,
+        "preview_sampled_entries": len(sampled),
         "preview_truncated": truncated,
     }
     return data
+
+
+def filesystem_used_bytes(path: Path) -> int:
+    """Used bytes of the filesystem that holds *path*.
+
+    Root-view shares are measured against the disk the row actually lives on. A
+    single ``/`` denominator is meaningless the moment /home is its own
+    partition -- the layout Debian's installer offers by default -- where 500 GB
+    of Home over a 20 GB root printed 2500%.
+    """
+    for candidate in (path, *path.parents):
+        try:
+            return shutil.disk_usage(candidate).used
+        except OSError:
+            continue
+    return 0
+
+
+def percent_of(size: int, total: int) -> float:
+    """Share of *total* taken by *size*, capped at 100%.
+
+    The cap matters where the two numbers come from different measurements: a
+    scanned tree sums apparent file sizes while ``disk_usage`` reports allocated
+    blocks, so hard links or sparse files can push the ratio just past 1.
+    """
+    return min((size / (total or 1)) * 100, 100.0)
 
 
 def parallel_scan_sizes(
@@ -185,7 +211,8 @@ def build_analysis_entry(name: str, path: Path, size: int, total_size: int) -> d
         "name": name,
         "path": path,
         "size": size,
-        "percent": (size / (total_size or 1)) * 100,
+        "percent": percent_of(size, total_size),
+        "percent_base": total_size,
         "icon": icon,
         "is_cleanable": is_cleanable,
         "cleanable_reason": cleanable_reason,
@@ -218,21 +245,28 @@ def get_old_items_info(dir_path: Path, days_threshold: int = 90) -> list[dict[st
     """Returns a list of items in a directory older than X days."""
     old_items = []
     cutoff = time.time() - (days_threshold * 86400)
+    # One scan of the parent already holds every direct child's size, and the
+    # root view has just walked Home, so this is normally a cache hit costing no
+    # subprocess at all. Sizing each row on its own forked the engine once per
+    # old entry, serially, and each of those scans also pushed a fresh entry into
+    # the shared ScanCache -- evicting the Home tree it had just filled.
+    child_sizes = get_direct_child_sizes_fast(dir_path)
     try:
         for item in dir_path.iterdir():
             try:
                 stat_result = item.stat()
                 if stat_result.st_mtime < cutoff:
+                    is_dir = stat.S_ISDIR(stat_result.st_mode)
                     old_items.append(
                         {
                             "name": item.name,
                             "path": item,
-                            "size": get_size_fast(item),
+                            "size": _old_item_size(item, stat_result, is_dir, child_sizes),
                             "mtime": stat_result.st_mtime,
                             # Taken from the stat already in hand: the row icon
                             # needs it, and probing again per render would be a
                             # syscall a keystroke.
-                            "is_dir": stat.S_ISDIR(stat_result.st_mode),
+                            "is_dir": is_dir,
                         }
                     )
             except OSError:
@@ -240,6 +274,29 @@ def get_old_items_info(dir_path: Path, days_threshold: int = 90) -> list[dict[st
     except OSError:
         pass
     return sorted(old_items, key=lambda x: x["size"], reverse=True)
+
+
+def _old_item_size(
+    item: Path,
+    stat_result: os.stat_result,
+    is_dir: bool,
+    child_sizes: dict[str, int] | None,
+) -> int:
+    """Size of one old-downloads row, preferring the parent's single scan.
+
+    ``child_sizes`` is None only when no fast scan was available, which is the
+    one case that still needs a per-item scan. A name missing from a successful
+    scan is one the engine left out -- it held nothing, or it is a symlinked
+    directory the walk refuses to follow -- and either way removing that row
+    frees nothing here, so 0 is the answer without asking again. A file's size is
+    already in the stat in hand.
+    """
+    if child_sizes is not None:
+        cached_size = child_sizes.get(item.name)
+        if cached_size is not None:
+            return cached_size
+        return 0 if is_dir else stat_result.st_size
+    return get_size_fast(item)
 
 
 def _needs_admin_for_deletion(path: Path) -> bool:

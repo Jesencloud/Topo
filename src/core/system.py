@@ -95,6 +95,13 @@ def run_command(
     capture=True,
     timeout=DEFAULT_COMMAND_TIMEOUT,
     env: dict[str, str] | None = None,
+    # Opt-in only: a child that inherits our stdin can read the keystrokes a TUI
+    # screen is waiting for. xdg-open needs it detached because with no desktop
+    # session it falls through to a terminal handler (sensible-browser -> w3m),
+    # which would then fight the caller for the keyboard until the timeout.
+    # Interactive children -- above all `sudo` asking for a password -- must keep
+    # stdin, which is why this cannot become the default.
+    detach_stdin: bool = False,
 ):
     cmd = (["sudo", "-n"] + args if SUDO_CANCELLED else ["sudo"] + args) if use_sudo else args
     # Overlay rather than replace: dropping PATH, HOME or DISPLAY would break the
@@ -110,6 +117,7 @@ def run_command(
             check=False,
             timeout=timeout,
             env=child_env,
+            stdin=subprocess.DEVNULL if detach_stdin else None,
         )
         return CommandResult(
             args=cmd,
