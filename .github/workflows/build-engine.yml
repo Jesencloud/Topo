@@ -9,6 +9,9 @@ on:
       - "src/manage/**"
       - "src/core/install_source.py"
       - "src/core/paths.py"
+      # src/core/bin/** so that a commit which touches only the bundled engines
+      # still has to face the stamp gate in the build job below.
+      - "src/core/bin/**"
       - "topo-core/**"
       - "topo"
       - "VERSION"
@@ -22,6 +25,7 @@ on:
       - "src/manage/**"
       - "src/core/install_source.py"
       - "src/core/paths.py"
+      - "src/core/bin/**"
       - "topo-core/**"
       - "topo"
       - "VERSION"
@@ -116,31 +120,28 @@ jobs:
           BIN="topo-core/target/${{ matrix.target }}/release/topo-core"
           echo "=== Verifying Binary Properties for ${{ matrix.target }} ==="
           file "$BIN"
-
-          # Verify ELF Machine Architecture match
-          case "${{ matrix.arch }}" in
-            x86_64)
-              readelf -h "$BIN" | grep -q 'Machine:.*X86-64'
-              ;;
-            aarch64)
-              readelf -h "$BIN" | grep -q 'Machine:.*AArch64'
-              ;;
-          esac
-
-          # Check 1: Must NOT have PT_INTERP dynamic linker requested
-          if readelf -l "$BIN" | grep -i INTERP; then
-            echo "❌ ERROR: Binary has PT_INTERP interpreter! It is NOT statically linked."
-            exit 1
-          fi
-
-          # Check 2: Must NOT have DT_NEEDED dynamic library dependencies
-          if readelf -d "$BIN" | grep -i NEEDED; then
-            echo "❌ ERROR: Binary has DT_NEEDED dynamic dependencies! It is NOT statically linked."
-            exit 1
-          fi
-
-          echo "✅ VERIFIED: Binary $BIN is a 100% pure static ELF executable!"
+          # The architecture and the two "no dynamic linking" assertions come from
+          # the script that owns them, so this job cannot drift from the check the
+          # bundled engines face -- it used to keep its own copy of the ELF probes,
+          # without the LC_ALL=C that a translated field name needs.
+          packaging/build-engine.sh --check-elf "$BIN" "${{ matrix.arch }}"
           cp "$BIN" "topo-core-${{ matrix.arch }}"
+
+      # The engines committed under src/core/bin/ are what a git or --minimal
+      # install runs, and nothing here used to compare them with topo-core/.
+      # A byte compare against this fresh build cannot be the check: a musl
+      # release build bakes in the builder's cargo registry path, so the runner
+      # produces different bytes than the developer for the very same commit.
+      # Hence two questions instead: the stamp answers "were the committed bytes
+      # built from this source", and the x86_64 leg -- the only architecture this
+      # runner can execute -- also asks the committed engine and the fresh one
+      # the same things about a fixture tree.
+      - name: Verify Bundled Engines Against the Stamp
+        run: packaging/build-engine.sh --verify
+
+      - name: Compare Bundled Engine With This Build
+        if: matrix.arch == 'x86_64'
+        run: packaging/build-engine.sh --compare "topo-core-x86_64" x86_64
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4

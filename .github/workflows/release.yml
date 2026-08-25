@@ -74,31 +74,21 @@ jobs:
           BIN="topo-core/target/${{ matrix.target }}/release/topo-core"
           echo "=== Verifying Binary Properties for ${{ matrix.target }} ==="
           file "$BIN"
-
-          # Verify ELF Machine Architecture match
-          case "${{ matrix.arch }}" in
-            x86_64)
-              readelf -h "$BIN" | grep -q 'Machine:.*X86-64'
-              ;;
-            aarch64)
-              readelf -h "$BIN" | grep -q 'Machine:.*AArch64'
-              ;;
-          esac
-
-          # Check 1: Must NOT have PT_INTERP dynamic linker requested
-          if readelf -l "$BIN" | grep -i INTERP; then
-            echo "❌ ERROR: Binary has PT_INTERP interpreter! It is NOT statically linked."
-            exit 1
-          fi
-
-          # Check 2: Must NOT have DT_NEEDED dynamic library dependencies
-          if readelf -d "$BIN" | grep -i NEEDED; then
-            echo "❌ ERROR: Binary has DT_NEEDED dynamic dependencies! It is NOT statically linked."
-            exit 1
-          fi
-
-          echo "✅ VERIFIED: Binary $BIN is a 100% pure static ELF executable!"
+          # One owner for the three assertions -- see the same step in
+          # build-engine.yml. These bytes become the published release asset, so
+          # the check that they are musl-static matters most here.
+          packaging/build-engine.sh --check-elf "$BIN" "${{ matrix.arch }}"
           cp "$BIN" "topo-core-${{ matrix.arch }}"
+
+      # Same gate as build-engine.yml, for the reason that only matters here: the
+      # source tarball this workflow publishes carries src/core/bin/ verbatim, so
+      # a tag must not be able to ship engines that no longer match topo-core/.
+      - name: Verify Bundled Engines Against the Stamp
+        run: packaging/build-engine.sh --verify
+
+      - name: Compare Bundled Engine With This Build
+        if: matrix.arch == 'x86_64'
+        run: packaging/build-engine.sh --compare "topo-core-x86_64" x86_64
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
