@@ -75,7 +75,16 @@ command -v curl >/dev/null 2>&1 || { echo -e "  ${RED}✗ Error: curl is require
 if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓${NC} ${GRAY}curl installed${NC}"; fi
 
 command -v python3 >/dev/null 2>&1 || { echo -e "  ${RED}✗ Error: python3 is required but not installed.${NC}"; exit 1; }
-if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓${NC} ${GRAY}python3 installed${NC}"; fi
+# Version, not just presence, and one interpreter call for both halves of the
+# answer. The code requires 3.10+ (see the same floor in the `topo` launcher), so
+# on Debian 11 or RHEL 8 this script used to tick every box, print its success
+# banner, and leave behind a Topo that dies on first run.
+if ! PY_VERSION=$(python3 -c 'import sys; print(".".join(str(p) for p in sys.version_info[:3])); sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null); then
+    echo -e "  ${RED}✗ Error: Topo requires Python 3.10 or newer (found ${PY_VERSION:-an unknown version}).${NC}"
+    echo -e "  ${GRAY}Install a newer python3 and make sure it is the one on your PATH.${NC}"
+    exit 1
+fi
+if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓${NC} ${GRAY}python3 ${PY_VERSION} installed${NC}"; fi
 if ! python3 -c "import packaging" >/dev/null 2>&1; then
     echo -e "  ${RED}✗ Error: Python package 'packaging' is required but not installed.${NC}"
     echo -e "  ${GRAY}Install it with one of:${NC}"
@@ -214,6 +223,19 @@ absolute_link_dir() {
     esac
 }
 
+# The engine built for an architecture, or nothing when none is. One answer for
+# both callers -- the completeness check below and the provisioning in step 4 --
+# because they used to spell the same case statement twice and disagreeing about
+# which machines have an engine is precisely the bug that produces an install
+# that re-downloads itself forever. src/core/engine.py keeps the same table for
+# the Python side, and tests/test_engine.py runs this function against it.
+engine_for_arch() {
+    case "$1" in
+        x86_64) printf '%s\n' "topo-core-x86_64" ;;
+        aarch64|arm64) printf '%s\n' "topo-core-aarch64" ;;
+    esac
+}
+
 # A repeated curl install should be cheap when the requested release is already
 # complete. Only skip the verified download when every runtime artifact and
 # the launcher/PATH setup match this release; missing, non-executable, or
@@ -243,12 +265,13 @@ installed_version_matches() {
     [ -L "$launcher_path" ] || return 1
     [ "$(readlink -f "$launcher_path" 2>/dev/null || true)" = "$(readlink -f "$HOME/.topo/topo" 2>/dev/null || true)" ] || return 1
 
-    case "$(uname -m)" in
-        x86_64) engine_name="topo-core-x86_64" ;;
-        aarch64|arm64) engine_name="topo-core-aarch64" ;;
-        *) return 1 ;;
-    esac
-    [ -x "$HOME/.topo/src/core/bin/$engine_name" ] || return 1
+    # An architecture without an engine has nothing to check here: step 4
+    # deliberately installs none. This used to `return 1`, which made every
+    # single run of this script re-download and re-install the whole release.
+    engine_name=$(engine_for_arch "$(uname -m)")
+    if [ -n "$engine_name" ]; then
+        [ -x "$HOME/.topo/src/core/bin/$engine_name" ] || return 1
+    fi
 
     if [[ ":${PATH}:" == *":${path_entry}:"* ]]; then
         return 0
@@ -468,12 +491,16 @@ fetch_engine_binary() {
     fi
 }
 
-if [[ "$ARCH" == "x86_64" ]]; then
-    fetch_engine_binary "topo-core-x86_64"
-    rm -f "$BIN_DIR/topo-core-aarch64"
-elif [[ "$ARCH" == "aarch64" ]] || [[ "$ARCH" == "arm64" ]]; then
-    fetch_engine_binary "topo-core-aarch64"
-    rm -f "$BIN_DIR/topo-core-x86_64"
+# Exactly one engine survives this, and on an architecture nobody builds for,
+# none does. The source archive carries both, and leaving the wrong one behind
+# hands Topo a binary the kernel refuses to exec -- src/core/engine.py reaches
+# the same conclusion from the same table and falls back to pure Python.
+ENGINE_NAME=$(engine_for_arch "$ARCH")
+rm -f "$BIN_DIR/topo-core-x86_64" "$BIN_DIR/topo-core-aarch64"
+if [ -n "$ENGINE_NAME" ]; then
+    fetch_engine_binary "$ENGINE_NAME"
+elif [ "$MINIMAL" = false ]; then
+    echo -e "  ${YELLOW}ℹ${NC} ${GRAY}No prebuilt engine for ${ARCH}; scanning will use the slower pure-Python path.${NC}"
 fi
 
 # Keep LICENSE for compliance, but remove everything else non-essential
@@ -490,6 +517,7 @@ rm -rf \
     README.zh-CN.md \
     check.sh \
     pyproject.toml \
+    requirements-dev.txt \
     packaging/ \
     install.sh \
     topo-core/

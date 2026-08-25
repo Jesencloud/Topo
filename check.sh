@@ -29,14 +29,27 @@ else
 fi
 
 echo -e "${PURPLE}☉ 1. Formatting Code...${NC}"
-if ! OUT=$(ruff format src tests 2>&1); then
+# Plain ./check.sh asks the same question CI asks (--check); ./check.sh --fix is
+# the mode that rewrites files. It used to format unconditionally, so a run that
+# said "✓ Ruff format" had just made the change CI would have failed on, and the
+# commit that followed was only clean because the check itself had edited it.
+if [ $AUTO_FIX -eq 1 ]; then
+    FORMAT_CMD="ruff format src tests"
+    CARGO_FMT_CMD="cargo fmt --manifest-path topo-core/Cargo.toml"
+else
+    FORMAT_CMD="ruff format --check src tests"
+    CARGO_FMT_CMD="cargo fmt --manifest-path topo-core/Cargo.toml --check"
+fi
+if ! OUT=$($FORMAT_CMD 2>&1); then
     echo -e "${RED}❌ Ruff format failed:${NC}\n$OUT"
+    echo -e "${GRAY}   Run './check.sh --fix' to apply the formatting.${NC}"
     exit 1
 fi
 echo -e "  ${GREEN}✓${NC} ${GRAY}Ruff format${NC}"
 
-if ! OUT=$(cargo fmt --manifest-path topo-core/Cargo.toml 2>&1); then
+if ! OUT=$($CARGO_FMT_CMD 2>&1); then
     echo -e "${RED}❌ Cargo fmt failed:${NC}\n$OUT"
+    echo -e "${GRAY}   Run './check.sh --fix' to apply the formatting.${NC}"
     exit 1
 fi
 echo -e "  ${GREEN}✓${NC} ${GRAY}Cargo fmt${NC}"
@@ -67,7 +80,7 @@ if command -v tach &> /dev/null; then
     fi
     echo -e "  ${GREEN}✓${NC} ${GRAY}Tach module boundary check${NC}"
 else
-    echo -e "  ${YELLOW}⚠️${NC}  ${GRAY}Tach not installed; module check SKIPPED (pip install tach).${NC}"
+    echo -e "  ${YELLOW}⚠️${NC}  ${GRAY}Tach not installed; module check SKIPPED (pip install -r requirements-dev.txt).${NC}"
 fi
 
 if command -v vulture &> /dev/null; then
@@ -77,7 +90,7 @@ if command -v vulture &> /dev/null; then
     fi
     echo -e "  ${GREEN}✓${NC} ${GRAY}Vulture dead code check${NC}"
 else
-    echo -e "  ${YELLOW}⚠️${NC}  ${GRAY}Vulture not installed; dead code check SKIPPED (pip install vulture).${NC}"
+    echo -e "  ${YELLOW}⚠️${NC}  ${GRAY}Vulture not installed; dead code check SKIPPED (pip install -r requirements-dev.txt).${NC}"
 fi
 echo -e "  ${GREEN}✓${NC} ${GRAY}Python linting complete.${NC}\n"
 

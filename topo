@@ -2,6 +2,23 @@
 import sys
 import os
 
+# The floor the code actually requires: PEP 604 annotations like `int | None` are
+# evaluated at runtime inside dataclasses, and the CI test matrix starts at 3.10.
+# Checked before importing anything from src/ and written in a dialect old
+# interpreters can still parse, because that is the whole point -- on Debian 11
+# (3.9) or RHEL 8 (3.6) those imports fail with SyntaxError or TypeError, and the
+# ImportError handler below would blame a perfectly present source tree.
+MIN_PYTHON = (3, 10)
+if sys.version_info < MIN_PYTHON:
+    sys.stderr.write(
+        "Error: Topo requires Python {}.{} or newer, but this is Python {}.\n".format(
+            MIN_PYTHON[0],
+            MIN_PYTHON[1],
+            ".".join(str(part) for part in sys.version_info[:3]),
+        )
+    )
+    sys.exit(1)
+
 # Get the real physical path of the script
 REAL_PATH = os.path.realpath(__file__)
 REAL_DIR = os.path.dirname(REAL_PATH)
@@ -25,15 +42,20 @@ def restore_terminal_after_interrupt():
         pass
 
 
+# Only the import is allowed to mean "source modules are missing". main() used to
+# sit in this same try, so any lazy import failing *inside* a feature module --
+# `import termios` in remove.py, say -- was reported as a broken installation and
+# pointed the user at a directory that was fine all along.
 try:
-    from src.main import main
+    try:
+        from src.main import main
+    except ImportError as e:
+        print(f"Error: Could not find topo source modules in {REAL_DIR}", file=sys.stderr)
+        print(f"Debug info: {e}", file=sys.stderr)
+        sys.exit(1)
 
     if __name__ == "__main__":
         main()
-except ImportError as e:
-    print(f"Error: Could not find topo source modules in {REAL_DIR}")
-    print(f"Debug info: {e}")
-    sys.exit(1)
 except KeyboardInterrupt:
     restore_terminal_after_interrupt()
     print("\n🚫 Process interrupted by user.")

@@ -1,6 +1,7 @@
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,211 @@ def test_install_script_fails_early_when_curl_is_missing(tmp_path):
     assert "python3 is required" not in result.stdout
 
 
+def _fake_python3(tmp_path: Path, version: tuple[int, int, int]) -> Path:
+    """A python3 on PATH that reports `version` and is otherwise the real one.
+
+    install.sh asks two questions of the interpreter -- print the version, and
+    exit non-zero if it is too old -- and a stub that pattern-matched those two
+    command lines would pass even if the script stopped asking. This answers them
+    by actually running the code install.sh passes, against a patched
+    sys.version_info.
+    """
+    bin_dir = tmp_path / "fakebin"
+    bin_dir.mkdir(exist_ok=True)
+    stub = bin_dir / "python3"
+    stub.write_text(
+        f"#!{sys.executable}\n"
+        "import sys\n"
+        f"sys.version_info = {version!r}\n"
+        'code = sys.argv[2] if len(sys.argv) > 2 and sys.argv[1] == "-c" else ""\n'
+        "del sys.argv[1:]\n"
+        "exec(code)\n"
+    )
+    stub.chmod(0o755)
+    return bin_dir
+
+
+def test_install_script_refuses_an_interpreter_older_than_the_code_requires(tmp_path):
+    # The failure this closes: on Debian 11 (3.9) or RHEL 8 (3.6) the script
+    # checked only that `python3` existed, ticked every box, printed its success
+    # banner, and left behind a Topo that died on first run.
+    bin_dir = _fake_python3(tmp_path, (3, 9, 2))
+
+    result = subprocess.run(
+        ["/bin/bash", str(REPO_ROOT / "install.sh"), "--minimal"],
+        env={"HOME": str(tmp_path), "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "requires Python 3.10 or newer (found 3.9.2)" in result.stdout
+    # And it stopped there: nothing was downloaded, nothing was installed.
+    assert not (tmp_path / ".topo").exists()
+
+
+def _run_installer_block(pattern: str, prelude: str, expr: str, env: dict, count: int = 1) -> str:
+    """Run top-level blocks of install.sh in isolation.
+
+    Same reason as _run_installer_link_helpers: none of this is visible to ruff,
+    mypy, vulture or tach, and the alternative to extracting it is a text grep
+    that passes whatever the block happens to say.
+    """
+    script = (REPO_ROOT / "install.sh").read_text()
+    blocks = re.findall(pattern, script, re.M | re.S)
+    assert len(blocks) == count, (
+        f"install.sh no longer contains {count} block(s) matching {pattern!r}"
+    )
+
+    result = subprocess.run(
+        ["/bin/bash", "-c", f"{prelude}\n" + "\n".join(blocks) + f"\n{expr}"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    return result.stdout
+
+
+def _installer_function(name: str) -> str:
+    """One named shell function of install.sh, verbatim."""
+    script = (REPO_ROOT / "install.sh").read_text()
+    block = re.search(rf"^{name}\(\) \{{\n.*?^\}}$", script, re.M | re.S)
+    assert block is not None, f"install.sh no longer defines {name}()"
+    return block.group(0)
+
+
+ENGINE_SELECTION = r"^ENGINE_NAME=\$\(engine_for_arch \"\$ARCH\"\)\n.*?^fi$"
+
+
+@pytest.mark.parametrize(
+    ("arch", "kept"),
+    [
+        ("x86_64", "topo-core-x86_64"),
+        ("aarch64", "topo-core-aarch64"),
+        ("arm64", "topo-core-aarch64"),
+    ],
+)
+def test_install_script_installs_only_the_engine_for_this_architecture(tmp_path, arch, kept):
+    bin_dir = tmp_path / "src/core/bin"
+    bin_dir.mkdir(parents=True)
+    for name in ("topo-core-x86_64", "topo-core-aarch64"):
+        (bin_dir / name).write_text("shipped in the source archive\n")
+
+    output = _run_installer_block(
+        ENGINE_SELECTION,
+        prelude=(
+            f'ARCH={arch}\nBIN_DIR="{bin_dir}"\nMINIMAL=false\n'
+            + _installer_function("engine_for_arch")
+            + '\nfetch_engine_binary() { printf downloaded > "$BIN_DIR/$1"; }\n'
+        ),
+        expr=":",
+        env={"HOME": str(tmp_path), "PATH": os.environ["PATH"]},
+    )
+
+    assert (bin_dir / kept).read_text() == "downloaded"
+    assert sorted(p.name for p in bin_dir.iterdir()) == [kept]
+    assert "pure-Python" not in output
+
+
+def test_install_script_removes_both_engines_on_an_architecture_without_one(tmp_path):
+    # The source archive carries both engines; leaving either one behind hands
+    # Topo a binary the kernel refuses to exec (src/core/engine.py agrees this
+    # architecture has no engine, and falls back for the same reason).
+    bin_dir = tmp_path / "src/core/bin"
+    bin_dir.mkdir(parents=True)
+    for name in ("topo-core-x86_64", "topo-core-aarch64"):
+        (bin_dir / name).write_text("shipped in the source archive\n")
+
+    output = _run_installer_block(
+        ENGINE_SELECTION,
+        prelude=(
+            f'ARCH=riscv64\nBIN_DIR="{bin_dir}"\nMINIMAL=false\n'
+            + _installer_function("engine_for_arch")
+            + '\nfetch_engine_binary() { printf downloaded > "$BIN_DIR/$1"; }\n'
+        ),
+        expr=":",
+        env={"HOME": str(tmp_path), "PATH": os.environ["PATH"]},
+    )
+
+    assert list(bin_dir.iterdir()) == []
+    assert "No prebuilt engine for riscv64" in output
+    assert "pure-Python path" in output
+
+
+VERSION_MATCH_HELPERS = (
+    r"^(?:resolve_link_target_dir|absolute_link_dir|engine_for_arch"
+    r"|installed_version_matches)\(\) \{\n.*?^\}$"
+)
+
+
+def _complete_install(tmp_path: Path, version: str, engines: tuple[str, ...]) -> dict:
+    """A ~/.topo that installed_version_matches() should be happy with."""
+    tree = tmp_path / ".topo"
+    (tree / "src/core/bin").mkdir(parents=True)
+    (tree / "VERSION").write_text(f"{version}\n")
+    launcher = tree / "topo"
+    launcher.write_text("#!/usr/bin/env python3\n")
+    launcher.chmod(0o755)
+    (tree / "src/main.py").write_text("")
+    for name in engines:
+        binary = tree / "src/core/bin" / name
+        binary.write_text("engine")
+        binary.chmod(0o755)
+    link_dir = tmp_path / "bin"
+    link_dir.mkdir()
+    (link_dir / "topo").symlink_to(launcher)
+    return {
+        "HOME": str(tmp_path),
+        "TARGET_REF": f"v{version}",
+        "TOPO_LINK_DIR": str(link_dir),
+        "PATH": f"{link_dir}{os.pathsep}{os.environ['PATH']}",
+    }
+
+
+def _installed_version_matches(env: dict, arch: str, tmp_path: Path) -> str:
+    fake_bin = tmp_path / "unamebin"
+    fake_bin.mkdir(exist_ok=True)
+    uname = fake_bin / "uname"
+    uname.write_text(f"#!/bin/sh\necho {arch}\n")
+    uname.chmod(0o755)
+    env = {**env, "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}"}
+
+    return _run_installer_block(
+        VERSION_MATCH_HELPERS,
+        prelude="",
+        expr="if installed_version_matches; then echo MATCH; else echo MISS; fi",
+        env=env,
+        count=4,
+    ).strip()
+
+
+@pytest.mark.parametrize(
+    ("arch", "engine_name"),
+    [("x86_64", "topo-core-x86_64"), ("aarch64", "topo-core-aarch64")],
+)
+def test_a_repeat_install_is_skipped_only_when_this_arch_engine_is_there(
+    tmp_path, arch, engine_name
+):
+    env = _complete_install(tmp_path, "1.1.2", engines=(engine_name,))
+    assert _installed_version_matches(env, arch, tmp_path) == "MATCH"
+
+    (tmp_path / ".topo/src/core/bin" / engine_name).unlink()
+    assert _installed_version_matches(env, arch, tmp_path) == "MISS"
+
+
+def test_a_repeat_install_is_skipped_on_an_architecture_that_has_no_engine(tmp_path):
+    # This used to return 1 unconditionally for an unsupported architecture, so
+    # every single run re-downloaded and re-installed the whole release -- for a
+    # file step 4 had just deliberately deleted.
+    env = _complete_install(tmp_path, "1.1.2", engines=())
+
+    assert _installed_version_matches(env, "riscv64", tmp_path) == "MATCH"
+
+
 def _run_installer_link_helpers(env, expr="resolve_link_target_dir"):
     """Evaluate install.sh's launcher-path helpers without running the installer.
 
@@ -34,22 +240,13 @@ def _run_installer_link_helpers(env, expr="resolve_link_target_dir"):
     would notice the two drifting apart: ruff, mypy, vulture and tach never read
     shell. This extracts the two functions and runs them.
     """
-    script = (REPO_ROOT / "install.sh").read_text()
-    blocks = re.findall(
-        r"^(?:resolve_link_target_dir|absolute_link_dir)\(\) \{\n.*?^\}$", script, re.M | re.S
-    )
-    assert len(blocks) == 2, "install.sh no longer defines the launcher-path helpers by name"
-
-    result = subprocess.run(
-        ["/bin/bash", "-c", "\n".join(blocks) + "\n" + expr],
+    return _run_installer_block(
+        r"^(?:resolve_link_target_dir|absolute_link_dir)\(\) \{\n.*?^\}$",
+        prelude="",
+        expr=expr,
         env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
-    return result.stdout.strip()
+        count=2,
+    ).strip()
 
 
 @pytest.mark.parametrize("override", [None, "/opt/bin", "~/xbin", "relbin"])

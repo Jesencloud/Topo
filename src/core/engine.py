@@ -23,25 +23,36 @@ from .system import run_command
 # How long a single topo-core invocation may take before it is abandoned.
 _SCAN_COMMAND_TIMEOUT = 300
 
+# The only architectures an engine is built for. `platform.machine()` values, so
+# arm64 is in here for the platforms that spell aarch64 that way, and the two
+# names install.sh knows are the two names this table maps.
+_ENGINE_BY_ARCH = {
+    "x86_64": "topo-core-x86_64",
+    "aarch64": "topo-core-aarch64",
+    "arm64": "topo-core-aarch64",
+}
+
 
 @functools.cache
 def get_core_binary() -> Path | None:
-    """Resolves the architecture-specific topo-core binary path.
+    """The topo-core binary for this machine, or None when there is no such thing.
 
-    install.sh keeps only the binary matching the host arch (e.g. it removes
-    topo-core-x86_64 on ARM64), so we must pick the name dynamically. Falls back
-    to any available engine binary for dev/single-arch checkouts.
+    None is the honest answer on riscv64, armv7l or i686: the source archive
+    carries both engines, so anything that merely *picks a name* finds a file
+    there and returns a binary the kernel refuses to exec. Callers already treat
+    None as "use the pure-Python path", which is what those machines get either
+    way -- the difference is that they no longer pay for a failed exec per scan,
+    and `topo doctor` reports a missing engine instead of a broken one.
+
+    Deliberately no glob fallback: it only ever ran when the engine for this
+    architecture was absent, and then the only thing left to find was an engine
+    for the other one.
     """
-    bin_dir = Path(__file__).parent / "bin"
-    arch = platform.machine().lower()
-    suffix = "aarch64" if arch in ("aarch64", "arm64") else "x86_64"
-    preferred = bin_dir / f"topo-core-{suffix}"
-    if preferred.exists():
-        return preferred
-    for candidate in sorted(bin_dir.glob("topo-core-*")):
-        if candidate.is_file():
-            return candidate
-    return None
+    name = _ENGINE_BY_ARCH.get(platform.machine().lower())
+    if name is None:
+        return None
+    binary = Path(__file__).parent / "bin" / name
+    return binary if binary.is_file() else None
 
 
 def normalize_scan_path(path: str | Path) -> Path:

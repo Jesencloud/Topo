@@ -21,8 +21,11 @@ jobs:
         with:
           python-version: "3.11"
 
+      # Pinned in requirements-dev.txt so this job and ./check.sh run the same
+      # versions: an unpinned `pip install ruff` turns unrelated PRs red the day
+      # ruff adds a rule, and makes "passes locally" mean nothing.
       - name: Install Python Linter
-        run: pip install ruff mypy packaging vulture tach
+        run: pip install -r requirements-dev.txt
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -83,8 +86,12 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      # -c and not -r: the same pinned versions as the lint job, without dragging
+      # the lint tools into a matrix that also runs on the newest Python -- tach
+      # is a compiled wheel, and a missing build for a fresh interpreter would
+      # fail this job for a reason that has nothing to do with the tests.
       - name: Install Python Test Tools
-        run: pip install pytest packaging
+        run: pip install -c requirements-dev.txt pytest packaging
 
       # -p no:tach matches check.sh. The tach package registers a pytest plugin
       # under that name, so a run with tach installed collects differently from
