@@ -8,14 +8,18 @@ use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
 use std::io::Write;
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 
 pub const DEFAULT_TREE_MIN_BYTES: u64 = 1_048_576; // 1 MiB
 /// Minimum size for a file to enter a `top_files` list.
 pub const TOP_FILE_MIN_BYTES: u64 = 1_048_576; // 1 MiB
-// Safety list - skip virtual and system-reserved directories.
-const SKIP_DIR_NAMES: [&str; 7] = ["proc", "sys", "dev", "run", "mnt", "media", "lost+found"];
+// Safety lists - skip virtual and system-reserved directories. Both are matched
+// against the entry's own name; `skips_child` explains why one of them has to
+// look at the device the entry lives on as well.
+const MOUNT_SKIP_DIR_NAMES: [&str; 6] = ["proc", "sys", "dev", "run", "mnt", "media"];
+const ALWAYS_SKIP_DIR_NAMES: [&str; 1] = ["lost+found"];
 
 #[derive(Serialize, Deserialize)]
 pub struct ScanResult {
@@ -162,27 +166,73 @@ fn estimated_scan_bytes(
     total
 }
 
+/// Device id of `path`, without following a final symlink. `None` when it
+/// cannot be read.
+fn device_id(path: &Path) -> Option<u64> {
+    std::fs::symlink_metadata(path)
+        .ok()
+        .map(|metadata| metadata.dev())
+}
+
+/// Whether the walker drops one child of the directory it has just read.
+///
+/// `lost+found` goes by name wherever it appears: only root can read it, and
+/// what it holds is filesystem repair debris rather than anything a user put
+/// there. The virtual filesystems (`proc`, `sys`, `dev`, `run`) and the two
+/// conventional mount roots (`mnt`, `media`) need the name *and* the entry
+/// really being a mount point, i.e. sitting on a different device than the
+/// directory holding it. Going by name alone silently dropped `~/dev`,
+/// `~/media` and `node_modules/dev` -- ordinary content, counted by `du`, and
+/// missing from both the totals and the listing -- while `/proc` and a
+/// bind-mounted `~/chroot/proc` are still caught by the device test, so the
+/// intent of the list survives without its false positives.
+///
+/// `devices` is called only for a guarded name: stat'ing every child of every
+/// directory to answer a question about six names would cost far more than the
+/// walk saves. If either device cannot be read the old name-only skip stands --
+/// an entry that cannot be stat'ed cannot be measured either.
+fn skips_child(name: &str, devices: impl FnOnce() -> (Option<u64>, Option<u64>)) -> bool {
+    if ALWAYS_SKIP_DIR_NAMES.contains(&name) {
+        return true;
+    }
+    if !MOUNT_SKIP_DIR_NAMES.contains(&name) {
+        return false;
+    }
+    match devices() {
+        (Some(child), Some(parent)) => child != parent,
+        _ => true,
+    }
+}
+
 /// Walker used by every mode that reports *sizes*, so `--single` and `--tree`
 /// necessarily agree on the skip-list / symlink / hidden-file rules. Change the
 /// traversal policy here and both modes move together.
 ///
 /// `compute_stats` deliberately does not use this: it measures one specific
-/// path the user asked about (a cache or residue directory), where a child that
-/// happens to be named `run` or `media` is real content and should be counted,
-/// and where the virtual filesystems this list guards against cannot appear.
+/// path the user asked about (a cache or residue directory), where even
+/// `lost+found` is content the caller asked to have counted, and where the
+/// virtual filesystems this list guards against cannot appear.
 fn scan_walker(root_path: &Path) -> WalkDir {
     WalkDir::new(root_path)
         .skip_hidden(false)
         .follow_links(false)
-        .process_read_dir(|_depth, _path, _read_dir_state, children| {
+        .process_read_dir(|_depth, parent_path, _read_dir_state, children| {
+            // Read on the first guarded name and reused for the rest of the
+            // directory; most directories never hold one and never stat it.
+            let mut parent_dev: Option<Option<u64>> = None;
             children.retain(|child| {
                 if let Ok(entry) = child {
                     let name = entry.file_name.to_string_lossy();
-                    !SKIP_DIR_NAMES.iter().any(|&skip| name == skip)
+                    !skips_child(&name, || {
+                        (
+                            device_id(&entry.path()),
+                            *parent_dev.get_or_insert_with(|| device_id(parent_path)),
+                        )
+                    })
                 } else {
                     false
                 }
-            });
+            })
         })
 }
 
@@ -448,4 +498,40 @@ pub fn run_stats(root_path: &Path) {
     let mut output = stdout.lock();
     let _ = serde_json::to_writer(&mut output, &compute_stats(root_path));
     let _ = writeln!(output);
+}
+
+/// The device half of the skip rule lives here rather than in
+/// `tests/scanner_tests.rs` because creating a mount point needs privileges an
+/// integration test does not have; what a test *can* build -- a plain directory
+/// named `proc` -- is covered there.
+#[cfg(test)]
+mod tests {
+    use super::skips_child;
+
+    #[test]
+    fn a_guarded_name_is_skipped_only_where_it_is_a_mount_point() {
+        // /proc, or a bind-mounted ~/chroot/proc: another device, still skipped.
+        assert!(skips_child("proc", || (Some(2), Some(1))));
+        assert!(skips_child("media", || (Some(2), Some(1))));
+        // ~/dev, node_modules/dev: same device as its parent, so it is content.
+        assert!(!skips_child("dev", || (Some(1), Some(1))));
+        assert!(!skips_child("run", || (Some(1), Some(1))));
+    }
+
+    #[test]
+    fn an_unreadable_device_keeps_the_name_only_skip() {
+        assert!(skips_child("sys", || (None, Some(1))));
+        assert!(skips_child("mnt", || (Some(1), None)));
+    }
+
+    #[test]
+    fn only_a_guarded_name_costs_a_stat() {
+        assert!(skips_child("lost+found", || panic!(
+            "decided by name alone"
+        )));
+        assert!(!skips_child("Documents", || panic!(
+            "decided by name alone"
+        )));
+        assert!(!skips_child("proc.bin", || panic!("decided by name alone")));
+    }
 }

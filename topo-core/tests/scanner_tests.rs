@@ -105,15 +105,42 @@ fn tree_keys_are_relative() {
 }
 
 #[test]
-fn tree_skips_virtual_dirs() {
+fn tree_counts_plain_dirs_that_share_a_virtual_filesystem_name() {
     let dir = tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
     write_file(&root.join("proc/x.bin"), 1000);
+    write_file(&root.join("dev/y.bin"), 700);
+    write_file(&root.join("sub/media/z.bin"), 200);
+    write_file(&root.join("real/w.bin"), 500);
+
+    // These names are skipped only where they are real mount points. As
+    // ordinary directories they are content like any other -- going by name
+    // alone made a developer's ~/dev vanish from the totals and the listing.
+    let tree = compute_tree(&root);
+    assert_eq!(tree["."].total_size_bytes, 2400);
+    assert_eq!(tree["."].file_count, 4);
+    assert_eq!(tree["."].subdirs["proc"], 1000);
+    assert_eq!(tree["."].subdirs["dev"], 700);
+    assert_eq!(tree["sub"].subdirs["media"], 200);
+    assert!(tree.contains_key("proc"));
+
+    // --single shares the walker, so the size the uninstall and clean screens
+    // ask for has to agree with the tree.
+    assert_eq!(compute_single(&root).total_size_bytes, 2400);
+}
+
+#[test]
+fn tree_skips_lost_and_found_by_name_alone() {
+    let dir = tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    write_file(&root.join("lost+found/chunk.bin"), 1000);
     write_file(&root.join("real/y.bin"), 500);
 
+    // Only root can read it and what it holds is repair debris, so no device
+    // test is needed or wanted here.
     let tree = compute_tree(&root);
-    assert!(!tree.contains_key("proc"));
-    assert!(!tree["."].subdirs.contains_key("proc"));
+    assert!(!tree.contains_key("lost+found"));
+    assert!(!tree["."].subdirs.contains_key("lost+found"));
     assert_eq!(tree["."].total_size_bytes, 500);
 }
 
@@ -266,21 +293,20 @@ fn stats_reports_size_and_activity() {
 fn stats_counts_named_content_that_size_scans_intentionally_skip() {
     let dir = tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
-    write_file(&root.join("run/session.bin"), 100);
-    write_file(&root.join("media/cache.bin"), 200);
+    write_file(&root.join("lost+found/chunk.bin"), 200);
     write_file(&root.join("regular.bin"), 300);
 
     let stats = compute_stats(&root);
     let tree = compute_tree(&root);
 
-    // --stats measures a specific cache/residue path, where these names are
-    // ordinary content rather than virtual filesystem mount points.
-    assert_eq!(stats.total_size_bytes, 600);
-    assert_eq!(stats.file_count, 3);
+    // --stats measures one specific path the caller pointed at (a cache or
+    // residue directory), where everything under it is content it asked to have
+    // counted -- hence the bare walker.
+    assert_eq!(stats.total_size_bytes, 500);
+    assert_eq!(stats.file_count, 2);
 
-    // Size/tree scans retain the existing safety policy for broad scan roots.
+    // Size/tree scans keep the safety policy for broad scan roots.
     assert_eq!(tree["."].total_size_bytes, 300);
     assert_eq!(tree["."].file_count, 1);
-    assert!(!tree["."].subdirs.contains_key("run"));
-    assert!(!tree["."].subdirs.contains_key("media"));
+    assert!(!tree["."].subdirs.contains_key("lost+found"));
 }
