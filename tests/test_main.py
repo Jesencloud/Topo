@@ -1,5 +1,5 @@
 from contextlib import nullcontext
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -165,6 +165,46 @@ def test_cli_routes_commands(argv, target, expected):
         mocked.assert_called_once_with(limit=expected[0])
     else:
         mocked.assert_called_once_with(*expected)
+
+
+@pytest.mark.parametrize(
+    ("argv", "target"),
+    [
+        (["topo", "clean"], "run_clean"),
+        (["topo", "update"], "run_update"),
+        (["topo", "remove", "--dry-run"], "run_remove"),
+    ],
+)
+def test_installation_mutating_commands_hold_the_single_instance_lock(argv, target):
+    # update replaces ~/.topo through install.sh and remove deletes it outright,
+    # so both must be as exclusive as clean is -- a concurrent run would pull the
+    # program files out from under whichever instance started first.
+    lock = MagicMock()
+    with (
+        patch("sys.argv", argv),
+        patch("src.main.terminal_state.install_signal_handlers"),
+        patch("src.main.system.get_os_id", return_value="test-os"),
+        patch("src.main.SingleInstanceLock", return_value=lock) as lock_class,
+        patch(f"src.main.{target}"),
+    ):
+        topo_main.main()
+
+    lock_class.assert_called_once_with()
+    lock.__enter__.assert_called_once_with()
+    lock.__exit__.assert_called_once()
+
+
+def test_status_does_not_take_the_single_instance_lock():
+    with (
+        patch("sys.argv", ["topo", "status"]),
+        patch("src.main.terminal_state.install_signal_handlers"),
+        patch("src.main.system.get_os_id", return_value="test-os"),
+        patch("src.main.SingleInstanceLock") as lock_class,
+        patch("src.main.show_status"),
+    ):
+        topo_main.main()
+
+    lock_class.assert_not_called()
 
 
 def test_cli_authorize_link_failure_and_analyze_uninstall_routes():

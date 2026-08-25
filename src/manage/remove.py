@@ -13,6 +13,7 @@ from ..core.install_source import (
     get_install_source,
     get_package_remove_argv,
 )
+from ..core.lock import LOCK_FILE_PATH
 
 
 class _RemoveItem(TypedDict, total=False):
@@ -100,6 +101,23 @@ def _launcher_points_to_package(launcher_path: Path) -> bool:
         return False
 
 
+def _config_dir_is_lock_only(config_dir: Path) -> bool:
+    """True when ~/.config/topo contains nothing but this run's own lock file.
+
+    `topo remove` is itself a lock-holding command, so by the time it looks
+    around, SingleInstanceLock has already created ~/.config/topo/topo.lock.
+    Counting that as leftover configuration would mean `topo remove` could never
+    report a clean system: run it twice and the second run would offer to delete
+    the directory the second run just made. An empty directory is still treated
+    as removable residue, exactly as before the lock covered this command.
+    """
+    try:
+        return [entry.name for entry in config_dir.iterdir()] == [LOCK_FILE_PATH.name]
+    except OSError:
+        # Unreadable is not lock-only; let the normal removal path try and report.
+        return False
+
+
 def _remove_path(path: Path) -> bool:
     ok, _ = safe_remove(
         path,
@@ -126,9 +144,17 @@ def _remove_package_user_residue() -> list[str]:
     ):
         removed.append("Launcher compatibility entry")
 
+    config_dir = home / ".config/topo"
+    # This run holds the instance lock inside ~/.config/topo, so the directory
+    # always exists by the time we get here. Deleting it is still right -- an
+    # empty directory holding nothing but our own lock file is residue this run
+    # created -- but announcing it as removed configuration would be a lie on a
+    # machine that never had any.
+    config_is_lock_only = _config_dir_is_lock_only(config_dir)
+
     for path, label in (
         (internal_dir, "Script install directory"),
-        (home / ".config/topo", "Configuration and whitelist"),
+        (config_dir, "Configuration and whitelist"),
         (home / ".cache/topo", "Temporary scan cache"),
         (
             Path(os.environ.get("XDG_STATE_HOME", str(home / ".local/state"))).expanduser()
@@ -136,7 +162,7 @@ def _remove_package_user_residue() -> list[str]:
             "Deletion history / state",
         ),
     ):
-        if _remove_path(path):
+        if _remove_path(path) and not (path == config_dir and config_is_lock_only):
             removed.append(label)
 
     if _strip_topo_path_lines():
@@ -189,7 +215,7 @@ def run_remove(dry_run=False):
 
     # Configuration directory
     config_dir = Path.home() / ".config" / "topo"
-    if config_dir.exists():
+    if config_dir.exists() and not _config_dir_is_lock_only(config_dir):
         to_remove.append({"path": config_dir, "desc": "Configuration and whitelist", "type": "dir"})
 
     # Cache directory (if any)

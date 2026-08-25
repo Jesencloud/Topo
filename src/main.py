@@ -314,12 +314,22 @@ def _main():
                 print(f"   - {p}")
         return
 
-    # Commands requiring single-instance concurrency lock
+    # Commands requiring single-instance concurrency lock.
+    #
+    # update and remove belong here even though they delete nothing under the
+    # user's home: their blast radius is the installation itself. update hands
+    # ~/.topo to install.sh, which replaces the whole directory, and remove
+    # deletes it with allow_self_removal=True -- both while a concurrent
+    # `topo clean` may still be importing modules out of it. That makes them
+    # more destructive than the five commands the lock was originally written
+    # for, not less.
     LOCK_REQUIRED_COMMANDS = {
         "clean",
         "uninstall",
         "optimize",
         "analyze",
+        "update",
+        "remove",
         None,
     }
 

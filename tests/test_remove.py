@@ -67,6 +67,35 @@ def test_run_remove_executes_package_manager_removal(
 @patch("src.manage.remove.get_install_source", return_value="package")
 @patch(
     "src.manage.remove.get_package_remove_argv",
+    return_value=["sudo", "apt", "remove", "-y", "topo"],
+)
+@patch("src.manage.remove.subprocess.run")
+@patch("src.manage.remove.safe_remove", side_effect=lambda p, **kw: (_do_remove(p), "ok"))
+def test_package_removal_does_not_report_a_lock_only_config_dir(
+    _mock_safe, mock_run, _mock_command, _mock_install_source, monkeypatch, test_env, capsys
+):
+    # The lock this run holds lives in ~/.config/topo, so the directory exists
+    # even on a machine that never had user configuration. It still gets deleted
+    # (it is residue this run created), but it must not be announced as removed
+    # configuration.
+    mock_run.return_value = MagicMock(returncode=0)
+    config_dir = test_env / ".config/topo"
+    config_dir.mkdir(parents=True)
+    (config_dir / "topo.lock").write_text("4242\n")
+    monkeypatch.setenv("XDG_STATE_HOME", str(test_env / ".local/state"))
+    monkeypatch.setattr("pathlib.Path.home", lambda: test_env)
+
+    run_remove()
+
+    output = capsys.readouterr().out
+    assert "Topo package removal completed" in output
+    assert "Removed Configuration and whitelist" not in output
+    assert not config_dir.exists()
+
+
+@patch("src.manage.remove.get_install_source", return_value="package")
+@patch(
+    "src.manage.remove.get_package_remove_argv",
     return_value=["sudo", "dnf", "remove", "-y", "topo"],
 )
 @patch("src.manage.remove.subprocess.run")
@@ -245,6 +274,28 @@ def test_user_remove_no_integration_and_dry_run(test_env, monkeypatch, capsys):
     ):
         run_remove(dry_run=True)
     assert "Dry run complete" in capsys.readouterr().out
+
+
+def test_config_dir_holding_only_the_lock_file_is_not_leftover(test_env, monkeypatch, capsys):
+    # run_remove now runs under SingleInstanceLock, which creates
+    # ~/.config/topo/topo.lock before the scan. That file alone must not make an
+    # otherwise clean system look like it still has configuration to remove.
+    monkeypatch.setattr("pathlib.Path.home", lambda: test_env)
+    config_dir = test_env / ".config/topo"
+    config_dir.mkdir(parents=True)
+    (config_dir / "topo.lock").write_text("4242\n")
+
+    with patch("src.manage.remove.get_install_source", return_value="script"):
+        run_remove()
+    assert "No system integration" in capsys.readouterr().out
+
+    (config_dir / "config.json").write_text("{}")
+    with (
+        patch("src.manage.remove.get_install_source", return_value="script"),
+        patch("src.manage.remove.get_size_fast", return_value=10),
+    ):
+        run_remove(dry_run=True)
+    assert "Configuration and whitelist" in capsys.readouterr().out
 
 
 def test_user_remove_cancel_and_success_with_error(test_env, monkeypatch, capsys):
