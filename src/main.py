@@ -89,6 +89,7 @@ REMOVE_HELP = """
 Examples:
   topo remove             Uninstall topo from the system
   topo remove --dry-run   Preview files and links that would be removed
+  topo remove --yes       Uninstall without the confirmation prompt (scripts, CI)
 """
 
 HISTORY_HELP = """
@@ -229,13 +230,23 @@ def _main():
     # --- Management ---
     subparsers.add_parser("authorize", help="Setup passwordless sudo for faster cleanup")
     subparsers.add_parser("update", help="Update topo to the latest version")
-    subparsers.add_parser(
+    remove_parser = subparsers.add_parser(
         "remove",
         parents=[dry_run_parent],
         help="Uninstall topo from the system",
         description="Uninstall topo from the system.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=REMOVE_HELP,
+    )
+    # The confirmation prompt needs a terminal, so automation (CI smoke tests,
+    # image builds, provisioning) needs a way past it -- without one the only
+    # alternative is `apt remove topo`, which skips the user-residue cleanup that
+    # `topo remove` exists for.
+    remove_parser.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="Skip the confirmation prompt (for scripts and CI)",
     )
     link_parser = subparsers.add_parser(
         "link", help="Create a symbolic link for the 'topo' command"
@@ -437,7 +448,7 @@ def _execute_main_router(args, dry_run):
         run_update()
 
     if args.command == "remove":
-        run_remove(dry_run)
+        run_remove(dry_run, args.yes)
 
 
 if __name__ == "__main__":

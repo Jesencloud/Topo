@@ -175,7 +175,9 @@ def test_alternate_tui_runs_command_inside_screen():
         (["topo", "status"], "show_status", ()),
         (["topo", "history", "--limit", "0"], "show_history", (1,)),
         (["topo", "update"], "run_update", ()),
-        (["topo", "remove", "--dry-run"], "run_remove", (True,)),
+        (["topo", "remove", "--dry-run"], "run_remove", (True, False)),
+        (["topo", "remove", "--yes"], "run_remove", (False, True)),
+        (["topo", "remove", "-y", "--dry-run"], "run_remove", (True, True)),
     ],
 )
 def test_cli_routes_commands(argv, target, expected):

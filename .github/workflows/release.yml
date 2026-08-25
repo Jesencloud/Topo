@@ -174,7 +174,7 @@ jobs:
           ! grep -F "sudo apt upgrade topo" <<<"$update_output"
           ! grep -F "sudo dnf upgrade topo" <<<"$update_output"
 
-          remove_output="$(topo remove)"
+          remove_output="$(topo remove --yes)"
           printf '%s\n' "$remove_output"
           grep -F "apt remove -y topo" <<<"$remove_output"
           ! grep -F "dnf remove -y topo" <<<"$remove_output"
@@ -210,7 +210,7 @@ jobs:
           ! grep -F "sudo apt upgrade topo" <<<"$update_output"
           ! grep -F "sudo dnf upgrade topo" <<<"$update_output"
 
-          remove_output="$(topo remove)"
+          remove_output="$(topo remove --yes)"
           printf '%s\n' "$remove_output"
           grep -F "dnf remove -y topo" <<<"$remove_output"
           ! grep -F "apt remove -y topo" <<<"$remove_output"
@@ -250,7 +250,7 @@ jobs:
               apt-get update
               apt-get install -y ./dist/packages/topo_*_amd64.deb
               topo --version
-              topo remove
+              topo remove --yes
               ! dpkg-query -W topo >/dev/null 2>&1
               ;;
             rpm-zypper)
@@ -260,7 +260,7 @@ jobs:
               ln -sf /usr/bin/python3.11 /usr/local/bin/python3
               zypper --non-interactive install --allow-unsigned-rpm ./dist/packages/topo-*-1.x86_64.rpm
               topo --version
-              topo remove
+              topo remove --yes
               ! rpm -q topo
               ;;
             rpm-dnf)
@@ -269,7 +269,7 @@ jobs:
               ln -sf /usr/bin/python3.11 /usr/local/bin/python3
               dnf install -y ./dist/packages/topo-*-1.x86_64.rpm
               topo --version
-              topo remove
+              topo remove --yes
               ! rpm -q topo
               ;;
           esac

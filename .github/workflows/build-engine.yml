@@ -196,7 +196,7 @@ jobs:
           ! grep -F "sudo apt upgrade topo" <<<"$update_output"
           ! grep -F "sudo dnf upgrade topo" <<<"$update_output"
 
-          remove_output="$(topo remove)"
+          remove_output="$(topo remove --yes)"
           printf '%s\n' "$remove_output"
           grep -F "apt remove -y topo" <<<"$remove_output"
           ! grep -F "dnf remove -y topo" <<<"$remove_output"
@@ -232,7 +232,7 @@ jobs:
           ! grep -F "sudo apt upgrade topo" <<<"$update_output"
           ! grep -F "sudo dnf upgrade topo" <<<"$update_output"
 
-          remove_output="$(topo remove)"
+          remove_output="$(topo remove --yes)"
           printf '%s\n' "$remove_output"
           grep -F "dnf remove -y topo" <<<"$remove_output"
           ! grep -F "apt remove -y topo" <<<"$remove_output"

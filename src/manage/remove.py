@@ -171,7 +171,7 @@ def _remove_package_user_residue() -> list[str]:
     return removed
 
 
-def _confirm_removal(prompt: str) -> bool:
+def _confirm_removal(prompt: str, assume_yes: bool = False) -> bool:
     """Ask for a single-key confirmation; False when declined or non-interactive.
 
     Deliberately not terminal_state.read_sudo_choice(): that helper treats a
@@ -183,16 +183,25 @@ def _confirm_removal(prompt: str) -> bool:
     handles ImportError and KeyboardInterrupt) lets it print a traceback -- the
     outcome for `ssh host topo remove`, containers, and any pipe.
 
+    `assume_yes` (`topo remove --yes`) is the deliberate escape hatch for the
+    callers that legitimately have no terminal: CI smoke tests, container image
+    builds, provisioning tools. Refusing without offering one would only push
+    them back to `apt remove topo`, which skips the user-residue cleanup this
+    command exists for. It is checked before isatty so `--yes` works on a pipe.
+
     Both install sources come through here. The package manager is invoked with
     its own -y, so this prompt is topo's only confirmation on that path; leaving
     it out made `topo remove` uninstall a packaged topo with no question asked
     while the script install asked for Enter.
     """
+    if assume_yes:
+        return True
+
     if not sys.stdin.isatty():
         print(f"\n {YELLOW}⚠{RESET} Removing topo needs an interactive confirmation.")
         print(
-            f"  {GRAY}Run it from a terminal, or preview with{RESET} "
-            f"{BOLD}topo remove --dry-run{RESET}{GRAY}.{RESET}"
+            f"  {GRAY}Run it from a terminal, pass{RESET} {BOLD}--yes{RESET}{GRAY} to skip this "
+            f"prompt, or preview with{RESET} {BOLD}topo remove --dry-run{RESET}{GRAY}.{RESET}"
         )
         return False
 
@@ -217,7 +226,7 @@ def _confirm_removal(prompt: str) -> bool:
     return True
 
 
-def run_remove(dry_run=False):
+def run_remove(dry_run=False, assume_yes=False):
     """Removes topo from the system."""
 
     if get_install_source() == PACKAGE_INSTALL:
@@ -226,13 +235,16 @@ def run_remove(dry_run=False):
             print(f"\n {RED}✗ Unsupported Linux distribution for package removal.{RESET}")
             return
         print(f"\n {MAGENTA}☉ Removing Topo through the system package manager.{RESET}\n")
-        print(f" {GRAY}Running:{RESET} {BOLD}{' '.join(command)}{RESET}")
+        # "Command:" and not "Running:": this line is printed before the
+        # confirmation, so on the --dry-run and declined paths nothing runs.
+        print(f" {GRAY}Command:{RESET} {BOLD}{' '.join(command)}{RESET}")
         if dry_run:
             print(f" {GREEN}✓{RESET} Dry run complete. Package removal command was not executed.")
             return
         if not _confirm_removal(
             f"\n {PURPLE}●{RESET} Remove the topo package: "
-            f"Press {GREEN}Enter{RESET} confirm, {GREEN}ESC{RESET} cancel: "
+            f"Press {GREEN}Enter{RESET} confirm, {GREEN}ESC{RESET} cancel: ",
+            assume_yes,
         ):
             return
         print()
@@ -313,7 +325,8 @@ def run_remove(dry_run=False):
     # 3. Confirmation (Mole-style)
     if not _confirm_removal(
         f"\n {PURPLE}●{RESET} Remove topo ({bytes_to_human(total_size)}): "
-        f"Press {GREEN}Enter{RESET} confirm, {GREEN}ESC{RESET} cancel: "
+        f"Press {GREEN}Enter{RESET} confirm, {GREEN}ESC{RESET} cancel: ",
+        assume_yes,
     ):
         return
 

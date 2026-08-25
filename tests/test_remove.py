@@ -316,8 +316,63 @@ def test_package_remove_refuses_to_confirm_without_a_terminal(_run, _argv, _sour
 
     output = capsys.readouterr().out
     assert "needs an interactive confirmation" in output
+    assert "--yes" in output  # the refusal must name the automation escape hatch
     assert "topo remove --dry-run" in output
     _run.assert_not_called()
+
+
+@patch("src.manage.remove.get_install_source", return_value="package")
+@patch("src.manage.remove.get_package_remove_argv", return_value=["dnf", "remove", "-y", "topo"])
+@patch("src.manage.remove.subprocess.run", return_value=MagicMock(returncode=0))
+@patch("src.manage.remove.safe_remove", side_effect=lambda p, **kw: (_do_remove(p), "ok"))
+def test_package_remove_yes_skips_the_prompt_without_a_terminal(
+    _mock_safe, mock_run, _argv, _source, monkeypatch, test_env, capsys
+):
+    # --yes is the escape hatch for the callers that legitimately have no
+    # terminal (CI smoke tests, image builds). Without it they would fall back
+    # to `dnf remove topo`, which skips the user-residue cleanup asserted below.
+    monkeypatch.setattr("pathlib.Path.home", lambda: test_env)
+    cache_dir = test_env / ".cache/topo"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "cache").write_text("")
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("--yes must not reach the single-key read")
+
+    with (
+        patch("sys.stdin.isatty", return_value=False),
+        patch("termios.tcgetattr", side_effect=fail_if_called),
+    ):
+        run_remove(assume_yes=True)
+
+    output = capsys.readouterr().out
+    assert "needs an interactive confirmation" not in output
+    assert "Topo package removal completed" in output
+    assert "Removed Temporary scan cache" in output
+    assert not cache_dir.exists()
+    mock_run.assert_called_once_with(["dnf", "remove", "-y", "topo"], timeout=300)
+
+
+def test_script_remove_yes_skips_the_prompt_without_a_terminal(test_env, monkeypatch, capsys):
+    monkeypatch.setattr("pathlib.Path.home", lambda: test_env)
+    (test_env / ".topo").mkdir()
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("--yes must not reach the single-key read")
+
+    with (
+        patch("src.manage.remove.get_install_source", return_value="script"),
+        patch("src.manage.remove.get_size_fast", return_value=1),
+        patch("sys.stdin.isatty", return_value=False),
+        patch("termios.tcgetattr", side_effect=fail_if_called),
+        patch("src.manage.remove.safe_remove", side_effect=lambda p, **kw: (_do_remove(p), "ok")),
+    ):
+        run_remove(assume_yes=True)
+
+    output = capsys.readouterr().out
+    assert "needs an interactive confirmation" not in output
+    assert "successfully removed" in output
+    assert not (test_env / ".topo").exists()
 
 
 def test_user_remove_no_integration_and_dry_run(test_env, monkeypatch, capsys):
@@ -411,5 +466,6 @@ def test_remove_refuses_to_confirm_without_a_terminal(test_env, monkeypatch, cap
 
     output = capsys.readouterr().out
     assert "needs an interactive confirmation" in output
+    assert "--yes" in output
     assert "topo remove --dry-run" in output
     assert (test_env / ".topo").exists()
