@@ -1,5 +1,6 @@
 import json
 import platform
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -21,10 +22,16 @@ from ..core.engine import get_core_binary
 from ..core.install_source import get_install_root, get_install_source
 from ..core.package_manager import PACKAGE_MANAGERS, detect_package_manager, resolve_admin_tool
 from ..core.paths import get_config_dir
-from ..core.system import get_invoking_user, get_os_id, run_command
+from ..core.system import C_LOCALE_ENV, get_invoking_user, get_os_id, run_command
 
 DOCTOR_COMMAND_TIMEOUT = 5
 VERSION_UNAVAILABLE = "Unavailable (VERSION missing, empty or unreadable)"
+# A dotted number, plus a pre-release suffix when there is one (1.2.3-rc1), but
+# not the sentence punctuation that may follow it.
+_VERSION_TOKEN = re.compile(r"\d+(?:\.\d+)+(?:[-+~][\w.]+)?")
+# Enough for any version, short enough to keep a row on one terminal line; only
+# reached by a tool that prints no recognisable number at all.
+VERSION_DETAIL_MAX_LENGTH = 40
 # What `topo update` cannot do without: the download and the signature check.
 # Warned about rather than failed on -- see run_doctor's docstring.
 UPDATE_PREREQUISITES = (
@@ -33,16 +40,39 @@ UPDATE_PREREQUISITES = (
 )
 
 
+def _short_version(output: str) -> str:
+    """The version number alone, out of whatever `--version` printed.
+
+    curl opens with its own version and then names every library it was linked
+    against -- one ~300-character line that wrapped the report over several
+    terminal rows. The tool's name is already this row's own column, so the row
+    only needs the number: take the first version-looking token anywhere in the
+    output (pacman's first line is ASCII art, so the first *line* is not enough),
+    and fall back to a clipped first line for a tool that prints no number.
+    """
+    match = _VERSION_TOKEN.search(output)
+    if match:
+        return match.group(0)
+    for line in output.splitlines():
+        line = line.strip()
+        if line:
+            if len(line) > VERSION_DETAIL_MAX_LENGTH:
+                return line[: VERSION_DETAIL_MAX_LENGTH - 3] + "..."
+            return line
+    return "Installed"
+
+
 def _check_tool(name: str, args: list[str] | None = None) -> tuple[bool, str]:
     if args is None:
         args = ["--version"]
-    path = shutil.which(name)
-    if not path:
+    if not shutil.which(name):
         return False, "Not installed"
-    res = run_command([name] + args, capture=True, timeout=DOCTOR_COMMAND_TIMEOUT)
+    # C locale because the answer is parsed, not displayed: dnf5 and rpm print
+    # "版本" where a translation exists, and _short_version's fallback line would
+    # otherwise be a sentence in whatever language the box happens to be set to.
+    res = run_command([name] + args, capture=True, timeout=DOCTOR_COMMAND_TIMEOUT, env=C_LOCALE_ENV)
     if res.ok:
-        first_line = res.stdout.splitlines()[0] if res.stdout else "Installed"
-        return True, first_line
+        return True, _short_version(res.stdout)
     return True, "Installed (version check failed)"
 
 

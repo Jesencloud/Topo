@@ -1,6 +1,8 @@
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from src.core.package_manager import APT
 from src.core.system import CommandResult
 from src.manage import doctor
@@ -147,3 +149,60 @@ def test_doctor_warns_about_update_prerequisites_without_failing(tmp_path, capsy
     # of silently listing no package tools at all.
     assert "No supported package manager detected" in output
     assert "Diagnostic complete: 1 problem(s) found." in output
+
+
+@pytest.mark.parametrize(
+    ("output", "expected"),
+    [
+        # The row this was written for: curl names every library it links against.
+        (
+            (
+                "curl 8.18.0 (x86_64-redhat-linux-gnu) libcurl/8.18.0 OpenSSL/3.5.7 "
+                "zlib/1.3.1.zlib-ng brotli/1.2.0 libidn2/2.3.8 nghttp2/1.68.0\n"
+                "Release-Date: 2026-01-14\n"
+            ),
+            "8.18.0",
+        ),
+        ("gpg (GnuPG) 2.4.9\nlibgcrypt 1.11.0\n", "2.4.9"),
+        ("2.88.3\n", "2.88.3"),  # gio version prints the number and nothing else
+        ("Flatpak 1.18.1\n", "1.18.1"),
+        ("dnf5 version 5.4.3.0\n", "5.4.3.0"),
+        # dpkg-query pads its own line out with a sentence, and ends it with a dot
+        # that is punctuation rather than part of the version.
+        ("Debian dpkg-query package management program version 1.23.7 (amd64).\n", "1.23.7"),
+        # pacman opens with ASCII art, so the first line carries no version at all.
+        ("\n .--.                  Pacman v6.0.2 - libalpm v13.0.2\n", "6.0.2"),
+        ("trash-put 0.24.5.26\n", "0.24.5.26"),
+        ("topo 1.2.3-rc1\n", "1.2.3-rc1"),
+    ],
+)
+def test_a_tool_row_shows_the_version_and_not_the_link_line(output, expected):
+    assert doctor._short_version(output) == expected
+
+
+def test_a_tool_that_prints_no_version_still_gets_a_row_that_fits():
+    assert doctor._short_version("") == "Installed"
+    assert doctor._short_version("   \n\n") == "Installed"
+
+    detail = doctor._short_version("built from git, no version number here at all\n")
+
+    assert len(detail) == doctor.VERSION_DETAIL_MAX_LENGTH
+    assert detail.endswith("...")
+
+
+def test_the_version_probe_asks_in_the_c_locale():
+    # The output is parsed now, so it has to be asked for in a language this code
+    # knows: dnf5 and rpm both print a translated "version" line otherwise.
+    calls = []
+
+    def fake_run_command(args, capture=True, timeout=300, env=None):
+        calls.append((args, env))
+        return _command_result(args, stdout="curl 8.18.0 (x86_64) libcurl/8.18.0\n")
+
+    with (
+        patch("src.manage.doctor.shutil.which", return_value="/usr/bin/curl"),
+        patch("src.manage.doctor.run_command", side_effect=fake_run_command),
+    ):
+        assert doctor._check_tool("curl") == (True, "8.18.0")
+
+    assert calls == [(["curl", "--version"], doctor.C_LOCALE_ENV)]
