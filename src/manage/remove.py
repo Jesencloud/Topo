@@ -14,7 +14,7 @@ from ..core.install_source import (
     get_package_remove_argv,
 )
 from ..core.lock import LOCK_FILE_PATH
-from ..core.paths import get_config_dir, get_state_dir
+from ..core.paths import get_config_dir, get_launcher_candidates, get_state_dir
 
 
 class _RemoveItem(TypedDict, total=False):
@@ -133,16 +133,25 @@ def _remove_package_user_residue() -> list[str]:
     removed: list[str] = []
     home = Path.home()
     internal_dir = home / ".topo"
-    launcher_path = home / ".local/bin/topo"
 
-    if (
-        (launcher_path.exists() or launcher_path.is_symlink())
-        and (
-            _launcher_points_to_topo(launcher_path, internal_dir)
-            or _launcher_points_to_package(launcher_path)
-        )
-        and _remove_path(launcher_path)
-    ):
+    # Every candidate, not just ~/.local/bin: a compatibility launcher created by
+    # `topo link` under TOPO_LINK_DIR (or by `sudo topo link`, in /usr/local/bin)
+    # would otherwise survive the package removal as a dangling symlink. Not
+    # any()/short-circuited on purpose -- more than one can exist, and stopping at
+    # the first would leave the others. Paths this user cannot write simply fail
+    # to be removed and stay unreported.
+    launcher_removed = False
+    for launcher_path in get_launcher_candidates():
+        if (
+            (launcher_path.exists() or launcher_path.is_symlink())
+            and (
+                _launcher_points_to_topo(launcher_path, internal_dir)
+                or _launcher_points_to_package(launcher_path)
+            )
+            and _remove_path(launcher_path)
+        ):
+            launcher_removed = True
+    if launcher_removed:
         removed.append("Launcher compatibility entry")
 
     config_dir = get_config_dir()
@@ -272,7 +281,7 @@ def run_remove(dry_run=False, assume_yes=False) -> bool:
 
     # The launcher link
     internal_dir = Path.home() / ".topo"
-    for launcher_path in (Path.home() / ".local/bin/topo", Path("/usr/local/bin/topo")):
+    for launcher_path in get_launcher_candidates():
         if (launcher_path.exists() or launcher_path.is_symlink()) and _launcher_points_to_topo(
             launcher_path, internal_dir
         ):

@@ -2,14 +2,7 @@ import os
 from pathlib import Path
 
 from ..core.constants import BOLD, GRAY, GREEN, PURPLE, RED, RESET, YELLOW
-
-
-def _get_link_target_dir() -> Path:
-    if override := os.environ.get("TOPO_LINK_DIR"):
-        return Path(override).expanduser()
-    if hasattr(os, "geteuid") and os.geteuid() == 0:
-        return Path("/usr/local/bin")
-    return Path.home() / ".local" / "bin"
+from ..core.paths import get_link_target_dir
 
 
 def run_install_link(silent=False):
@@ -21,7 +14,7 @@ def run_install_link(silent=False):
     # 1. Paths
     repo_root = Path(__file__).parent.parent.parent
     source_script = repo_root / "topo"
-    target_dir = _get_link_target_dir()
+    target_dir = get_link_target_dir()
     target_link = target_dir / "topo"
 
     if not source_script.exists():

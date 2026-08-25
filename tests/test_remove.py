@@ -469,3 +469,55 @@ def test_remove_refuses_to_confirm_without_a_terminal(test_env, monkeypatch, cap
     assert "--yes" in output
     assert "topo remove --dry-run" in output
     assert (test_env / ".topo").exists()
+
+
+def test_remove_finds_launchers_in_both_the_override_and_the_default_dir(
+    test_env, monkeypatch, capsys
+):
+    # install.sh honours TOPO_LINK_DIR; remove used to scan only ~/.local/bin and
+    # /usr/local/bin, so an install into /opt/bin left `topo` on PATH as a
+    # dangling symlink -- the next invocation said "No such file or directory".
+    # Both are planted at once: the override in force during removal need not be
+    # the one used to install, so the historical default must still be scanned,
+    # and finding one candidate must not stop the sweep.
+    monkeypatch.setattr("pathlib.Path.home", lambda: test_env)
+    internal_dir = test_env / ".topo"
+    internal_dir.mkdir()
+    (internal_dir / "topo").write_text("#!/bin/sh\n")
+    override_dir = test_env / "opt/bin"
+    default_dir = test_env / ".local/bin"
+    launchers = []
+    for link_dir in (override_dir, default_dir):
+        link_dir.mkdir(parents=True)
+        launcher = link_dir / "topo"
+        launcher.symlink_to(internal_dir / "topo")
+        launchers.append(launcher)
+    monkeypatch.setenv("TOPO_LINK_DIR", str(override_dir))
+
+    with (
+        patch("src.manage.remove.get_install_source", return_value="script"),
+        patch("src.manage.remove.get_size_fast", return_value=10),
+    ):
+        assert run_remove(assume_yes=True) is True
+
+    assert capsys.readouterr().out.count("Removed Launcher script link") == 2
+    for launcher in launchers:
+        assert not launcher.exists() and not launcher.is_symlink()
+
+
+def test_package_residue_removes_a_launcher_under_topo_link_dir(test_env, monkeypatch):
+    # Same asymmetry on the package path: `topo link` puts the compatibility
+    # launcher wherever TOPO_LINK_DIR says, and the residue sweep looked in one
+    # fixed place.
+    monkeypatch.setattr("pathlib.Path.home", lambda: test_env)
+    link_dir = test_env / "opt/bin"
+    link_dir.mkdir(parents=True)
+    launcher = link_dir / "topo"
+    launcher.write_text("#!/bin/sh\n# Managed by topo package compatibility launcher.\n")
+    monkeypatch.setenv("TOPO_LINK_DIR", str(link_dir))
+    monkeypatch.setenv("XDG_STATE_HOME", str(test_env / ".local/state"))
+
+    with patch("src.manage.remove.safe_remove", side_effect=lambda p, **kw: (_do_remove(p), "ok")):
+        assert "Launcher compatibility entry" in _remove_package_user_residue()
+
+    assert not launcher.exists()

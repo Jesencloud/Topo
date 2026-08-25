@@ -53,8 +53,12 @@ jobs:
         shell: bash
         env:
           HOME: ${{ runner.temp }}/topo-home
-          TOPO_LINK_DIR: ${{ runner.temp }}/topo-home/.local/bin
-          PATH: ${{ runner.temp }}/topo-home/.local/bin:/usr/local/bin:/usr/bin:/bin
+          # Deliberately not $HOME/.local/bin: with HOME already redirected, the
+          # default would be indistinguishable from no override at all, and the
+          # override is the path with no other coverage -- `topo remove` used to
+          # ignore TOPO_LINK_DIR entirely and leave a dangling launcher on PATH.
+          TOPO_LINK_DIR: ${{ runner.temp }}/topo-home/opt/bin
+          PATH: ${{ runner.temp }}/topo-home/opt/bin:/usr/local/bin:/usr/bin:/bin
         run: |
           set -euo pipefail
           mkdir -p "$HOME"
@@ -69,6 +73,15 @@ jobs:
           repeat_output="$(bash install.sh --version "v${version}")"
           printf '%s\n' "$repeat_output"
           grep -F "Topo v${version} is already installed; skipping download." <<<"$repeat_output"
+
+          # Uninstall last: the script install had no removal smoke at all, so
+          # nothing verified that what install.sh creates is what topo remove
+          # deletes. Keep the output before judging the exit code (see I1).
+          remove_output="$("$TOPO_LINK_DIR/topo" remove --yes)" && remove_status=0 || remove_status=$?
+          printf '%s\n' "$remove_output"
+          test "$remove_status" -eq 0
+          test ! -e "$TOPO_LINK_DIR/topo" && test ! -L "$TOPO_LINK_DIR/topo"
+          test ! -e "$HOME/.topo"
 
   build:
     name: Build for ${{ matrix.target }}

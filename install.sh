@@ -495,7 +495,9 @@ snapshot_shell_configs
 # Resolve the same target directory used by run_install_link(), including root
 # installs and TOPO_LINK_DIR overrides. Resolve it before creating the link so
 # failure cleanup always knows which first-install launcher belongs to us.
-LAUNCHER_PATH=$(python3 -c 'from src.manage.install import _get_link_target_dir; print(_get_link_target_dir() / "topo")') ||
+# get_link_target_dir() is a public contract for exactly this call; renaming it
+# breaks tests/test_install.py, which runs the line below.
+LAUNCHER_PATH=$(python3 -c 'from src.core.paths import get_link_target_dir; print(get_link_target_dir() / "topo")') ||
     abort_verification "Could not resolve the launcher path before running topo link."
 
 # Updates and minimal installs suppress presentation while still performing the

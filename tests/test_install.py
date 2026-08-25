@@ -1,8 +1,11 @@
 import os
+import re
 import subprocess
+import sys
 from pathlib import Path
 
-from src.manage.install import _get_link_target_dir, run_install_link
+from src.core.paths import get_link_target_dir
+from src.manage.install import run_install_link
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -21,18 +24,45 @@ def test_install_script_fails_early_when_curl_is_missing(tmp_path):
     assert "python3 is required" not in result.stdout
 
 
+def test_install_script_can_still_resolve_the_launcher_path_it_asks_for(tmp_path, monkeypatch):
+    """install.sh imports get_link_target_dir() to learn the launcher path.
+
+    That import is a plain string as far as ruff, mypy, vulture and tach are
+    concerned, so renaming or moving the function used to break the installer
+    with no local gate turning red -- only the CI smoke job, and only when its
+    path filter happened to match. This test runs the script's own line.
+    """
+    snippet = re.search(
+        r"^LAUNCHER_PATH=\$\(python3 -c '(.+)'\)", (REPO_ROOT / "install.sh").read_text(), re.M
+    )
+    assert snippet, "install.sh no longer resolves LAUNCHER_PATH the way this test expects"
+
+    target = tmp_path / "bin"
+    monkeypatch.setenv("TOPO_LINK_DIR", str(target))
+    result = subprocess.run(
+        [sys.executable, "-c", snippet.group(1)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == str(target / "topo")
+
+
 def test_get_link_target_dir_uses_override(monkeypatch, tmp_path):
     target = tmp_path / "bin"
     monkeypatch.setenv("TOPO_LINK_DIR", str(target))
 
-    assert _get_link_target_dir() == target
+    assert get_link_target_dir() == target
 
 
 def test_get_link_target_dir_uses_usr_local_bin_for_root(monkeypatch):
     monkeypatch.delenv("TOPO_LINK_DIR", raising=False)
     monkeypatch.setattr(os, "geteuid", lambda: 0)
 
-    assert _get_link_target_dir() == Path("/usr/local/bin")
+    assert get_link_target_dir() == Path("/usr/local/bin")
 
 
 def test_run_install_link_creates_launcher_symlink(monkeypatch, tmp_path, test_env):
