@@ -171,6 +171,52 @@ def _remove_package_user_residue() -> list[str]:
     return removed
 
 
+def _confirm_removal(prompt: str) -> bool:
+    """Ask for a single-key confirmation; False when declined or non-interactive.
+
+    Deliberately not terminal_state.read_sudo_choice(): that helper treats a
+    non-TTY stdin as "\\n" -- accept -- which is a sane default for a sudo prompt
+    and exactly the wrong one for "delete the installation". With no terminal
+    there is nobody to confirm, so refuse. Without the guard the read below
+    raises termios.error, which is *not* an OSError subclass, so no
+    `except OSError` on the way up catches it and the topo launcher (which only
+    handles ImportError and KeyboardInterrupt) lets it print a traceback -- the
+    outcome for `ssh host topo remove`, containers, and any pipe.
+
+    Both install sources come through here. The package manager is invoked with
+    its own -y, so this prompt is topo's only confirmation on that path; leaving
+    it out made `topo remove` uninstall a packaged topo with no question asked
+    while the script install asked for Enter.
+    """
+    if not sys.stdin.isatty():
+        print(f"\n {YELLOW}⚠{RESET} Removing topo needs an interactive confirmation.")
+        print(
+            f"  {GRAY}Run it from a terminal, or preview with{RESET} "
+            f"{BOLD}topo remove --dry-run{RESET}{GRAY}.{RESET}"
+        )
+        return False
+
+    print(prompt, end="", flush=True)
+
+    # Single-key capture
+    import termios
+    import tty
+
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    terminal_state.remember_raw_state(fd, old_settings)
+    try:
+        tty.setraw(fd)
+        ch = sys.stdin.read(1)
+    finally:
+        terminal_state.restore_raw_state(fd, old_settings)
+
+    if ch not in ("\r", "\n", "y", "Y"):
+        print(f"\n\n {YELLOW}⚠{RESET}{GRAY} Uninstallation cancelled.{RESET}")
+        return False
+    return True
+
+
 def run_remove(dry_run=False):
     """Removes topo from the system."""
 
@@ -184,6 +230,12 @@ def run_remove(dry_run=False):
         if dry_run:
             print(f" {GREEN}✓{RESET} Dry run complete. Package removal command was not executed.")
             return
+        if not _confirm_removal(
+            f"\n {PURPLE}●{RESET} Remove the topo package: "
+            f"Press {GREEN}Enter{RESET} confirm, {GREEN}ESC{RESET} cancel: "
+        ):
+            return
+        print()
         try:
             process = subprocess.run(command, timeout=300)
         except (OSError, subprocess.SubprocessError) as e:
@@ -259,27 +311,10 @@ def run_remove(dry_run=False):
         return
 
     # 3. Confirmation (Mole-style)
-    print(
-        f"\n {PURPLE}●{RESET} Remove topo ({bytes_to_human(total_size)}): Press {GREEN}Enter{RESET} confirm, {GREEN}ESC{RESET} cancel: ",
-        end="",
-        flush=True,
-    )
-
-    # Single-key capture
-    import termios
-    import tty
-
-    fd = sys.stdin.fileno()
-    old_settings = termios.tcgetattr(fd)
-    terminal_state.remember_raw_state(fd, old_settings)
-    try:
-        tty.setraw(fd)
-        ch = sys.stdin.read(1)
-    finally:
-        terminal_state.restore_raw_state(fd, old_settings)
-
-    if ch not in ("\r", "\n", "y", "Y"):
-        print(f"\n\n {YELLOW}⚠{RESET}{GRAY} Uninstallation cancelled.{RESET}")
+    if not _confirm_removal(
+        f"\n {PURPLE}●{RESET} Remove topo ({bytes_to_human(total_size)}): "
+        f"Press {GREEN}Enter{RESET} confirm, {GREEN}ESC{RESET} cancel: "
+    ):
         return
 
     # 4. Execution

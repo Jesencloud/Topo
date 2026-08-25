@@ -104,6 +104,7 @@ def test_main_cleans_direct_command_output_on_interrupt():
 def test_main_menu_clean_action_routes_to_clean():
     with (
         patch("sys.argv", ["topo"]),
+        patch("sys.stdin.isatty", return_value=True),
         patch("src.main.terminal_state.install_signal_handlers"),
         patch("src.main.SingleInstanceLock", return_value=nullcontext()),
         patch("src.main.main_menu", return_value="clean"),
@@ -112,6 +113,39 @@ def test_main_menu_clean_action_routes_to_clean():
         topo_main.main()
 
     run_terminal.assert_called_once_with(topo_main.run_clean, False)
+
+
+@pytest.mark.parametrize(
+    ("argv", "target", "label"),
+    [
+        (["topo"], "main_menu", "The topo menu"),
+        (["topo", "analyze"], "run_deep_analysis", "topo analyze"),
+        (["topo", "uninstall"], "run_uninstall", "topo uninstall"),
+    ],
+)
+def test_interactive_commands_refuse_a_non_tty_instead_of_crashing(argv, target, label, capsys):
+    # All three drive Navigator.raw_mode(), whose termios.tcgetattr(stdin) raises
+    # termios.error -- not an OSError subclass -- whenever stdin is not a
+    # terminal (`echo | topo`, `topo analyze < /dev/null`, cron), so nothing on
+    # the way up caught it and the launcher printed a traceback. The guard must
+    # also fire before the lock is taken: refusing is not a reason to fight
+    # another instance for it.
+    with (
+        patch("sys.argv", argv),
+        patch("sys.stdin.isatty", return_value=False),
+        patch("src.main.terminal_state.install_signal_handlers"),
+        patch("src.main.SingleInstanceLock") as lock_class,
+        # QUIT_ACTION so a regressed guard fails on the assertions below instead
+        # of spinning forever in the menu loop on an unroutable MagicMock.
+        patch(f"src.main.{target}", return_value=topo_main.QUIT_ACTION) as mocked,
+    ):
+        topo_main.main()
+
+    output = capsys.readouterr().out
+    assert f"{label} needs an interactive terminal" in output
+    assert "topo clean --dry-run" in output
+    mocked.assert_not_called()
+    lock_class.assert_not_called()
 
 
 def test_screen_helpers_and_interrupted_output(capsys):
@@ -229,6 +263,7 @@ def test_cli_authorize_link_failure_and_analyze_uninstall_routes():
     for command, function in (("analyze", "run_deep_analysis"), ("uninstall", "run_uninstall")):
         with (
             patch("sys.argv", ["topo", command]),
+            patch("sys.stdin.isatty", return_value=True),
             patch("src.main.terminal_state.install_signal_handlers"),
             patch("src.main.alternate_screen", return_value=nullcontext()),
             patch("src.main.SingleInstanceLock", return_value=nullcontext()),

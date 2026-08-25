@@ -6,11 +6,14 @@ from .clean.runner import run_clean
 from .core import system, terminal_state
 from .core.constants import (
     BLUE,
+    BOLD,
     CLEAR_LINE,
     CLEAR_SCREEN,
+    GRAY,
     RESET,
     THEME_TITLE,
     TOPO_VERSION,
+    YELLOW,
     setup_color_mode,
 )
 from .core.history import show_history
@@ -312,6 +315,26 @@ def _main():
                 print("   (Empty)")
             for p in w:
                 print(f"   - {p}")
+        return
+
+    # Commands that cannot work without a terminal.
+    #
+    # The TUI menu, analyze and uninstall all drive Navigator.raw_mode(), whose
+    # first act is termios.tcgetattr(stdin). termios.error is not an OSError
+    # subclass, so anything that hands topo a non-terminal stdin -- `echo | topo`,
+    # `topo analyze < /dev/null`, cron, non-interactive ssh -- used to escape
+    # every handler on the way up and print a raw traceback. (`topo | cat` only
+    # redirects stdout and never hit this.) Guarding here covers all three entry
+    # points at once and keeps isatty knowledge out of the ui layer; raw_mode()
+    # itself must not degrade to a no-op, or the selector loop would spin against
+    # a pipe instead.
+    if args.command in {None, "analyze", "uninstall"} and not sys.stdin.isatty():
+        label = f"topo {args.command}" if args.command else "The topo menu"
+        print(f"\n {YELLOW}⚠{RESET} {label} needs an interactive terminal.")
+        print(
+            f"  {GRAY}Run it from a terminal, or use a non-interactive command such as{RESET} "
+            f"{BOLD}topo status{RESET}{GRAY} or{RESET} {BOLD}topo clean --dry-run{RESET}{GRAY}.{RESET}"
+        )
         return
 
     # Commands requiring single-instance concurrency lock.
