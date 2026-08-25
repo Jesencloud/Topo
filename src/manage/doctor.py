@@ -178,7 +178,7 @@ def run_doctor() -> bool:
         supported = ", ".join(m.label for m in PACKAGE_MANAGERS)
         print(f"  {GRAY}-{RESET} No supported package manager detected ({supported})")
     else:
-        print(f"    {'Detected':<10} {CYAN}{manager.label}{RESET}")
+        print(f"  {GREEN}✓{RESET} {'Detected':<10} {CYAN}{manager.label}{RESET}")
         # The binaries topo actually runs, not the family's front-end names: it
         # used to probe `apt` and `dpkg` while running apt-get and dpkg-query, and
         # `dnf` on a Fedora where dnf is only a compat symlink to dnf5.
