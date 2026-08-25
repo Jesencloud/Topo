@@ -1,4 +1,3 @@
-import contextlib
 import fcntl
 import os
 import shutil
@@ -89,50 +88,125 @@ def get_uptime():
 
 
 def get_cpu_load_summary() -> str:
-    """Return CPU load percentage formatted with unit e.g. 'load 3%'."""
-    load_1m, *_ = os.getloadavg()
+    """Return CPU load percentage formatted with unit e.g. 'load 3%'.
+
+    Answers ``"load N/A"`` when the load average is unavailable. Every other
+    probe here degrades to "Unknown"/"N/A"; this one used to raise, and nothing
+    above ``show_status`` catches OSError, so a kernel without
+    ``/proc/loadavg`` turned the whole status screen into a traceback.
+    """
+    try:
+        load_1m, *_ = os.getloadavg()
+    except OSError:
+        return "load N/A"
     cores = os.cpu_count() or 1
     load_percent = (load_1m / cores) * 100
     return f"load {load_percent:.0f}%"
 
 
-def get_battery_info():
-    """Get battery capacity, health, and cycle count."""
-    try:
-        bat_path = Path("/sys/class/power_supply/BAT0")
-        if not bat_path.exists():
-            return None
+# The filesystems worth a row of their own. Debian's guided partitioning offers
+# separate /home and /var, and a full /var breaks apt long before $HOME notices.
+DISK_ROW_PATHS = ("/", "~", "/var")
 
-        with open(bat_path / "capacity") as f:
-            capacity_str = f.read().strip()
-            capacity = int(capacity_str)
 
-        # Health calculation
+def get_disk_rows() -> list[tuple[str, int, int]]:
+    """Return ``(spec, used, total)`` for each distinct filesystem behind the specs.
+
+    Deduplicated by the measured numbers rather than by ``st_dev``: btrfs gives
+    every subvolume its own device id, so a single-pool Fedora/openSUSE box has
+    ``/`` and ``$HOME`` on different st_dev while reporting identical usage, and
+    keying on the device would print the same row twice. Two genuinely separate
+    filesystems agreeing to the byte would collapse into one row, which costs
+    nothing: they carry the same percentage either way.
+
+    Paths that cannot be measured are dropped rather than reported as empty -- a
+    failing statfs is not a disk with zero bytes used.
+    """
+    rows: list[tuple[str, int, int]] = []
+    seen: set[tuple[int, int]] = set()
+    for spec in DISK_ROW_PATHS:
+        path = os.path.expanduser(spec)
         try:
-            with open(bat_path / "energy_full_design") as f:
-                design = int(f.read().strip())
-            with open(bat_path / "energy_full") as f:
-                full = int(f.read().strip())
-            health = min(100.0, (full / design) * 100)
-            # No parens here: show_status() already wraps the whole details string
-            # in one pair, so adding our own produced "((Health: ...) | Cycles: N)".
-            health_str = f" Health: {health:.1f}%"
-        except (OSError, ValueError, ZeroDivisionError):
-            health_str = ""
-
-        # Cycle count
-        cycles_str = ""
-        try:
-            with open(bat_path / "cycle_count") as f:
-                cycles = f.read().strip()
-                if cycles and cycles != "0":
-                    cycles_str = f" | Cycles: {cycles}"
+            usage = shutil.disk_usage(path)
         except OSError:
-            pass
+            continue
+        if usage.total <= 0 or (usage.used, usage.total) in seen:
+            continue
+        seen.add((usage.used, usage.total))
+        rows.append((spec, usage.used, usage.total))
+    return rows
 
-        return capacity, f"{capacity}%", f"{health_str}{cycles_str}"
-    except (OSError, ValueError):
-        return 0, "N/A", ""
+
+def _read_sysfs(path: Path) -> str:
+    """Return a stripped sysfs value, or "" when it cannot be read."""
+    try:
+        return path.read_text().strip()
+    except OSError:
+        return ""
+
+
+def _battery_pack() -> tuple[Path, int] | None:
+    """Return the first battery with a parseable capacity, and that capacity.
+
+    Globs ``BAT*`` instead of assuming ``BAT0``: laptops that dock a second pack
+    number them BAT0/BAT1, and a few (some ThinkPads, most Chromebooks with an
+    ACPI shim) expose only BAT1. A pack whose capacity does not parse -- the stub
+    nodes a VM leaves behind -- is skipped rather than taken as the answer.
+    """
+    try:
+        candidates = sorted(Path("/sys/class/power_supply").glob("BAT*"))
+    except OSError:
+        return None
+    for candidate in candidates:
+        try:
+            return candidate, int(_read_sysfs(candidate / "capacity"))
+        except ValueError:
+            continue
+    return None
+
+
+# ACPI reports charge in one of two unit families and only ever populates one of
+# them: energy (uWh) or charge (uAh). Health is a ratio, so either works.
+_BATTERY_FULL_PAIRS = (
+    ("energy_full", "energy_full_design"),
+    ("charge_full", "charge_full_design"),
+)
+
+
+def _battery_health(bat_path: Path) -> str:
+    for full_name, design_name in _BATTERY_FULL_PAIRS:
+        try:
+            design = int(_read_sysfs(bat_path / design_name))
+            full = int(_read_sysfs(bat_path / full_name))
+        except ValueError:
+            continue
+        if design <= 0:
+            continue
+        health = min(100.0, (full / design) * 100)
+        # No parens here: show_status() already wraps the whole details string
+        # in one pair, so adding our own produced "((Health: ...) | Cycles: N)".
+        return f" Health: {health:.1f}%"
+    return ""
+
+
+def get_battery_info():
+    """Get battery capacity, health, and cycle count, or None when unavailable.
+
+    ``None`` covers both "this machine has no battery" and "the battery is there
+    but unreadable". The old code answered ``(0, "N/A", "")`` for the second
+    case, which show_status drew as an empty bar at 0.0% -- indistinguishable
+    from a pack about to die. Same principle as get_temp_color: a failed read is
+    not a measurement.
+    """
+    pack = _battery_pack()
+    if pack is None:
+        return None
+    bat_path, capacity = pack
+
+    cycles = _read_sysfs(bat_path / "cycle_count")
+    cycles_str = f" | Cycles: {cycles}" if cycles and cycles != "0" else ""
+
+    return capacity, f"{capacity}%", f"{_battery_health(bat_path)}{cycles_str}"
 
 
 def get_network_traffic():
@@ -245,6 +319,38 @@ def get_ip_info():
     return local_ip or "N/A"
 
 
+def _read_temp_c(temp_input: Path) -> float | None:
+    """Convert a hwmon/thermal millidegree file to Celsius, or None if unusable.
+
+    Ignores disconnected or broken probes: Linux hwmon occasionally exposes
+    sentinel readings such as 127C or 255C for sensors that are not physically
+    present, and a channel reading exactly 0 is almost always unpopulated.
+    """
+    try:
+        temp_c = int(_read_sysfs(temp_input)) / 1000.0
+    except ValueError:
+        return None
+    return temp_c if 0 < temp_c < 125 else None
+
+
+def _cpu_sensor_priority(is_cpu_drv: bool, drv_name: str, label: str) -> int:
+    """Rank one hwmon channel as a CPU temperature source; 0 means "not one"."""
+    if is_cpu_drv:
+        # A dedicated CPU driver always outranks a board/EC probe. Within it,
+        # prefer package/die readings, then a labelled core, then an unlabelled
+        # channel.
+        if any(k in label for k in ("tctl", "tdie", "package")):
+            return 5
+        if "core" in label or "cpu" in label:
+            return 4
+        return 3
+    if "cpu" in label:
+        return 2
+    if "acpitz" in drv_name:
+        return 1
+    return 0
+
+
 def get_cpu_temp() -> tuple[float | None, str]:
     """Read authentic CPU core temperature from /sys/class/hwmon or /sys/class/thermal.
 
@@ -262,51 +368,24 @@ def get_cpu_temp() -> tuple[float | None, str]:
             candidates = []
 
             for hw_dir in hwmon_root.glob("hwmon*"):
-                name_file = hw_dir / "name"
-                drv_name = ""
-                if name_file.exists():
-                    with contextlib.suppress(OSError):
-                        drv_name = name_file.read_text().strip().lower()
-
+                drv_name = _read_sysfs(hw_dir / "name").lower()
                 is_cpu_drv = any(k in drv_name for k in cpu_drivers)
 
                 for t_input in hw_dir.glob("temp*_input"):
-                    try:
-                        raw_str = t_input.read_text().strip()
-                        raw_val = int(raw_str)
-                        temp_c = raw_val / 1000.0
-                        # Ignore disconnected or broken probes. Linux hwmon
-                        # occasionally exposes sentinel readings such as 127C
-                        # or 255C for sensors that are not physically present.
-                        if not 0 < temp_c < 125:
-                            continue
-
-                        # Check label (e.g. Tctl, Tdie, Package id 0, CPU)
-                        label_file = hw_dir / t_input.name.replace("_input", "_label")
-                        label = ""
-                        if label_file.exists():
-                            label = label_file.read_text().strip().lower()
-
-                        priority = 0
-                        if is_cpu_drv:
-                            # A dedicated CPU driver always outranks a board/EC
-                            # probe. Within it, prefer package/die readings,
-                            # then a labelled core, then an unlabelled channel.
-                            if any(k in label for k in ("tctl", "tdie", "package")):
-                                priority = 5
-                            elif "core" in label or "cpu" in label:
-                                priority = 4
-                            else:
-                                priority = 3
-                        elif "cpu" in label:
-                            priority = 2
-                        elif "acpitz" in drv_name:
-                            priority = 1
-
-                        if priority > 0:
-                            candidates.append((priority, temp_c))
-                    except (OSError, ValueError):
+                    # Label first, temperature second. The label decides whether
+                    # the channel counts at all, and reading one is ~20x cheaper
+                    # than the reading itself -- an nvme temp*_input costs a
+                    # controller round-trip (~0.5 ms) that a disqualified
+                    # channel used to pay for nothing.
+                    label = _read_sysfs(hw_dir / t_input.name.replace("_input", "_label")).lower()
+                    priority = _cpu_sensor_priority(is_cpu_drv, drv_name, label)
+                    if priority == 0:
                         continue
+
+                    temp_c = _read_temp_c(t_input)
+                    if temp_c is None:
+                        continue
+                    candidates.append((priority, temp_c))
 
             if candidates:
                 # Pick highest priority, then highest temperature among them
@@ -326,24 +405,20 @@ def get_cpu_temp() -> tuple[float | None, str]:
                 type_file = tz / "type"
                 if not temp_file.exists() or not type_file.exists():
                     continue
-                try:
-                    zone_type = type_file.read_text().strip().lower()
-                    raw_val = int(temp_file.read_text().strip())
-                    temp_c = raw_val / 1000.0
-                    if not 0 < temp_c < 125:
-                        continue
-
-                    if any(k in zone_type for k in ("x86_pkg", "cpu", "package")):
-                        priority = 3
-                    elif any(k in zone_type for k in ("soc", "acpitz")):
-                        priority = 2
-                    else:
-                        # Do not report a GPU, battery, wireless, or other
-                        # unrelated thermal zone as the CPU temperature.
-                        continue
-                    thermal_candidates.append((priority, temp_c))
-                except (OSError, ValueError):
+                zone_type = _read_sysfs(type_file).lower()
+                if any(k in zone_type for k in ("x86_pkg", "cpu", "package")):
+                    priority = 3
+                elif any(k in zone_type for k in ("soc", "acpitz")):
+                    priority = 2
+                else:
+                    # Do not report a GPU, battery, wireless, or other
+                    # unrelated thermal zone as the CPU temperature.
                     continue
+
+                temp_c = _read_temp_c(temp_file)
+                if temp_c is None:
+                    continue
+                thermal_candidates.append((priority, temp_c))
 
             if thermal_candidates:
                 thermal_candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
@@ -591,8 +666,10 @@ def show_status():
     gpu = get_gpu_info()
     top_procs = get_top_processes()
 
-    home_stats = shutil.disk_usage(os.path.expanduser("~"))
-    disk_percent = (home_stats.used / home_stats.total) * 100
+    disk_rows = get_disk_rows()
+    # The verdict tracks the fullest filesystem: on a split layout a full /var
+    # breaks apt while $HOME still looks roomy.
+    disk_percent = max((used / total * 100 for _, used, total in disk_rows), default=0.0)
 
     # 1. Overview & Compute (Uptime, CPU, GPU, Fans)
     uptime_str = f"{uptime} (since boot)" if uptime != "Unknown" else uptime
@@ -618,16 +695,21 @@ def show_status():
         )
     )
 
-    disk_bar = draw_bar(disk_percent, width=20)
-    disk_color = get_color_for_percent(disk_percent)
-    print(
-        _status_row(
-            "💿",
-            "Disk:",
-            f"{disk_bar}  {disk_color}{format_percent(disk_percent)}{RESET}  "
-            f"({bytes_to_human(home_stats.used)} / {bytes_to_human(home_stats.total)})",
+    # One row per filesystem, labelled with the path only when there is more
+    # than one -- a single-partition machine keeps the plain "Disk:" row.
+    for spec, used, total in disk_rows:
+        row_percent = (used / total) * 100
+        disk_bar = draw_bar(row_percent, width=20)
+        disk_color = get_color_for_percent(row_percent)
+        label = "Disk:" if len(disk_rows) == 1 else f"Disk ({spec}):"
+        print(
+            _status_row(
+                "💿",
+                label,
+                f"{disk_bar}  {disk_color}{format_percent(row_percent)}{RESET}  "
+                f"({bytes_to_human(used)} / {bytes_to_human(total)})",
+            )
         )
-    )
 
     # 3. Hardware & Network (Battery, Network)
     if battery_data:

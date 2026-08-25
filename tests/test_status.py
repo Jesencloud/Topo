@@ -1,5 +1,6 @@
+import os
 import socket
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, mock_open, patch
 
@@ -15,6 +16,7 @@ from src.status import (
     get_battery_info,
     get_cpu_load_summary,
     get_cpu_temp,
+    get_disk_rows,
     get_fan_speed,
     get_gpu_info,
     get_ip_info,
@@ -143,6 +145,44 @@ def test_get_cpu_temp_missing():
         assert text == "N/A"
 
 
+def test_get_cpu_temp_does_not_read_a_sensor_its_label_disqualifies():
+    """The label decides whether a channel counts, so it is read first.
+
+    An nvme temp*_input costs a controller round-trip (~0.5 ms on this box, 20x
+    a label read), and a laptop exposes a dozen channels that lose anyway.
+    """
+    hwmon = Path("/sys/class/hwmon/hwmon3")
+    read = []
+
+    def mock_glob(self, pattern):
+        if "hwmon*" in pattern:
+            return [hwmon]
+        if "temp*_input" in pattern:
+            return [hwmon / "temp1_input", hwmon / "temp2_input"]
+        return []
+
+    def mock_read_text(self, *args, **kwargs):
+        read.append(self.name)
+        if self.name == "name":
+            return "nvme\n"  # not a CPU driver, so labels decide
+        if self.name == "temp1_label":
+            return "Composite\n"  # the SSD itself
+        if self.name == "temp2_label":
+            return "CPU\n"  # a board probe that does count
+        if self.name == "temp2_input":
+            return "48000\n"
+        raise AssertionError(f"read a channel the label already ruled out: {self}")
+
+    with (
+        patch("pathlib.Path.exists", return_value=True),
+        patch("pathlib.Path.glob", mock_glob),
+        patch("pathlib.Path.read_text", mock_read_text),
+    ):
+        assert get_cpu_temp() == (48.0, "48°C")
+
+    assert "temp1_input" not in read, read
+
+
 def test_get_temp_color_covers_both_thresholds():
     with _marked_colors():
         assert get_temp_color(0.0) == "<green>"
@@ -252,44 +292,61 @@ def test_get_network_traffic_keeps_lowpan_and_filters_unbacked_interface():
     assert tx == "2.0 KiB"
 
 
-def test_get_battery_info():
-    # Mock battery data: capacity=80%, design=5000, full=4500 (90% health), cycles=100
-    def battery_mock_open(path):
-        if "capacity" in str(path):
-            return mock_open(read_data="80\n")()
-        if "energy_full_design" in str(path):
-            return mock_open(read_data="5000\n")()
-        if "energy_full" in str(path):
-            return mock_open(read_data="4500\n")()
-        if "cycle_count" in str(path):
-            return mock_open(read_data="100\n")()
-        return mock_open()()
+@contextmanager
+def _fake_batteries(packs):
+    """Present /sys/class/power_supply as holding exactly ``packs``.
+
+    ``packs`` maps a battery directory name to ``{attribute: contents}``. An
+    attribute the mapping omits raises OSError, the way reading an absent sysfs
+    file does -- which is how the "machine has no cycle_count" and "the pack
+    reports charge_* instead of energy_*" cases are expressed.
+    """
+
+    def glob(self, pattern):
+        if str(self) == "/sys/class/power_supply" and pattern == "BAT*":
+            return [Path(f"/sys/class/power_supply/{name}") for name in packs]
+        return []
+
+    def read_text(self, *args, **kwargs):
+        attributes = packs.get(Path(str(self)).parent.name, {})
+        if self.name not in attributes:
+            raise OSError(f"no such attribute: {self}")
+        return attributes[self.name]
 
     with (
-        patch("pathlib.Path.exists", return_value=True),
-        patch("builtins.open", side_effect=battery_mock_open),
+        patch("src.status.Path.glob", glob),
+        patch("src.status.Path.read_text", read_text),
     ):
+        yield
+
+
+def test_get_battery_info():
+    packs = {
+        "BAT0": {
+            "capacity": "80\n",
+            "energy_full_design": "5000\n",
+            "energy_full": "4500\n",  # 90% health
+            "cycle_count": "100\n",
+        }
+    }
+    with _fake_batteries(packs):
         val, pct, details = get_battery_info()
-        assert val == 80
-        assert pct == "80%"
-        assert "Health: 90.0%" in details
-        assert "Cycles: 100" in details
+
+    assert val == 80
+    assert pct == "80%"
+    assert "Health: 90.0%" in details
+    assert "Cycles: 100" in details
 
 
 def test_get_battery_health_capped_at_100():
-    def battery_mock_open(path):
-        if "capacity" in str(path):
-            return mock_open(read_data="95\n")()
-        if "energy_full_design" in str(path):
-            return mock_open(read_data="5000\n")()
-        if "energy_full" in str(path):
-            return mock_open(read_data="5200\n")()  # full > design -> would be >100%
-        return mock_open()()
-
-    with (
-        patch("pathlib.Path.exists", return_value=True),
-        patch("builtins.open", side_effect=battery_mock_open),
-    ):
+    packs = {
+        "BAT0": {
+            "capacity": "95\n",
+            "energy_full_design": "5000\n",
+            "energy_full": "5200\n",  # full > design -> would be >100%
+        }
+    }
+    with _fake_batteries(packs):
         _, _, details = get_battery_info()
 
     assert "Health: 100.0%" in details
@@ -300,26 +357,44 @@ def test_battery_details_are_not_pre_parenthesized():
 
     Otherwise the row renders as "🔋 Battery: ... ((Health: 100.0%) | Cycles: N)".
     """
-
-    def battery_mock_open(path):
-        if "capacity" in str(path):
-            return mock_open(read_data="80\n")()
-        if "energy_full_design" in str(path):
-            return mock_open(read_data="5000\n")()
-        if "energy_full" in str(path):
-            return mock_open(read_data="4500\n")()
-        if "cycle_count" in str(path):
-            return mock_open(read_data="244\n")()
-        return mock_open()()
-
-    with (
-        patch("pathlib.Path.exists", return_value=True),
-        patch("builtins.open", side_effect=battery_mock_open),
-    ):
+    packs = {
+        "BAT0": {
+            "capacity": "80\n",
+            "energy_full_design": "5000\n",
+            "energy_full": "4500\n",
+            "cycle_count": "244\n",
+        }
+    }
+    with _fake_batteries(packs):
         _, _, details = get_battery_info()
 
     assert "(" not in details and ")" not in details, details
     assert details.strip() == "Health: 90.0% | Cycles: 244"
+
+
+def test_battery_is_found_when_the_pack_is_not_numbered_zero():
+    """Docked second packs number BAT0/BAT1, and some machines only expose BAT1."""
+    with _fake_batteries({"BAT1": {"capacity": "62\n"}}):
+        assert get_battery_info() == (62, "62%", "")
+
+    # A VM's stub BAT0 answers nothing usable; it must not shadow the real pack.
+    with _fake_batteries({"BAT0": {"capacity": "bad"}, "BAT1": {"capacity": "41\n"}}):
+        assert get_battery_info() == (41, "41%", "")
+
+
+def test_battery_health_reads_a_charge_based_pack():
+    """ACPI fills in energy_* or charge_* but never both; health needs either."""
+    packs = {
+        "BAT0": {
+            "capacity": "55\n",
+            "charge_full_design": "4000\n",
+            "charge_full": "3000\n",
+        }
+    }
+    with _fake_batteries(packs):
+        _, _, details = get_battery_info()
+
+    assert details.strip() == "Health: 75.0%"
 
 
 def test_get_gpu_info_multi_gpu_uses_first_line():
@@ -427,22 +502,21 @@ QUIET_PROBES = {
 }
 
 
-def _render_status_raw(capsys, label, disk=(1, 2), **overrides):
-    """Render one report and return the row carrying ``label``, colors intact."""
+def _render_report(capsys, disk=(1, 2), **overrides):
+    """Render one whole report with every probe pinned, and return its text."""
     probes = {**QUIET_PROBES, **overrides}
-    used, total = disk
+    probes.setdefault("get_disk_rows", [("/", *disk)])
     with ExitStack() as stack:
         for name, value in probes.items():
             stack.enter_context(patch(f"src.status.{name}", return_value=value))
-        stack.enter_context(
-            patch(
-                "src.status.shutil.disk_usage",
-                return_value=MagicMock(used=used, total=total),
-            )
-        )
         show_status()
 
-    out = capsys.readouterr().out
+    return capsys.readouterr().out
+
+
+def _render_status_raw(capsys, label, disk=(1, 2), **overrides):
+    """Render one report and return the row carrying ``label``, colors intact."""
+    out = _render_report(capsys, disk=disk, **overrides)
     return next(line for line in out.splitlines() if label in ANSI_CSI_RE.sub("", line))
 
 
@@ -583,38 +657,30 @@ def test_proc_readers_and_cpu_load_errors():
     with patch("builtins.open", side_effect=OSError):
         assert get_mem_info() == ("Unknown", "Unknown", 0)
         assert get_uptime() == "Unknown"
-    with patch("os.getloadavg", side_effect=OSError), pytest.raises(OSError):
-        get_cpu_load_summary()
+    with patch("os.getloadavg", side_effect=OSError):
+        assert get_cpu_load_summary() == "load N/A"
 
 
 def test_battery_missing_and_malformed_optional_fields():
-    with patch("src.status.Path.exists", return_value=False):
+    with _fake_batteries({}):
         assert get_battery_info() is None
 
-    def opened(path):
-        if str(path).endswith("capacity"):
-            return mock_open(read_data="bad")()
-        raise OSError
+    # A pack whose capacity does not parse is not a pack at 0%: the old code
+    # answered (0, "N/A", "") and show_status drew an empty bar at 0.0%, which
+    # reads as "about to die" rather than "unreadable".
+    with _fake_batteries({"BAT0": {"capacity": "bad"}}):
+        assert get_battery_info() is None
 
-    with (
-        patch("src.status.Path.exists", return_value=True),
-        patch("builtins.open", side_effect=opened),
-    ):
-        assert get_battery_info() == (0, "N/A", "")
+    # A design capacity of 0 makes health meaningless -- the row keeps the
+    # charge and drops the health text rather than dividing by zero.
+    with _fake_batteries({"BAT0": {"capacity": "70", "energy_full_design": "0"}}):
+        assert get_battery_info() == (70, "70%", "")
 
-    def partial(path):
-        if str(path).endswith("capacity"):
-            return mock_open(read_data="70")()
-        if str(path).endswith("energy_full_design"):
-            return mock_open(read_data="0")()
-        raise OSError
 
-    with (
-        patch("src.status.Path.exists", return_value=True),
-        patch("builtins.open", side_effect=partial),
-    ):
-        value = get_battery_info()
-        assert value[0:2] == (70, "70%") and value[2] == ""
+def test_an_empty_power_supply_directory_is_not_a_battery():
+    """A desktop has no BAT* at all; the glob failing is the same answer."""
+    with patch("src.status.Path.glob", side_effect=OSError):
+        assert get_battery_info() is None
 
 
 def test_network_and_route_error_branches(tmp_path):
@@ -718,13 +784,98 @@ def test_show_status_optional_rows(capsys):
         "get_fan_speed": "1200 RPM",
         "get_battery_info": (80, "80%", "Health: 90.0%"),
         "get_top_processes": ["chrome (200MB)"],
+        "get_disk_rows": [("/", 1, 2)],
     }
     with ExitStack() as stack:
         for name, value in overrides.items():
             stack.enter_context(patch(f"src.status.{name}", return_value=value))
-        stack.enter_context(
-            patch("src.status.shutil.disk_usage", return_value=MagicMock(used=1, total=2))
-        )
         show_status()
     output = capsys.readouterr().out
     assert "GPU Status:" in output and "Fan Speed:" in output and "Top Processes:" in output
+
+
+# --- disk rows ---
+
+
+def _usage(used, total):
+    return MagicMock(used=used, total=total)
+
+
+def test_disk_rows_report_each_distinct_filesystem():
+    """Debian's guided partitioning offers separate /home and /var, and a full
+    /var breaks apt long before $HOME notices."""
+    sizes = {"/": (90, 100), os.path.expanduser("~"): (10, 100), "/var": (50, 60)}
+
+    with patch("src.status.shutil.disk_usage", lambda path: _usage(*sizes[path])):
+        assert get_disk_rows() == [("/", 90, 100), ("~", 10, 100), ("/var", 50, 60)]
+
+
+def test_disk_rows_collapse_paths_that_measure_the_same_filesystem():
+    """btrfs gives every subvolume its own st_dev, so / and $HOME can differ by
+    device while reporting one pool -- the row must not print three times."""
+    with patch("src.status.shutil.disk_usage", return_value=_usage(42, 100)):
+        assert get_disk_rows() == [("/", 42, 100)]
+
+
+def test_disk_rows_drop_a_filesystem_they_cannot_measure():
+    """A failing statfs is not a disk with zero bytes used."""
+
+    def usage(path):
+        if path == "/":
+            raise OSError("statfs failed")
+        return _usage(7, 0) if path == "/var" else _usage(3, 100)
+
+    with patch("src.status.shutil.disk_usage", usage):
+        assert get_disk_rows() == [("~", 3, 100)]
+
+
+def test_the_report_labels_every_disk_row_once_a_second_one_shows(capsys):
+    out = _render_report(capsys, get_disk_rows=[("/", 95, 100), ("~", 10, 100)])
+
+    assert "Disk (/):" in out and "Disk (~):" in out, out
+    assert "Disk:" not in out, out
+
+
+def test_the_verdict_follows_the_fullest_filesystem(capsys):
+    """The old report measured only $HOME's filesystem, so a full / went unsaid."""
+    out = _render_report(capsys, get_disk_rows=[("/", 95, 100), ("~", 10, 100)])
+
+    assert "Disk space low (95%)" in out, out
+
+
+def test_the_report_drops_the_battery_row_when_the_pack_is_unreadable(capsys):
+    """An unreadable pack used to arrive as (0, "N/A", "").
+
+    That drew "🪫 Battery: ──── 0.0%" -- which is what a pack about to die looks
+    like. This drives the real probe, so it covers both halves of the fix.
+    """
+    probes = {k: v for k, v in QUIET_PROBES.items() if k != "get_battery_info"}
+    probes["get_disk_rows"] = [("/", 1, 2)]
+    with ExitStack() as stack:
+        for name, value in probes.items():
+            stack.enter_context(patch(f"src.status.{name}", return_value=value))
+        stack.enter_context(_fake_batteries({"BAT0": {"capacity": "bad"}}))
+        show_status()
+
+    out = capsys.readouterr().out
+    assert "Battery:" not in out, out
+
+
+def test_the_report_survives_a_kernel_that_answers_neither_load_nor_disk(capsys):
+    """Nothing above show_status catches OSError.
+
+    main() only handles KeyboardInterrupt, so a probe that raised replaced the
+    whole report -- and, from the TUI, the session -- with a traceback.
+    """
+    probes = {k: v for k, v in QUIET_PROBES.items() if k != "get_cpu_load_summary"}
+    with ExitStack() as stack:
+        for name, value in probes.items():
+            stack.enter_context(patch(f"src.status.{name}", return_value=value))
+        stack.enter_context(patch("os.getloadavg", side_effect=OSError))
+        stack.enter_context(patch("src.status.shutil.disk_usage", side_effect=OSError))
+        show_status()
+
+    out = capsys.readouterr().out
+    assert "load N/A" in out, out
+    assert "Disk" not in out, out
+    assert "Overall Status:" in out, out
