@@ -14,6 +14,7 @@ from ..core.install_source import (
     get_package_remove_argv,
 )
 from ..core.lock import LOCK_FILE_PATH
+from ..core.paths import get_config_dir, get_state_dir
 
 
 class _RemoveItem(TypedDict, total=False):
@@ -144,7 +145,7 @@ def _remove_package_user_residue() -> list[str]:
     ):
         removed.append("Launcher compatibility entry")
 
-    config_dir = home / ".config/topo"
+    config_dir = get_config_dir()
     # This run holds the instance lock inside ~/.config/topo, so the directory
     # always exists by the time we get here. Deleting it is still right -- an
     # empty directory holding nothing but our own lock file is residue this run
@@ -156,11 +157,7 @@ def _remove_package_user_residue() -> list[str]:
         (internal_dir, "Script install directory"),
         (config_dir, "Configuration and whitelist"),
         (home / ".cache/topo", "Temporary scan cache"),
-        (
-            Path(os.environ.get("XDG_STATE_HOME", str(home / ".local/state"))).expanduser()
-            / "topo",
-            "Deletion history / state",
-        ),
+        (get_state_dir(), "Deletion history / state"),
     ):
         if _remove_path(path) and not (path == config_dir and config_is_lock_only):
             removed.append(label)
@@ -284,7 +281,7 @@ def run_remove(dry_run=False, assume_yes=False) -> bool:
             )
 
     # Configuration directory
-    config_dir = Path.home() / ".config" / "topo"
+    config_dir = get_config_dir()
     if config_dir.exists() and not _config_dir_is_lock_only(config_dir):
         to_remove.append({"path": config_dir, "desc": "Configuration and whitelist", "type": "dir"})
 
@@ -298,10 +295,7 @@ def run_remove(dry_run=False, assume_yes=False) -> bool:
         to_remove.append({"path": internal_dir, "desc": "Main program files", "type": "dir"})
 
     # Deletion-audit / state directory (XDG_STATE_HOME/topo)
-    state_dir = (
-        Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))).expanduser()
-        / "topo"
-    )
+    state_dir = get_state_dir()
     if state_dir.exists():
         to_remove.append({"path": state_dir, "desc": "Deletion history / state", "type": "dir"})
 
@@ -356,12 +350,8 @@ def run_remove(dry_run=False, assume_yes=False) -> bool:
     # Deletion auditing can recreate XDG_STATE_HOME/topo, while protection
     # checks can recreate ~/.config/topo to read an empty whitelist after the
     # original directory was removed. Clear both self-generated directories
-    # once all uninstall work is finished.
-    config_dir = Path.home() / ".config" / "topo"
-    state_dir = (
-        Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))).expanduser()
-        / "topo"
-    )
+    # once all uninstall work is finished -- they are the same two paths the
+    # survey above already resolved, whether or not they were listed then.
     for generated_dir in (config_dir, state_dir):
         if not generated_dir.exists():
             continue

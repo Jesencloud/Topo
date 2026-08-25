@@ -9,7 +9,7 @@ from typing import Any
 
 from packaging.version import InvalidVersion, Version
 
-from ..core.constants import BOLD, GRAY, GREEN, RED, RESET
+from ..core.constants import BOLD, GRAY, GREEN, RED, RESET, TOPO_VERSION
 from ..core.install_source import (
     PACKAGE_INSTALL,
     get_install_source,
@@ -72,14 +72,6 @@ def _fetch_latest_release_tag() -> str:
         return latest_redirect_url.rstrip("/").rsplit("/", 1)[-1].split("?", 1)[0].strip()
     except (OSError, subprocess.SubprocessError):
         return ""
-
-
-def _read_local_version() -> str:
-    install_dir = Path(__file__).parent.parent.parent
-    version_file = install_dir / "VERSION"
-    if version_file.exists():
-        return version_file.read_text().strip()
-    return "0.0.0"
 
 
 def _release_download_url(tag: str, asset_name: str) -> str:
@@ -345,9 +337,12 @@ def run_update() -> bool:
     """
 
     # 1. Get current local version
-    # Since we are running from src/manage/update.py,
-    # the VERSION file should be in the root of the installation (~/.topo/VERSION)
-    local_version = _read_local_version()
+    # Read once by core.constants from the VERSION file at the install root, so
+    # the updater cannot disagree with `topo --version` about what is installed.
+    # An unreadable VERSION arrives here as UNKNOWN_VERSION, which does not parse
+    # as a version and so stops at the "Invalid local version" check below --
+    # this used to fall back to 0.0.0, i.e. reinstall against any remote tag.
+    local_version = TOPO_VERSION
 
     print(f" {GREEN}✓{RESET} Checking for updates...{RESET} (Local: v{local_version})")
 

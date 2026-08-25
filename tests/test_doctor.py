@@ -36,7 +36,7 @@ def test_run_doctor_continues_when_version_file_is_missing(tmp_path, capsys):
         assert doctor.run_doctor() is False
 
     output = capsys.readouterr().out
-    assert "Unavailable (VERSION missing or unreadable)" in output
+    assert doctor.VERSION_UNAVAILABLE in output
     # An unreadable VERSION and a missing engine are both hard failures: the
     # install tree is broken. The report still prints in full -- doctor's job is
     # to describe the environment, not to bail on the first problem -- but the

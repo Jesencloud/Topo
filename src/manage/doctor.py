@@ -5,12 +5,25 @@ import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from ..core.constants import BLUE, BOLD, CYAN, GRAY, GREEN, PURPLE, RED, RESET, YELLOW
+from ..core.constants import (
+    BLUE,
+    BOLD,
+    CYAN,
+    GRAY,
+    GREEN,
+    PURPLE,
+    RED,
+    RESET,
+    YELLOW,
+    read_topo_version,
+)
 from ..core.engine import get_core_binary
 from ..core.install_source import get_install_root, get_install_source
+from ..core.paths import get_config_dir
 from ..core.system import get_invoking_user, get_os_id, run_command
 
 DOCTOR_COMMAND_TIMEOUT = 5
+VERSION_UNAVAILABLE = "Unavailable (VERSION missing, empty or unreadable)"
 
 
 def _check_tool(name: str, args: list[str] | None = None) -> tuple[bool, str]:
@@ -24,14 +37,6 @@ def _check_tool(name: str, args: list[str] | None = None) -> tuple[bool, str]:
         first_line = res.stdout.splitlines()[0] if res.stdout else "Installed"
         return True, first_line
     return True, "Installed (version check failed)"
-
-
-def _read_topo_version(install_root: Path) -> str:
-    try:
-        version = (install_root / "VERSION").read_text(encoding="utf-8").strip()
-    except OSError:
-        return "Unavailable (VERSION missing or unreadable)"
-    return version or "Unavailable (VERSION empty)"
 
 
 def _command_failure_detail(result) -> str:
@@ -107,10 +112,12 @@ def run_doctor() -> bool:
     # 2. Topo Installation
     print(f"{BOLD}{BLUE}Topo Installation{RESET}")
     install_root = get_install_root()
-    version = _read_topo_version(install_root)
-    if version.startswith("Unavailable"):
+    # Read from the tree this report calls the install root, through the same
+    # reader core.constants uses, so doctor and `topo --version` cannot disagree.
+    version = read_topo_version(install_root / "VERSION")
+    if version is None:
         failures.append("VERSION unreadable")
-    print(f"  Version:       {CYAN}{version}{RESET}")
+    print(f"  Version:       {CYAN}{version or VERSION_UNAVAILABLE}{RESET}")
     print(f"  Source:        {CYAN}{get_install_source()}{RESET}")
     print(f"  Install Root:  {CYAN}{install_root}{RESET}")
     print()
@@ -178,7 +185,7 @@ def run_doctor() -> bool:
     else:
         print(f"  {YELLOW}⚠{RESET} Sudo Access: {YELLOW}Requires Password prompt{RESET}")
 
-    config_dir = Path.home() / ".config/topo"
+    config_dir = get_config_dir()
     if config_dir.exists():
         print(f"  {GREEN}✓{RESET} Config Dir:  {CYAN}{config_dir}{RESET} (Exists)")
     else:

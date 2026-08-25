@@ -257,7 +257,7 @@ def test_verify_release_signature_rejects_foreign_signature_even_if_topo_key_is_
 
 
 @patch("src.manage.update.get_install_source", return_value="package")
-@patch("src.manage.update._read_local_version", return_value="0.9.1")
+@patch("src.manage.update.TOPO_VERSION", "0.9.1")
 @patch("src.manage.update._fetch_latest_release_tag", return_value="v0.9.3")
 @patch("src.manage.update.get_package_asset_name", return_value="topo-0.9.3-1.x86_64.rpm")
 @patch("src.manage.update.get_package_upgrade_argv")
@@ -267,7 +267,6 @@ def test_run_update_downloads_and_installs_package_update(
     mock_upgrade_argv,
     _mock_asset_name,
     _mock_remote_tag,
-    _mock_local_version,
     _mock_install_source,
     monkeypatch,
     capsys,
@@ -304,7 +303,7 @@ def test_run_update_downloads_and_installs_package_update(
 
 
 @patch("src.manage.update.get_install_source", return_value="package")
-@patch("src.manage.update._read_local_version", return_value="0.9.1")
+@patch("src.manage.update.TOPO_VERSION", "0.9.1")
 @patch("src.manage.update._fetch_latest_release_tag", return_value="v0.9.3")
 @patch("src.manage.update.get_package_asset_name", return_value="topo-0.9.3-1.x86_64.rpm")
 @patch("src.manage.update.get_package_upgrade_argv")
@@ -316,7 +315,6 @@ def test_run_update_downloads_signature_assets_when_gpg_is_available(
     mock_upgrade_argv,
     _mock_asset_name,
     _mock_remote_tag,
-    _mock_local_version,
     _mock_install_source,
     monkeypatch,
 ):
@@ -474,13 +472,13 @@ def test_verify_signature_import_and_verify_failures(mock_run, _which, tmp_path,
 
 def test_run_update_invalid_local_and_fetch_failure(capsys):
     with (
-        patch("src.manage.update._read_local_version", return_value="bad"),
+        patch("src.manage.update.TOPO_VERSION", "bad"),
         patch("src.manage.update._fetch_latest_release_tag", return_value="v2.0.0"),
     ):
         assert run_update() is False
     assert "Invalid local version" in capsys.readouterr().out
     with (
-        patch("src.manage.update._read_local_version", return_value="1.0.0"),
+        patch("src.manage.update.TOPO_VERSION", "1.0.0"),
         patch("src.manage.update._fetch_latest_release_tag", side_effect=OSError("offline")),
     ):
         assert run_update() is False
@@ -492,7 +490,7 @@ def test_run_update_separates_a_missing_curl_from_a_failed_lookup(capsys):
     # which used to surface as `Invalid release tag: ''` -- blaming the release
     # for a missing tool or a dropped network.
     with (
-        patch("src.manage.update._read_local_version", return_value="1.0.0"),
+        patch("src.manage.update.TOPO_VERSION", "1.0.0"),
         patch("src.manage.update._fetch_latest_release_tag", return_value=""),
         patch("src.manage.update.shutil.which", return_value=None),
     ):
@@ -502,7 +500,7 @@ def test_run_update_separates_a_missing_curl_from_a_failed_lookup(capsys):
     assert "Invalid release tag" not in output
 
     with (
-        patch("src.manage.update._read_local_version", return_value="1.0.0"),
+        patch("src.manage.update.TOPO_VERSION", "1.0.0"),
         patch("src.manage.update._fetch_latest_release_tag", return_value=""),
         patch("src.manage.update.shutil.which", return_value="/usr/bin/curl"),
     ):
@@ -513,7 +511,7 @@ def test_run_update_separates_a_missing_curl_from_a_failed_lookup(capsys):
 
     # A non-empty tag that does not parse is still reported as a bad tag.
     with (
-        patch("src.manage.update._read_local_version", return_value="1.0.0"),
+        patch("src.manage.update.TOPO_VERSION", "1.0.0"),
         patch("src.manage.update._fetch_latest_release_tag", return_value="nightly"),
     ):
         assert run_update() is False

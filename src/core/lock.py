@@ -7,9 +7,10 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 from .constants import RESET, YELLOW
+from .paths import get_config_dir
 from .text import sanitize_for_display
 
-LOCK_FILE_PATH = Path.home() / ".config" / "topo" / "topo.lock"
+LOCK_FILE_PATH = get_config_dir() / "topo.lock"
 
 
 class SingleInstanceLock:

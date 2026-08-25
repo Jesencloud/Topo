@@ -2,9 +2,40 @@ import os
 import sys
 from pathlib import Path
 
-# Get version from root VERSION file
+from .paths import get_config_dir
+
+# The VERSION file at the install root, and the only place it is read. Every
+# component used to read it itself and invent its own answer for "unreadable"
+# (1.0.0 here, 0.0.0 in the updater, "Unavailable" in doctor), so a missing
+# VERSION made `topo --version`, `topo doctor` and `topo update` disagree about
+# which version was installed -- and the updater's 0.0.0 made every remote tag
+# look newer, turning a lost file into an unrequested reinstall.
 VERSION_FILE = Path(__file__).parent.parent.parent / "VERSION"
-TOPO_VERSION = VERSION_FILE.read_text().strip() if VERSION_FILE.exists() else "1.0.0"
+
+# What TOPO_VERSION says when the file cannot be read. Deliberately not a version
+# number: it has to be honest in `topo --version` output and it must not parse as
+# a Version, so `topo update` refuses to compare instead of guessing.
+UNKNOWN_VERSION = "unknown"
+
+
+def read_topo_version(version_file: Path | None = None) -> str | None:
+    """The version of this topo copy, or None when VERSION cannot be read.
+
+    Callers differ in how they present "cannot be read" -- doctor names it as a
+    problem, the updater refuses to compare, the banner falls back to
+    UNKNOWN_VERSION -- but they no longer differ on what it means. *version_file*
+    is only passed by doctor, which reports on the tree at get_install_root()
+    rather than on this module's own; the two are the same directory (pinned by
+    tests/test_single_sources.py).
+    """
+    try:
+        version = (version_file or VERSION_FILE).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return version or None
+
+
+TOPO_VERSION: str = read_topo_version() or UNKNOWN_VERSION
 
 # Search roots for user project directories (used by the __pycache__ cleaner)
 DEFAULT_PROJECT_SEARCH_PATHS = [
@@ -18,7 +49,7 @@ DEFAULT_PROJECT_SEARCH_PATHS = [
 ]
 
 # Config files for detected paths
-DETECTED_APPS_FILE = Path.home() / ".config" / "topo" / "detected_apps.json"
+DETECTED_APPS_FILE = get_config_dir() / "detected_apps.json"
 
 HOME = Path.home()
 

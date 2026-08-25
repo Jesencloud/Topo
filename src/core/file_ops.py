@@ -14,6 +14,7 @@ from typing import Any
 from .config import get_min_age_days
 from .constants import SECONDS_PER_DAY
 from .engine import get_core_binary, get_rust_scan_data
+from .paths import get_state_dir
 from .system import run_command
 from .text import is_unsafe_display_char
 from .whitelist import (
@@ -38,17 +39,11 @@ def _which_cached(name: str) -> str | None:
     return shutil.which(name)
 
 
-def _default_log_dir() -> Path:
-    """Topo's own state directory — the only log directory whose mode Topo may change."""
-    state_home = Path(os.environ.get("XDG_STATE_HOME", "~/.local/state")).expanduser()
-    return state_home / "topo"
-
-
 def get_deletion_log_path() -> Path:
     """Return the audit log path for destructive file operations."""
     if override := os.environ.get("TOPO_DELETE_LOG"):
         return Path(override).expanduser()
-    return _default_log_dir() / "deletions.log"
+    return get_state_dir() / "deletions.log"
 
 
 def _sanitize_audit_field(value: str) -> str:
@@ -117,7 +112,7 @@ def _prepare_audit_log(log_path: Path) -> bool:
     if uid != 0 and dir_st.st_uid != uid:
         _warn_audit_dropped(f"{parent} is owned by uid {dir_st.st_uid}, not by this user")
         return False
-    if stat.S_IMODE(dir_st.st_mode) & 0o077 and parent == _default_log_dir():
+    if stat.S_IMODE(dir_st.st_mode) & 0o077 and parent == get_state_dir():
         # Only Topo's own state directory is tightened. TOPO_DELETE_LOG may point
         # into a directory shared with other users (/tmp, /var/log), and under
         # sudo a blind chmod 0700 there would lock everyone else out of it.
