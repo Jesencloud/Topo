@@ -120,6 +120,29 @@ $ topo history --limit 5
 
 ---
 
+## Configuration
+
+Optional. topo does not create `~/.config/topo/config.json` for you — write it by hand to change a default. Every key is optional; anything missing or invalid falls back to the value below.
+
+```json
+{
+  "config_version": 2,
+  "use_trash": true,
+  "min_age_days": 0,
+  "show_scrollbar": true,
+  "theme_color": "purple"
+}
+```
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `use_trash` | `true` | Where a *recoverable* deletion goes: editor backups, app residue, and the directories `topo analyze` deletes on request are trashed. Set it to `false` to wipe them instead. Caches and stale temp files are always deleted outright — trashing a cache would free nothing. |
+| `min_age_days` | `0` | A floor, in days, under which nothing is old enough to be cleaned. Each cleaner keeps its own window (30 days for caches, 7 for editor backups, 3 for `/tmp`); this can only push one further into the past, never closer to now. `0` leaves every threshold where the code put it. |
+| `show_scrollbar` | `true` | Draw the scrollbar in the interactive selectors. |
+| `theme_color` | `purple` | Title color: `purple`, `cyan`, `blue`, `magenta`, `green`, `yellow` or `red`. `--no-color` and `NO_COLOR` still win. |
+
+Keep `"config_version": 2` in the file. A config without it is read as one written by topo ≤ 1.1.2, where `min_age_days` and `theme_color` had no effect at all: those two values are dropped rather than suddenly honoured, so upgrading never moves an existing install off the thresholds and title color it has always had.
+
 ## Highlights
 
 - **Safety First**: Built-in global whitelist protecting system binaries, user credentials, and XDG folders.

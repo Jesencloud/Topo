@@ -10,6 +10,7 @@ from typing import Any
 
 from .core import system
 from .core.app_cache import find_cleanable_cache_dirs, get_cache_cleanable_reason
+from .core.config import get_use_trash
 from .core.constants import (
     GREEN,
     MAGENTA,
@@ -440,7 +441,11 @@ def _safe_remove_analyze_path(
     path: Path,
     permanent_consent: Callable[[Path], bool] | None = None,
 ) -> bool:
-    removed, reason = safe_remove(path, use_trash=True)
+    # config.json's use_trash is consent given in advance: with it turned off the
+    # first attempt is already the permanent one, and the consent prompt below
+    # never comes up because there is no trash step left to fail.
+    use_trash = get_use_trash()
+    removed, reason = safe_remove(path, use_trash=use_trash)
     if removed:
         return True
 
@@ -458,7 +463,7 @@ def _safe_remove_analyze_path(
     cleaned_child = False
     if reason == "Path is whitelisted":
         for child in find_cleanable_cache_dirs(path, require_sensitive_app_data_root=True):
-            child_removed, child_reason = safe_remove(child, use_trash=True)
+            child_removed, child_reason = safe_remove(child, use_trash=use_trash)
             if (
                 not child_removed
                 and child_reason == TRASH_UNAVAILABLE_REASON

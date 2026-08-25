@@ -55,6 +55,29 @@ SKIP: str = ""
 # to this; see the comment in _init_colors() for why they stay three names.
 _NEUTRAL_GRAY = "\033[38;5;244m"
 
+# Name of the configured title color (config.json "theme_color"). Held here
+# rather than read from core.config, so importing this module never touches the
+# user's home directory: setup_color_mode() is handed the name by its caller.
+_theme_color_name: str = "purple"
+
+
+def _resolve_theme_title(name: str) -> str:
+    """Map a theme_color name onto one of the palette escapes bound above.
+
+    Called from _init_colors() after the palette is assigned, so --no-color
+    still wins: it never reaches this at all.
+    """
+    return {
+        "purple": PURPLE,
+        "cyan": CYAN,
+        "blue": BLUE,
+        "magenta": MAGENTA,
+        "green": GREEN,
+        "yellow": YELLOW,
+        "red": RED,
+    }.get(name, PURPLE)
+
+
 # Every name _init_colors() rebinds. Consumers do `from .constants import GREEN`,
 # which copies the *value* into their own module namespace, so rebinding these
 # globals alone is invisible to them (see _propagate_colors).
@@ -144,7 +167,7 @@ def _init_colors(disable: bool = False):
         BOLD = "\033[1m"
         PURPLE = "\033[1;95m"
         EARTH = YELLOW  # Adaptive Bold Yellow (Matches theme #8B8B00 across palettes)
-        THEME_TITLE = PURPLE
+        THEME_TITLE = _resolve_theme_title(_theme_color_name)
 
         GREEN_NB = "\033[0;32m"
 
@@ -155,8 +178,15 @@ def _init_colors(disable: bool = False):
         SKIP = f"{GRAY_NB}◎{RESET}"
 
 
-def setup_color_mode(no_color: bool = False) -> None:
-    """Configures ANSI colors according to --no-color flag and NO_COLOR env spec (https://no-color.org/)."""
+def setup_color_mode(no_color: bool = False, theme_color: str | None = None) -> None:
+    """Configures ANSI colors according to --no-color flag and NO_COLOR env spec (https://no-color.org/).
+
+    *theme_color* is the config.json "theme_color" name; None keeps whatever was
+    set last (the default at import, so the automatic call below stays quiet).
+    """
+    global _theme_color_name
+    if theme_color:
+        _theme_color_name = theme_color
     env_no_color = bool(os.environ.get("NO_COLOR", "").strip())
     disable = no_color or env_no_color or not sys.stdout.isatty()
     _init_colors(disable=disable)

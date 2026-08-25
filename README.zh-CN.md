@@ -119,6 +119,29 @@ $ topo history --limit 5
 
 ---
 
+## 配置
+
+可选。topo 不会替你创建 `~/.config/topo/config.json`，需要改默认值时手写这个文件即可。所有键都是可选的，缺失或非法的值一律回落到下面的默认值。
+
+```json
+{
+  "config_version": 2,
+  "use_trash": true,
+  "min_age_days": 0,
+  "show_scrollbar": true,
+  "theme_color": "purple"
+}
+```
+
+| 键 | 默认值 | 含义 |
+| --- | --- | --- |
+| `use_trash` | `true` | 一次**可恢复**的删除去哪儿：编辑器备份、应用残留、`topo analyze` 里手动删除的目录会进回收站。改成 `false` 则直接抹掉。缓存与过期临时文件一律直接删除——把缓存搬进回收站不会释放任何空间。 |
+| `min_age_days` | `0` | 清理的年龄下限（天）。各清理器自带窗口（缓存 30 天、编辑器备份 7 天、`/tmp` 3 天），这个值只能把窗口往过去推，不能往现在拉。`0` 表示不加下限，完全按代码里的阈值执行。 |
+| `show_scrollbar` | `true` | 交互选择器里是否绘制滚动条。 |
+| `theme_color` | `purple` | 标题颜色：`purple`、`cyan`、`blue`、`magenta`、`green`、`yellow`、`red`。`--no-color` 与 `NO_COLOR` 仍然优先。 |
+
+文件里请保留 `"config_version": 2`。没有这个键的配置会被当成 topo ≤ 1.1.2 写下的旧文件——那时 `min_age_days` 与 `theme_color` 根本无人读取，所以其中这两个值会被丢弃而不是突然生效，升级才不会把现有安装从一直以来的阈值和标题色上挪走。
+
 ## 项目亮点
 
 - **安全第一**：内置全局白名单，保护系统二进制文件、用户凭据与 XDG 目录。

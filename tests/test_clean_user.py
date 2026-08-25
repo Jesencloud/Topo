@@ -328,6 +328,26 @@ def test_clean_backup_files_dry_run_and_actual(test_env):
     assert all(call.kwargs["use_trash"] is True for call in remove.call_args_list)
 
 
+def test_clean_backup_files_follows_the_use_trash_setting(test_env, capsys):
+    # use_trash=false is the one way to ask for these to be wiped instead of
+    # trashed, and the report line has to say which of the two happened.
+    root = test_env / "Documents"
+    root.mkdir(parents=True)
+    (root / "old.bak").write_bytes(b"stale")
+    stale = time.time() - 30 * 86400
+    os.utime(root / "old.bak", (stale, stale))
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.clean.user.get_use_trash", return_value=False),
+        patch("src.clean.user.safe_remove", return_value=(True, 1)) as remove,
+    ):
+        assert clean_backup_files() == (5, 1, 1)
+
+    assert all(call.kwargs["use_trash"] is False for call in remove.call_args_list)
+    assert "deleted" in capsys.readouterr().out
+
+
 def test_clean_backup_files_keeps_files_a_live_editor_is_still_touching(test_env):
     """A swap file vim keeps rewriting stays out of range of the age gate.
 

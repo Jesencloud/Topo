@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .core import system
+from .core.config import get_use_trash
 from .core.constants import (
     RPM_QUERY_BATCH_SIZE,
 )
@@ -1714,7 +1715,7 @@ class UninstallManager:
                 ]
                 for ct in cli_targets:
                     if ct.exists():
-                        safe_remove(ct, use_trash=True, allow_app_data_removal=True)
+                        safe_remove(ct, use_trash=get_use_trash(), allow_app_data_removal=True)
                 res = system.CommandResult(
                     args=["cli_uninstall"], returncode=0, stdout="CLI uninstalled"
                 )
@@ -1770,13 +1771,16 @@ class UninstallManager:
             # but hard-protected credentials/system paths remain blocked.
             removed_details = []
             removed_systemd_service = False
+            # Residue removal is recoverable (trash) rather than a permanent
+            # wipe: residue discovery is heuristic, so a mis-matched user
+            # directory must be undoable. config.json's use_trash=false is the
+            # one way to ask for an unrecoverable wipe instead.
+            # allow_app_data_removal still lets app-owned data go, while
+            # hard-protected paths (whitelist, credentials, system, XDG
+            # user-data dirs) stay blocked.
+            use_trash = get_use_trash()
             for p in paths:
-                # Residue removal is recoverable (trash) rather than a permanent
-                # wipe: residue discovery is heuristic, so a mis-matched user
-                # directory must be undoable. allow_app_data_removal still lets
-                # app-owned data go, while hard-protected paths (whitelist,
-                # credentials, system, XDG user-data dirs) stay blocked.
-                success, _ = safe_remove(p, use_trash=True, allow_app_data_removal=True)
+                success, _ = safe_remove(p, use_trash=use_trash, allow_app_data_removal=True)
                 if success and str(p).endswith(".service") and ".config/systemd/user" in str(p):
                     removed_systemd_service = True
                 try:

@@ -1,6 +1,5 @@
 import json
 import shutil
-import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -12,13 +11,13 @@ from ..core.app_cache import (
     resolve_cache_path,
 )
 from ..core.browser_paths import BROWSER_CACHE_DEFS, BROWSER_CACHE_ROOT_NAMES
+from ..core.config import get_use_trash
 from ..core.constants import (
     CLEAN_CACHE_AGE_DAYS,
     DETECTED_APPS_FILE,
     GRAY,
     OK,
     RESET,
-    SECONDS_PER_DAY,
     SKIP,
 )
 from ..core.desktop_app_cache import (
@@ -28,6 +27,7 @@ from ..core.desktop_app_cache import (
 from ..core.desktop_entry import get_desktop_exec_command
 from ..core.file_ops import (
     CLEANED_PATHS,
+    age_cutoff,
     bytes_to_human,
     clean_path_by_age,
     get_direct_child_sizes_fast,
@@ -288,7 +288,11 @@ def clean_orphaned_remnants(dry_run=False, max_age_days=60):
 
     total_size = 0
     total_items = 0
-    cutoff = time.time() - (max_age_days * SECONDS_PER_DAY)
+    cutoff = age_cutoff(max_age_days)
+    # Recoverable by default even though this is cache: "orphaned" is a heuristic
+    # (a .desktop link can be missing for reasons other than the app being gone),
+    # so a wrong match has to be undoable. config.json's use_trash=false opts out.
+    use_trash = get_use_trash()
 
     # Core desktop and system infrastructure cache folders that must always be skipped
     system_folders = {
@@ -418,7 +422,7 @@ def clean_orphaned_remnants(dry_run=False, max_age_days=60):
                     continue
 
                 s = get_size_fast(item)
-                if safe_remove(item, use_trash=True, dry_run=dry_run, known_size_bytes=s)[0]:
+                if safe_remove(item, use_trash=use_trash, dry_run=dry_run, known_size_bytes=s)[0]:
                     total_size += s
                     total_items += 1
                     if not dry_run:

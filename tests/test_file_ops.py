@@ -5,11 +5,13 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 from lock_helpers import RECORD_LOCK_HOLDER, external_holder
 
 from src.core.file_ops import (
     _AUDIT_WARNINGS_EMITTED,
     CLEANED_PATHS,
+    age_cutoff,
     bytes_to_human,
     clean_path_by_age,
     get_deletion_log_path,
@@ -706,6 +708,44 @@ def test_clean_path_by_age_keeps_a_directory_holding_a_live_socket(test_env):
     assert (size, items) == (4, 1)
     assert sock_path.exists()
     assert not junk_dir.exists()
+
+
+def test_age_cutoff_default_config_changes_no_threshold(test_env):
+    # The shipped default has to be a no-op, including for the sweeps that ask
+    # for no age gate at all (days=0): a floor is something the user opts into,
+    # never a default that quietly spares files a cleanup used to reclaim.
+    assert age_cutoff(0) == pytest.approx(time.time(), abs=2)
+    assert age_cutoff(30) == pytest.approx(time.time() - 30 * 86400, abs=2)
+
+
+def test_age_cutoff_treats_min_age_days_as_a_floor_only():
+    # config.json can make a cleaner more cautious than its own threshold, never
+    # more aggressive: a smaller configured value leaves the caller's window
+    # alone, a larger one pushes the cutoff further into the past.
+    with patch("src.core.file_ops.get_min_age_days", return_value=1):
+        assert age_cutoff(10) == pytest.approx(time.time() - 10 * 86400, abs=2)
+
+    with patch("src.core.file_ops.get_min_age_days", return_value=30):
+        assert age_cutoff(10) == pytest.approx(time.time() - 30 * 86400, abs=2)
+
+
+def test_clean_path_by_age_honours_the_configured_floor(test_env):
+    cache_dir = test_env / "cache-floor"
+    cache_dir.mkdir()
+    stale = cache_dir / "five-days-old.txt"
+    stale.write_text("junk")
+    old_time = time.time() - (5 * 86400)
+    os.utime(stale, (old_time, old_time))
+
+    # Old enough for the caller's 3-day window, but the config raises the floor
+    # past it, so the file stays.
+    with patch("src.core.file_ops.get_min_age_days", return_value=30):
+        assert clean_path_by_age(cache_dir, days=3) == (0, 0)
+    assert stale.exists()
+
+    with patch("src.core.file_ops.get_min_age_days", return_value=1):
+        assert clean_path_by_age(cache_dir, days=3) == (4, 1)
+    assert not stale.exists()
 
 
 def test_clean_path_by_age(test_env):

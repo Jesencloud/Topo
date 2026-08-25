@@ -5,6 +5,7 @@ from contextlib import contextmanager
 
 from .clean.runner import run_clean
 from .core import system, terminal_state
+from .core.config import get_theme_color
 from .core.constants import (
     BLUE,
     BOLD,
@@ -316,7 +317,7 @@ def _main() -> bool:
     )
 
     args = parser.parse_args()
-    setup_color_mode(getattr(args, "no_color", False))
+    setup_color_mode(getattr(args, "no_color", False), theme_color=get_theme_color())
     dry_run = getattr(args, "dry_run", False)
 
     # Authorization setup command

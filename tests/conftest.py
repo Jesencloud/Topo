@@ -6,6 +6,22 @@ from pathlib import Path
 
 import pytest
 
+from src.core.config import clear_config_cache
+
+
+@pytest.fixture(autouse=True)
+def clean_config_cache():
+    """Drop the process-wide config cache around every test.
+
+    ``get_config()`` memoizes, and ``get_config_dir()`` resolves ``Path.home()``,
+    so one test that reads a setting would otherwise pin its temporary home's
+    config for every test that runs after it -- including the ones that write a
+    config file into a fresh ``test_env`` home and expect it to be honoured.
+    """
+    clear_config_cache()
+    yield
+    clear_config_cache()
+
 
 @pytest.fixture(autouse=True)
 def no_real_sudo(monkeypatch):

@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 import pytest
 
+from src.core.config import DEFAULT_CONFIG
 from src.core.constants import setup_color_mode
 
 
@@ -12,10 +13,11 @@ def _restore_real_color_mode():
 
     setup_color_mode() now rebinds the color names inside every consumer module
     (that is the point of the --no-color fix), so a test that leaves colors
-    forced on would leak escape codes into unrelated tests.
+    forced on would leak escape codes into unrelated tests. The theme name is
+    process state too, so it goes back to the default as well.
     """
     yield
-    setup_color_mode(no_color=False)
+    setup_color_mode(no_color=False, theme_color=DEFAULT_CONFIG["theme_color"])
 
 
 def test_no_color_env_variable(monkeypatch):
@@ -69,6 +71,37 @@ def test_non_tty_redirection_disables_color(monkeypatch):
     with patch.object(sys.stdout, "isatty", return_value=False):
         setup_color_mode(no_color=False)
         assert constants.BLUE == ""
+
+
+def test_theme_color_sets_the_title_color(monkeypatch):
+    """config.json's theme_color picks the escape THEME_TITLE resolves to."""
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    from src.core import constants
+
+    with patch.object(sys.stdout, "isatty", return_value=True):
+        setup_color_mode(no_color=False, theme_color="purple")
+        assert constants.THEME_TITLE == constants.PURPLE
+
+        setup_color_mode(no_color=False, theme_color="cyan")
+        assert constants.THEME_TITLE == constants.CYAN
+
+        # The name is remembered, so a later call that only re-derives the
+        # color mode (the --no-color path) keeps the configured title color.
+        setup_color_mode(no_color=False)
+        assert constants.THEME_TITLE == constants.CYAN
+
+        # An unknown name cannot blank the title.
+        setup_color_mode(no_color=False, theme_color="chartreuse")
+        assert constants.THEME_TITLE == constants.PURPLE
+
+
+def test_no_color_still_wins_over_the_theme_color(monkeypatch):
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    from src.core import constants
+
+    with patch.object(sys.stdout, "isatty", return_value=True):
+        setup_color_mode(no_color=True, theme_color="green")
+        assert constants.THEME_TITLE == ""
 
 
 def test_no_color_flag_reaches_from_imported_consumers(monkeypatch):

@@ -83,6 +83,22 @@ def test_doctor_command_routes_to_run_doctor():
     run_doctor.assert_called_once_with()
 
 
+def test_startup_passes_the_configured_theme_color(test_env):
+    # The title color is resolved once, before the version banner, so every
+    # command honours config.json without any of them knowing about it.
+    with (
+        patch("sys.argv", ["topo", "doctor"]),
+        patch("src.main.terminal_state.install_signal_handlers"),
+        patch("src.main.system.get_os_id", return_value="test-os"),
+        patch("src.main.run_doctor"),
+        patch("src.main.get_theme_color", return_value="cyan"),
+        patch("src.main.setup_color_mode") as setup_color_mode,
+    ):
+        topo_main.main()
+
+    setup_color_mode.assert_called_once_with(False, theme_color="cyan")
+
+
 def test_main_cleans_direct_command_output_on_interrupt():
     with (
         patch("sys.argv", ["topo", "status"]),

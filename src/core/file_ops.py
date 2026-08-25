@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .config import get_min_age_days
 from .constants import SECONDS_PER_DAY
 from .engine import get_core_binary, get_rust_scan_data
 from .system import run_command
@@ -559,6 +560,21 @@ def _holds_special_file(path: Path) -> bool:
     return False
 
 
+def age_cutoff(days: int) -> float:
+    """Epoch seconds before which an entry is old enough to be cleaned.
+
+    Every age gate goes through here so config.json's ``min_age_days`` is a real
+    floor: it can push a threshold further into the past, never closer to now.
+    That direction is deliberate -- a hand-edited config can make topo more
+    cautious than its own defaults, but it can never make any cleaner more
+    aggressive than the code already is. It reaches the ungated sweeps too
+    (``days=0``, a couple of pure-cache directories), which is why the shipped
+    default is 0: a floor is something the user asks for, never a default that
+    quietly narrows what a cleanup reclaims.
+    """
+    return time.time() - (max(days, get_min_age_days()) * SECONDS_PER_DAY)
+
+
 def clean_path_by_age(path: str | Path, days: int, dry_run: bool = False) -> tuple[int, int]:
     """Cleans items within a path that haven't been touched in 'days' days."""
     path = Path(path).expanduser()
@@ -567,7 +583,7 @@ def clean_path_by_age(path: str | Path, days: int, dry_run: bool = False) -> tup
 
     total_size = 0
     items_count = 0
-    cutoff = time.time() - (days * SECONDS_PER_DAY)
+    cutoff = age_cutoff(days)
 
     try:
         with os.scandir(path) as entries:

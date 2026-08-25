@@ -13,6 +13,7 @@ from typing import Any
 
 from .core import system
 from .core.browser_paths import BROWSER_PROFILE_TARGETS
+from .core.config import get_use_trash
 from .core.constants import (
     BOLD,
     CLEAR_LINE,
@@ -351,6 +352,7 @@ def run_autostart_cleanup(dry_run=False):
         return None
     zombies = 0
     kept_no_trash = 0
+    use_trash = get_use_trash()
     for desktop_file in autostart_dir.glob("*.desktop"):
         try:
             cmd = get_desktop_exec_command(desktop_file)
@@ -365,11 +367,13 @@ def run_autostart_cleanup(dry_run=False):
             )
             if is_zombie:
                 if not dry_run:
-                    ok, reason = safe_remove(desktop_file, use_trash=True)
+                    ok, reason = safe_remove(desktop_file, use_trash=use_trash)
                     if not ok:
                         # No silent downgrade to a permanent delete: this task
                         # runs unattended in a worker thread, so there is nobody
-                        # to consent to an unrecoverable removal.
+                        # to consent to an unrecoverable removal. Setting
+                        # use_trash=false in config.json is that consent, given
+                        # ahead of time, and then this branch never runs.
                         if reason == TRASH_UNAVAILABLE_REASON:
                             kept_no_trash += 1
                         continue
@@ -689,12 +693,14 @@ def run_broken_symlink_cleanup(dry_run=False):
 
     removed = 0
     kept_no_trash = 0
+    # Recoverable by default: a dangling link is still the only record of what it
+    # once pointed at, and this task runs unattended in a worker thread where
+    # nobody can consent to an unrecoverable delete. Only config.json's
+    # use_trash=false, set in advance, opts out.
+    use_trash = get_use_trash()
     for link in broken:
         try:
-            # Recoverable by default: a dangling link is still the only record of
-            # what it once pointed at, and this task runs unattended in a worker
-            # thread where nobody can consent to an unrecoverable delete.
-            removed_ok, reason = safe_remove(link, use_trash=True)
+            removed_ok, reason = safe_remove(link, use_trash=use_trash)
             if removed_ok:
                 removed += 1
             elif reason == TRASH_UNAVAILABLE_REASON:

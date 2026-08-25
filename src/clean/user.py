@@ -2,16 +2,16 @@ import contextlib
 import os
 import shutil
 import stat
-import time
 from pathlib import Path
 
+from ..core.config import get_use_trash
 from ..core.constants import (
     CLEAN_BACKUP_AGE_DAYS,
     CLEAN_TEMP_AGE_DAYS,
     OK,
-    SECONDS_PER_DAY,
 )
 from ..core.file_ops import (
+    age_cutoff,
     bytes_to_human,
     clean_path_by_age,
     get_size_fast,
@@ -81,7 +81,7 @@ def clean_system_temp(dry_run=False, min_age_days=CLEAN_TEMP_AGE_DAYS):
     total_size = 0
     total_items = 0
     uid = os.getuid()
-    cutoff = time.time() - (min_age_days * SECONDS_PER_DAY)
+    cutoff = age_cutoff(min_age_days)
 
     # Intentional temp cleanup roots, not temp file creation.
     temp_paths = [Path("/tmp"), Path("/var/tmp")]  # nosec B108
@@ -137,7 +137,7 @@ def clean_user_logs(dry_run=False):
     total_size = 0
     total_items = 0
     home = Path.home()
-    cutoff = time.time() - (30 * SECONDS_PER_DAY)  # 30 days
+    cutoff = age_cutoff(30)  # 30 days
 
     # ~/.xsession-errors is held open by the X session for the whole login, so
     # unlinking it reclaims nothing until logout (the inode outlives the name)
@@ -219,14 +219,16 @@ def clean_backup_files(dry_run=False, min_age_days=CLEAN_BACKUP_AGE_DAYS):
     These are documents, not caches: a ``.bak`` or ``file~`` is often the only
     copy of an earlier revision, and a ``.swp`` is vim's crash-recovery state for
     a buffer that may still be open. So they go to the trash rather than being
-    unlinked, and only once untouched for ``min_age_days`` -- vim rewrites its
-    swap file as you type (see 'updatetime' and 'updatecount'), which keeps a
-    live session's mtime well inside the window.
+    unlinked -- unless config.json turns ``use_trash`` off, which is the one way
+    to ask for them to be wiped -- and only once untouched for ``min_age_days``:
+    vim rewrites its swap file as you type (see 'updatetime' and 'updatecount'),
+    which keeps a live session's mtime well inside the window.
     """
     total_size = 0
     total_items = 0
     home = Path.home()
-    cutoff = time.time() - (min_age_days * SECONDS_PER_DAY)
+    use_trash = get_use_trash()
+    cutoff = age_cutoff(min_age_days)
     # Only scan common user document directories, not all of home
     scan_dirs = [
         home / "Desktop",
@@ -254,14 +256,17 @@ def clean_backup_files(dry_run=False, min_age_days=CLEAN_BACKUP_AGE_DAYS):
                 # st already carries the size for a regular file; asking
                 # get_size_fast would just stat it a second time.
                 size = st.st_size
-                if dry_run or safe_remove(item, use_trash=True)[0]:
+                if dry_run or safe_remove(item, use_trash=use_trash)[0]:
                     total_size += size
                     total_items += 1
         except OSError:
             continue
 
     if total_items > 0:
-        status = "would be trashed" if dry_run else "moved to trash"
+        if use_trash:
+            status = "would be trashed" if dry_run else "moved to trash"
+        else:
+            status = "would be deleted" if dry_run else "deleted"
         print(f"  {OK} Backup/swap files ({bytes_to_human(total_size)}) {status}")
         return total_size, total_items, 1
     return 0, 0, 0
