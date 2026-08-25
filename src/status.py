@@ -3,6 +3,7 @@ import os
 import shutil
 import socket
 import struct
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -15,19 +16,48 @@ from .core.text import display_width
 DEFAULT_ROUTE_PATH = Path("/proc/net/route")
 SIOCGIFADDR = 0x8915
 
+_HWMON_ROOT = Path("/sys/class/hwmon")
+_THERMAL_ROOT = Path("/sys/class/thermal")
+
 # Every status row renders as "<icon><pad> <label><pad> <value>". Both pads are
 # measured rather than hand-typed: the icons are not all the same width (U+1F4DF
 # and friends take two cells, while U+23F1 / U+2699 are a narrow base plus
 # U+FE0F and take one), and the label field is sized to the longest label so all
 # values start in the same column no matter which rows a machine actually shows.
 _ICON_SLOT = 2
-_LABEL_SLOT = len("Top Processes:")
+
+# Every label the report can print, listed so the field is sized by measurement
+# rather than by whichever label someone remembered. "Overall Status:" is one
+# character longer than "Top Processes:" and used to push its own value a column
+# right of the other ten. The disk row can widen to "Disk (/var):" (12), which
+# still fits.
+_ROW_LABELS = (
+    "Uptime:",
+    "CPU Status:",
+    "GPU Status:",
+    "Fan Speed:",
+    "Memory:",
+    "Disk:",
+    "Battery:",
+    "Network:",
+    "Top Processes:",
+    "Overall Status:",
+)
+_LABEL_SLOT = max(len(label) for label in _ROW_LABELS)
 
 # Shared by every temperature this module prints -- the CPU row and both GPU
 # probes -- so a retune lands on all of them at once. They used to carry three
 # copies of the thresholds in two spellings (`<= 60` and `> 60`).
 TEMP_WARN_C = 60.0
 TEMP_HOT_C = 80.0
+
+# The verdict's own "elevated" line, deliberately above the row's yellow one:
+# many Ryzen and mobile parts idle in the low 60s, so calling that a finding
+# would leave half the machines in the world permanently at "moderate". It is
+# named rather than left as a literal 70.0 so the gap is a decision on record --
+# the assessment used to hold the third copy of these thresholds, spelling hot
+# as its own 80.0 (equal to TEMP_HOT_C, but not tied to it) and warn as 70.0.
+TEMP_ELEVATED_C = 70.0
 
 # One boundary for "the battery is low", shared by the row's colour and its icon
 # so the two cannot disagree about what counts as low.
@@ -80,28 +110,38 @@ def get_uptime():
     try:
         with open("/proc/uptime") as f:
             uptime_seconds = float(f.readline().split()[0])
-            hours = int(uptime_seconds // 3600)
-            minutes = int((uptime_seconds % 3600) // 60)
-            return f"{hours}h {minutes}m"
     except (OSError, ValueError, IndexError):
         return "Unknown"
 
+    hours = int(uptime_seconds // 3600)
+    if hours >= 24:
+        # Past a day the minutes carry no information and the hour count stops
+        # being readable -- a NAS up for three months printed "2160h 5m". Same
+        # units uptime(1) switches to.
+        return f"{hours // 24}d {hours % 24}h"
+    return f"{hours}h {int((uptime_seconds % 3600) // 60)}m"
 
-def get_cpu_load_summary() -> str:
-    """Return CPU load percentage formatted with unit e.g. 'load 3%'.
 
-    Answers ``"load N/A"`` when the load average is unavailable. Every other
+def get_cpu_load_summary() -> tuple[float | None, str]:
+    """Return the 1-minute load per core as ``(percent, "load 3%")``.
+
+    Shaped like ``get_cpu_temp``: the number is for the health assessment, the
+    string for the row. The assessment used to parse the string back into a
+    float, which handed it the value already rounded by ``.0f`` and made an
+    unreadable load indistinguishable from a load of zero.
+
+    ``percent`` is ``None`` when the load average is unavailable. Every other
     probe here degrades to "Unknown"/"N/A"; this one used to raise, and nothing
-    above ``show_status`` catches OSError, so a kernel without
-    ``/proc/loadavg`` turned the whole status screen into a traceback.
+    above ``show_status`` catches OSError, so a kernel without ``/proc/loadavg``
+    turned the whole status screen into a traceback.
     """
     try:
         load_1m, *_ = os.getloadavg()
     except OSError:
-        return "load N/A"
+        return None, "load N/A"
     cores = os.cpu_count() or 1
     load_percent = (load_1m / cores) * 100
-    return f"load {load_percent:.0f}%"
+    return load_percent, f"load {load_percent:.0f}%"
 
 
 # The filesystems worth a row of their own. Debian's guided partitioning offers
@@ -173,7 +213,8 @@ _BATTERY_FULL_PAIRS = (
 )
 
 
-def _battery_health(bat_path: Path) -> str:
+def _battery_health(bat_path: Path) -> float | None:
+    """Return remaining capacity as a percent of the design capacity, or None."""
     for full_name, design_name in _BATTERY_FULL_PAIRS:
         try:
             design = int(_read_sysfs(bat_path / design_name))
@@ -182,31 +223,37 @@ def _battery_health(bat_path: Path) -> str:
             continue
         if design <= 0:
             continue
-        health = min(100.0, (full / design) * 100)
-        # No parens here: show_status() already wraps the whole details string
-        # in one pair, so adding our own produced "((Health: ...) | Cycles: N)".
-        return f" Health: {health:.1f}%"
-    return ""
+        return min(100.0, (full / design) * 100)
+    return None
 
 
-def get_battery_info():
-    """Get battery capacity, health, and cycle count, or None when unavailable.
+def get_battery_info() -> tuple[int, float | None, str] | None:
+    """Return ``(charge percent, health percent, details)``, or None when absent.
 
     ``None`` covers both "this machine has no battery" and "the battery is there
     but unreadable". The old code answered ``(0, "N/A", "")`` for the second
     case, which show_status drew as an empty bar at 0.0% -- indistinguishable
     from a pack about to die. Same principle as get_temp_color: a failed read is
     not a measurement.
+
+    Health is handed back as a number as well as inside ``details``: the health
+    assessment needs the value, and it used to recover it by parsing the display
+    string. ``details`` carries no parentheses of its own -- show_status wraps the
+    whole string in one pair, so adding another produced
+    "((Health: ...) | Cycles: N)".
     """
     pack = _battery_pack()
     if pack is None:
         return None
     bat_path, capacity = pack
 
+    health = _battery_health(bat_path)
     cycles = _read_sysfs(bat_path / "cycle_count")
-    cycles_str = f" | Cycles: {cycles}" if cycles and cycles != "0" else ""
 
-    return capacity, f"{capacity}%", f"{_battery_health(bat_path)}{cycles_str}"
+    details = [] if health is None else [f"Health: {health:.1f}%"]
+    if cycles and cycles != "0":
+        details.append(f"Cycles: {cycles}")
+    return capacity, health, " | ".join(details)
 
 
 def get_network_traffic():
@@ -333,13 +380,88 @@ def _read_temp_c(temp_input: Path) -> float | None:
     return temp_c if 0 < temp_c < 125 else None
 
 
-def _cpu_sensor_priority(is_cpu_drv: bool, drv_name: str, label: str) -> int:
+def _hottest(candidates: list[tuple[int, float]]) -> float | None:
+    """Return the hottest temperature among the highest-priority candidates.
+
+    Tuple order does the ranking: priority first, then temperature, so several
+    channels tied at one priority answer with the hottest -- which is what a
+    multi-core package reading wants.
+    """
+    return max(candidates)[1] if candidates else None
+
+
+def _iter_hwmon(root: Path = _HWMON_ROOT) -> list[tuple[Path, str]]:
+    """List ``(directory, driver name)`` for every hwmon node under ``root``.
+
+    The driver name is read here because the temperature and fan probes both
+    want it, and the list is sorted so a machine carrying two sensors of one kind
+    answers the same way across runs. ``show_status`` walks the tree once and
+    hands the result to both probes; called with no argument, either probe still
+    stands on its own.
+    """
+    if not root.exists():
+        return []
+    try:
+        return [(hw_dir, _read_sysfs(hw_dir / "name")) for hw_dir in sorted(root.glob("hwmon*"))]
+    except OSError:
+        return []
+
+
+def _best_hwmon_temp(
+    hwmon: list[tuple[Path, str]],
+    rank: Callable[[str, str], int],
+) -> float | None:
+    """Pick a temperature from hwmon channels ranked by ``rank(driver, label)``.
+
+    Reads ``temp*_label`` before ``temp*_input`` because the label decides whether
+    the channel counts at all and costs about a twentieth as much: an nvme
+    ``temp*_input`` is a round-trip to the SSD controller. ``rank`` answering 0
+    drops the channel.
+
+    Both arguments reach ``rank`` lower-cased, so a rank function only ever
+    matches lowercase keywords. This is the one ranking loop in the module -- the
+    CPU hwmon sweep, the thermal zones and the GPU card each had their own copy,
+    which is how the temperature thresholds ended up in three spellings.
+    """
+    candidates: list[tuple[int, float]] = []
+    for hw_dir, drv_name in hwmon:
+        try:
+            # Listed eagerly: Path.glob is lazy on 3.10-3.12, where a directory
+            # that vanished after the walk (an unplugged USB sensor controller)
+            # raises FileNotFoundError from the loop below rather than from here,
+            # which is outside this guard. get_fan_speed already reads its own
+            # glob eagerly for the same reason.
+            temp_inputs = sorted(hw_dir.glob("temp*_input"))
+        except OSError:
+            continue
+        for t_input in temp_inputs:
+            label = _read_sysfs(hw_dir / t_input.name.replace("_input", "_label"))
+            priority = rank(drv_name.lower(), label.lower())
+            if priority == 0:
+                continue
+            temp_c = _read_temp_c(t_input)
+            if temp_c is None:
+                continue
+            candidates.append((priority, temp_c))
+    return _hottest(candidates)
+
+
+# Drivers that expose a real CPU die sensor: Intel, AMD, and the ARM SoC ones.
+_CPU_SENSOR_DRIVERS = ("coretemp", "k10temp", "zenpower", "cpu_thermal", "soc_thermal")
+
+
+def _cpu_sensor_priority(drv_name: str, label: str) -> int:
     """Rank one hwmon channel as a CPU temperature source; 0 means "not one"."""
-    if is_cpu_drv:
-        # A dedicated CPU driver always outranks a board/EC probe. Within it,
-        # prefer package/die readings, then a labelled core, then an unlabelled
-        # channel.
-        if any(k in label for k in ("tctl", "tdie", "package")):
+    if any(k in drv_name for k in _CPU_SENSOR_DRIVERS):
+        # A dedicated CPU driver always outranks a board or EC probe. Inside one,
+        # a die reading beats Tctl: k10temp exposes both on Threadripper and the
+        # early X-series, where Tctl is the control-loop value carrying a
+        # deliberate offset (+27C on those parts) and Tdie is the measured
+        # silicon. They used to share one priority, and the tie-break takes the
+        # hotter channel, so Tctl won every time and the report ran high.
+        if "tdie" in label or "package" in label:
+            return 6
+        if "tctl" in label:
             return 5
         if "core" in label or "cpu" in label:
             return 4
@@ -351,7 +473,34 @@ def _cpu_sensor_priority(is_cpu_drv: bool, drv_name: str, label: str) -> int:
     return 0
 
 
-def get_cpu_temp() -> tuple[float | None, str]:
+def _best_thermal_zone_temp(root: Path = _THERMAL_ROOT) -> float | None:
+    """Pick a CPU temperature from /sys/class/thermal, the last-resort source."""
+    if not root.exists():
+        return None
+    try:
+        zones = sorted(root.glob("thermal_zone*"))
+    except OSError:
+        return None
+
+    candidates: list[tuple[int, float]] = []
+    for zone in zones:
+        zone_type = _read_sysfs(zone / "type").lower()
+        if any(k in zone_type for k in ("x86_pkg", "cpu", "package")):
+            priority = 3
+        elif any(k in zone_type for k in ("soc", "acpitz")):
+            priority = 2
+        else:
+            # Do not report a GPU, battery, wireless, or other unrelated thermal
+            # zone as the CPU temperature.
+            continue
+        temp_c = _read_temp_c(zone / "temp")
+        if temp_c is None:
+            continue
+        candidates.append((priority, temp_c))
+    return _hottest(candidates)
+
+
+def get_cpu_temp(hwmon: list[tuple[Path, str]] | None = None) -> tuple[float | None, str]:
     """Read authentic CPU core temperature from /sys/class/hwmon or /sys/class/thermal.
 
     Priority:
@@ -359,107 +508,46 @@ def get_cpu_temp() -> tuple[float | None, str]:
     2. Other hwmon sensors with CPU label or acpi thermal zone
     3. Standard fallback: /sys/class/thermal/thermal_zone*/temp
     """
-    # 1. Check dedicated CPU hwmon drivers
-    try:
-        hwmon_root = Path("/sys/class/hwmon")
-        if hwmon_root.exists():
-            # Known CPU core sensor driver names
-            cpu_drivers = {"coretemp", "k10temp", "zenpower", "cpu_thermal", "soc_thermal"}
-            candidates = []
-
-            for hw_dir in hwmon_root.glob("hwmon*"):
-                drv_name = _read_sysfs(hw_dir / "name").lower()
-                is_cpu_drv = any(k in drv_name for k in cpu_drivers)
-
-                for t_input in hw_dir.glob("temp*_input"):
-                    # Label first, temperature second. The label decides whether
-                    # the channel counts at all, and reading one is ~20x cheaper
-                    # than the reading itself -- an nvme temp*_input costs a
-                    # controller round-trip (~0.5 ms) that a disqualified
-                    # channel used to pay for nothing.
-                    label = _read_sysfs(hw_dir / t_input.name.replace("_input", "_label")).lower()
-                    priority = _cpu_sensor_priority(is_cpu_drv, drv_name, label)
-                    if priority == 0:
-                        continue
-
-                    temp_c = _read_temp_c(t_input)
-                    if temp_c is None:
-                        continue
-                    candidates.append((priority, temp_c))
-
-            if candidates:
-                # Pick highest priority, then highest temperature among them
-                candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
-                best_temp = candidates[0][1]
-                return best_temp, f"{best_temp:.0f}°C"
-    except OSError:
-        pass
-
-    # 2. Fallback to CPU-related /sys/class/thermal/thermal_zone* entries.
-    try:
-        thermal_root = Path("/sys/class/thermal")
-        if thermal_root.exists():
-            thermal_candidates = []
-            for tz in sorted(thermal_root.glob("thermal_zone*")):
-                temp_file = tz / "temp"
-                type_file = tz / "type"
-                if not temp_file.exists() or not type_file.exists():
-                    continue
-                zone_type = _read_sysfs(type_file).lower()
-                if any(k in zone_type for k in ("x86_pkg", "cpu", "package")):
-                    priority = 3
-                elif any(k in zone_type for k in ("soc", "acpitz")):
-                    priority = 2
-                else:
-                    # Do not report a GPU, battery, wireless, or other
-                    # unrelated thermal zone as the CPU temperature.
-                    continue
-
-                temp_c = _read_temp_c(temp_file)
-                if temp_c is None:
-                    continue
-                thermal_candidates.append((priority, temp_c))
-
-            if thermal_candidates:
-                thermal_candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
-                best_temp = thermal_candidates[0][1]
-                return best_temp, f"{best_temp:.0f}°C"
-    except OSError:
-        pass
-
-    return None, "N/A"
+    best = _best_hwmon_temp(_iter_hwmon() if hwmon is None else hwmon, _cpu_sensor_priority)
+    if best is None:
+        best = _best_thermal_zone_temp()
+    if best is None:
+        return None, "N/A"
+    return best, f"{best:.0f}°C"
 
 
-def get_fan_speed():
+def get_fan_speed(hwmon: list[tuple[Path, str]] | None = None) -> str | None:
     """Read fan speeds from /sys/class/hwmon."""
-    fans = []
-    try:
-        hwmon_root = Path("/sys/class/hwmon")
-        if hwmon_root.exists():
-            for hw_dir in hwmon_root.glob("hwmon*"):
-                for fan_input in hw_dir.glob("fan*_input"):
-                    try:
-                        with open(fan_input) as f:
-                            rpm = f.read().strip()
-                            if rpm and rpm != "0":
-                                label_path = hw_dir / fan_input.name.replace("_input", "_label")
-                                name = ""
-                                if label_path.exists():
-                                    with open(label_path) as lf:
-                                        name = lf.read().strip()
-                                if not name:
-                                    name_path = hw_dir / "name"
-                                    if name_path.exists():
-                                        with open(name_path) as nf:
-                                            name = nf.read().strip()
-                                entry = f"{name}: {rpm} RPM" if name else f"{rpm} RPM"
-                                if entry not in fans:
-                                    fans.append(entry)
-                    except OSError:
-                        continue
-    except OSError:
-        pass
+    fans: list[str] = []
+    for hw_dir, drv_name in _iter_hwmon() if hwmon is None else hwmon:
+        try:
+            fan_inputs = sorted(hw_dir.glob("fan*_input"))
+        except OSError:
+            continue
+        for fan_input in fan_inputs:
+            rpm = _read_sysfs(fan_input)
+            if not rpm or rpm == "0":
+                continue
+            # A channel label ("CPU Fan") beats the driver name, which is all a
+            # board controller offers.
+            name = _read_sysfs(hw_dir / fan_input.name.replace("_input", "_label")) or drv_name
+            entry = f"{name}: {rpm} RPM" if name else f"{rpm} RPM"
+            if entry not in fans:
+                fans.append(entry)
     return ", ".join(fans) if fans else None
+
+
+def _gpu_sensor_priority(_drv_name: str, label: str) -> int:
+    """Rank one GPU hwmon channel. Every channel on the card is a GPU reading.
+
+    Unlike the CPU ranking this never answers 0: the channels live under the
+    card's own device directory, so even an unlabelled one belongs to the GPU.
+    """
+    if "junction" in label or "hotspot" in label:
+        return 3
+    if any(k in label for k in ("edge", "gpu", "core")):
+        return 2
+    return 1
 
 
 def get_gpu_info() -> str | None:
@@ -474,7 +562,11 @@ def get_gpu_info() -> str | None:
                     "--format=csv,noheader,nounits",
                 ],
                 capture=True,
-                timeout=10,
+                # It either answers in milliseconds or it is wedged (a card in a
+                # deep power state, a driver mid-reset). The report already has
+                # its header printed by now, so a long timeout just shows the
+                # user a stalled screen.
+                timeout=3,
             )
             if res.ok and res.stdout.strip():
                 first = res.stdout.strip().splitlines()[0]
@@ -490,7 +582,15 @@ def get_gpu_info() -> str | None:
     try:
         drm_path = Path("/sys/class/drm")
         if drm_path.exists():
-            for card_dir in drm_path.glob("card*"):
+            # /sys/class/drm also holds one directory per connector, named
+            # card<N>-<CONNECTOR>. Those match a plain "card*" and carry a
+            # `device` link of their own (pointing at the card, not the GPU's PCI
+            # device), so the check below cannot tell them apart -- a laptop with
+            # four connectors ran this whole body five times. sorted() also makes
+            # the choice stable on a machine with two cards.
+            for card_dir in sorted(drm_path.glob("card[0-9]*")):
+                if "-" in card_dir.name:
+                    continue
                 device_dir = card_dir / "device"
                 if not device_dir.exists():
                     continue
@@ -505,38 +605,12 @@ def get_gpu_info() -> str | None:
                     except (OSError, ValueError):
                         pass
 
-                gpu_temps = []
-                hwmon_root = device_dir / "hwmon"
-                if hwmon_root.exists():
-                    for hw_dir in hwmon_root.glob("hwmon*"):
-                        for t_input in hw_dir.glob("temp*_input"):
-                            try:
-                                raw_val = int(t_input.read_text().strip())
-                                temp_c = raw_val / 1000.0
-                                if not 0 < temp_c < 125:
-                                    continue
-
-                                # Check sensor label (junction/hotspot/edge/gpu)
-                                label_file = hw_dir / t_input.name.replace("_input", "_label")
-                                label = ""
-                                if label_file.exists():
-                                    label = label_file.read_text().strip().lower()
-
-                                priority = 1
-                                if any(k in label for k in ("junction", "hotspot")):
-                                    priority = 3
-                                elif any(k in label for k in ("edge", "gpu", "core")):
-                                    priority = 2
-
-                                gpu_temps.append((priority, temp_c))
-                            except (OSError, ValueError):
-                                continue
+                best_gpu_temp = _best_hwmon_temp(
+                    _iter_hwmon(device_dir / "hwmon"), _gpu_sensor_priority
+                )
 
                 parts = []
-                if gpu_temps:
-                    # Pick highest priority, then highest temperature
-                    gpu_temps.sort(key=lambda x: (x[0], x[1]), reverse=True)
-                    best_gpu_temp = gpu_temps[0][1]
+                if best_gpu_temp is not None:
                     color = get_temp_color(best_gpu_temp)
                     parts.append(f"{color}{best_gpu_temp:.0f}°C{RESET}")
                 if util is not None:
@@ -585,68 +659,65 @@ def get_top_processes():
     return []
 
 
+# A finding either forces the red verdict or only tints it yellow. This used to
+# be decided by searching the human-readable sentence for "critical", "low",
+# "hot" or "degraded", so the classification depended on nobody ever writing a
+# message that happened to contain one of those words -- a future "Fan speed low"
+# would have silently promoted itself to red.
+_CRITICAL = "critical"
+_WARNING = "warning"
+
+
 def get_system_health_assessment(
     cpu_temp_c: float | None,
-    cpu_load_str: str,
+    cpu_load_percent: float | None,
     mem_percent: float,
     disk_percent: float,
-    battery_data: tuple[int, str, str] | None,
+    battery_health: float | None,
 ) -> tuple[str, str, str]:
     """Evaluate overall system health based on hardware metrics.
 
     Returns:
         (icon, color, message)
     """
-    issues = []
-
-    # Parse numeric CPU load percent
-    cpu_load_val = 0.0
-    if "%" in cpu_load_str:
-        try:
-            num_part = cpu_load_str.replace("load", "").replace("%", "").strip()
-            cpu_load_val = float(num_part)
-        except ValueError:
-            pass
+    issues: list[tuple[str, str]] = []
 
     # 1. Critical & Warning Checks
     if disk_percent >= 90.0:
-        issues.append(f"Disk space low ({disk_percent:.0f}%)")
+        issues.append((_CRITICAL, f"Disk space low ({disk_percent:.0f}%)"))
     elif disk_percent >= 80.0:
-        issues.append(f"Disk usage high ({disk_percent:.0f}%)")
+        issues.append((_WARNING, f"Disk usage high ({disk_percent:.0f}%)"))
 
     if mem_percent >= 90.0:
-        issues.append(f"Memory load critical ({mem_percent:.0f}%)")
+        issues.append((_CRITICAL, f"Memory load critical ({mem_percent:.0f}%)"))
     elif mem_percent >= 80.0:
-        issues.append(f"Memory usage high ({mem_percent:.0f}%)")
+        issues.append((_WARNING, f"Memory usage high ({mem_percent:.0f}%)"))
 
     if cpu_temp_c is not None:
-        if cpu_temp_c > 80.0:
-            issues.append(f"CPU temperature hot ({cpu_temp_c:.0f}°C)")
-        elif cpu_temp_c > 70.0:
-            issues.append(f"CPU temperature elevated ({cpu_temp_c:.0f}°C)")
+        if cpu_temp_c > TEMP_HOT_C:
+            issues.append((_CRITICAL, f"CPU temperature hot ({cpu_temp_c:.0f}°C)"))
+        elif cpu_temp_c > TEMP_ELEVATED_C:
+            issues.append((_WARNING, f"CPU temperature elevated ({cpu_temp_c:.0f}°C)"))
 
-    if cpu_load_val >= 90.0:
-        issues.append(f"CPU workload heavy ({cpu_load_val:.0f}%)")
+    # A pegged CPU is what a compile or a render looks like, not a fault, so it
+    # stays a warning -- which is also what the old keyword matching worked out
+    # to, none of its four words appearing in this sentence.
+    if cpu_load_percent is not None and cpu_load_percent >= 90.0:
+        issues.append((_WARNING, f"CPU workload heavy ({cpu_load_percent:.0f}%)"))
 
-    if battery_data:
-        try:
-            health_str = battery_data[2]
-            if "Health:" in health_str:
-                health_val = float(health_str.split("Health:")[1].split("%")[0].strip())
-                if health_val < 50.0:
-                    issues.append(f"Battery degraded ({health_val:.0f}%)")
-        except (ValueError, IndexError):
-            pass
-
-    critical_issues = [
-        iss for iss in issues if any(k in iss for k in ("critical", "low", "hot", "degraded"))
-    ]
+    if battery_health is not None and battery_health < 50.0:
+        issues.append((_CRITICAL, f"Battery degraded ({battery_health:.0f}%)"))
 
     if not issues:
         return "🌿", GREEN, "System is running in optimal condition."
-    if not critical_issues:
-        return "🟡", YELLOW, f"System status is moderate ({', '.join(issues)})."
-    return "🔴", RED, f"System under heavy load: {', '.join(issues)}."
+    findings = ", ".join(text for _, text in issues)
+    # A colon, not parentheses: every finding already carries its own "(85%)",
+    # so wrapping the joined list would nest them and end the line on "))".
+    if not any(severity == _CRITICAL for severity, _ in issues):
+        return "🟡", YELLOW, f"System status is moderate: {findings}."
+    # Deliberately not "under heavy load": a full disk or a worn-out battery is
+    # neither load nor heavy, and those reach this line too.
+    return "🔴", RED, f"System needs attention: {findings}."
 
 
 def show_status():
@@ -655,35 +726,35 @@ def show_status():
     print(f"\n{PURPLE}System Health Status ({now}){RESET}")
     print()
 
-    uptime = get_uptime()
-    cpu_load = get_cpu_load_summary()
-    temp_val, cpu_temp_str = get_cpu_temp()
-    fans = get_fan_speed()
-    used_mem_str, total_mem_str, mem_percent = get_mem_info()
-    battery_data = get_battery_info()
-    rx, tx = get_network_traffic()
-    local_ip = get_ip_info()
-    gpu = get_gpu_info()
-    top_procs = get_top_processes()
-
-    disk_rows = get_disk_rows()
-    # The verdict tracks the fullest filesystem: on a split layout a full /var
-    # breaks apt while $HOME still looks roomy.
-    disk_percent = max((used / total * 100 for _, used, total in disk_rows), default=0.0)
-
+    # Each probe runs immediately before the row that needs it, so a slow one
+    # holds up only the rest of the report instead of all of it. Two of them fork
+    # (nvidia-smi, ps) and can stall for seconds on a wedged driver or a process
+    # in uninterruptible sleep; the header was already on screen while every
+    # probe ran, so that time used to read as a hang.
     # 1. Overview & Compute (Uptime, CPU, GPU, Fans)
+    uptime = get_uptime()
     uptime_str = f"{uptime} (since boot)" if uptime != "Unknown" else uptime
     print(_status_row("⏱️", "Uptime:", uptime_str))
+
+    # One walk of /sys/class/hwmon for both the temperature and the fan probe:
+    # they read different files out of the same directories, and each `name` is
+    # read once here rather than once per probe.
+    hwmon = _iter_hwmon()
+    temp_val, cpu_temp_str = get_cpu_temp(hwmon)
+    load_percent, cpu_load = get_cpu_load_summary()
     cpu_status_str = f"{get_temp_color(temp_val)}{cpu_temp_str}{RESET} | {cpu_load}"
     print(_status_row("🔲", "CPU Status:", cpu_status_str))
 
+    gpu = get_gpu_info()
     if gpu:
         print(_status_row("🎮", "GPU Status:", gpu))
 
+    fans = get_fan_speed(hwmon)
     if fans:
         print(_status_row("❄️", "Fan Speed:", fans))
 
     # 2. Memory & Storage (RAM, Disk)
+    used_mem_str, total_mem_str, mem_percent = get_mem_info()
     mem_bar = draw_bar(mem_percent, width=20)
     mem_color = get_color_for_percent(mem_percent)
     print(
@@ -694,6 +765,11 @@ def show_status():
             f"({used_mem_str} / {total_mem_str})",
         )
     )
+
+    disk_rows = get_disk_rows()
+    # The verdict tracks the fullest filesystem: on a split layout a full /var
+    # breaks apt while $HOME still looks roomy.
+    disk_percent = max((used / total * 100 for _, used, total in disk_rows), default=0.0)
 
     # One row per filesystem, labelled with the path only when there is more
     # than one -- a single-partition machine keeps the plain "Disk:" row.
@@ -712,15 +788,17 @@ def show_status():
         )
 
     # 3. Hardware & Network (Battery, Network)
+    battery_data = get_battery_info()
+    bat_health: float | None = None
     if battery_data:
-        bat_val, _bat_pct_str, bat_details = battery_data
+        bat_val, bat_health, bat_details = battery_data
         bat_color = (
             GREEN
             if bat_val >= _BATTERY_HIGH_PERCENT
             else (YELLOW if bat_val >= _BATTERY_LOW_PERCENT else RED)
         )
         bat_bar = draw_bar(bat_val, width=20, force_color=bat_color)
-        details_fmt = f"  ({bat_details.strip()})" if bat_details.strip() else ""
+        details_fmt = f"  ({bat_details})" if bat_details else ""
         # Same 20% boundary the colour uses, so the icon and the red bar agree.
         # Both glyphs are two cells wide, so the row alignment is unchanged.
         bat_icon = "🔋" if bat_val >= _BATTERY_LOW_PERCENT else "🪫"
@@ -732,15 +810,18 @@ def show_status():
             )
         )
 
+    rx, tx = get_network_traffic()
+    local_ip = get_ip_info()
     print(_status_row("🖧", "Network:", f"↓ {rx} / ↑ {tx} | {local_ip}"))
 
     # 4. Workload (Top Processes)
+    top_procs = get_top_processes()
     if top_procs:
         print(_status_row("🔝", "Top Processes:", ", ".join(top_procs)))
 
     # 5. Overall Assessment Verdict
     icon, color, verdict = get_system_health_assessment(
-        temp_val, cpu_load, mem_percent, disk_percent, battery_data
+        temp_val, load_percent, mem_percent, disk_percent, bat_health
     )
     status_row = _status_row(icon, "Overall Status:", verdict)
     print(status_row.replace(icon, f"{color}{icon}{RESET}", 1))
