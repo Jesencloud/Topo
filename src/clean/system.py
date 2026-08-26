@@ -298,6 +298,43 @@ def _apt_freed_bytes(output: str) -> int:
     return int(float(match.group(1)) * _SI_MULTIPLIER[match.group(2)])
 
 
+# The `uname -r` form inside an rpm NEVRA: version-release.arch, with the epoch
+# repoquery prints ("kernel-core-0:7.1.8-200.fc44.x86_64") skipped over. Anchored
+# at the end and started at the first digit after a dash, so it works whether or
+# not the epoch is there.
+_NEVRA_VERSION = re.compile(r"-(?:\d+:)?(\d[^-]*-[^-]*)$")
+# dnf's own total. dnf5 says "After this operation, 4 MiB will be freed (install
+# 0 B, remove 4 MiB)"; dnf4 closes its transaction table with "Freed space: 4 M".
+# Both count in 1024s, so the matched size goes straight to parse_size_from_text()
+# -- what must never be handed to it is the whole transcript.
+_DNF_FREED_SPACE = (
+    re.compile(r"After this operation, ([0-9.]+\s*[kKMGTPE]?i?B) will be freed"),
+    re.compile(r"Freed space:\s*([0-9.]+\s*[kKMGTPE]?i?B?)"),
+)
+
+
+def _rpm_kernel_version(nevra: str) -> str:
+    """The kernel version an rpm package name carries, "" when it carries none.
+
+    "kernel-core-0:7.1.8-200.fc44.x86_64" -> "7.1.8-200.fc44.x86_64", which is
+    exactly what platform.release() reports for the kernel that package provides:
+    the running kernel is therefore recognised by string equality, and every
+    subpackage of one kernel -- kernel, kernel-core, kernel-modules... -- shares
+    a single key, which is how they are kept together.
+    """
+    match = _NEVRA_VERSION.search(nevra)
+    return match.group(1) if match else ""
+
+
+def _dnf_freed_bytes(output: str) -> int:
+    """Bytes freed according to dnf's own report, 0 when it did not say."""
+    for pattern in _DNF_FREED_SPACE:
+        match = pattern.search(output)
+        if match:
+            return parse_size_from_text(match.group(1))
+    return 0
+
+
 def clean_old_kernels(dry_run: bool = False) -> tuple[int, int, int]:
     """Remove old kernel packages, keeping current and one previous version."""
     current_kernel = platform.release()
@@ -368,21 +405,55 @@ def clean_old_kernels(dry_run: bool = False) -> tuple[int, int, int]:
         return freed, removed, 1
 
     elif manager.key == "dnf":
-        res = run_command([tool, "repoquery", "--installonly", "--installed"], capture=True)
+        # `--installonly` on its own. dnf5 defines it as mutually exclusive with
+        # `--installed` and refuses the pair outright, so with both -- the dnf4
+        # spelling this used to carry -- kernel cleaning was dead on every
+        # Fedora 41+ box; alone it already means "installed" on dnf4 as well.
+        # `--latest-limit=-2` is librpm's own version comparison, "all but the two
+        # newest of each name.arch", so nothing here has to sort rpm versions by
+        # hand (epoch, .fc44, ~rc1 and all) and the two newest of every kernel
+        # subpackage are the two that stay behind. One argv token, `=` included:
+        # a negative value has to be attached, or the parser reads it as an option.
+        res = run_command(
+            [tool, "repoquery", "--installonly", "--latest-limit=-2"],
+            capture=True,
+            env=C_LOCALE_ENV,
+        )
         if not res.ok or not res.stdout:
             return 0, 0, 0
-        kernels = [k.strip() for k in res.stdout.splitlines() if k.strip()]
-        removable = [k for k in kernels if current_kernel.split("-")[0] not in k]
-        if len(removable) <= 1:
+        # A flavour suffix is on uname's side only: the +debug kernel reports
+        # "6.11.3-200.fc41.x86_64+debug" for package kernel-debug-core-6.11.3-200.
+        running_version = current_kernel.partition("+")[0]
+        stale: dict[str, list[str]] = {}
+        for nevra in res.stdout.split():
+            version = _rpm_kernel_version(nevra)
+            # Never the running kernel -- dnf's protect_running_kernel would abort
+            # the transaction, taking every other row in the batch down with it.
+            # A row whose version cannot be read is left alone for the same
+            # reason: it is not worth one refusal to remove one unnamed package.
+            if not version or version == running_version:
+                continue
+            stale.setdefault(version, []).append(nevra)
+        if not stale:
             return 0, 0, 0
-        to_remove = removable[:-1]
         if dry_run:
-            print(f"  {OK} {len(to_remove)} old kernel(s) would be removed")
+            print(f"  {OK} {len(stale)} old kernel(s) would be removed")
             return 0, 0, 1
-        for pkg in to_remove:
-            run_command([tool, "remove", "-y", pkg], use_sudo=True, capture=True)
-        print(f"  {OK} Removed {len(to_remove)} old kernel(s)")
-        return 0, len(to_remove), 1
+        # Every subpackage of every stale version, in one transaction. Each
+        # version used to be taken apart instead: `removable[:-1]` counted *rows*,
+        # so of the five or six packages that make up one kernel it removed all
+        # but one and called that leftover the fallback kernel -- a kernel-devel
+        # with no image behind it, and one dnf resolved away anyway.
+        packages = [nevra for nevras in stale.values() for nevra in nevras]
+        remove = run_command(
+            [tool, "remove", "-y", *packages], use_sudo=True, capture=True, env=C_LOCALE_ENV
+        )
+        if not remove.ok:
+            return 0, 0, 0
+        freed = _dnf_freed_bytes(remove.stdout)
+        freed_str = f" ({bytes_to_human(freed)})" if freed else ""
+        print(f"  {OK} Removed {len(stale)} old kernel(s){freed_str}")
+        return freed, len(stale), 1
 
     return 0, 0, 0
 

@@ -353,10 +353,11 @@ Removing linux-image-6.8.0-31-generic (6.8.0-31.31) ...
 """
 
 
-_PURGE_OK = SimpleNamespace(ok=True, stdout="")
+# A removal that worked and said nothing about sizes -- shared by both branches.
+_REMOVAL_OK = SimpleNamespace(ok=True, stdout="")
 
 
-def _purge_kernels(rows, os_id, release, purge=_PURGE_OK, dry_run=False):
+def _purge_kernels(rows, os_id, release, purge=_REMOVAL_OK, dry_run=False):
     """clean_old_kernels() over a `dpkg -l` listing; returns (purged, result)."""
     purged = []
 
@@ -465,19 +466,153 @@ def test_apt_freed_bytes_reads_apts_sentence_and_nothing_else():
     assert module._apt_freed_bytes("") == 0
 
 
-def test_old_kernels_dnf_path():
-    # The branch follows os-release, not whichever tools happen to be installed:
-    # with dpkg present for `alien` -- as it is here -- a Fedora box used to take
-    # the deb branch, find no linux-image-* rows and never ask dnf about kernels.
-    rpm = "5.10.1-1\n5.10.2-1\n6.1.0-1\n"
+# Real `dnf repoquery --installonly --latest-limit=-2` output from a box with
+# three kernels installed: every subpackage of the oldest one, epoch and all.
+# dnf5 lists them sorted by name, and one kernel is five or six rows -- which is
+# why the old per-row `removable[:-1]` left one of them behind.
+_FEDORA_STALE_ROWS = """\
+kernel-0:7.1.8-200.fc44.x86_64
+kernel-core-0:7.1.8-200.fc44.x86_64
+kernel-modules-0:7.1.8-200.fc44.x86_64
+kernel-modules-core-0:7.1.8-200.fc44.x86_64
+kernel-modules-extra-0:7.1.8-200.fc44.x86_64
+"""
+# The tail of what `dnf remove -y` prints. dnf5 counts in MiB, unlike apt's MB.
+_DNF5_REMOVE_OUTPUT = """\
+Transaction Summary:
+ Removing:           5 packages
+
+After this operation, 312 MiB will be freed (install 0 B, remove 312 MiB).
+Running transaction
+"""
+
+
+def _remove_kernels(rows, release, remove=_REMOVAL_OK, dry_run=False):
+    """clean_old_kernels() over a `dnf repoquery` listing; returns (calls, result).
+
+    `calls` holds (argv, env) for every command, the query included: which
+    arguments the query carries is itself the D13 regression.
+    """
+    calls = []
+
+    def fake_run_command(args, **kwargs):
+        calls.append((args, kwargs.get("env")))
+        if "repoquery" in args:
+            return SimpleNamespace(ok=True, stdout=rows)
+        return remove
+
     with (
         patch("src.clean.system.get_os_id", return_value="fedora"),
-        patch("src.clean.system.platform.release", return_value="6.1.0-1"),
+        patch("src.clean.system.platform.release", return_value=release),
         patch("shutil.which", side_effect=lambda n: "/usr/bin/" + n),
-        patch("src.clean.system.run_command", return_value=SimpleNamespace(ok=True, stdout=rpm)),
+        patch("src.clean.system.run_command", side_effect=fake_run_command),
     ):
-        assert clean_old_kernels(dry_run=True) == (0, 0, 1)
-        assert clean_old_kernels() == (0, 1, 1)
+        return calls, clean_old_kernels(dry_run=dry_run)
+
+
+def test_old_kernels_asks_dnf_a_question_dnf5_accepts():
+    """dnf5 refuses `--installonly --installed` as a mutually exclusive pair, so
+    the query failed and the branch returned empty-handed on every Fedora 41+.
+
+    The branch is also chosen by os-release, not by whichever tools happen to be
+    installed: with dpkg present for `alien` -- as it is on the box these fixtures
+    came from -- a Fedora box used to take the deb branch, find no linux-image-*
+    rows and never ask dnf about kernels at all.
+    """
+    calls, result = _remove_kernels(_FEDORA_STALE_ROWS, "7.1.10-200.fc44.x86_64", dry_run=True)
+
+    assert calls == [
+        (["dnf5", "repoquery", "--installonly", "--latest-limit=-2"], C_LOCALE_ENV),
+    ]
+    # One kernel, not the five rows it arrived as.
+    assert result == (0, 0, 1)
+
+
+def test_old_kernels_removes_every_subpackage_of_a_stale_kernel_together():
+    """`removable[:-1]` counted rows, so of the five packages that make up this
+    one kernel it removed four and called the leftover the fallback kernel -- a
+    kernel-modules with no image behind it, which dnf's dependency resolution
+    then took away as well.
+    """
+    calls, result = _remove_kernels(
+        _FEDORA_STALE_ROWS,
+        "7.1.10-200.fc44.x86_64",
+        remove=SimpleNamespace(ok=True, stdout=_DNF5_REMOVE_OUTPUT),
+    )
+
+    # C locale on the removal too, not just the query: the sentence it is read
+    # for is one dnf5 translates.
+    assert calls[1:] == [
+        (["dnf5", "remove", "-y", *_FEDORA_STALE_ROWS.split()], C_LOCALE_ENV),
+    ]
+    # 312 MiB, because dnf reports in 1024s where apt reports in 1000s.
+    assert result == (312 * 1024**2, 1, 1)
+
+
+def test_old_kernels_leaves_the_running_kernel_out_of_the_transaction():
+    # A box booted into something older than its two newest kernels: repoquery's
+    # "all but the two newest" then names the running kernel, and dnf would refuse
+    # the whole transaction over it (protect_running_kernel).
+    calls, result = _remove_kernels(_FEDORA_STALE_ROWS, "7.1.8-200.fc44.x86_64")
+
+    assert [argv[1] for argv, _env in calls] == ["repoquery"]
+    assert result == (0, 0, 0)
+
+
+def test_old_kernels_ignores_dnf_output_that_is_not_a_package():
+    rows = _FEDORA_STALE_ROWS + "Last metadata expiration check: 0:03:21 ago.\n"
+
+    calls, result = _remove_kernels(rows, "7.1.10-200.fc44.x86_64")
+
+    # Whatever cannot be read as a package stays out of the argv, rather than
+    # being handed to dnf to reject the batch over.
+    assert [argv for argv, _env in calls[1:]] == [
+        ["dnf5", "remove", "-y", *_FEDORA_STALE_ROWS.split()]
+    ]
+    assert result == (0, 1, 1)
+
+
+def test_old_kernels_counts_nothing_when_the_dnf_transaction_fails():
+    calls, result = _remove_kernels(
+        _FEDORA_STALE_ROWS,
+        "7.1.10-200.fc44.x86_64",
+        remove=SimpleNamespace(ok=False, stdout=""),
+    )
+
+    assert [argv[1] for argv, _env in calls] == ["repoquery", "remove"]
+    assert result == (0, 0, 0)
+
+
+def test_rpm_kernel_version_is_the_uname_form_whatever_the_subpackage():
+    from src.clean import system as module
+
+    # Every subpackage of one kernel has to yield one key, or they get split
+    # across the keep/remove line.
+    assert {module._rpm_kernel_version(nevra) for nevra in _FEDORA_STALE_ROWS.split()} == {
+        "7.1.8-200.fc44.x86_64"
+    }
+    # rpm -q prints no epoch; aarch64's kernel-64k carries digits in its *name*.
+    assert module._rpm_kernel_version("kernel-core-7.1.8-200.fc44.x86_64") == (
+        "7.1.8-200.fc44.x86_64"
+    )
+    assert module._rpm_kernel_version("kernel-64k-core-0:6.11.3-200.fc41.aarch64") == (
+        "6.11.3-200.fc41.aarch64"
+    )
+    assert module._rpm_kernel_version("Last") == ""
+
+
+def test_dnf_freed_bytes_reads_either_dnf_generations_wording():
+    from src.clean import system as module
+
+    # dnf5 (Fedora 41+), then dnf4's transaction table. Both count in 1024s.
+    assert module._dnf_freed_bytes(
+        "After this operation, 4 MiB will be freed (install 0 B, remove 4 MiB)."
+    ) == (4 * 1024**2)
+    assert module._dnf_freed_bytes("Freed space: 312 M\n") == 312 * 1024**2
+    # An install is not a free, and neither is the row count.
+    assert module._dnf_freed_bytes("After this operation, 4 MiB will be used") == 0
+    assert module._dnf_freed_bytes("Removing 5 packages") == 0
+    assert module._dnf_freed_bytes("") == 0
 
 
 def test_opensuse_cleans_its_package_cache_but_has_no_orphan_sweep():
