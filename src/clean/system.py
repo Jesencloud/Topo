@@ -212,13 +212,34 @@ def clean_orphaned_packages(dry_run: bool = False) -> tuple[int, int, int]:
 
     elif manager.key == "dnf":
         if dry_run:
+            # No number to promise here, unlike the apt branch above: `dnf
+            # autoremove` takes the rpm transaction lock even to resolve, so there
+            # is no unprivileged preview, and running it under sudo to get one is
+            # the very thing --dry-run exists to avoid.
             print(f"  {OK} Orphaned {manager.label} packages would be autoremoved")
             return 0, 0, 1
         res = run_command([tool, "autoremove", "-y"], use_sudo=True, capture=True, env=C_LOCALE_ENV)
         if res.ok:
-            freed = parse_size_from_text(res.stdout)
-            items = res.stdout.count("\n") // 2
-            print(f"  {OK} Removed orphaned {manager.label} packages ({bytes_to_human(freed)})")
+            # Both numbers come from dnf's transaction summary. What they replace:
+            # parse_size_from_text() over the entire transcript, which returns the
+            # first size-looking token anywhere in it -- on dnf5 that is the size
+            # column of the first row of the package table, not the total (D7's
+            # mistake, in the branch D7 did not touch) -- and `stdout.count("\n")
+            # // 2`, half the number of lines dnf happened to print, which counts
+            # the table, the progress narration and the trailing "Complete!" as
+            # packages.
+            freed = _dnf_freed_bytes(res.stdout)
+            items = _dnf_removal_count(res.stdout)
+            if not freed and not items:
+                # "Nothing to do." -- and the same answer for a summary this cannot
+                # read, where 0 is the honest report rather than a guess. Either way
+                # there is nothing to claim, exactly as the apt branch claims nothing
+                # when its preview finds no orphans.
+                return 0, 0, 0
+            print(
+                f"  {OK} Removed {items} orphaned {manager.label} package(s)"
+                f" ({bytes_to_human(freed)})"
+            )
             return freed, items, 1
 
     elif manager.key == "pacman":
@@ -284,6 +305,12 @@ def clean_zombies(dry_run: bool = False) -> tuple[int, int, int]:
 # (Ubuntu), linux-image-6.1.0-18-amd64 (Debian). Names without one -- the
 # linux-image-generic / linux-image-amd64 metapackages -- are not kernels.
 _VERSIONED_KERNEL = re.compile(r"^linux-image-\d")
+# What dpkg-query is asked for in place of `dpkg -l`'s table: the status pair the
+# selection is made on, and the package name. Deliberately ${Package} and not
+# ${binary:Package} -- kernel images are not Multi-Arch:same, and the name here is
+# handed straight to `apt-get purge`, which wants it unqualified, exactly as the
+# old fixed-width table printed it.
+_DPKG_KERNEL_FORMAT = "${db:Status-Abbrev}\t${Package}\n"
 # apt's own total for one operation. parse_size_from_text() cannot be pointed at
 # the transcript: fed the whole thing it matches "2 to remove" as 2 TB. The
 # sentence is English because the purge runs under APT_NONINTERACTIVE_ENV, and
@@ -350,6 +377,15 @@ _DNF_FREED_SPACE = (
     re.compile(r"After this operation, ([0-9.]+\s*[kKMGTPE]?i?B) will be freed"),
     re.compile(r"Freed space:\s*([0-9.]+\s*[kKMGTPE]?i?B?)"),
 )
+# dnf's own count of what the transaction removes, from the summary it prints
+# under "Transaction Summary". dnf5 says " Removing:           5 packages", dnf4
+# "Remove  5 Packages"; both drop the plural at one. The number and the word are
+# both required, which is what keeps the dnf5 pattern off the bare "Removing:"
+# heading of the package table further up -- that line carries no count.
+_DNF_REMOVAL_COUNT = (
+    re.compile(r"^\s*Removing:\s+(\d+)\s+packages?\s*$", re.MULTILINE),
+    re.compile(r"^\s*Remove\s+(\d+)\s+Packages?\s*$", re.MULTILINE),
+)
 
 
 def _rpm_kernel_version(nevra: str) -> str:
@@ -374,6 +410,23 @@ def _dnf_freed_bytes(output: str) -> int:
     return 0
 
 
+def _dnf_removal_count(output: str) -> int:
+    """How many packages dnf's transaction summary removes, 0 when it did not say.
+
+    The dnf-side counterpart to _apt_removal_count(), and answered from the summary
+    for the same reason: dnf's per-package rows are a width-dependent table with a
+    translated heading, while the summary line holds the number dnf itself arrived
+    at. 0 is returned both for "removed nothing" and for a summary in a dialect
+    these patterns do not know, which the caller treats alike -- there is nothing to
+    report either way.
+    """
+    for pattern in _DNF_REMOVAL_COUNT:
+        match = pattern.search(output)
+        if match:
+            return int(match.group(1))
+    return 0
+
+
 def clean_old_kernels(dry_run: bool = False) -> tuple[int, int, int]:
     """Remove old kernel packages, keeping current and one previous version."""
     current_kernel = platform.release()
@@ -388,18 +441,35 @@ def clean_old_kernels(dry_run: bool = False) -> tuple[int, int, int]:
     if not shutil.which(tool):
         return 0, 0, 0
 
-    if manager.key == "apt" and shutil.which("dpkg"):
-        # Rows are matched on dpkg's English "ii" status pair.
-        res = run_command(["dpkg", "-l", "linux-image-*"], capture=True, env=C_LOCALE_ENV)
+    if manager.key == "apt" and shutil.which(manager.query_tool):
+        # The matrix's query_tool, which is dpkg-query -- the tool doctor probes
+        # for and the tool uninstall's scanner reads the same database with. `dpkg
+        # -l` was a hand-written copy of that decision, and one that has to be
+        # asked for a fixed-width table and then have the fields counted back out
+        # of it.
+        res = run_command(
+            [manager.query_tool, "-W", f"-f={_DPKG_KERNEL_FORMAT}", "linux-image-*"],
+            capture=True,
+            env=C_LOCALE_ENV,
+        )
         if not res.ok or not res.stdout:
             return 0, 0, 0
         running = _kernel_version_key(current_kernel)
         candidates: list[tuple[tuple[int, ...], str]] = []
         for line in res.stdout.splitlines():
-            if not line.startswith("ii"):
+            parts = line.split("\t")
+            if len(parts) < 2:
                 continue
-            parts = line.split()
-            if len(parts) < 2 or not _VERSIONED_KERNEL.match(parts[1]):
+            status, name = parts[0].strip(), parts[1].strip()
+            # Exactly what `line.startswith("ii")` used to accept, now said out
+            # loud: want=install and state=installed. The want flag is the half
+            # that matters here -- a kernel on hold reads "hi", and `apt-mark
+            # hold` is a user saying "do not touch this package", not a size
+            # estimate topo may overrule. Everything else (rc, iU, iF) is either
+            # already gone or mid-transaction.
+            if status[:2] != "ii":
+                continue
+            if not _VERSIONED_KERNEL.match(name):
                 # Everything without a version in its name: the metapackages
                 # (linux-image-generic on Ubuntu, linux-image-amd64 on Debian)
                 # that pull in each new kernel -- purging one is how a machine
@@ -407,12 +477,12 @@ def clean_old_kernels(dry_run: bool = False) -> tuple[int, int, int]:
                 # linux-image-unsigned-*, which the orphan sweep collects once
                 # the image depending on them is gone.
                 continue
-            key = _kernel_version_key(parts[1])
+            key = _kernel_version_key(name)
             if key == running:
                 # Never the kernel we booted from, whatever its flavour suffix.
                 continue
-            candidates.append((key, parts[1]))
-        # Sorted by version, because dpkg -l lists rows alphabetically and
+            candidates.append((key, name))
+        # Sorted by version, because dpkg lists rows alphabetically and
         # alphabetically "-100-generic" comes *before* "-91-generic": trusting
         # that order kept the oldest kernel and purged the newest one.
         candidates.sort()

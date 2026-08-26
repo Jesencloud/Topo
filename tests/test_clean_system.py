@@ -45,6 +45,40 @@ Building dependency tree...
 Reading state information...
 0 upgraded, 0 newly installed, 0 to remove and 2 not upgraded.
 """
+# `dnf autoremove -y` on dnf5, transcribed from `dnf --assumeno remove tree` on
+# Fedora 44. The size column of the first table row is the trap: parse_size_from_text
+# over this whole transcript answers 120.0 KiB whatever the transaction total is, and
+# on a two-package removal it answers the size of one of them.
+_DNF5_AUTOREMOVE_OUTPUT = """\
+Package Arch   Version        Repository                            Size
+Removing:
+ tree   x86_64 0:2.2.1-4.fc44 19278be6a81040f5b6cbc7bacea5148e 120.0 KiB
+ gdbm   x86_64 1:1.23-9.fc44  19278be6a81040f5b6cbc7bacea5148e 456.0 KiB
+
+Transaction Summary:
+ Removing:           2 packages
+
+After this operation, 576 KiB will be freed (install 0 B, remove 576 KiB).
+Running transaction
+Complete!
+"""
+# dnf4, as RHEL 9 and Leap still run it: no colon after the heading, "Remove" in
+# place of "Removing:", "Freed space:" in place of the sentence.
+_DNF4_AUTOREMOVE_OUTPUT = """\
+Dependencies resolved.
+================================================================================
+ Package        Arch    Version          Repository       Size
+================================================================================
+Removing:
+ tree           x86_64  2.2.1-4.fc44     @System         120 k
+
+Transaction Summary
+================================================================================
+Remove  1 Package
+
+Freed space: 120 k
+Complete!
+"""
 
 
 def test_package_cache_paths_cover_supported_managers(monkeypatch):
@@ -112,20 +146,56 @@ def test_system_cleaners_no_tools_return_zero(_mock_which):
 @patch("src.clean.system.run_command")
 @patch("src.clean.system.get_os_id")
 def test_clean_orphaned_packages_fedora(mock_get_os_id, mock_run, mock_which):
+    """dnf's own two numbers, from its transaction summary (D14).
+
+    What this used to accept: parse_size_from_text() over the whole transcript and
+    `stdout.count("\\n") // 2`. Against the fixture below the first answers 120 KiB --
+    the size column of the table's first row -- for a transaction that freed 576, and
+    the second answers 6 packages for a transaction that removed 2.
+    """
     mock_get_os_id.return_value = "fedora"
     mock_which.side_effect = lambda x: "/usr/bin/dnf" if x == "dnf" else None
-    mock_run.return_value = MagicMock(returncode=0, stdout="Removed 500 MB\nPackage1\nPackage2")
+    mock_run.return_value = MagicMock(ok=True, stdout=_DNF5_AUTOREMOVE_OUTPUT)
 
-    s, i, c = clean_orphaned_packages(dry_run=False)
-    assert s > 0
-    assert i > 0
-    assert c == 1
+    with patch("builtins.print") as mock_print:
+        assert clean_orphaned_packages(dry_run=False) == (576 * 1024, 2, 1)
+
+    assert "Removed 2 orphaned DNF package(s) (576.0 KiB)" in mock_print.call_args[0][0]
     mock_run.assert_called_with(
         ["dnf", "autoremove", "-y"], use_sudo=True, capture=True, env=C_LOCALE_ENV
     )
 
-    s, i, c = clean_orphaned_packages(dry_run=True)
-    assert c == 1
+    # dnf4 is still what RHEL 9 and Leap run, and it words all three of the lines
+    # being read here differently.
+    mock_run.return_value = MagicMock(ok=True, stdout=_DNF4_AUTOREMOVE_OUTPUT)
+    assert clean_orphaned_packages(dry_run=False) == (120 * 1024, 1, 1)
+
+    # The preview stays wordless: `dnf autoremove` needs the transaction lock even to
+    # resolve, so there is no unprivileged count to print the way apt has one.
+    mock_run.reset_mock()
+    assert clean_orphaned_packages(dry_run=True) == (0, 0, 1)
+    mock_run.assert_not_called()
+
+
+@patch("shutil.which", side_effect=lambda x: "/usr/bin/dnf" if x == "dnf" else None)
+@patch("src.clean.system.run_command")
+@patch("src.clean.system.get_os_id", return_value="fedora")
+def test_a_dnf_transaction_that_says_nothing_is_reported_as_nothing(
+    _mock_get_os_id, mock_run, _mock_which
+):
+    """0 rather than a guess, and no line claiming a removal that did not happen.
+
+    Two ways to get here and both are answered the same: dnf removed nothing, or it
+    reported the transaction in a dialect these patterns do not read. The old code
+    printed "Removed orphaned DNF packages" for both -- with a size taken from
+    wherever in the output a number happened to sit -- and counted "Nothing to do."
+    as half a package.
+    """
+    for output in ("Nothing to do.\n", "Removed 500 MB\nPackage1\nPackage2\n"):
+        mock_run.return_value = MagicMock(ok=True, stdout=output)
+        with patch("builtins.print") as mock_print:
+            assert clean_orphaned_packages(dry_run=False) == (0, 0, 0)
+        mock_print.assert_not_called()
 
 
 @patch("shutil.which")
@@ -441,25 +511,22 @@ def test_zombies_failure_and_empty_output():
         assert clean_zombies() == (0, 0, 0)
 
 
-# Real `dpkg -l 'linux-image-*'` output, header and all. The row order is dpkg's
-# own -- alphabetical, which puts "-100-" ahead of "-31-" and the metapackage
-# last -- because the code under test must not read it as a version order.
+# What `dpkg-query -W -f='${db:Status-Abbrev}\t${Package}\n' 'linux-image-*'`
+# prints: the status triple (want, state, error), a tab, the name -- no header and
+# no fixed-width columns. The row order is dpkg's own -- alphabetical, which puts
+# "-100-" ahead of "-31-" and the metapackage last -- because the code under test
+# must not read it as a version order.
 _UBUNTU_KERNEL_ROWS = """\
-Desired=Unknown/Install/Remove/Purge/Hold
-| Status=Not/Inst/Conf-files/Unpacked/halF-conf/Half-inst/trig-aWait/Trig-pend
-|/ Err?=(none)/Reinst-required (Status,Err: uppercase=bad)
-||/ Name                          Version       Architecture Description
-+++-=============================-=============-============-=================
-ii  linux-image-6.8.0-100-generic 6.8.0-100.100 amd64        Signed kernel image
-ii  linux-image-6.8.0-31-generic  6.8.0-31.31   amd64        Signed kernel image
-ii  linux-image-6.8.0-45-generic  6.8.0-45.45   amd64        Signed kernel image
-ii  linux-image-generic           6.8.0.100.100 amd64        Generic metapackage
+ii \tlinux-image-6.8.0-100-generic
+ii \tlinux-image-6.8.0-31-generic
+ii \tlinux-image-6.8.0-45-generic
+ii \tlinux-image-generic
 """
 _DEBIAN_KERNEL_ROWS = """\
-ii  linux-image-5.10.0-26-amd64 5.10.197-1 amd64 Linux 5.10 for 64-bit PCs
-ii  linux-image-5.10.0-28-amd64 5.10.209-2 amd64 Linux 5.10 for 64-bit PCs
-ii  linux-image-6.1.0-18-amd64  6.1.76-1   amd64 Linux 6.1 for 64-bit PCs
-ii  linux-image-amd64           6.1.76-1   amd64 Linux for 64-bit PCs (meta)
+ii \tlinux-image-5.10.0-26-amd64
+ii \tlinux-image-5.10.0-28-amd64
+ii \tlinux-image-6.1.0-18-amd64
+ii \tlinux-image-amd64
 """
 # What `apt-get purge -y` prints. The "2 to remove" line is kept verbatim on
 # purpose: parse_size_from_text() reads it as 2 TB, which is why the code has its
@@ -479,11 +546,11 @@ _REMOVAL_OK = SimpleNamespace(ok=True, stdout="")
 
 
 def _purge_kernels(rows, os_id, release, purge=_REMOVAL_OK, dry_run=False):
-    """clean_old_kernels() over a `dpkg -l` listing; returns (purged, result)."""
+    """clean_old_kernels() over a `dpkg-query -W` listing; returns (purged, result)."""
     purged = []
 
     def fake_run_command(args, **kwargs):
-        if args[:2] == ["dpkg", "-l"]:
+        if args[:2] == ["dpkg-query", "-W"]:
             return SimpleNamespace(ok=True, stdout=rows)
         purged.append(args)
         return purge
@@ -566,6 +633,62 @@ def test_old_kernels_counts_nothing_when_the_purge_fails():
 
     assert len(purged) == 1
     assert result == (0, 0, 0)
+
+
+def test_old_kernels_asks_the_matrix_query_tool_and_respects_a_hold():
+    """The kernel listing comes from dpkg-query, the matrix's query_tool (D10).
+
+    `dpkg -l` was a second hand-written answer to "what reads the installed
+    database" -- doctor probes dpkg-query, uninstall's scanner reads dpkg-query --
+    and it made the code parse a fixed-width table for two fields it can simply
+    ask for. The status pair still has to be read, though: `apt-mark hold` shows up
+    as "hi", and the old `startswith("ii")` kept held kernels out of the purge list
+    for free. Losing that would have made `topo clean` purge a package the user
+    explicitly pinned.
+    """
+    queries = []
+    purged = []
+
+    def fake_run_command(args, **kwargs):
+        if args[0] == "dpkg-query":
+            queries.append(args)
+            return SimpleNamespace(
+                ok=True,
+                stdout=(
+                    "ii \tlinux-image-6.8.0-100-generic\n"
+                    "hi \tlinux-image-6.8.0-31-generic\n"  # held by the user
+                    "rc \tlinux-image-6.8.0-40-generic\n"  # removed, config files left
+                    "iU \tlinux-image-6.8.0-41-generic\n"  # unpacked, not configured
+                    "ii \tlinux-image-6.8.0-45-generic\n"  # running
+                    "ii \tlinux-image-6.8.0-52-generic\n"
+                    "\n"  # dpkg-query prints nothing for an empty pattern match
+                ),
+            )
+        purged.append(args)
+        return _REMOVAL_OK
+
+    with (
+        patch("src.clean.system.get_os_id", return_value="ubuntu"),
+        patch("src.clean.system.platform.release", return_value="6.8.0-45-generic"),
+        patch("shutil.which", side_effect=lambda n: "/usr/bin/" + n),
+        patch("src.clean.system.run_command", side_effect=fake_run_command),
+    ):
+        result = clean_old_kernels()
+
+    assert queries == [
+        [
+            "dpkg-query",
+            "-W",
+            "-f=${db:Status-Abbrev}\t${Package}\n",
+            "linux-image-*",
+        ]
+    ]
+    # Of the three "ii" rows, the running kernel stays and so does the newest of
+    # the rest (-100-, which sorts above -52- by version and below it
+    # alphabetically); only -52- goes. The held, the half-removed and the unpacked
+    # rows never entered the candidate list at all.
+    assert purged == [["apt-get", "purge", "-y", "linux-image-6.8.0-52-generic"]]
+    assert result == (0, 1, 1)
 
 
 def test_apt_freed_bytes_reads_apts_sentence_and_nothing_else():
