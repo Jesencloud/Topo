@@ -501,7 +501,7 @@ def _ensure_admin_for_delete(paths: list[Path]) -> bool:
             print(f" {RED}✗{RESET} Authorization failed. Delete cancelled.\n")
         return False
 
-    print(f"{GREEN}ꗃ{RESET} Authorization successful.\n")
+    print(f"{GREEN}✓{RESET} Authorization successful.\n")
     return True
 
 

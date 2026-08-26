@@ -184,7 +184,7 @@ def authenticate_sudo_session(dry_run: bool, *, request_subject: str, action: st
             print(f" {RED}✗{RESET} Authorization failed. {action_title} skipped.\n")
         return False
 
-    print(f"{GREEN}ꗃ{RESET} Authorization successful.\n")
+    print(f"{GREEN}✓{RESET} Authorization successful.\n")
     return True
 
 

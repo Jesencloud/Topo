@@ -98,7 +98,7 @@ def run_uninstall():
                     return
 
             if needs_sudo:
-                print(f"{GREEN}ꗃ{RESET} Authorization successful.")
+                print(f"{GREEN}✓{RESET} Authorization successful.")
 
             # --- EXECUTION ---
             current_status = ["Processing..."]
