@@ -23,6 +23,26 @@ if sys.version_info < MIN_PYTHON:
 REAL_PATH = os.path.realpath(__file__)
 REAL_DIR = os.path.dirname(REAL_PATH)
 
+# A system package must not grow files under /usr that its own file list does not
+# mention. Most of what topo does needs root, and the first `sudo topo clean`
+# would otherwise have CPython write __pycache__/*.pyc all through
+# /usr/lib/topo/src/ -- files dpkg never recorded, so `apt remove topo` cannot
+# delete them and cannot rmdir the directories holding them either, leaving a
+# shell of empty directories and stale bytecode behind after an uninstall.
+#
+# The marker is read here, by hand, rather than through get_install_source() in
+# src/core/install_source.py, which owns both the filename and the meaning of its
+# contents: this has to be decided *before* the first import from src/, or that
+# import is itself the thing that writes a .pyc. Same reason MIN_PYTHON above is
+# spelled out here instead of imported. A script install keeps its bytecode cache
+# and its faster startup; it writes into a directory that is the user's own.
+try:
+    with open(os.path.join(REAL_DIR, ".topo-install-source")) as marker:
+        if marker.read().strip().lower() == "package":
+            sys.dont_write_bytecode = True
+except OSError:
+    pass
+
 # Add project root to Python search path so src is recognized as a package
 sys.path.insert(0, REAL_DIR)
 

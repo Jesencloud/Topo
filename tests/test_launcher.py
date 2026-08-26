@@ -8,6 +8,7 @@ failed *inside* a feature module (`import termios` in remove.py, say) was caught
 by the same handler and reported the same way.
 """
 
+import os
 import re
 import subprocess
 import sys
@@ -19,12 +20,18 @@ MISSING_SOURCE = "Could not find topo source modules"
 
 
 def _run(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    # PYTHONDONTWRITEBYTECODE stripped rather than inherited: whether the launcher
+    # writes a .pyc is one of the things under test here, and a developer with that
+    # variable exported in their shell must not silently pass the half of it that
+    # asserts bytecode *is* written.
+    env = {key: value for key, value in os.environ.items() if key != "PYTHONDONTWRITEBYTECODE"}
     return subprocess.run(
         [sys.executable, *args],
         cwd=str(cwd) if cwd else None,
         capture_output=True,
         text=True,
         check=False,
+        env=env,
     )
 
 
@@ -98,6 +105,47 @@ def test_an_import_failing_inside_main_is_not_blamed_on_the_install(tmp_path):
     assert MISSING_SOURCE not in result.stderr + result.stdout
     assert "No module named 'termios'" in result.stderr
     assert "Traceback" in result.stderr
+
+
+def test_a_package_install_writes_no_bytecode_under_usr(tmp_path):
+    """A package install must not grow files its own file list does not mention (D11).
+
+    Packaging strips __pycache__ from the payload, but most of what topo does needs
+    root: the first `sudo topo clean` used to have CPython write .pyc files all
+    through /usr/lib/topo/src/, and dpkg deletes only what it recorded -- so
+    `apt remove topo` left stale bytecode plus the empty directories it could not
+    rmdir. Deciding this from the marker has to happen before the first import from
+    src/, because that import is what writes the first .pyc.
+    """
+    root = _fake_install(tmp_path, main_body="def main():\n    pass\n")
+    (root / ".topo-install-source").write_text("package\n")
+
+    result = _run(str(root / "topo"), cwd=root)
+
+    assert result.returncode == 0, result.stderr
+    assert list(root.rglob("__pycache__")) == []
+    assert list(root.rglob("*.pyc")) == []
+
+
+def test_a_script_install_keeps_its_bytecode_cache(tmp_path):
+    """The other side of D11: nothing was traded away for the git/script install.
+
+    Its directory belongs to the user, the .pyc files there are removed with the
+    tree, and paying to recompile every module on each launch would be a real cost
+    to a TUI. An unreadable or unrecognised marker means script, exactly as
+    get_install_source() reads it.
+    """
+    for index, marker in enumerate((None, "script\n", "nonsense\n")):
+        home = tmp_path / f"case{index}"
+        home.mkdir()
+        root = _fake_install(home, main_body="def main():\n    pass\n")
+        if marker is not None:
+            (root / ".topo-install-source").write_text(marker)
+
+        result = _run(str(root / "topo"), cwd=root)
+
+        assert result.returncode == 0, result.stderr
+        assert [p.name for p in root.rglob("__pycache__")] == ["__pycache__"]
 
 
 def test_the_launcher_and_install_sh_agree_on_the_floor():
