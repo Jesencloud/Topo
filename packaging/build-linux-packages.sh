@@ -134,10 +134,30 @@ build_one() {
     local engine_path="$4"
     local package_path="$5"
     local root="$WORK_DIR/root-$package_type-$package_arch"
+    local python_depends
     local -a fpm_args
 
     rm -rf "$root"
     copy_runtime_tree "$root" "$engine_arch" "$engine_path"
+
+    # The launcher refuses to run on anything older than 3.10 (see MIN_PYTHON in
+    # ./topo), and src/ is full of PEP 604 annotations, so an older interpreter
+    # cannot load it at all. Debian 11 ships 3.9 and Ubuntu 20.04 ships 3.8:
+    # unversioned, the dependency lets apt install the package there and leaves
+    # the user to discover the problem on first run.
+    #
+    # The rpm deliberately keeps no lower bound. openSUSE Leap 15.6's python3 is
+    # 3.6, and the release workflow installs python311 beside it and symlinks
+    # /usr/local/bin/python3, which a versioned dependency cannot see -- zypper
+    # would refuse the package on the very distro it was built for. Every deb leg
+    # (ubuntu-latest, debian:stable) already ships 3.11 or newer, so the bound
+    # costs nothing there. fpm passes a dependency that is already in Debian's
+    # `name (>= version)` form through untouched.
+    if [[ "$package_type" == deb ]]; then
+        python_depends='python3 (>= 3.10)'
+    else
+        python_depends='python3'
+    fi
 
     fpm_args=(
         -s dir
@@ -154,7 +174,7 @@ build_one() {
         --description "Linux cleanup, app removal, disk analysis, and status checks."
         --category utils
         --depends curl
-        --depends python3
+        --depends "$python_depends"
         --depends python3-packaging
         -C "$root"
     )
