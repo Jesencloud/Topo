@@ -1,5 +1,6 @@
 import signal
 import subprocess
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 from src.core import system
@@ -82,6 +83,22 @@ def test_run_command_timeout_result(mock_run):
     assert result.stdout == "partial"
 
 
+@contextmanager
+def _as_terminal():
+    """Patch the state that makes the rewind sequence reachable at all.
+
+    CLEAR_LINE and ERASE_BELOW are resolved when src.core.system is imported, and
+    under pytest stdout is never a terminal, so both arrive empty. Restoring them
+    here is what lets these tests assert on the sequence a real terminal gets.
+    """
+    with (
+        patch("sys.stdout.isatty", return_value=True),
+        patch("src.core.system.CLEAR_LINE", "\r\033[K"),
+        patch("src.core.system.ERASE_BELOW", "\033[J"),
+    ):
+        yield
+
+
 def test_ensure_sudo_session_clears_prompt_line_on_keyboard_interrupt():
     system.SUDO_CANCELLED = False
     with (
@@ -93,6 +110,7 @@ def test_ensure_sudo_session_clears_prompt_line_on_keyboard_interrupt():
                 KeyboardInterrupt,
             ],
         ),
+        _as_terminal(),
         patch("sys.stdout.write") as write,
         patch("sys.stdout.flush"),
     ):
@@ -103,6 +121,31 @@ def test_ensure_sudo_session_clears_prompt_line_on_keyboard_interrupt():
     assert clear_sequence.startswith("\r\033[K")
     assert clear_sequence.endswith("\033[J")
     assert clear_sequence.count("\033[1A") == 1 + system.SUDO_INTERRUPT_EXTRA_CLEAR_LINES
+    system.SUDO_CANCELLED = False
+
+
+def test_ensure_sudo_session_rewinds_nothing_without_a_terminal():
+    # Rewinding needs a cursor. CLEAR_LINE and ERASE_BELOW empty themselves off a
+    # terminal, but the \033[1A between them is a literal, so this path needs its
+    # own guard or a redirected run collects one cursor-up per rewound line.
+    system.SUDO_CANCELLED = False
+    with (
+        patch(
+            "src.core.system.run_command",
+            side_effect=[
+                CommandResult(["sudo", "-k"], 0),
+                CommandResult(["sudo", "-n", "true"], 1),
+                KeyboardInterrupt,
+            ],
+        ),
+        patch("sys.stdout.isatty", return_value=False),
+        patch("sys.stdout.write") as write,
+        patch("sys.stdout.flush"),
+    ):
+        assert system.ensure_sudo_session("Password: ") is False
+
+    assert system.SUDO_CANCELLED is True
+    assert write.call_args_list == []
     system.SUDO_CANCELLED = False
 
 
@@ -117,6 +160,7 @@ def test_ensure_sudo_session_treats_sigint_return_as_user_cancel():
                 CommandResult(["sudo", "-v"], -signal.SIGINT),
             ],
         ),
+        _as_terminal(),
         patch("sys.stdout.write") as write,
         patch("sys.stdout.flush"),
     ):

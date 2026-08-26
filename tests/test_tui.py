@@ -31,6 +31,6 @@ def test_render_banner_is_stable_across_redraws():
 
 def test_render_banner_emits_no_escapes_when_colors_are_off():
     # Colors are already blanked under pytest (non-TTY); the dot's palette used to
-    # be a module-level list of inline SGR literals that _propagate_colors() could
-    # not reach, so it stayed colored under --no-color.
+    # be a module-level list of inline SGR literals that _propagate_constants()
+    # could not reach, so it stayed colored under --no-color.
     assert "\033" not in tui.render_banner()

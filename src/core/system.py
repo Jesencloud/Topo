@@ -223,6 +223,14 @@ def _clear_interrupted_sudo_prompt(prompt: str | None = None) -> None:
     lines_to_rewind = prompt_lines + SUDO_INTERRUPT_EXTRA_CLEAR_LINES
     clear_sequence = CLEAR_LINE + (f"\033[1A{CLEAR_LINE}" * lines_to_rewind) + ERASE_BELOW
     try:
+        # Rewinding the cursor needs a cursor. CLEAR_LINE and ERASE_BELOW already
+        # empty themselves when stdout is not a terminal, but the \033[1A above is
+        # a literal, so without this guard a redirected run still got one
+        # cursor-up per rewound line written into the log. It sits inside the try
+        # because isatty() on a closed stdout raises, and this runs from an
+        # interrupt handler that must not raise anything new.
+        if not sys.stdout.isatty():
+            return
         sys.stdout.write(clear_sequence)
         sys.stdout.flush()
     except (OSError, ValueError):

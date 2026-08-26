@@ -104,6 +104,53 @@ def test_no_color_still_wins_over_the_theme_color(monkeypatch):
         assert constants.THEME_TITLE == ""
 
 
+def test_turning_colors_off_does_not_turn_terminal_control_off(monkeypatch):
+    """--no-color and NO_COLOR must not blank CLEAR_SCREEN / CLEAR_LINE / ERASE_BELOW.
+
+    They ask topo to stop colouring, not to stop driving the terminal: someone
+    who exports NO_COLOR=1 still wants `topo analyze` to repaint its frame in
+    place instead of smearing every frame down the scrollback. Only the absence
+    of a terminal makes these meaningless, which is the next test.
+    """
+    from src.core import constants
+
+    for env_no_color, flag in (("1", False), (None, True)):
+        if env_no_color:
+            monkeypatch.setenv("NO_COLOR", env_no_color)
+        else:
+            monkeypatch.delenv("NO_COLOR", raising=False)
+        with patch.object(sys.stdout, "isatty", return_value=True):
+            setup_color_mode(no_color=flag)
+
+        assert constants.GREEN == ""
+        assert constants.CLEAR_SCREEN == "\033[2J\033[H"
+        assert constants.CLEAR_LINE == "\r\033[K"
+        assert constants.ERASE_BELOW == "\033[J"
+
+
+def test_non_tty_redirection_blanks_terminal_control_in_consumers(monkeypatch):
+    """A pipe has no screen to clear, and the constants have to reach from-importers.
+
+    `topo optimize > log` used to write \\033[2J plus a spinner frame's \\r\\033[K
+    a dozen times a second into the log: the colors were correctly gone, the
+    cursor control was not. Asserting on constants.* alone would pass even if the
+    propagation pass had been left color-only, so this checks a consumer module.
+    """
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    from src import optimize
+    from src.core import constants
+
+    with patch.object(sys.stdout, "isatty", return_value=True):
+        setup_color_mode(no_color=False)
+        assert optimize.CLEAR_SCREEN != ""
+
+    with patch.object(sys.stdout, "isatty", return_value=False):
+        setup_color_mode(no_color=False)
+        assert constants.CLEAR_SCREEN == ""
+        assert optimize.CLEAR_SCREEN == ""
+        assert optimize.CLEAR_LINE == ""
+
+
 def test_no_color_flag_reaches_from_imported_consumers(monkeypatch):
     """--no-color must blank colors in modules that did `from .constants import GREEN`.
 

@@ -25,7 +25,16 @@ _mouse_tracking_enabled = False
 
 
 def _write(sequence: str) -> None:
+    # Every escape this module emits goes through here, so this is the one place
+    # that has to ask whether there is a terminal to emit them to. Redirecting
+    # stdout used to put the whole reset sequence -- mouse-off, cursor-on,
+    # graphics-reset, alt-screen-off -- into the log on Ctrl-C, on top of the
+    # \033[2J that followed it. The depth counters above are kept up to date
+    # either way: they track what topo *asked for*, not what reached a screen,
+    # so a run that starts redirected and is inspected later still reads right.
     try:
+        if not sys.stdout.isatty():
+            return
         sys.stdout.write(sequence)
         sys.stdout.flush()
     except (OSError, ValueError):

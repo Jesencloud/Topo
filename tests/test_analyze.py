@@ -464,7 +464,10 @@ def test_scan_status_message_uses_spinner_frame():
 
 
 def test_render_scan_header_repaints_in_place_without_full_clear(capsys):
-    _render_scan_header("Analyze Disk")
+    # ERASE_BELOW is empty unless stdout is a terminal, and under pytest it never
+    # is; restore it so this test sees the sequence a real terminal gets.
+    with patch("src.ui.screens.analyze.ERASE_BELOW", "\033[J"):
+        _render_scan_header("Analyze Disk")
 
     output = capsys.readouterr().out
     # Repaints in place: homes the cursor and clears row by row, but must NOT

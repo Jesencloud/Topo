@@ -16,6 +16,7 @@ def _reset_terminal_state():
 def test_reset_terminal_is_silent_when_no_terminal_state_is_active(monkeypatch):
     _reset_terminal_state()
     writes = []
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
     monkeypatch.setattr("sys.stdout.write", writes.append)
     monkeypatch.setattr("sys.stdout.flush", lambda: None)
 
@@ -51,9 +52,33 @@ def test_signal_handler_resets_terminal_before_termination(monkeypatch):
 
 def _capture_writes(monkeypatch):
     writes = []
+    # These tests are about what topo emits *to a terminal*; _write() drops every
+    # sequence when stdout is redirected, and under pytest it always is.
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
     monkeypatch.setattr("sys.stdout.write", writes.append)
     monkeypatch.setattr("sys.stdout.flush", lambda: None)
     return writes
+
+
+def test_no_escape_sequences_reach_a_redirected_stdout(monkeypatch):
+    # Ctrl-C on `topo optimize > log` used to append the whole reset sequence --
+    # mouse-off, cursor-on, graphics-reset, alt-screen-off -- to the log.
+    _reset_terminal_state()
+    writes = []
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    monkeypatch.setattr("sys.stdout.write", writes.append)
+    monkeypatch.setattr("sys.stdout.flush", lambda: None)
+
+    terminal_state.enter_alternate_screen()
+    terminal_state.hide_cursor()
+    terminal_state.enable_mouse_tracking()
+    terminal_state.reset_terminal(force=True)
+
+    assert writes == []
+    # The bookkeeping still ran, so a later reset has nothing left to undo.
+    assert terminal_state._alternate_screen_depth == 0
+    assert terminal_state._cursor_hidden is False
+    assert terminal_state._mouse_tracking_enabled is False
 
 
 def test_nested_enter_does_not_retoggle_the_alternate_buffer(monkeypatch):

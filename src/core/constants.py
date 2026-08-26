@@ -111,7 +111,7 @@ def _resolve_theme_title(name: str) -> str:
 
 # Every name _init_colors() rebinds. Consumers do `from .constants import GREEN`,
 # which copies the *value* into their own module namespace, so rebinding these
-# globals alone is invisible to them (see _propagate_colors).
+# globals alone is invisible to them (see _propagate_constants).
 _COLOR_NAMES: tuple[str, ...] = (
     "BLUE",
     "CYAN",
@@ -133,9 +133,15 @@ _COLOR_NAMES: tuple[str, ...] = (
     "SKIP",
 )
 
+# Terminal control sequences. Rebound by _init_terminal_control() and pushed out
+# by the same propagation pass as the colors, for the same reason.
+_TERMINAL_CONTROL_NAMES: tuple[str, ...] = ("CLEAR_SCREEN", "CLEAR_LINE", "ERASE_BELOW")
 
-def _propagate_colors() -> None:
-    """Push the current color values into modules that from-imported them.
+_PROPAGATED_NAMES: tuple[str, ...] = _COLOR_NAMES + _TERMINAL_CONTROL_NAMES
+
+
+def _propagate_constants() -> None:
+    """Push the current color and terminal-control values into modules that from-imported them.
 
     ``setup_color_mode()`` runs after argparse, i.e. long after every UI module
     has already bound its own copy of GREEN/RESET/... at import time. Without
@@ -144,7 +150,7 @@ def _propagate_colors() -> None:
     module's own import, before the from-imports happen.
     """
     root = __name__.split(".")[0]
-    values = {name: globals()[name] for name in _COLOR_NAMES}
+    values = {name: globals()[name] for name in _PROPAGATED_NAMES}
     for mod_name, module in list(sys.modules.items()):
         if module is None or mod_name == __name__:
             continue
@@ -209,28 +215,61 @@ def _init_colors(disable: bool = False):
         SKIP = f"{GRAY_NB}◎{RESET}"
 
 
+# Terminal control sequences.
+#
+# These are gated on isatty() *alone*, deliberately not on the color switch:
+# --no-color and NO_COLOR ask topo to stop colouring, not to stop driving the
+# terminal. Someone who exports NO_COLOR=1 still wants `topo analyze` to repaint
+# its frame in place rather than smear every frame down the scrollback.
+#
+# What makes them meaningless is the absence of a terminal. A pipe or a file has
+# no screen to clear and no line to rewind, and before this gate existed
+# `topo optimize > log` wrote \033[2J plus a spinner frame's \r\033[K a dozen
+# times a second into the log -- the colors were correctly gone, the cursor
+# control was not.
+#
+# Declared empty like the colors above: the real values live only in
+# _init_terminal_control(), which the import-time setup_color_mode() call runs
+# before any consumer can from-import them.
+CLEAR_SCREEN: str = ""
+CLEAR_LINE: str = ""
+ERASE_BELOW: str = ""
+
+
+def _init_terminal_control(disable: bool = False) -> None:
+    global CLEAR_SCREEN, CLEAR_LINE, ERASE_BELOW
+
+    if disable:
+        CLEAR_SCREEN = CLEAR_LINE = ERASE_BELOW = ""
+    else:
+        CLEAR_SCREEN = "\033[2J\033[H"
+        CLEAR_LINE = "\r\033[K"
+        ERASE_BELOW = "\033[J"
+
+
 def setup_color_mode(no_color: bool = False, theme_color: str | None = None) -> None:
     """Configures ANSI colors according to --no-color flag and NO_COLOR env spec (https://no-color.org/).
 
     *theme_color* is the config.json "theme_color" name; None keeps whatever was
     set last (the default at import, so the automatic call below stays quiet).
+
+    Terminal control sequences are re-evaluated here too, but against a narrower
+    condition -- see the comment above ``_init_terminal_control``.
     """
     global _theme_color_name
     if theme_color:
         _theme_color_name = theme_color
     env_no_color = bool(os.environ.get("NO_COLOR", "").strip())
-    disable = no_color or env_no_color or not sys.stdout.isatty()
+    is_terminal = sys.stdout.isatty()
+    disable = no_color or env_no_color or not is_terminal
     _init_colors(disable=disable)
-    _propagate_colors()
+    _init_terminal_control(disable=not is_terminal)
+    _propagate_constants()
 
 
 # Auto-initialize based on NO_COLOR environment specification at module import
 setup_color_mode()
 
-# Terminal control sequences
-CLEAR_SCREEN = "\033[2J\033[H"
-CLEAR_LINE = "\r\033[K"
-ERASE_BELOW = "\033[J"
 
 # Age-based cleanup thresholds (days)
 CLEAN_CACHE_AGE_DAYS = 30
