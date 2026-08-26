@@ -9,6 +9,35 @@ permissions:
   contents: read
 
 jobs:
+  # topo does not ship prereleases, and a prerelease .deb could not be upgraded
+  # away from if it did: dpkg reads everything after the *last* hyphen as the
+  # Debian revision, so `--iteration 1` turns v1.2.3-rc.1 into Version
+  # 1.2.3-rc.1-1, which outranks the 1.2.3-1 that follows it -- the rc-to-release
+  # `apt install` is then a refused downgrade, while topo's own comparison
+  # (packaging.version.Version in src/manage/update.py) orders the rc *below* the
+  # release. The two orderings disagree, so a prerelease tag gets a source-only
+  # release: install.sh and topo-src.tar.gz still ship, no package that could pin
+  # a machine to an rc is ever built.
+  #
+  # Classified once here because a job-level `if:` cannot read the `env` context,
+  # and a second copy of this expression next to the `prerelease:` flag below is
+  # exactly what would drift.
+  tag-kind:
+    name: Classify Tag
+    runs-on: ubuntu-latest
+    outputs:
+      prerelease: ${{ steps.classify.outputs.prerelease }}
+    steps:
+      - name: Classify Tag
+        id: classify
+        env:
+          IS_PRERELEASE: ${{ contains(github.ref_name, '-rc.') || contains(github.ref_name, '-beta.') || contains(github.ref_name, '-alpha.') }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          echo "prerelease=${IS_PRERELEASE}" >> "$GITHUB_OUTPUT"
+          echo "${REF_NAME}: prerelease=${IS_PRERELEASE}"
+
   smoke-script-install:
     name: Smoke Test install.sh on Ubuntu
     runs-on: ubuntu-latest
@@ -98,7 +127,11 @@ jobs:
 
   package:
     name: Build Debian/RPM Packages
-    needs: build
+    needs: [build, tag-kind]
+    # See tag-kind. Skipping this also skips smoke-ubuntu, smoke-fedora and
+    # release-distro-smoke, which need it -- a skipped dependency skips its
+    # dependents, so those three need no condition of their own.
+    if: needs.tag-kind.outputs.prerelease != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -300,6 +333,8 @@ jobs:
   release:
     name: Attach Release Assets
     needs:
+      - tag-kind
+      - build
       - package
       - smoke-script-install
       - smoke-ubuntu
@@ -307,9 +342,23 @@ jobs:
       - release-distro-smoke
       - release-arm64-smoke
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
+    # A prerelease tag skips package and the three smoke jobs that need it, and a
+    # skipped dependency would skip this job too under the default `success()`.
+    # !cancelled() lifts that, which means every other reason to stand down has to
+    # be spelled out: without the failure and cancellation checks a red smoke test
+    # would still publish, and a failed `build` reaches here as a *skipped*
+    # package rather than a failed one, so the engine artifacts this job always
+    # consumes get their own check.
+    if: >-
+      ${{ !cancelled()
+      && needs.build.result == 'success'
+      && !contains(needs.*.result, 'failure')
+      && !contains(needs.*.result, 'cancelled')
+      && startsWith(github.ref, 'refs/tags/') }}
     permissions:
       contents: write
+    env:
+      PRERELEASE: ${{ needs.tag-kind.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v4
 
@@ -326,6 +375,7 @@ jobs:
           path: artifacts/topo-core-aarch64
 
       - name: Download Package Artifacts
+        if: env.PRERELEASE != 'true'
         uses: actions/download-artifact@v4
         with:
           name: topo-linux-packages
@@ -354,8 +404,10 @@ jobs:
           mkdir -p release-assets
           cp artifacts/topo-core-x86_64/topo-core-x86_64 release-assets/
           cp artifacts/topo-core-aarch64/topo-core-aarch64 release-assets/
-          cp dist/packages/*.deb release-assets/
-          cp dist/packages/*.rpm release-assets/
+          if [ "$PRERELEASE" != true ]; then
+            cp dist/packages/*.deb release-assets/
+            cp dist/packages/*.rpm release-assets/
+          fi
           cp install.sh release-assets/
           # Signed source archive: install.sh's no-git path verifies this instead
           # of piping GitHub's unsigned auto-generated tarball straight into tar.
@@ -368,14 +420,18 @@ jobs:
           set -euo pipefail
           cd release-assets
           rm -f SHA256SUMS
-          sha256sum \
-            topo-core-x86_64 \
-            topo-core-aarch64 \
-            install.sh \
-            topo-src.tar.gz \
-            *.deb \
-            *.rpm \
-            > SHA256SUMS
+          # This list is also the existence gate for the release payload: sha256sum
+          # fails on a missing file, and it runs before anything is published.
+          assets=(
+            topo-core-x86_64
+            topo-core-aarch64
+            install.sh
+            topo-src.tar.gz
+          )
+          if [ "$PRERELEASE" != true ]; then
+            assets+=(*.deb *.rpm)
+          fi
+          sha256sum "${assets[@]}" > SHA256SUMS
           sha256sum -c SHA256SUMS
 
       - name: Sign Checksum Manifest
@@ -392,21 +448,38 @@ jobs:
             --passphrase "${GPG_PASSPHRASE}" \
             --armor --detach-sign release-assets/SHA256SUMS
 
+      - name: Select Release Assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The attach step needs one asset list per tag kind, and
+          # fail_on_unmatched_files is a whole-list switch rather than a per-entry
+          # one, so the list is assembled here instead of being written twice.
+          # install.sh is deliberately absent: it is checksummed above so the copy
+          # served from the default branch can be verified against a tag, but the
+          # release itself has never carried it.
+          {
+            echo 'RELEASE_FILES<<EOF'
+            printf '%s\n' \
+              release-assets/topo-core-x86_64 \
+              release-assets/topo-core-aarch64 \
+              release-assets/topo-src.tar.gz \
+              release-assets/SHA256SUMS \
+              release-assets/SHA256SUMS.asc \
+              assets/topo-release-public.asc
+            if [ "$PRERELEASE" != true ]; then
+              printf '%s\n' release-assets/*.deb release-assets/*.rpm
+            fi
+            echo 'EOF'
+          } >> "$GITHUB_ENV"
+
       - name: Attach Assets to Release
         uses: softprops/action-gh-release@v2
         with:
           body_path: docs/releases/${{ github.ref_name }}.md
-          files: |
-            release-assets/topo-core-x86_64
-            release-assets/topo-core-aarch64
-            release-assets/topo-src.tar.gz
-            release-assets/*.deb
-            release-assets/*.rpm
-            release-assets/SHA256SUMS
-            release-assets/SHA256SUMS.asc
-            assets/topo-release-public.asc
+          files: ${{ env.RELEASE_FILES }}
           draft: false
-          prerelease: ${{ contains(github.ref_name, '-rc.') || contains(github.ref_name, '-beta.') || contains(github.ref_name, '-alpha.') }}
+          prerelease: ${{ needs.tag-kind.outputs.prerelease == 'true' }}
           fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

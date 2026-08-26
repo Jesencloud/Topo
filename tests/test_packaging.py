@@ -67,6 +67,53 @@ def test_system_packages_do_not_modify_user_home_from_maintainer_scripts():
     assert not (REPO_ROOT / "packaging/scripts/after-remove.sh").exists()
 
 
+def test_a_prerelease_tag_never_reaches_the_packaging_job():
+    """A prerelease tag gets a source-only release (D3).
+
+    `--iteration 1` makes v1.2.3-rc.1 into deb Version 1.2.3-rc.1-1, and dpkg
+    reads everything after the last hyphen as the Debian revision, so that
+    outranks the 1.2.3-1 that follows: the rc-to-release `apt install` is a
+    refused downgrade, while topo's own packaging.version comparison puts the rc
+    below the release. Not building the package at all is what closes the gap.
+    """
+    # Comments stripped: this file explains the gating in prose right next to it,
+    # and prose that mentions `!cancelled()` must not stand in for the condition.
+    workflow = "\n".join(
+        line
+        for line in (REPO_ROOT / ".github/workflows/release.yml").read_text().splitlines()
+        if not line.lstrip().startswith("#")
+    )
+
+    # One classifier for the whole workflow. Two copies drifting apart is the
+    # shape of D3 itself, so the count is the assertion.
+    classifiers = [line for line in workflow.splitlines() if "contains(github.ref_name" in line]
+    assert len(classifiers) == 1
+    assert classifiers[0].strip().startswith("IS_PRERELEASE:")
+    assert "prerelease: ${{ steps.classify.outputs.prerelease }}" in workflow
+    assert "if: needs.tag-kind.outputs.prerelease != 'true'" in workflow
+    assert "prerelease: ${{ needs.tag-kind.outputs.prerelease == 'true' }}" in workflow
+
+    # Skipping `package` skips the smoke jobs that need it, which would take the
+    # release job with them under the default `success()`; !cancelled() lifts that,
+    # and on its own it would publish over a failed smoke test -- or over a failed
+    # `build`, which arrives here as a skipped `package` rather than a failure.
+    assert "!cancelled()" in workflow
+    assert "!contains(needs.*.result, 'failure')" in workflow
+    assert "needs.build.result == 'success'" in workflow
+
+    # Nothing downstream may assume the packages exist: the artifact download,
+    # the staging copy, the checksum manifest and the attached asset list.
+    assert "if: env.PRERELEASE != 'true'" in workflow
+    for guarded in (
+        "cp dist/packages/*.deb release-assets/",
+        "assets+=(*.deb *.rpm)",
+        "printf '%s\\n' release-assets/*.deb release-assets/*.rpm",
+    ):
+        prefix = workflow.split(guarded)[0]
+        assert prefix.rsplit("\n", 2)[-2].strip() == 'if [ "$PRERELEASE" != true ]; then'
+    assert "\n            release-assets/*.deb\n" not in workflow
+
+
 def test_only_the_deb_bounds_python_at_310(tmp_path):
     """The interpreter floor belongs in the deb's metadata, not the rpm's (D5).
 
