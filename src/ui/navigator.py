@@ -727,7 +727,10 @@ class AnalyzeSelector(_PagedSelector):
         )
         buf.append(f"{hint}\033[K\n")
         if self.notice:
-            buf.append(f"{YELLOW}⚠ {self.notice}{RESET}\033[K\n")
+            # The notice arrives already carrying its own glyph and colour: a
+            # finished delete reports success here, and a fixed yellow "⚠"
+            # prefix would have marked "Deleted 3 items" as a warning.
+            buf.append(f"{self.notice}\033[K\n")
         buf.append("\033[K\n")
 
         total_len = len(self.items)

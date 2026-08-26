@@ -14,7 +14,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.analyze import (
+    DELETE_CANCELLED_PROBLEM,
     PERMANENT_DELETE_QUESTION,
+    DeleteOutcome,
     _delete_analyze_paths,
     _needs_admin_for_deletion,
     _permanent_fallback_consent,
@@ -32,14 +34,20 @@ from src.analyze import (
 )
 from src.core.file_ops import CACHEDIR_TAG_SIGNATURE, has_valid_cachedir_tag
 from src.core.scan_cache import ScanCache
+from src.ui.navigator import ANSI_CSI_RE
 from src.ui.screens.analyze import (
+    ENGINE_SCAN_FAILED_NOTICE,
+    NOTICE_TEXT_LIMIT,
     XDG_OPEN_MISSING_NOTICE,
     _confirm_permanent_delete,
+    _delete_notice,
     _explore_notice,
+    _fail_notice,
     _open_in_file_manager,
     _render_scan_header,
     _scan_status_message,
     _scan_with_spinner,
+    _warn_notice,
     run_deep_analysis,
 )
 
@@ -850,12 +858,16 @@ def test_analyze_delete_user_writable_path_without_admin(test_env):
 
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.analyze._ensure_admin_for_delete", return_value=True) as mock_admin_check,
+        patch("src.analyze._ensure_admin_for_delete", return_value="") as mock_admin_check,
         patch("src.analyze.safe_remove", return_value=(True, "Moved to trash")) as mock_safe,
         patch("src.analyze._sudo_remove") as mock_sudo,
     ):
-        assert _delete_analyze_paths([target]) is True
+        outcome = _delete_analyze_paths([target])
 
+    # The batch reports numbers instead of printing: Analyze repaints its frame
+    # as soon as this returns, so anything printed here would be overwritten.
+    assert (outcome.deleted, outcome.failed, outcome.first_problem) == (1, 0, "")
+    assert outcome.freed_bytes == target.stat().st_size
     mock_admin_check.assert_called_once_with([target])
     mock_safe.assert_called_once_with(target, use_trash=True)
     mock_sudo.assert_not_called()
@@ -885,7 +897,7 @@ def test_analyze_delete_browser_profile_root_cleans_cache_children(test_env):
     firefox_login_db.write_text("{}")
 
     with (
-        patch("src.analyze._ensure_admin_for_delete", return_value=True),
+        patch("src.analyze._ensure_admin_for_delete", return_value=""),
         # _which_cached() memoizes, so patching shutil.which alone is order-dependent.
         patch("src.core.file_ops._which_cached", return_value=None),
         # No trash backend here, so the permanent downgrade needs consent; this
@@ -893,7 +905,12 @@ def test_analyze_delete_browser_profile_root_cleans_cache_children(test_env):
         patch("src.analyze._permanent_fallback_consent", return_value=lambda _p: True),
         patch("src.analyze.play_delete") as mock_play_delete,
     ):
-        assert _delete_analyze_paths([chrome_root, firefox_root]) is True
+        outcome = _delete_analyze_paths([chrome_root, firefox_root])
+
+    # Both roots count as deleted even though the roots themselves survive: what
+    # the user asked for (the cache under them) is gone.
+    assert (outcome.deleted, outcome.failed) == (2, 0)
+    assert outcome.freed_bytes > 0
 
     assert chrome_root.exists()
     assert chrome_profile_dir.exists()
@@ -908,23 +925,27 @@ def test_analyze_delete_browser_profile_root_cleans_cache_children(test_env):
     mock_play_delete.assert_called_once()
 
 
-def test_analyze_delete_keeps_data_when_permanent_fallback_is_declined(test_env, capsys):
+def test_analyze_delete_keeps_data_when_permanent_fallback_is_declined(test_env):
     """Without a trash backend and without consent, nothing is deleted (M-1)."""
     target = test_env / "Downloads" / "big-blob"
     target.mkdir(parents=True)
     (target / "payload.bin").write_text("data")
 
     with (
-        patch("src.analyze._ensure_admin_for_delete", return_value=True),
+        patch("src.analyze._ensure_admin_for_delete", return_value=""),
         # _which_cached() memoizes, so patching shutil.which alone is order-dependent.
         patch("src.core.file_ops._which_cached", return_value=None),
         patch("src.analyze.play_delete") as mock_play_delete,
     ):
-        assert _delete_analyze_paths([target]) is False
+        outcome = _delete_analyze_paths([target])
 
+    assert not outcome
+    assert (outcome.deleted, outcome.failed, outcome.freed_bytes) == (0, 1, 0)
+    # The reason travels back with the outcome so the screen can put it in the
+    # notice line; printing it here would be erased by the next repaint.
+    assert "No trash utility available" in outcome.first_problem
     assert (target / "payload.bin").exists()
     mock_play_delete.assert_not_called()
-    assert "No trash utility available" in capsys.readouterr().out
 
 
 def test_old_items_info_reports_whether_each_entry_is_a_directory(tmp_path):
@@ -1098,7 +1119,7 @@ def test_open_reports_a_missing_xdg_open_instead_of_doing_nothing(tmp_path):
 
     with patch("src.ui.screens.analyze.run_command") as mock_run:
         mock_run.return_value = SimpleNamespace(ok=False)
-        assert _open_in_file_manager(target) == XDG_OPEN_MISSING_NOTICE
+        assert _open_in_file_manager(target) == _warn_notice(XDG_OPEN_MISSING_NOTICE)
 
         # A file opens its containing directory, not itself.
         assert mock_run.call_args.args[0] == ["xdg-open", str(tmp_path)]
@@ -1115,12 +1136,13 @@ def test_analyze_delete_system_path_requires_admin():
 
     with (
         patch("src.analyze.get_size_fast", return_value=4096),
-        patch("src.analyze._ensure_admin_for_delete", return_value=True) as mock_admin_check,
+        patch("src.analyze._ensure_admin_for_delete", return_value="") as mock_admin_check,
         patch("src.analyze.safe_remove") as mock_safe,
-        patch("src.analyze._sudo_remove", return_value=True) as mock_sudo,
+        patch("src.analyze._sudo_remove", return_value=(True, 4096, "")) as mock_sudo,
     ):
-        assert _delete_analyze_paths([target]) is True
+        outcome = _delete_analyze_paths([target])
 
+    assert (outcome.deleted, outcome.failed, outcome.freed_bytes) == (1, 0, 4096)
     mock_admin_check.assert_called_once_with([target])
     mock_sudo.assert_called_once_with(target)
     mock_safe.assert_not_called()
@@ -1154,7 +1176,7 @@ def test_sudo_remove_operates_on_resolved_root_managed_path():
         patch.object(Path, "is_symlink", return_value=False),
         patch.object(Path, "resolve", side_effect=lambda strict=False: real_dir),
     ):
-        assert _sudo_remove(link) is True
+        assert _sudo_remove(link) == (True, 0, "")
 
     # rm must target the resolved real directory, never the raw symlink path.
     assert captured["cmd"] == ["rm", "-rf", "--one-file-system", "--", str(real_dir)]
@@ -1168,6 +1190,75 @@ def test_sudo_remove_rejects_user_writable_ancestor(test_env):
         patch("src.analyze.run_command") as mock_run,
         patch("src.analyze.get_size_fast", return_value=0),
     ):
-        assert _sudo_remove(target) is False
+        removed, freed, problem = _sudo_remove(target)
 
+    assert (removed, freed) == (False, 0)
+    # The refusal is described in the returned reason, which the notice line
+    # shows; nothing is printed from down here.
+    assert "untrusted ancestor directory" in problem
     mock_run.assert_not_called()
+
+
+def test_delete_notice_reports_success_partial_and_total_failure():
+    """One frame-safe line per delete outcome (I3).
+
+    Analyze repaints the whole frame right after a delete, so the batch's own
+    prints were overwritten within the same tick: a success said nothing at all
+    and a refusal flashed. Each outcome now becomes the notice the *next* frame
+    draws, and the glyph is what tells them apart.
+    """
+    deleted_all = _delete_notice(DeleteOutcome(deleted=3, freed_bytes=2 * 1024**3))
+    assert "✓" in deleted_all
+    assert "Deleted 3 item(s), freed 2.0 GiB." in ANSI_CSI_RE.sub("", deleted_all)
+
+    partial = _delete_notice(
+        DeleteOutcome(deleted=1, failed=2, freed_bytes=1024, first_problem="Skipped /x: busy")
+    )
+    assert "⚠" in partial
+    assert "2 left: Skipped /x: busy" in ANSI_CSI_RE.sub("", partial)
+
+    failed = _delete_notice(DeleteOutcome(failed=2, first_problem="Skipped /x: busy"))
+    assert "✗" in failed
+    assert "2 item(s) not deleted: Skipped /x: busy" in ANSI_CSI_RE.sub("", failed)
+
+    # Nothing was even attempted: the admin prompt was declined. The reason is
+    # the whole message -- there are no counts worth reporting.
+    declined = _delete_notice(DeleteOutcome(first_problem=DELETE_CANCELLED_PROBLEM))
+    assert "✗" in declined
+    assert DELETE_CANCELLED_PROBLEM in ANSI_CSI_RE.sub("", declined)
+
+
+def test_notice_stays_on_one_row_so_the_frame_below_it_does_not_shift():
+    """A wrapped notice pushes every row of the absolutely positioned frame down.
+
+    Problems can carry a path, which has no length limit, so the text is clamped
+    here rather than trusted.
+    """
+    long_problem = "Skipped " + "/very-long-directory-name" * 20 + ": busy"
+    notice = ANSI_CSI_RE.sub("", _fail_notice(long_problem))
+
+    assert notice.endswith("…")
+    # The glyph and its space ride on top of the clamped text.
+    assert len(notice) == NOTICE_TEXT_LIMIT + 2
+    assert _fail_notice("") == ""
+
+
+@patch("src.ui.screens.analyze.get_fast_explore_data", return_value=None)
+@patch("src.ui.screens.analyze.get_rust_tree_data", return_value=None)
+def test_failed_root_scan_explains_itself_and_waits_for_a_keypress(
+    mock_tree, mock_fallback, test_env, capsys
+):
+    """A dead scan with nowhere to go back to must say why before it closes (I3).
+
+    It used to print "❌ Engine scan failed." and sleep 1.5 s -- the sleep was the
+    only reason the line was readable at all, since the next frame would have
+    overwritten it, and on the root view (no state to pop) the screen simply
+    closed. Now the reason waits for Enter like every other terminal notice.
+    """
+    ScanCache.clear()
+
+    with patch("src.ui.screens.analyze.Navigator.wait_for_return") as wait:
+        run_deep_analysis()
+
+    wait.assert_called_once_with()
+    assert ENGINE_SCAN_FAILED_NOTICE in ANSI_CSI_RE.sub("", capsys.readouterr().out)

@@ -620,6 +620,30 @@ def test_analyze_render_shows_notice():
     )
 
 
+def test_analyze_render_passes_the_notice_through_without_marking_it_a_warning():
+    """The notice carries its own glyph, so a success line is not stamped "⚠".
+
+    render() used to prefix every notice with a fixed yellow warning glyph, which
+    was right for the one caller it had (preview-mode truncation) and wrong for
+    the delete report that now shares the line: "Deleted 3 items, freed 1.2 GiB"
+    read as a warning.
+    """
+    sel = AnalyzeSelector("t", _analyze_items(), can_select=True, notice="✓ Deleted 3 item(s).")
+
+    with (
+        patch(
+            "src.ui.navigator.shutil.get_terminal_size", return_value=os.terminal_size((100, 24))
+        ),
+        patch("sys.stdout.write") as write,
+        patch("sys.stdout.flush"),
+    ):
+        sel.render()
+
+    visible_output = ANSI_CSI_RE.sub("", write.call_args.args[0])
+    assert "✓ Deleted 3 item(s)." in visible_output
+    assert "⚠" not in visible_output
+
+
 def test_analyze_render_shows_unknown_folder_size():
     items = [
         {

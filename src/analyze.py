@@ -5,6 +5,7 @@ import sys
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +15,6 @@ from .core.config import get_use_trash
 from .core.constants import (
     GREEN,
     MAGENTA,
-    RED,
     RESET,
     YELLOW,
 )
@@ -325,8 +325,14 @@ def _needs_admin_for_deletion(path: Path) -> bool:
     return stat.st_uid != os.getuid() or not os.access(parent, os.W_OK | os.X_OK)
 
 
-def _sudo_remove(path: Path) -> bool:
-    """Remove a validated Analyze target with sudo and record an audit event."""
+def _sudo_remove(path: Path) -> tuple[bool, int, str]:
+    """Remove a validated Analyze target with sudo and record an audit event.
+
+    Returns (removed, freed_bytes, problem). *problem* is a plain, uncoloured
+    sentence for the caller to render; nothing here prints, because Analyze
+    repaints a whole frame the moment the batch returns and anything written
+    straight to the terminal is overwritten inside the same tick.
+    """
     raw_path = Path(path).expanduser()
     # Resolve once and operate on that exact path for the rest of the function.
     # Validation, the existence check, the size read and `rm -rf` must all act on
@@ -344,12 +350,11 @@ def _sudo_remove(path: Path) -> bool:
     safe_target = sanitize_for_display(str(target_path))
     if not valid:
         record_deletion_audit(target_path, "sudo-permanent", "rejected-validation")
-        print(f" {RED}✗{RESET} {safe_target}: {reason}")
-        return False
+        return False, 0, f"{safe_target}: {reason}"
 
     if not target_path.exists() and not target_path.is_symlink():
         record_deletion_audit(target_path, "sudo-permanent", "missing", 0)
-        return False
+        return False, 0, f"{safe_target}: no longer there"
 
     size_bytes = get_size_fast(target_path)
     current_uid = os.getuid()
@@ -360,13 +365,11 @@ def _sudo_remove(path: Path) -> bool:
             st = parent.lstat()
         except OSError:
             record_deletion_audit(target_path, "sudo-permanent", "rejected-unreadable-ancestor")
-            print(f" {RED}✗{RESET} {safe_target}: cannot stat path component ({safe_parent})")
-            return False
+            return False, 0, f"{safe_target}: cannot stat path component ({safe_parent})"
 
         if stat.S_ISLNK(st.st_mode):
             record_deletion_audit(target_path, "sudo-permanent", "rejected-ancestor-symlink")
-            print(f" {RED}✗{RESET} {safe_target}: ancestor directory is a symlink ({safe_parent})")
-            return False
+            return False, 0, f"{safe_target}: ancestor directory is a symlink ({safe_parent})"
 
         # `rm` receives a pathname, so every directory used to resolve that name
         # must be immune to replacement by the invoking user until sudo opens it.
@@ -379,8 +382,7 @@ def _sudo_remove(path: Path) -> bool:
         foreign_owner = st.st_uid not in (0, current_uid) and not direct_sticky_parent
         if user_can_replace or (shared_writable and not direct_sticky_parent) or foreign_owner:
             record_deletion_audit(target_path, "sudo-permanent", "rejected-unsafe-ancestor")
-            print(f" {RED}✗{RESET} {safe_target}: untrusted ancestor directory ({safe_parent})")
-            return False
+            return False, 0, f"{safe_target}: untrusted ancestor directory ({safe_parent})"
 
     res = run_command(
         ["rm", "-rf", "--one-file-system", "--", str(target_path)],
@@ -390,10 +392,10 @@ def _sudo_remove(path: Path) -> bool:
     )
     if res.ok:
         record_deletion_audit(target_path, "sudo-permanent", "deleted", size_bytes)
-        return True
+        return True, size_bytes, ""
 
     record_deletion_audit(target_path, "sudo-permanent", "failed", size_bytes)
-    return False
+    return False, 0, f"{safe_target}: rm failed as root"
 
 
 PERMANENT_DELETE_QUESTION = (
@@ -440,14 +442,22 @@ def _permanent_fallback_consent(
 def _safe_remove_analyze_path(
     path: Path,
     permanent_consent: Callable[[Path], bool] | None = None,
-) -> bool:
+) -> tuple[bool, int, str]:
+    """Remove one user-owned Analyze target: (removed, freed_bytes, problem).
+
+    The size is read before the removal, because afterwards there is nothing left
+    to measure; that walk is the same get_size_fast() the sudo path already pays.
+    *problem* is plain uncoloured text -- see _sudo_remove for why nothing here
+    prints its own line.
+    """
     # config.json's use_trash is consent given in advance: with it turned off the
     # first attempt is already the permanent one, and the consent prompt below
     # never comes up because there is no trash step left to fail.
     use_trash = get_use_trash()
+    size_bytes = get_size_fast(path)
     removed, reason = safe_remove(path, use_trash=use_trash)
     if removed:
-        return True
+        return True, size_bytes, ""
 
     # Trash unavailable: permanent removal happens only with the user's explicit
     # consent for this batch, never as a library-level substitution.
@@ -458,11 +468,14 @@ def _safe_remove_analyze_path(
     ):
         removed, reason = safe_remove(path, use_trash=False)
         if removed:
-            return True
+            return True, size_bytes, ""
 
     cleaned_child = False
+    freed_bytes = 0
+    first_problem = ""
     if reason == "Path is whitelisted":
         for child in find_cleanable_cache_dirs(path, require_sensitive_app_data_root=True):
+            child_size = get_size_fast(child)
             child_removed, child_reason = safe_remove(child, use_trash=use_trash)
             if (
                 not child_removed
@@ -473,59 +486,100 @@ def _safe_remove_analyze_path(
                 child_removed, child_reason = safe_remove(child, use_trash=False)
             if child_removed:
                 cleaned_child = True
-            else:
+                freed_bytes += child_size
+            elif not first_problem:
                 safe_child = sanitize_for_display(str(child))
-                print(f" {YELLOW}⚠{RESET} Skipped {safe_child}: {child_reason}")
+                first_problem = f"Skipped {safe_child}: {child_reason}"
 
     if cleaned_child:
-        return True
+        return True, freed_bytes, first_problem
 
     safe_path = sanitize_for_display(str(Path(path).expanduser()))
-    print(f" {YELLOW}⚠{RESET} Skipped {safe_path}: {reason}")
-    return False
+    return False, 0, f"Skipped {safe_path}: {reason}"
 
 
-def _ensure_admin_for_delete(paths: list[Path]) -> bool:
-    """Prompts for sudo only if any path in the list requires admin privileges."""
+DELETE_CANCELLED_PROBLEM = "Delete cancelled: admin access was declined."
+DELETE_UNAUTHORIZED_PROBLEM = "Delete cancelled: authorization failed."
+
+
+def _ensure_admin_for_delete(paths: list[Path]) -> str:
+    """Prompt for sudo only if any path in the list requires admin privileges.
+
+    Returns "" when the batch may go ahead, otherwise the reason it may not. The
+    reason is returned rather than printed for the same repaint reason as the
+    removals themselves; the password prompt still writes to the terminal,
+    because the user is looking at it while typing.
+    """
     admin_paths = [p for p in paths if _needs_admin_for_deletion(p)]
     if not admin_paths:
-        return True
+        return ""
 
     print()
     if not system.ensure_sudo_session(
         f"{MAGENTA}➔{RESET} File deletion requires admin access\n{MAGENTA}➔{RESET} Password: "
     ):
-        if system.SUDO_CANCELLED:
-            print(f" {YELLOW}⚠️  Delete cancelled by user.{RESET}\n")
-        else:
-            print(f" {RED}✗{RESET} Authorization failed. Delete cancelled.\n")
-        return False
+        return DELETE_CANCELLED_PROBLEM if system.SUDO_CANCELLED else DELETE_UNAUTHORIZED_PROBLEM
 
     print(f"{GREEN}✓{RESET} Authorization successful.\n")
-    return True
+    return ""
+
+
+@dataclass(frozen=True)
+class DeleteOutcome:
+    """What one Analyze delete batch actually did.
+
+    Analyze repaints a full frame as soon as a batch returns, so the batch cannot
+    report by printing -- it hands back these numbers and the screen renders one
+    notice line that arrives *with* the next frame instead of under it.
+
+    Truthiness means "something was deleted", which is what the caller uses to
+    decide whether the view needs rescanning.
+    """
+
+    deleted: int = 0
+    failed: int = 0
+    freed_bytes: int = 0
+    first_problem: str = ""
+
+    def __bool__(self) -> bool:
+        return self.deleted > 0
 
 
 def _delete_analyze_paths(
     paths: list[Path], *, ask_permanent: Callable[[str], bool] | None = None
-) -> bool:
+) -> DeleteOutcome:
     """Delete Analyze targets, using sudo only for paths outside user control."""
-    if not _ensure_admin_for_delete(paths):
-        return False
+    problem = _ensure_admin_for_delete(paths)
+    if problem:
+        return DeleteOutcome(first_problem=problem)
 
     admin_paths = [p for p in paths if _needs_admin_for_deletion(p)]
-    changed = False
     consent = _permanent_fallback_consent(ask_permanent)
+    deleted = 0
+    failed = 0
+    freed_bytes = 0
+    first_problem = ""
     for p in paths:
-        removed = (
+        removed, size_bytes, reason = (
             _sudo_remove(p)
             if p in admin_paths
             else _safe_remove_analyze_path(p, permanent_consent=consent)
         )
         if removed:
-            changed = True
-    if changed:
+            deleted += 1
+            freed_bytes += size_bytes
+        else:
+            failed += 1
+        # The first reason is the one the notice has room for, and a partial
+        # success carries one too (a whitelisted root whose caches were cleared
+        # while one child was refused).
+        if reason and not first_problem:
+            first_problem = reason
+    if deleted:
         play_delete()
-    return changed
+    return DeleteOutcome(
+        deleted=deleted, failed=failed, freed_bytes=freed_bytes, first_problem=first_problem
+    )
 
 
 def delete_and_refresh_cache(
@@ -533,12 +587,13 @@ def delete_and_refresh_cache(
     current_target: Path | None,
     *,
     ask_permanent: Callable[[str], bool] | None = None,
-) -> bool:
+) -> DeleteOutcome:
     """Delete paths and invalidate scan caches on success."""
-    if not _delete_analyze_paths(paths, ask_permanent=ask_permanent):
-        return False
+    outcome = _delete_analyze_paths(paths, ask_permanent=ask_permanent)
+    if not outcome:
+        return outcome
     if current_target:
         ScanCache.discard(current_target)
     else:
         ScanCache.clear()
-    return True
+    return outcome

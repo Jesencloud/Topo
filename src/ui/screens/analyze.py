@@ -18,6 +18,7 @@ from ...analyze import (
     ANALYZE_RESULT_LIMIT,
     FAST_EXPLORE_ENTRY_LIMIT,
     SCAN_SPINNER_DELAY,
+    DeleteOutcome,
     build_analysis_entry,
     build_linux_insights,
     delete_and_refresh_cache,
@@ -28,13 +29,25 @@ from ...analyze import (
     parallel_scan_sizes,
     percent_of,
 )
-from ...core.constants import BLUE, CYAN, ERASE_BELOW, GRAY, MAGENTA, PURPLE, RESET, YELLOW
+from ...core.constants import (
+    BLUE,
+    CYAN,
+    ERASE_BELOW,
+    GRAY,
+    MAGENTA,
+    OK,
+    PURPLE,
+    RED,
+    RESET,
+    YELLOW,
+)
 from ...core.engine import get_rust_scan_data, get_rust_tree_data, normalize_scan_path
+from ...core.file_ops import bytes_to_human
 from ...core.file_types import DIRECTORY_ICON, icon_for_entry
 from ...core.scan_cache import ScanCache
 from ...core.spinner import DEFAULT_SPINNER_FRAMES
 from ...core.system import run_command
-from ..navigator import AnalyzeSelector, ConfirmSelector, TopFilesSelector
+from ..navigator import AnalyzeSelector, ConfirmSelector, Navigator, TopFilesSelector
 
 
 def _confirm_permanent_delete(question: str) -> bool:
@@ -46,17 +59,71 @@ def _confirm_permanent_delete(question: str) -> bool:
     return ConfirmSelector(question).run()
 
 
+# The notice line sits inside an absolutely positioned frame, so it has to stay
+# one line: a wrapped notice pushes every row below it down until the next full
+# repaint. Reasons can carry a path, so they are clamped rather than trusted.
+NOTICE_TEXT_LIMIT = 96
+
+
+def _notice(glyph: str, text: str) -> str:
+    """One notice line: a coloured glyph, then plain text, clamped to one row.
+
+    Only the glyph is coloured. The frame carries three kinds of notice now
+    (done / warning / failed) and they are told apart by that glyph, so dyeing
+    the whole sentence would just make the colour the message.
+    """
+    if not text:
+        return ""
+    if len(text) > NOTICE_TEXT_LIMIT:
+        text = text[: NOTICE_TEXT_LIMIT - 1].rstrip() + "…"
+    return f"{glyph} {text}"
+
+
+def _done_notice(text: str) -> str:
+    return _notice(OK, text)
+
+
+def _warn_notice(text: str) -> str:
+    return _notice(f"{YELLOW}⚠{RESET}", text)
+
+
+def _fail_notice(text: str) -> str:
+    return _notice(f"{RED}✗{RESET}", text)
+
+
+def _delete_notice(outcome: DeleteOutcome) -> str:
+    """Describe a finished delete batch in one line.
+
+    Success used to have no feedback at all -- only the delete sound, which says
+    nothing on a muted laptop or over ssh -- and the failures printed straight to
+    the terminal, where the next frame overwrote them within the same tick.
+    """
+    freed = bytes_to_human(outcome.freed_bytes)
+    if outcome.deleted and not outcome.failed:
+        return _done_notice(f"Deleted {outcome.deleted} item(s), freed {freed}.")
+    if outcome.deleted:
+        return _warn_notice(
+            f"Deleted {outcome.deleted} item(s), freed {freed}; "
+            f"{outcome.failed} left: {outcome.first_problem}"
+        )
+    if outcome.failed:
+        return _fail_notice(f"{outcome.failed} item(s) not deleted: {outcome.first_problem}")
+    # Nothing was attempted: the admin prompt was declined, or the selection was
+    # empty. first_problem carries the reason when there is one.
+    return _fail_notice(outcome.first_problem)
+
+
 def _explore_notice(data: dict[str, Any] | None) -> str:
     if not data or not data.get("is_fast_explore"):
         return ""
     sampled = data.get("preview_sampled_entries", len(data.get("subdirs", {})))
     limit = data.get("preview_entry_limit", FAST_EXPLORE_ENTRY_LIMIT)
     if data.get("preview_truncated"):
-        return (
+        return _warn_notice(
             f"Preview mode: showing first {sampled or limit} direct entries; "
             "folder sizes are not calculated."
         )
-    return "Preview mode: direct entries only; folder sizes are not calculated."
+    return _warn_notice("Preview mode: direct entries only; folder sizes are not calculated.")
 
 
 def _scan_status_message(scan_reason: str, target_label: str, frame: str) -> str:
@@ -150,6 +217,10 @@ def _fast_explore_with_spinner(
 
 XDG_OPEN_MISSING_NOTICE = "Could not open it: install xdg-utils (xdg-open) to open files here."
 
+# Both the Rust engine and the Python fallback came back empty: the directory is
+# unreadable, or the engine is not working at all.
+ENGINE_SCAN_FAILED_NOTICE = "Engine scan failed: nothing could be read from that location."
+
 
 def _open_path(path: Path, timeout: int = 5) -> str:
     """Hand *path* to the desktop opener, returning a notice when that failed.
@@ -160,7 +231,7 @@ def _open_path(path: Path, timeout: int = 5) -> str:
     would otherwise read the keys this screen is waiting for.
     """
     res = run_command(["xdg-open", str(path)], capture=True, timeout=timeout, detach_stdin=True)
-    return "" if res.ok else XDG_OPEN_MISSING_NOTICE
+    return "" if res.ok else _warn_notice(XDG_OPEN_MISSING_NOTICE)
 
 
 def _open_in_file_manager(path: Path) -> str:
@@ -221,8 +292,12 @@ def run_deep_analysis(target_path: Path | None = None):
             if not data:
                 data = get_fast_explore_data(target_to_scan)
             if not data:
-                print("\n   ❌ Engine scan failed.")
-                time.sleep(1.5)
+                # A bare print here was overwritten by the next frame, so the
+                # 1.5 s sleep was the only thing that made it readable at all --
+                # and when there was nowhere to go back to, the screen closed
+                # with no explanation. Going back carries the reason in the
+                # notice; leaving waits for a keypress instead of a timer.
+                action_notice = _fail_notice(ENGINE_SCAN_FAILED_NOTICE)
                 if state_stack:
                     prev = state_stack.pop()
                     current_target = prev["target"]
@@ -234,6 +309,8 @@ def run_deep_analysis(target_path: Path | None = None):
                     needs_scan = False
                     continue
                 else:
+                    print(f"\n   {action_notice}")
+                    Navigator.wait_for_return()
                     break
 
             total_scan_size = data.get("total_size_bytes", 0)
@@ -434,9 +511,11 @@ def run_deep_analysis(target_path: Path | None = None):
                 selected_idxs = top_selector.run()
                 if selected_idxs:
                     paths = [item["smart_items"][s_idx]["path"] for s_idx in selected_idxs]
-                    if delete_and_refresh_cache(
+                    outcome = delete_and_refresh_cache(
                         paths, current_target, ask_permanent=_confirm_permanent_delete
-                    ):
+                    )
+                    action_notice = _delete_notice(outcome)
+                    if outcome:
                         needs_scan = True
                         scan_reason = "refresh"
             elif item["path"].is_dir():
@@ -487,9 +566,11 @@ def run_deep_analysis(target_path: Path | None = None):
         elif action == "DELETE_BATCH":
             selected_idxs = idx  # action was DELETE_BATCH, idx contains the list
             paths = [results[s_idx]["path"] for s_idx in selected_idxs]
-            if delete_and_refresh_cache(
+            outcome = delete_and_refresh_cache(
                 paths, current_target, ask_permanent=_confirm_permanent_delete
-            ):
+            )
+            action_notice = _delete_notice(outcome)
+            if outcome:
                 needs_scan = True
                 scan_reason = "refresh"
         elif action == "OPEN_BATCH":
