@@ -110,7 +110,6 @@ def run_uninstall():
             removed_names = []
             failed_names = []
             total_freed_all = 0
-            has_apt = False
 
             try:
                 with threaded_spinner(render_removal_spinner):
@@ -126,8 +125,6 @@ def run_uninstall():
                         # lists feed the summary lines only, never a filesystem operation.
                         safe_app_name = sanitize_for_display(str(app["name"]))
                         current_status[0] = f"Removing {BOLD}{safe_app_name}{RESET}..."
-                        if app["type"] == "APT":
-                            has_apt = True
                         result = manager.execute_uninstall(app, paths)
                         package_removed = bool(result.get("package_removed"))
                         paths_removed = any(ok for ok, _ in result.get("removed_paths", []))
@@ -137,17 +134,11 @@ def run_uninstall():
                                 total_freed_all += app["size_bytes"]
                         else:
                             failed_names.append(safe_app_name)
-
-                    if has_apt and removed_names:
-                        current_status[0] = "Cleaning up orphaned dependencies..."
-                        # --purge to match the purge above: without it the packages
-                        # dragged out as orphans leave their config files behind.
-                        system.run_command(
-                            ["apt-get", "autoremove", "--purge", "-y"],
-                            use_sudo=True,
-                            capture=True,
-                            env=system.APT_NONINTERACTIVE_ENV,
-                        )
+                    # No cleanup follows the loop. The system-wide `apt-get
+                    # autoremove --purge -y` that used to run here took every
+                    # unused auto-installed package on the box, previewed or not;
+                    # each app's own orphans now go in its own transaction, the one
+                    # the preview simulated (execute_uninstall passes --autoremove).
             finally:
                 sys.stdout.write(f"{CLEAR_LINE}")
                 sys.stdout.flush()

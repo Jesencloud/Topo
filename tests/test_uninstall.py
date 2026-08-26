@@ -1096,9 +1096,10 @@ def test_execute_uninstall_apt(mock_run_cmd, test_env):
     assert details["removed_paths"] == []
     # apt-get, and with debconf muted: apt warns about its unstable CLI when
     # captured, and a maintainer-script prompt nobody can see would hang the
-    # removal until the command timeout (D3).
+    # removal until the command timeout (D3). --autoremove takes the dependencies
+    # this removal orphans with it, the way -Rns and --clean-deps do (D6).
     mock_run_cmd.assert_any_call(
-        ["apt-get", "purge", "-y", "firefox"],
+        ["apt-get", "purge", "--autoremove", "-y", "firefox"],
         use_sudo=True,
         capture=True,
         env=APT_NONINTERACTIVE_ENV,
@@ -1376,12 +1377,15 @@ def test_run_uninstall_failed_package_not_counted(capsys):
     assert "Failed:" in out
 
 
-def test_run_uninstall_purges_apt_orphans_without_a_debconf_prompt(capsys):
-    """The follow-up autoremove has to purge and to mute debconf.
+def test_run_uninstall_does_not_autoremove_the_whole_machine(capsys):
+    """The screen runs no cleanup of its own after the removals (D6).
 
-    Without --purge the packages dragged out as orphans leave their config files
-    behind, and without DEBIAN_FRONTEND a maintainer-script question would sit
-    invisible behind the spinner until the command timeout (D3).
+    It used to end every selection containing an APT app with a system-wide
+    `sudo apt-get autoremove --purge -y`, output discarded: one transaction that
+    took every auto-installed package nothing needed any more, including ones
+    installed long before topo and unrelated to the selection, with no line of it
+    in the preview the user had just confirmed. The orphans an app really drags
+    out now go in that app's own transaction, which is the one the preview showed.
     """
     mock_apps = [
         {
@@ -1409,12 +1413,14 @@ def test_run_uninstall_purges_apt_orphans_without_a_debconf_prompt(capsys):
         mock_run_cmd.return_value = MagicMock(ok=True, stdout="")
         run_uninstall()
 
-    mock_run_cmd.assert_any_call(
-        ["apt-get", "autoremove", "--purge", "-y"],
-        use_sudo=True,
-        capture=True,
-        env=APT_NONINTERACTIVE_ENV,
-    )
+    # The preview's own simulation is the only apt command this path issues now,
+    # and it needs no root: the real removal belongs to execute_uninstall, patched
+    # out above, and nothing at all runs after the loop.
+    assert [call.args[0] for call in mock_run_cmd.call_args_list] == [
+        ["apt-get", "purge", "--autoremove", "-s", "firefox"]
+    ]
+    assert not any(call.kwargs.get("use_sudo") for call in mock_run_cmd.call_args_list)
+    assert "Removed 1 app(s)" in capsys.readouterr().out
 
 
 def test_find_residue_paths_skips_visible_home_workspace(test_env):
@@ -1666,7 +1672,13 @@ def _collateral(app_type: str, stdout: str, app_id: str = "vlc"):
 
 def test_collateral_packages_reads_an_apt_simulation():
     """Ticking one small entry can drag out half a desktop, and the preview said
-    nothing about it. -s simulates the real transaction without needing root (O4)."""
+    nothing about it. -s simulates the real transaction without needing root (O4).
+
+    --autoremove is part of that transaction (D6): the packages the removal
+    orphans are narrated as Purg lines here, and without the flag apt would list
+    them in prose the parser is right to ignore -- which is how the preview came
+    to omit exactly what the removal then took.
+    """
     names, argv, env = _collateral(
         "APT",
         "Reading package lists...\n"
@@ -1681,8 +1693,37 @@ def test_collateral_packages_reads_an_apt_simulation():
     # The app itself is dropped -- including when apt narrates it qualified --
     # duplicates collapse, and Inst/prose lines are not removals.
     assert names == ["vlc-plugin-base", "libvlc-bin"]
-    assert argv == ["apt-get", "purge", "-s", "vlc"]
+    assert argv == ["apt-get", "purge", "--autoremove", "-s", "vlc"]
     assert env == APT_NONINTERACTIVE_ENV
+
+
+def test_collateral_packages_previews_the_apt_transaction_that_will_run():
+    """The preview query and the removal differ by -s versus -y, nothing else.
+
+    That is the whole of D6: the screen used to follow the removals with one
+    system-wide `apt-get autoremove --purge -y`, so what came off the machine was
+    a superset of what the preview had listed. Any flag added to one side of this
+    pair and not the other reopens the gap.
+    """
+    mgr = UninstallManager()
+    app = {"id": "vlc", "name": "VLC", "type": "APT", "size_bytes": 0}
+
+    with patch("src.uninstall.system.run_command", return_value=MagicMock(stdout="")) as query:
+        mgr._collateral_packages(app)
+    with (
+        patch("src.uninstall.system.run_command", return_value=MagicMock(ok=True)) as removal,
+        patch("src.uninstall.record_deletion_audit"),
+        patch("src.uninstall.record_history_session"),
+        patch("src.uninstall.running_process_comms", return_value=set()),
+    ):
+        mgr.execute_uninstall(app, [])
+
+    preview_argv = query.call_args.args[0]
+    removal_argv = next(
+        call.args[0] for call in removal.call_args_list if call.args[0][0] == "apt-get"
+    )
+    assert preview_argv == ["apt-get", "purge", "--autoremove", "-s", "vlc"]
+    assert removal_argv == ["apt-get", "purge", "--autoremove", "-y", "vlc"]
 
 
 def test_collateral_packages_asks_pacman_to_print_instead_of_removing():

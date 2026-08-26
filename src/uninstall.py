@@ -1488,6 +1488,10 @@ class UninstallManager:
         remove, the rpm family with its first level. The list is therefore a floor
         rather than a promise, and a failed or unparsable reply yields an empty
         one -- the preview then says nothing, exactly as it did before.
+
+        The apt query carries the same flags as the apt removal in
+        execute_uninstall, `-s` in place of `-y`, so on Debian the floor is the
+        transaction: what is listed here is what that removal takes.
         """
         app_id = str(app.get("id") or "")
         app_type = str(app.get("type") or "")
@@ -1496,7 +1500,15 @@ class UninstallManager:
         if app_type == "APT":
             # -s simulates without root; the whole transaction is narrated, and
             # the removal lines are the interesting ones.
-            argv = ["apt-get", "purge", "-s", app_id]
+            #
+            # --autoremove is what puts the dependencies this removal orphans into
+            # that transaction. Without it apt names them only in its "packages
+            # were automatically installed and are no longer required" prose, with
+            # no Remv/Purg prefix, so the preview omitted precisely the packages
+            # the removal went on to take. Measured on debian:stable-slim:
+            # `purge -s cowsay` narrates one Purg line, `purge --autoremove -s
+            # cowsay` narrates eight.
+            argv = ["apt-get", "purge", "--autoremove", "-s", app_id]
             env = system.APT_NONINTERACTIVE_ENV
         elif app_type == "Pacman":
             # --print-format implies --print, and --print is what makes pacman
@@ -1725,8 +1737,17 @@ class UninstallManager:
                 # apt-get, not apt: apt prints "WARNING: apt does not have a stable
                 # CLI interface" when its output is captured, and the rest of the
                 # repository already standardises on apt-get.
+                #
+                # --autoremove for the same reason the zypper branch passes
+                # --clean-deps, and with exactly the flags _collateral_packages()
+                # simulated: the orphans this removal creates go with it, and they
+                # are the ones the preview listed. The screen used to follow the
+                # whole selection with a single system-wide `apt-get autoremove
+                # --purge -y` instead, one transaction that took every unused
+                # auto-installed package on the box -- none of them previewed, and
+                # not only the ones this app had pulled in.
                 res = system.run_command(
-                    ["apt-get", "purge", "-y", app["id"]],
+                    ["apt-get", "purge", "--autoremove", "-y", app["id"]],
                     use_sudo=True,
                     capture=True,
                     env=system.APT_NONINTERACTIVE_ENV,
@@ -1739,12 +1760,11 @@ class UninstallManager:
                 )
             elif app["type"] == "Zypper":
                 res = system.run_command(
-                    # --clean-deps for the same reason the screen follows an apt
-                    # removal with `apt-get autoremove --purge`: dnf drops the
-                    # dependencies nothing needs any more by default and pacman is
-                    # asked to with -Rns, while zypper keeps them unless told,
-                    # which would leave openSUSE the one family where uninstalling
-                    # quietly leaves orphans on disk.
+                    # --clean-deps for the same reason the apt branch above passes
+                    # --autoremove: dnf drops the dependencies nothing needs any
+                    # more by default and pacman is asked to with -Rns, while
+                    # zypper keeps them unless told, which would leave openSUSE the
+                    # one family where uninstalling quietly leaves orphans on disk.
                     ["zypper", "--non-interactive", "remove", "--clean-deps", app["id"]],
                     use_sudo=True,
                     capture=True,

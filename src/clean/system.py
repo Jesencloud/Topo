@@ -170,8 +170,19 @@ def clean_orphaned_packages(dry_run: bool = False) -> tuple[int, int, int]:
         return 0, 0, 0
 
     if manager.key == "apt":
+        # `--dry-run` is unprivileged and narrates the very transaction `-y` would
+        # run, so the count below is apt's own answer rather than a guess -- the
+        # dry run used to promise "orphaned packages would be autoremoved" without
+        # knowing whether there were any. The freed total is not available here:
+        # apt prints "After this operation..." only when it really removes.
+        preview = run_command(
+            [tool, "autoremove", "--dry-run"], capture=True, env=APT_NONINTERACTIVE_ENV
+        )
+        orphans = _apt_removal_count(preview.stdout) if preview.ok else 0
+        if not orphans:
+            return 0, 0, 0
         if dry_run:
-            print(f"  {OK} Orphaned {manager.label} packages would be autoremoved")
+            print(f"  {OK} {orphans} orphaned {manager.label} package(s) would be removed")
             return 0, 0, 1
         res = run_command(
             [tool, "autoremove", "-y"],
@@ -180,9 +191,15 @@ def clean_orphaned_packages(dry_run: bool = False) -> tuple[int, int, int]:
             env=APT_NONINTERACTIVE_ENV,
         )
         if res.ok:
-            freed = parse_size_from_text(res.stdout)
-            print(f"  {OK} Removed orphaned {manager.label} packages")
-            return freed, 1, 1
+            # apt's own total, not parse_size_from_text over the whole transcript:
+            # that takes the first size-looking token anywhere in it, and reads
+            # apt's decimal kB/MB as binary ones (D7).
+            freed = _apt_freed_bytes(res.stdout)
+            print(
+                f"  {OK} Removed {orphans} orphaned {manager.label} package(s)"
+                f" ({bytes_to_human(freed)})"
+            )
+            return freed, orphans, 1
 
     elif manager.key == "dnf":
         if dry_run:
@@ -200,7 +217,7 @@ def clean_orphaned_packages(dry_run: bool = False) -> tuple[int, int, int]:
         if list_res.ok and list_res.stdout.strip():
             orphans = list_res.stdout.split()
             if dry_run:
-                print(f"  {OK} {len(orphans)} orphaned {manager.label} packages would be removed")
+                print(f"  {OK} {len(orphans)} orphaned {manager.label} package(s) would be removed")
                 return 0, 0, 1
             remove_res = run_command(
                 [tool, "-Rns", "--noconfirm"] + orphans,
@@ -210,7 +227,7 @@ def clean_orphaned_packages(dry_run: bool = False) -> tuple[int, int, int]:
             )
             if remove_res.ok:
                 freed = parse_size_from_text(remove_res.stdout)
-                print(f"  {OK} Removed {len(orphans)} orphaned {manager.label} packages")
+                print(f"  {OK} Removed {len(orphans)} orphaned {manager.label} package(s)")
                 return freed, len(orphans), 1
 
     return 0, 0, 0
@@ -277,6 +294,8 @@ _SI_MULTIPLIER = {
     "P": 1000**5,
     "E": 1000**6,
 }
+# apt's per-package removal lines, the machine-readable half of its narration.
+_APT_REMOVAL_LINE = re.compile(r"^(?:Remv|Purg) \S", re.MULTILINE)
 
 
 def _kernel_version_key(name: str) -> tuple[int, ...]:
@@ -296,6 +315,17 @@ def _apt_freed_bytes(output: str) -> int:
     if not match:
         return 0
     return int(float(match.group(1)) * _SI_MULTIPLIER[match.group(2)])
+
+
+def _apt_removal_count(output: str) -> int:
+    """How many packages apt's narration says the transaction removes.
+
+    One line per package -- "Remv tree [2.2.1-1]", or Purg when configuration
+    files go too -- printed by a real run and by `-s`/`--dry-run` alike. The
+    "The following packages will be REMOVED:" block above it is not counted:
+    it wraps several names onto one line and is translated.
+    """
+    return len(_APT_REMOVAL_LINE.findall(output))
 
 
 # The `uname -r` form inside an rpm NEVRA: version-release.arch, with the epoch

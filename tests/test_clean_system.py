@@ -14,6 +14,38 @@ from src.clean.system import (
 )
 from src.core.system import APT_NONINTERACTIVE_ENV, C_LOCALE_ENV
 
+# `apt-get autoremove` as debian:stable-slim really narrates it. The Remv lines
+# are the simulation's: a real run prints its per-package progress as "Removing
+# tree (2.2.1-1) ..." instead, which is why the count has to come from the
+# --dry-run pass and the freed total from the run itself.
+_APT_AUTOREMOVE_DRY_RUN = """\
+Reading package lists...
+Building dependency tree...
+Reading state information...
+The following packages will be REMOVED:
+  libgdbm6t64 tree
+0 upgraded, 0 newly installed, 2 to remove and 2 not upgraded.
+Remv tree [2.2.1-1]
+Remv libgdbm6t64 [1.24-2]
+"""
+_APT_AUTOREMOVE_OUTPUT = """\
+Reading package lists...
+Building dependency tree...
+Reading state information...
+The following packages will be REMOVED:
+  libgdbm6t64 tree
+0 upgraded, 0 newly installed, 2 to remove and 2 not upgraded.
+After this operation, 132 kB disk space will be freed.
+Removing tree (2.2.1-1) ...
+Removing libgdbm6t64:amd64 (1.24-2) ...
+"""
+_APT_NOTHING_TO_REMOVE = """\
+Reading package lists...
+Building dependency tree...
+Reading state information...
+0 upgraded, 0 newly installed, 0 to remove and 2 not upgraded.
+"""
+
 
 def test_package_cache_paths_cover_supported_managers(monkeypatch):
     from src.clean import system as module
@@ -60,14 +92,17 @@ def test_clean_orphaned_packages_fedora(mock_get_os_id, mock_run, mock_which):
 def test_clean_orphaned_packages_ubuntu(mock_get_os_id, mock_run, mock_which):
     mock_get_os_id.return_value = "ubuntu"
     mock_which.return_value = "/usr/bin/apt-get"
-    mock_run.return_value = MagicMock(
-        returncode=0, stdout="After this operation, 50.0 MB of additional disk space will be freed."
+    mock_run.side_effect = lambda args, **kwargs: MagicMock(
+        ok=True,
+        stdout=_APT_AUTOREMOVE_DRY_RUN if "--dry-run" in args else _APT_AUTOREMOVE_OUTPUT,
     )
 
     s, i, c = clean_orphaned_packages(dry_run=False)
-    assert s > 0
-    assert i == 1
-    assert c == 1
+
+    # apt's own two numbers: one Purg line per package, and the freed total in the
+    # decimal kB apt-pkg prints. 132 kB is 132000 bytes, not 132 * 1024 -- which is
+    # what parse_size_from_text over the whole transcript used to make of it.
+    assert (s, i, c) == (132000, 2, 1)
     # apt-get, unlike dnf, runs maintainer scripts that may ask debconf a question
     # with nobody able to see the prompt.
     mock_run.assert_called_with(
@@ -76,6 +111,50 @@ def test_clean_orphaned_packages_ubuntu(mock_get_os_id, mock_run, mock_which):
         capture=True,
         env=APT_NONINTERACTIVE_ENV,
     )
+
+
+@patch("shutil.which", return_value="/usr/bin/apt-get")
+@patch("src.clean.system.run_command")
+@patch("src.clean.system.get_os_id", return_value="ubuntu")
+def test_clean_orphaned_packages_dry_run_counts_what_apt_would_remove(
+    _mock_get_os_id, mock_run, _mock_which
+):
+    """The preview says how many, and asks nothing of root to find out.
+
+    It used to print "Orphaned APT packages would be autoremoved" whatever the
+    machine's state: no count, and no idea whether there was anything to remove.
+    """
+    mock_run.return_value = MagicMock(ok=True, stdout=_APT_AUTOREMOVE_DRY_RUN)
+
+    with patch("builtins.print") as mock_print:
+        assert clean_orphaned_packages(dry_run=True) == (0, 0, 1)
+
+    assert "2 orphaned APT package(s) would be removed" in mock_print.call_args[0][0]
+    # One command, unprivileged: --dry-run is what makes that possible, and it
+    # narrates the same transaction `-y` would run.
+    mock_run.assert_called_once_with(
+        ["apt-get", "autoremove", "--dry-run"], capture=True, env=APT_NONINTERACTIVE_ENV
+    )
+
+
+@patch("shutil.which", return_value="/usr/bin/apt-get")
+@patch("src.clean.system.run_command")
+@patch("src.clean.system.get_os_id", return_value="ubuntu")
+def test_clean_orphaned_packages_reports_nothing_when_there_are_no_orphans(
+    _mock_get_os_id, mock_run, _mock_which
+):
+    """A clean machine is not a cleaned item, and a failed query is not either."""
+    mock_run.return_value = MagicMock(ok=True, stdout=_APT_NOTHING_TO_REMOVE)
+    assert clean_orphaned_packages(dry_run=True) == (0, 0, 0)
+    assert clean_orphaned_packages(dry_run=False) == (0, 0, 0)
+
+    mock_run.return_value = MagicMock(ok=False, stdout="")
+    assert clean_orphaned_packages(dry_run=False) == (0, 0, 0)
+
+    # Whatever the answer, nothing was ever removed: only the query ran.
+    assert [call.args[0] for call in mock_run.call_args_list] == [
+        ["apt-get", "autoremove", "--dry-run"]
+    ] * 3
 
 
 @patch("src.clean.system.run_command")
