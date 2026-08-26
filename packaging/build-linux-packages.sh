@@ -228,8 +228,14 @@ for engine_arch in x86_64 aarch64; do
 
     deb_arch="${DEB_ARCH_BY_ENGINE[$engine_arch]}"
     rpm_arch="${RPM_ARCH_BY_ENGINE[$engine_arch]}"
+    # Both names carry the `--iteration 1` revision, because both packages do:
+    # dpkg-deb -f reports Version 1.1.2-1 either way, and a file named
+    # topo_1.1.2_amd64.deb claims to be a native package with no revision at all.
+    # Debian's convention is name_upstream-revision_arch.deb; rpm's is
+    # name-upstream-release.arch.rpm. get_package_asset_name() in
+    # src/core/install_source.py has to spell out the same two names.
     build_one deb "$deb_arch" "$engine_arch" "$engine_path" \
-        "$OUTPUT_DIR/topo_${VERSION}_${deb_arch}.deb"
+        "$OUTPUT_DIR/topo_${VERSION}-1_${deb_arch}.deb"
     build_one rpm "$rpm_arch" "$engine_arch" "$engine_path" \
         "$OUTPUT_DIR/topo-${VERSION}-1.${rpm_arch}.rpm"
     built_any=true

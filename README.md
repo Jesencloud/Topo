@@ -49,7 +49,7 @@ curl -fsSL https://raw.githubusercontent.com/Jesencloud/Topo/main/install.sh | b
 
 Download from the [latest release](https://github.com/Jesencloud/Topo/releases/latest), then install via:
 ```bash
-sudo apt install ./topo_xxx_amd64.deb   # Debian / Ubuntu
+sudo apt install ./topo_xxx-1_amd64.deb   # Debian / Ubuntu
 sudo dnf install ./topo-xxx-1.x86_64.rpm  # Fedora / RHEL
 ```
 

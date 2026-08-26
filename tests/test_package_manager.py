@@ -114,7 +114,7 @@ def test_resolve_admin_tool_prefers_the_newest_generation():
 
 def test_the_release_assets_follow_the_matrix_package_format(monkeypatch):
     monkeypatch.setattr("src.core.install_source.os.geteuid", lambda: 1000)
-    assert get_package_asset_name("v1.1.2", "ubuntu", "x86_64") == "topo_1.1.2_amd64.deb"
+    assert get_package_asset_name("v1.1.2", "ubuntu", "x86_64") == "topo_1.1.2-1_amd64.deb"
     assert get_package_asset_name("1.1.2", "opensuse-leap", "aarch64") == "topo-1.1.2-1.aarch64.rpm"
     # Arch is in the matrix so that removal works, but packaging builds only a
     # .deb and an .rpm -- so `topo update` still has nothing to download.

@@ -2,11 +2,17 @@ import os
 import subprocess
 from pathlib import Path
 
+from src.core.install_source import get_package_asset_name
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 _FPM_STUB = """#!/usr/bin/env bash
 printf '%s\\n' "$@" > "$(mktemp "$FPM_ARGV_DIR/argv.XXXXXX")"
 """
+
+
+def _flag_value(argv: list[str], flag: str) -> str:
+    return argv[argv.index(flag) + 1]
 
 
 def _fpm_calls(tmp_path):
@@ -52,9 +58,16 @@ def _fpm_calls(tmp_path):
     calls = []
     for argv_file in sorted(argv_dir.iterdir()):
         argv = argv_file.read_text().splitlines()
-        package_type = argv[argv.index("-t") + 1]
-        depends = [argv[i + 1] for i, token in enumerate(argv) if token == "--depends"]
-        calls.append((package_type, tuple(depends)))
+        calls.append(
+            {
+                "type": _flag_value(argv, "-t"),
+                "iteration": _flag_value(argv, "--iteration"),
+                "package": Path(_flag_value(argv, "--package")).name,
+                "depends": tuple(
+                    argv[i + 1] for i, token in enumerate(argv) if token == "--depends"
+                ),
+            }
+        )
     return calls
 
 
@@ -130,7 +143,43 @@ def test_only_the_deb_bounds_python_at_310(tmp_path):
 
     # Both architectures, and the two package types differ in this one dependency.
     assert len(calls) == 4
-    assert sorted(set(calls)) == [
+    assert sorted({(call["type"], call["depends"]) for call in calls}) == [
         ("deb", ("curl", "python3 (>= 3.10)", "python3-packaging")),
         ("rpm", ("curl", "python3", "python3-packaging")),
     ]
+
+
+def test_both_filenames_carry_the_revision_the_package_declares(tmp_path):
+    """The published filename has to spell out `--iteration`, and both ends of
+    the download have to spell it the same way (D15).
+
+    `--iteration 1` puts Version 1.1.2-1 in the deb's control file, but the
+    filename used to be topo_1.1.2_amd64.deb -- which, under Debian's
+    name_upstream-revision_arch.deb convention, claims to be a native package
+    with no revision at all. dpkg reads control and not the filename, so nothing
+    broke; the name was just a false statement about its own contents.
+
+    The second assertion is the one that would actually take `topo update` down:
+    _run_package_update() computes the asset name from the remote tag and fails
+    outright on a 404, so get_package_asset_name() and the build script have to
+    agree character for character.
+    """
+    calls = _fpm_calls(tmp_path)
+    names = {call["package"] for call in calls}
+
+    assert names == {
+        "topo_9.9.9-1_amd64.deb",
+        "topo_9.9.9-1_arm64.deb",
+        "topo-9.9.9-1.x86_64.rpm",
+        "topo-9.9.9-1.aarch64.rpm",
+    }
+    # Pinned against the flag rather than the literal 1, so bumping the revision
+    # cannot leave the filenames behind again.
+    for call in calls:
+        assert f"9.9.9-{call['iteration']}" in call["package"]
+
+    assert {
+        get_package_asset_name("v9.9.9", os_id, machine)
+        for os_id in ("ubuntu", "fedora")
+        for machine in ("x86_64", "aarch64")
+    } == names

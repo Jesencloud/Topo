@@ -56,6 +56,13 @@ def get_package_asset_name(
     downloaded and handed to a package manager, so a distro nobody listed must
     come out as "no asset" rather than as a guess. Arch reaches this with a
     manager but no package_format -- topo publishes only .deb and .rpm.
+
+    The `-1` in both names is the package revision that
+    packaging/build-linux-packages.sh passes as `--iteration 1`; it is part of
+    the published filename, so it is part of the name computed here. The two
+    spellings differ because the conventions do: Debian separates the revision
+    with a hyphen inside the version field (name_upstream-revision_arch.deb),
+    rpm gives it its own field (name-upstream-release.arch.rpm).
     """
     manager = find_package_manager(os_id)
     if manager is None:
@@ -64,7 +71,7 @@ def get_package_asset_name(
     package_version = version.strip().lstrip("vV")
     if manager.package_format == "deb":
         deb_arch = DEB_ARCH_BY_MACHINE.get(current_machine, "amd64")
-        return f"topo_{package_version}_{deb_arch}.deb"
+        return f"topo_{package_version}-1_{deb_arch}.deb"
     if manager.package_format == "rpm":
         rpm_arch = RPM_ARCH_BY_MACHINE.get(current_machine, "x86_64")
         return f"topo-{package_version}-1.{rpm_arch}.rpm"

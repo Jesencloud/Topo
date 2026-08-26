@@ -24,11 +24,11 @@ def test_get_install_source_treats_unknown_marker_as_script(monkeypatch, tmp_pat
 def test_get_package_asset_name_uses_distro_and_arch():
     assert (
         install_source.get_package_asset_name("v1.2.3", os_id="ubuntu", machine="x86_64")
-        == "topo_1.2.3_amd64.deb"
+        == "topo_1.2.3-1_amd64.deb"
     )
     assert (
         install_source.get_package_asset_name("v1.2.3", os_id="ubuntu", machine="aarch64")
-        == "topo_1.2.3_arm64.deb"
+        == "topo_1.2.3-1_arm64.deb"
     )
     assert (
         install_source.get_package_asset_name("v1.2.3", os_id="fedora", machine="x86_64")
