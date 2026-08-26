@@ -39,7 +39,15 @@ def test_run_terminal_tui_command_skips_wait_when_command_returns_false():
     wait_for_return.assert_not_called()
 
 
-def test_run_terminal_tui_command_cleans_status_screen_on_interrupt():
+def test_run_terminal_tui_command_keeps_its_output_on_interrupt():
+    """A report-style command interrupted from the menu keeps what it printed.
+
+    main_screen() dropped to the main buffer precisely so this command's output
+    would survive in the scrollback; clearing the screen on the way out undid
+    that, which is the whole point of not doing it any more. The one remaining
+    _clear_screen() call is the one *before* the command runs.
+    """
+
     def command():
         raise KeyboardInterrupt
 
@@ -51,7 +59,7 @@ def test_run_terminal_tui_command_cleans_status_screen_on_interrupt():
     ):
         assert topo_main._run_terminal_tui_command(command) is False
 
-    assert clear_screen.call_count == 2
+    clear_screen.assert_called_once_with()
     reset_terminal.assert_called_once_with(force=True)
     print_mock.assert_called_once_with(topo_main.INTERRUPTED_MESSAGE)
     wait_for_return.assert_not_called()
@@ -99,7 +107,13 @@ def test_startup_passes_the_configured_theme_color(test_env):
     setup_color_mode.assert_called_once_with(False, theme_color="cyan")
 
 
-def test_main_cleans_direct_command_output_on_interrupt():
+def test_main_keeps_direct_command_output_on_interrupt():
+    """Ctrl-C on a CLI command restores the terminal without erasing the report.
+
+    A direct `topo status` / `topo clean` never entered the alternate screen, so
+    there is no frame to tidy -- only the command's own output, which is what the
+    user needs after interrupting a run that deletes things.
+    """
     with (
         patch("sys.argv", ["topo", "status"]),
         patch("src.main.terminal_state.install_signal_handlers"),
@@ -114,7 +128,7 @@ def test_main_cleans_direct_command_output_on_interrupt():
 
     assert exc.value.code == 130
     reset_terminal.assert_called_once_with(force=True)
-    clear_screen.assert_called_once_with()
+    clear_screen.assert_not_called()
     assert print_mock.call_args_list[-1].args == (topo_main.INTERRUPTED_MESSAGE,)
 
 
@@ -192,9 +206,28 @@ def test_interactive_commands_refuse_a_non_tty_instead_of_crashing(argv, target,
 def test_screen_helpers_and_interrupted_output(capsys):
     with patch("src.main.sys.stdout.write") as write, patch("src.main.sys.stdout.flush") as flush:
         topo_main._clear_screen()
-        topo_main._print_interrupted(clear_screen=False)
+        topo_main._print_interrupted()
     assert write.call_count >= 2
     flush.assert_called()
+
+
+def test_interrupt_keeps_what_is_already_on_the_screen(capsys):
+    """Ctrl-C must not clear the screen: it is the record of what was deleted.
+
+    reset_terminal() has already dropped back to the main buffer by the time this
+    runs, so a CLEAR_SCREEN here would erase the cleanup report -- and the shell
+    scrollback under it -- rather than the TUI frame it looks like it is tidying.
+    """
+    print("✓ Removed 1.2 GB of package caches")
+
+    with patch("src.main.terminal_state.reset_terminal") as reset:
+        topo_main._print_interrupted()
+
+    reset.assert_called_once_with(force=True)
+    output = capsys.readouterr().out
+    assert "✓ Removed 1.2 GB of package caches" in output
+    assert topo_main.INTERRUPTED_MESSAGE in output
+    assert "\033[2J" not in output
 
 
 def test_alternate_tui_runs_command_inside_screen():

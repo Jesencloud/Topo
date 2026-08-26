@@ -135,13 +135,27 @@ def _clear_screen():
     sys.stdout.flush()
 
 
-def _print_interrupted(clear_screen=False):
+def _print_interrupted():
+    """Restore the terminal and say the run was interrupted, keeping what is on screen.
+
+    Deliberately does not clear the screen. Both call sites used to ask for a full
+    ``CLEAR_SCREEN``, which erased the record of whatever destructive work had
+    already happened: Ctrl-C halfway through `topo clean` took the `✓` lines of
+    every category that had already been deleted with it, leaving one line of
+    "interrupted" and no way to tell what was gone.
+
+    Clearing is not even the right way to tidy up after a TUI. By the time this
+    runs, the alternate screen has already been left -- the signal handler resets
+    the terminal before raising, and reset_terminal(force=True) below covers the
+    paths that reach here without a signal (raw-mode Ctrl-C in read_sudo_choice)
+    -- so the cursor is back in the *main* buffer with its previous contents
+    restored. A CLEAR_SCREEN at that point wipes the user's scrollback view, not
+    the frame topo painted. What is worth erasing is a half-written spinner line,
+    which is exactly CLEAR_LINE's job.
+    """
     terminal_state.reset_terminal(force=True)
-    if clear_screen:
-        _clear_screen()
-    else:
-        sys.stdout.write(CLEAR_LINE)
-        sys.stdout.flush()
+    sys.stdout.write(CLEAR_LINE)
+    sys.stdout.flush()
     print(INTERRUPTED_MESSAGE)
 
 
@@ -154,7 +168,7 @@ def _run_terminal_tui_command(command, *args):
                 return True
             return Navigator.wait_for_return()
         except KeyboardInterrupt:
-            _print_interrupted(clear_screen=True)
+            _print_interrupted()
             return False
 
 
@@ -190,7 +204,7 @@ def main():
     try:
         ok = _main()
     except KeyboardInterrupt:
-        _print_interrupted(clear_screen=True)
+        _print_interrupted()
         raise SystemExit(130) from None
     if not ok:
         raise SystemExit(1)
