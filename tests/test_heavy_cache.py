@@ -95,3 +95,33 @@ def test_snap_packaged_docker_data_is_found_under_var_snap():
 
     assert docker_system.fallback_paths == ("/var/snap/docker/common/var-lib-docker",)
     assert get_container_cache_def("snapd").fallback_paths == ()
+
+
+def test_apt_lists_its_binary_indexes_as_extra_paths(tmp_path):
+    """`apt-get clean` frees more than archives/, and Clean has to measure it (D4).
+
+    pkgCacheFile::RemoveCaches() unlinks /var/cache/apt/pkgcache.bin and
+    srcpkgcache.bin, 44.5 MB each on debian:stable-slim against 8.6 MB of
+    archives/ -- apt-get(8) does not mention them. They belong beside the primary
+    path rather than instead of it, which is what separates extra_paths from
+    fallback_paths.
+    """
+    apt = {definition.key: definition for definition in PACKAGE_MANAGER_CACHE_DEFS}["apt"]
+
+    assert apt.extra_paths == (
+        "/var/cache/apt/pkgcache.bin",
+        "/var/cache/apt/srcpkgcache.bin",
+    )
+
+    # Analyze shows one path per row, so resolved_path() must not start answering
+    # with an extra: the primary is reported even when only an extra exists.
+    extra = tmp_path / "pkgcache.bin"
+    extra.write_bytes(b"")
+    definition = CachePathDef(
+        key="probe",
+        label="Probe",
+        path=str(tmp_path / "absent"),
+        extra_paths=(str(extra),),
+    )
+
+    assert definition.resolved_path() == tmp_path / "absent"

@@ -51,13 +51,55 @@ def test_package_cache_paths_cover_supported_managers(monkeypatch):
     from src.clean import system as module
 
     monkeypatch.setattr(module.Path, "exists", lambda self: True)
-    # One path per family, taken from the table Analyze reads: apt's own
+    # One family per row, taken from the table Analyze reads: apt's own
     # `partial/` subdirectory is not listed, because get_size_fast() recurses into
-    # it and naming it separately counted its bytes twice.
+    # it and naming it separately counted its bytes twice. The two binary indexes
+    # are listed -- they sit beside archives/ rather than inside it, and the same
+    # `apt-get clean` unlinks them (D4).
     assert [str(p) for p in module._get_package_manager_cache_paths("apt")] == [
-        "/var/cache/apt/archives"
+        "/var/cache/apt/archives",
+        "/var/cache/apt/pkgcache.bin",
+        "/var/cache/apt/srcpkgcache.bin",
     ]
     assert module._get_package_manager_cache_paths("unknown") == []
+
+
+def test_apt_cache_measurement_counts_the_binary_indexes(tmp_path, monkeypatch):
+    """A plain file among the cache paths is measured, and an absent one skipped.
+
+    On debian:stable-slim archives/ held 8.2 MiB and the two indexes 84.9 MiB, so
+    a measurement that skipped them reported a tenth of what `apt-get clean` went
+    on to free (D4).
+    """
+    from src.clean import system as module
+    from src.core.heavy_cache import CachePathDef
+
+    archives = tmp_path / "archives"
+    archives.mkdir()
+    (archives / "some.deb").write_bytes(b"d" * 1000)
+    index = tmp_path / "pkgcache.bin"
+    index.write_bytes(b"i" * 9000)
+
+    monkeypatch.setattr(
+        module,
+        "PACKAGE_MANAGER_CACHE_DEFS",
+        (
+            CachePathDef(
+                key="apt",
+                label="Apt Cache",
+                path=str(archives),
+                extra_paths=(str(index), str(tmp_path / "srcpkgcache.bin")),
+            ),
+        ),
+    )
+
+    paths = module._get_package_manager_cache_paths("apt")
+
+    # The index that is not there is dropped, the way a missing fallback is.
+    assert [str(p) for p in paths] == [str(archives), str(index)]
+    # get_size_fast() stats a file instead of scanning it as a directory, so the
+    # index contributes its own bytes rather than nothing.
+    assert module._measure_package_cache_size(paths) == 10000
 
 
 @patch("shutil.which", return_value=None)

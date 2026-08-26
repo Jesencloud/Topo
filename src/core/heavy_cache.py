@@ -19,6 +19,10 @@ class CachePathDef:
     # Where the same data lives when the primary path is absent: dnf5 moved its
     # cache, and a snap-packaged Docker keeps its data under /var/snap.
     fallback_paths: tuple[str, ...] = ()
+    # More of the same cache, beside the primary path rather than instead of it,
+    # and so measured on top of it. resolved_path() ignores these: its job is to
+    # answer "which one path do I show", and a second entry has no place in it.
+    extra_paths: tuple[str, ...] = ()
 
     def resolved_path(self) -> Path:
         raw_p = Path(self.path).expanduser()
@@ -48,6 +52,14 @@ PACKAGE_MANAGER_CACHE_DEFS = (
         label="Apt Cache",
         path="/var/cache/apt/archives",
         icon="📦",
+        # `apt-get clean` empties archives/ and archives/partial/, and then
+        # pkgCacheFile::RemoveCaches() unlinks these two binary indexes a level
+        # up -- 44 MB each on debian:stable-slim, and not a word about them in
+        # apt-get(8). Left out, they made the dry run understate the cache
+        # (archives/ is often near-empty already, where unattended-upgrades or a
+        # previous clean has been through) and the real run free bytes the report
+        # never mentioned.
+        extra_paths=("/var/cache/apt/pkgcache.bin", "/var/cache/apt/srcpkgcache.bin"),
     ),
     CachePathDef(
         key="pacman",

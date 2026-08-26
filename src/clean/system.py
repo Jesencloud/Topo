@@ -73,23 +73,32 @@ def clean_snaps(dry_run: bool = False) -> tuple[int, int, int]:
 
 
 def _get_package_manager_cache_paths(cleaner_key: str) -> list[Path]:
-    """The cache directories to measure, from the table Analyze reads too.
+    """The cache paths to measure, from the table Analyze reads too.
 
     Every path of the family that exists, not just the first: dnf5 moved the
     cache to /var/cache/libdnf5 and leaves the old /var/cache/dnf behind, and one
-    `dnf clean packages` empties both. apt's own `partial/` subdirectory is
-    deliberately not listed -- get_size_fast() already recurses into it, so
-    naming it separately only counted its bytes twice.
+    `dnf clean packages` empties both; apt's two pkgcache.bin indexes sit beside
+    archives/ and go in the same `apt-get clean`. apt's own `partial/`
+    subdirectory is deliberately not listed -- get_size_fast() already recurses
+    into it, so naming it separately only counted its bytes twice.
     """
     for definition in PACKAGE_MANAGER_CACHE_DEFS:
         if definition.key == cleaner_key:
-            candidates = (definition.path, *definition.fallback_paths)
+            candidates = (
+                definition.path,
+                *definition.fallback_paths,
+                *definition.extra_paths,
+            )
             return [path for path in map(Path, candidates) if path.exists()]
     return []
 
 
 def _measure_package_cache_size(cache_paths: list[Path]) -> int:
-    """Measures total bytes stored in package manager cache directories."""
+    """Measures total bytes held by package manager cache paths.
+
+    Directories and plain files alike -- get_size_fast() stats a file rather than
+    scanning it, which is what apt's two binary indexes need.
+    """
     return sum(get_size_fast(p) for p in cache_paths if p.exists())
 
 
