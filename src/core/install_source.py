@@ -8,6 +8,11 @@ INSTALL_SOURCE_MARKER = ".topo-install-source"
 SCRIPT_INSTALL = "script"
 PACKAGE_INSTALL = "package"
 
+# The only architectures a package is built for, spelled the way each packaging
+# convention spells them. `platform.machine()` values on the left, so amd64 and
+# arm64 are in here for the platforms that report those names. Same whitelist
+# shape as _ENGINE_BY_ARCH in src/core/engine.py, and for the same reason: an
+# unlisted machine has to come out as "no asset", not as amd64.
 DEB_ARCH_BY_MACHINE = {
     "x86_64": "amd64",
     "amd64": "amd64",
@@ -57,6 +62,13 @@ def get_package_asset_name(
     come out as "no asset" rather than as a guess. Arch reaches this with a
     manager but no package_format -- topo publishes only .deb and .rpm.
 
+    Architecture is just as strict, for the same reason. topo builds packages for
+    two machines; on riscv64 or armv7l there is nothing to download, and naming
+    the amd64 file anyway turned an honest "no package for this machine" into
+    either a 404 or -- on a machine whose package manager takes foreign
+    architectures -- a download that installs an engine the kernel refuses to
+    exec.
+
     The `-1` in both names is the package revision that
     packaging/build-linux-packages.sh passes as `--iteration 1`; it is part of
     the published filename, so it is part of the name computed here. The two
@@ -70,11 +82,11 @@ def get_package_asset_name(
     current_machine = _normalize_machine(machine)
     package_version = version.strip().lstrip("vV")
     if manager.package_format == "deb":
-        deb_arch = DEB_ARCH_BY_MACHINE.get(current_machine, "amd64")
-        return f"topo_{package_version}-1_{deb_arch}.deb"
+        deb_arch = DEB_ARCH_BY_MACHINE.get(current_machine)
+        return None if deb_arch is None else f"topo_{package_version}-1_{deb_arch}.deb"
     if manager.package_format == "rpm":
-        rpm_arch = RPM_ARCH_BY_MACHINE.get(current_machine, "x86_64")
-        return f"topo-{package_version}-1.{rpm_arch}.rpm"
+        rpm_arch = RPM_ARCH_BY_MACHINE.get(current_machine)
+        return None if rpm_arch is None else f"topo-{package_version}-1.{rpm_arch}.rpm"
     return None
 
 

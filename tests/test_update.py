@@ -521,7 +521,7 @@ def test_run_update_separates_a_missing_curl_from_a_failed_lookup(capsys):
 def test_run_update_package_unsupported_and_upgrade_failures(tmp_path, capsys):
     with patch("src.manage.update.get_package_asset_name", return_value=None):
         _run_package_update("1.0.0", "v2.0.0")
-    assert "Unsupported Linux distribution" in capsys.readouterr().out
+    assert "No Topo package for this distribution or architecture" in capsys.readouterr().out
     with (
         patch("src.manage.update.get_package_asset_name", return_value="topo.rpm"),
         patch("src.manage.update._download_file") as download,

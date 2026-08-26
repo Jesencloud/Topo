@@ -261,7 +261,9 @@ def _verify_release_checksum(package_path: Path, sha256sums_path: Path) -> bool:
 def _run_package_update(local_version: str, remote_tag: str) -> bool:
     asset_name = get_package_asset_name(remote_tag)
     if not asset_name:
-        print(f" {RED}❌ Unsupported Linux distribution for package updates.{RESET}")
+        # Two ways to get here, and the message names both: an unlisted distro,
+        # or a machine topo builds no package for (riscv64, armv7l, i686).
+        print(f" {RED}❌ No Topo package for this distribution or architecture.{RESET}")
         return False
 
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", remote_tag):

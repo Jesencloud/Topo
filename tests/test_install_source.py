@@ -45,6 +45,29 @@ def test_get_package_asset_name_uses_distro_and_arch():
     assert install_source.get_package_asset_name("v1.2.3", os_id="unknown") is None
 
 
+def test_get_package_asset_name_names_no_file_for_an_arch_with_no_package():
+    """An unlisted machine gets None, not the amd64 file (D8).
+
+    topo publishes packages for two architectures. The default used to be amd64
+    (x86_64 for the rpm), so on an armv7l or riscv64 Debian `topo update`
+    downloaded topo_<v>-1_amd64.deb -- which exists, so the checksum verified --
+    and only `apt install` said "wrong architecture", after the download.
+    """
+    for os_id in ("ubuntu", "fedora"):
+        for machine in ("armv7l", "i686", "riscv64", "ppc64le"):
+            assert install_source.get_package_asset_name("v1.2.3", os_id, machine) is None
+    # The four names that do exist still answer, whichever spelling the machine
+    # reports and whatever the case.
+    assert (
+        install_source.get_package_asset_name("v1.2.3", "debian", "AMD64")
+        == "topo_1.2.3-1_amd64.deb"
+    )
+    assert (
+        install_source.get_package_asset_name("v1.2.3", "debian", "arm64")
+        == "topo_1.2.3-1_arm64.deb"
+    )
+
+
 def test_get_package_execution_argv_uses_sudo_for_non_root(monkeypatch, tmp_path):
     monkeypatch.setattr(install_source.os, "geteuid", lambda: 1000)
     package_path = tmp_path / "topo.deb"
