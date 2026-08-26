@@ -8,7 +8,12 @@ import pytest
 from src.core.history import parse_deletion_history
 from src.core.system import APT_NONINTERACTIVE_ENV, C_LOCALE_ENV
 from src.ui.screens.uninstall import run_uninstall
-from src.uninstall import UninstallManager, _ResidueEntryIndex
+from src.uninstall import (
+    UninstallManager,
+    _has_deb_database,
+    _has_rpm_database,
+    _ResidueEntryIndex,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -18,6 +23,31 @@ def mock_sleep():
     with patch("time.sleep") as m:
         yield m
     UninstallManager.clear_scan_cache()
+
+
+@pytest.fixture
+def deb_database(monkeypatch, tmp_path):
+    """A dpkg status database with something in it.
+
+    The apt scanners refuse to fork dpkg-query when the status file is empty or
+    absent (D9), which is the normal state of every box these tests run on. Any
+    test that feeds dpkg-query output through a patched which() has to say the
+    database exists too, or it is only ever testing the guard.
+    """
+    status = tmp_path / "dpkg-status"
+    status.write_text("Package: bash\nStatus: install ok installed\n")
+    monkeypatch.setattr("src.uninstall._DPKG_STATUS_FILE", status)
+    return status
+
+
+@pytest.fixture
+def rpm_database(monkeypatch, tmp_path):
+    """An rpm database directory with something in it; the rpm-side counterpart."""
+    db_dir = tmp_path / "rpmdb"
+    db_dir.mkdir()
+    (db_dir / "rpmdb.sqlite").write_bytes(b"SQLite format 3\x00")
+    monkeypatch.setattr("src.uninstall._RPM_DB_DIR", db_dir)
+    return db_dir
 
 
 @pytest.fixture
@@ -647,7 +677,7 @@ def test_run_full_scan_keeps_user_libreoffice_apps(mock_run, mock_which):
 
 @patch("src.uninstall.system.run_command")
 @patch("shutil.which")
-def test_run_full_scan_apt(mock_which, mock_run_cmd):
+def test_run_full_scan_apt(mock_which, mock_run_cmd, deb_database):
     mock_which.side_effect = lambda x: "/usr/bin/dpkg-query" if x == "dpkg-query" else None
     # status<TAB>package<TAB>essential<TAB>priority<TAB>installed-size, the format
     # _DPKG_QUERY_FORMAT asks dpkg-query for.
@@ -675,7 +705,7 @@ def test_run_full_scan_apt(mock_which, mock_run_cmd):
 
 @patch("src.uninstall.system.run_command")
 @patch("shutil.which")
-def test_apt_scan_skips_packages_whose_files_are_gone(mock_which, mock_run_cmd):
+def test_apt_scan_skips_packages_whose_files_are_gone(mock_which, mock_run_cmd, deb_database):
     """`dpkg -r` without purge leaves an "rc" row keeping its old Installed-Size.
 
     Reporting it would promise back space that was freed whenever the package was
@@ -711,7 +741,7 @@ def test_apt_scan_skips_packages_whose_files_are_gone(mock_which, mock_run_cmd):
 
 @patch("src.uninstall.system.run_command")
 @patch("shutil.which")
-def test_apt_scan_trusts_dpkg_over_the_hardcoded_name_lists(mock_which, mock_run_cmd):
+def test_apt_scan_trusts_dpkg_over_the_hardcoded_name_lists(mock_which, mock_run_cmd, deb_database):
     """deb records its own answer to "may this be removed" (D6).
 
     The name-based guard in _is_system_component was written against Fedora
@@ -1138,7 +1168,7 @@ def test_execute_uninstall_pacman(mock_run_cmd, test_env):
         ("rhel", "fedora", "DNF"),
     ],
 )
-def test_rpm_scan_labels_suse_packages_zypper(os_id, id_like, expected_type):
+def test_rpm_scan_labels_suse_packages_zypper(os_id, id_like, expected_type, rpm_database):
     """An rpm distro is not necessarily a dnf distro: openSUSE and SLES ship
     zypper and no dnf, so a "DNF" label sent their removals nowhere (O5)."""
     mgr = UninstallManager()
@@ -1508,7 +1538,7 @@ def test_dpkg_install_time_prefers_the_arch_qualified_list(tmp_path, monkeypatch
 @patch("src.uninstall.shutil.which")
 @patch("src.uninstall.system.run_command")
 def test_apt_scan_dates_a_multi_arch_package_from_its_qualified_list(
-    mock_run_cmd, mock_which, tmp_path, monkeypatch
+    mock_run_cmd, mock_which, tmp_path, monkeypatch, deb_database
 ):
     """The scan has to hand dpkg-query's own name to the lookup before the stripped
     one, or a Multi-Arch package sorts as if it had never been installed (D2)."""
@@ -1575,7 +1605,7 @@ def test_uninstall_helpers_and_cache_state(test_env, monkeypatch):
     assert mgr.has_fresh_scan_cache() is False
 
 
-def test_scan_package_managers_handles_missing_tools_and_bad_output():
+def test_scan_package_managers_handles_missing_tools_and_bad_output(rpm_database):
     mgr = UninstallManager()
     with patch("src.uninstall.shutil.which", return_value=None):
         assert mgr._scan_rpm_packages(set(), {}) == []
@@ -1589,6 +1619,55 @@ def test_scan_package_managers_handles_missing_tools_and_bad_output():
         patch("src.uninstall.system.run_command", return_value=MagicMock(ok=True, stdout="bad\n")),
     ):
         assert mgr._scan_rpm_packages(set(), {}) == []
+
+
+def test_a_scanner_asks_no_question_of_a_database_that_holds_nothing(monkeypatch, tmp_path):
+    """Having the tools is not having the packages (D9).
+
+    Installing `alien` drags dpkg-query onto Fedora and rpm onto Debian, and both
+    leave behind a database that can only ever answer nothing. Each of those is a
+    fork with a 60-second timeout on every full scan. The module already asked
+    this question before its `dpkg-query -S` batches; now the two -qa/-W scanners
+    ask it too, on both sides.
+    """
+    mgr = UninstallManager()
+    empty_status = tmp_path / "dpkg-status"
+    empty_status.write_text("")
+    empty_rpm_db = tmp_path / "rpmdb"
+    empty_rpm_db.mkdir()
+    monkeypatch.setattr("src.uninstall._DPKG_STATUS_FILE", empty_status)
+    monkeypatch.setattr("src.uninstall._RPM_DB_DIR", empty_rpm_db)
+
+    with (
+        patch("src.uninstall.shutil.which", side_effect=lambda tool: f"/usr/bin/{tool}"),
+        patch("src.uninstall.system.run_command") as run_command,
+    ):
+        assert mgr._scan_apt_packages(set(), {}) == []
+        assert mgr._scan_rpm_packages(set(), {}) == []
+        # Not "returned nothing": never ran.
+        assert run_command.call_args_list == []
+
+    # A directory holding only an empty file is still empty, and a missing one is
+    # not an error to report -- both are just "no rpm packages here".
+    (empty_rpm_db / "Packages").write_bytes(b"")
+    assert _has_rpm_database() is False
+    monkeypatch.setattr("src.uninstall._RPM_DB_DIR", tmp_path / "absent")
+    assert _has_rpm_database() is False
+
+
+def test_a_populated_database_is_worth_asking(deb_database, rpm_database):
+    """The other half of D9's guard: a real box must still be scanned.
+
+    The rpm check is deliberately loose -- any non-empty file counts, because the
+    filename depends on the backend (sqlite/bdb/ndb) and a guard that listed them
+    would silently drop every RPM app the day a fourth appears.
+    """
+    assert _has_deb_database() is True
+    assert _has_rpm_database() is True
+    for leftover in rpm_database.iterdir():
+        leftover.unlink()
+    (rpm_database / "backend-nobody-has-heard-of").write_bytes(b"\x00")
+    assert _has_rpm_database() is True
 
 
 def test_run_full_scan_cache_and_failed_worker(monkeypatch):

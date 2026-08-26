@@ -54,6 +54,12 @@ _DPKG_INFO_DIR = Path("/var/lib/dpkg/info")
 # a non-deb distro creates it empty, and then `dpkg-query -S` can only ever reply
 # "no path found matching pattern" -- once per batch, at a fork apiece.
 _DPKG_STATUS_FILE = Path("/var/lib/dpkg/status")
+# The rpm equivalent. rpm keeps a directory rather than one file, and which files
+# are in it depends on the backend (rpmdb.sqlite today, Packages under bdb,
+# Packages.db under ndb), so the check is "does it hold anything at all" instead
+# of a filename. On Fedora this is a symlink to /usr/lib/sysimage/rpm, which
+# stat() follows.
+_RPM_DB_DIR = Path("/var/lib/rpm")
 
 # How long a process gets to act on SIGTERM before it is killed, and how long the
 # kernel gets to reap it afterwards. Both are waited through once per selection,
@@ -66,6 +72,21 @@ def _has_deb_database() -> bool:
     """Whether dpkg-query has anything to answer from."""
     with contextlib.suppress(OSError):
         return _DPKG_STATUS_FILE.stat().st_size > 0
+    return False
+
+
+def _has_rpm_database() -> bool:
+    """Whether rpm has anything to answer from.
+
+    Asymmetric on purpose: this says False only when the database directory is
+    missing or provably holds nothing, so a backend nobody here has heard of
+    still counts as a database and an rpm distro never silently loses its whole
+    package list. The case being excluded is a Debian box with `rpm` installed as
+    an `alien` dependency, where the directory ships empty and `rpm -qa` is a
+    60-second-timeout fork that can only answer nothing.
+    """
+    with contextlib.suppress(OSError):
+        return any(entry.is_file() and entry.stat().st_size > 0 for entry in _RPM_DB_DIR.iterdir())
     return False
 
 
@@ -640,7 +661,7 @@ class UninstallManager:
                 # dpkg branch, or every APT app falls out of the list -- so the
                 # box that merely has the *tools* of another distro is excluded by
                 # asking whether the database behind them holds anything.
-                has_rpm = bool(shutil.which("rpm"))
+                has_rpm = bool(shutil.which("rpm")) and _has_rpm_database()
                 has_dpkg_query = bool(shutil.which("dpkg-query")) and _has_deb_database()
                 has_pacman = bool(shutil.which("pacman"))
                 for i in range(0, len(str_desktop_files), batch_size):
@@ -729,7 +750,7 @@ class UninstallManager:
     def _scan_rpm_packages(
         self, user_app_packages: set[str], package_desktop_names: dict[str, str]
     ) -> list[dict[str, Any]]:
-        if not shutil.which("rpm"):
+        if not shutil.which("rpm") or not _has_rpm_database():
             return []
         # openSUSE and SLES are rpm distros without dnf, so labelling everything
         # rpm reports "DNF" sent their removals into a `dnf remove` that is not
@@ -777,7 +798,7 @@ class UninstallManager:
     def _scan_apt_packages(
         self, user_app_packages: set[str], package_desktop_names: dict[str, str]
     ) -> list[dict[str, Any]]:
-        if not shutil.which("dpkg-query"):
+        if not shutil.which("dpkg-query") or not _has_deb_database():
             return []
         apps = []
         try:
