@@ -520,7 +520,8 @@ rm -rf \
     requirements-dev.txt \
     packaging/ \
     install.sh \
-    topo-core/
+    topo-core/ \
+    tach.toml
 
 # 5. Run the linking script
 if [ -e "$FINAL_INSTALL" ]; then

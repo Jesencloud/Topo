@@ -121,3 +121,6 @@ def test_the_installer_does_not_leave_the_dev_requirements_in_the_install_tree()
     assert cleanup is not None
 
     assert "requirements-dev.txt" in cleanup.group(1)
+    # tach.toml is only read by `tach check`, which lives in check.sh -- itself on
+    # this list, so the config had nothing left to configure in the install tree.
+    assert "tach.toml" in cleanup.group(1)
