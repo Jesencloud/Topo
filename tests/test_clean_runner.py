@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from src.clean.runner import CleanupTask, TaskRegistry, _print_cleanup_summary, run_clean
 
 
@@ -98,3 +100,82 @@ def test_run_clean_executes_tasks_records_history_and_clears_scan_cache(capsys):
     assert "Category" in output
     assert "cleaned cache" in output
     assert "Cleanup complete" in output
+
+
+def test_run_clean_reports_what_it_deleted_before_a_ctrl_c(capsys):
+    """Ctrl-C mid-run keeps the record of everything already deleted.
+
+    The group's own `✓` lines were still buffered inside redirect_stdout, the
+    summary never ran and no closing line reached the audit log, so a run that
+    deleted 2 GB left one line of "interrupted" behind and showed up in
+    `topo history` as `incomplete` forever.
+    """
+
+    def deleting_task(dry_run=False):
+        print("cleaned cache")
+        return 2 * 1024**3, 2, 1
+
+    def interrupted_task(dry_run=False):
+        print("half of this group")
+        raise KeyboardInterrupt
+
+    groups = [
+        ("First Category", [CleanupTask("Cache", deleting_task)]),
+        ("Second Category", [CleanupTask("Interrupted", interrupted_task)]),
+    ]
+    with (
+        patch("src.clean.runner.proactive_app_detection", return_value={}),
+        patch("src.clean.runner.system.authenticate_sudo_session", return_value=True),
+        patch("src.clean.runner.TaskRegistry.build_execution_groups", return_value=groups),
+        patch("src.clean.runner.record_history_session") as history,
+        patch("src.clean.runner.ScanCache.clear") as clear_cache,
+        patch(
+            "src.clean.runner.shutil.disk_usage",
+            return_value=SimpleNamespace(free=10 * 1024**3),
+        ),
+        pytest.raises(KeyboardInterrupt),
+    ):
+        run_clean()
+
+    # The interrupt still propagates -- main() turns it into exit 130 -- but the
+    # report, the cache invalidation and the closing history line all happened
+    # on the way out.
+    assert history.call_args_list[-1].args == ("clean", "interrupted")
+    clear_cache.assert_called_once_with()
+    output = capsys.readouterr().out
+    assert "cleaned cache" in output
+    # Even the partial group flushes what it managed to print.
+    assert "half of this group" in output
+    assert "Cleanup interrupted" in output
+    assert "before the interrupt" in output
+    assert "the rest never started" in output
+
+
+def test_run_clean_does_not_log_a_finish_when_the_run_was_killed(capsys):
+    """Only a run that got through every group may report as finished.
+
+    The report moved into a `finally`, which by itself would have signed off any
+    exit as `ended` -- including SIGTERM, which arrives as SystemExit rather than
+    KeyboardInterrupt, and a task raising outright. Both would have written a
+    completion into the audit log for a run that never completed.
+    """
+
+    def killed_task(dry_run=False):
+        raise SystemExit(143)
+
+    groups = [("Category", [CleanupTask("Cache", killed_task)])]
+    with (
+        patch("src.clean.runner.proactive_app_detection", return_value={}),
+        patch("src.clean.runner.system.authenticate_sudo_session", return_value=True),
+        patch("src.clean.runner.TaskRegistry.build_execution_groups", return_value=groups),
+        patch("src.clean.runner.record_history_session") as history,
+        patch(
+            "src.clean.runner.shutil.disk_usage",
+            return_value=SimpleNamespace(free=10 * 1024**3),
+        ),
+        pytest.raises(SystemExit),
+    ):
+        run_clean()
+
+    assert history.call_args_list[-1].args == ("clean", "interrupted")
+    assert "Cleanup interrupted" in capsys.readouterr().out

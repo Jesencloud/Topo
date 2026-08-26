@@ -1928,3 +1928,53 @@ def test_build_targets_and_execute_cli_npm_and_systemd(test_env):
     ):
         result = mgr.execute_uninstall(app2, [service])
     assert result["removed_paths"]
+
+
+def test_run_uninstall_reports_apps_already_removed_before_a_ctrl_c(capsys):
+    """Ctrl-C mid-selection still says which apps are gone (I2).
+
+    removed_names/failed_names were discarded along with the exception, so a user
+    who interrupted a five-app removal after two had been purged saw one line --
+    "Process interrupted by user." -- and had no way to tell which two. The report
+    now runs from the loop's `finally`, and says the rest never started.
+    """
+    mock_apps = [
+        {
+            "id": f"app{i}",
+            "name": name,
+            "size_bytes": 1024,
+            "size_str": "1.0 KiB",
+            "type": "DNF",
+            "install_time": 0,
+        }
+        for i, name in enumerate(("Firefox", "Chromium"))
+    ]
+    results = [
+        {"package_removed": True, "removed_paths": []},
+        KeyboardInterrupt(),
+    ]
+
+    with (
+        patch("src.uninstall.UninstallManager.run_full_scan", return_value=mock_apps),
+        patch("src.ui.screens.uninstall.UninstallSelector.run", return_value=[0, 1]),
+        patch("src.ui.screens.uninstall.UninstallPreviewSelector.run", return_value=True),
+        patch("src.uninstall.UninstallManager.find_residue_paths", return_value=[]),
+        patch("src.uninstall.UninstallManager.execute_uninstall", side_effect=results),
+        patch("src.core.system.ensure_sudo_session", return_value=True),
+        patch("src.ui.screens.uninstall.ScanCache.clear") as clear_cache,
+        patch("src.ui.screens.uninstall.play_delete") as play,
+        patch("src.ui.navigator.Navigator.wait_for_return", return_value=False),
+        pytest.raises(KeyboardInterrupt),
+    ):
+        run_uninstall()
+
+    out = capsys.readouterr().out
+    assert "Removed Firefox" in out
+    assert "Chromium" not in out
+    assert "Uninstall interrupted" in out
+    assert "Removed 1 app(s)" in out
+    assert "left untouched" in out
+    # The scan cache is stale either way -- one app really is gone.
+    clear_cache.assert_called_once_with()
+    # No success chime for a run the user stopped.
+    play.assert_not_called()

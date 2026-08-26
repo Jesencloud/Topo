@@ -1696,6 +1696,11 @@ class UninstallManager:
         package_event_recorded = False
         package_mode = str(app.get("type", "package")).lower()
         package_size = int(app.get("size_bytes") or 0)
+        # Only the successful return below promotes this to "ended". Ctrl-C,
+        # SIGTERM (which arrives as SystemExit) and a bug in the removal code all
+        # leave it as it is, because `topo history` distinguishes an app whose
+        # removal was cut short from one that finished with failures.
+        session_status = "interrupted"
 
         try:
             # 1. Graceful Kill (SIGTERM -> Wait -> SIGKILL). Use real executable
@@ -1836,6 +1841,7 @@ class UninstallManager:
                     ["systemctl", "--user", "daemon-reload"], capture=True, timeout=10
                 )
 
+            session_status = "ended"
             return {
                 "package_removed": package_status == "removed",
                 "removed_paths": removed_details,
@@ -1843,4 +1849,4 @@ class UninstallManager:
         finally:
             if package_status == "failed" and not package_event_recorded:
                 record_deletion_audit(app.get("id", app_name), package_mode, "failed", package_size)
-            record_history_session(session_command, "ended")
+            record_history_session(session_command, session_status)

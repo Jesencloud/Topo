@@ -46,6 +46,42 @@ SCREEN_TITLE = "Uninstall Apps"
 NEEDS_SUDO_TYPES = frozenset({"APT", "DNF", "Pacman", "Snap", "Zypper"})
 
 
+def _print_removal_report(
+    removed_names: list[str],
+    failed_names: list[str],
+    total_freed: int,
+    *,
+    interrupted: bool = False,
+) -> None:
+    """Print what the removal loop actually managed to do, per app and in total.
+
+    This runs from the loop's ``finally``, because on Ctrl-C those two lists are
+    the only record of which apps are already gone -- they used to be discarded
+    along with the exception, leaving the user with one line ("Process
+    interrupted by user.") and no way to tell what had been removed.
+    """
+    for name in removed_names:
+        print(f"{GREEN}✓{RESET} Removed {BOLD}{name}{RESET}")
+    for name in failed_names:
+        print(f"{RED}✗{RESET} Failed to remove {BOLD}{name}{RESET}")
+
+    # Final Summary — only report what actually succeeded.
+    print(f"\n{'=' * 70}")
+    print(f"{BLUE}{'Uninstall interrupted' if interrupted else 'Uninstall complete'}{RESET}")
+    names_str = ", ".join(removed_names) if removed_names else "none"
+    # Count and size get the same treatment as each other, the way the
+    # preview prompt colours its pair -- but in green, not the preview's
+    # purple: this is the report of what happened, not a question.
+    msg = f"Removed {GREEN}{len(removed_names)}{RESET} app(s), freed {GREEN}"
+    msg += f"{bytes_to_human(total_freed)}{RESET}: {names_str}"
+    print(msg)
+    if failed_names:
+        print(f" {RED}✗ Failed:{RESET} {', '.join(failed_names)}")
+    if interrupted:
+        print(f" {GRAY}ℹ️  Anything not listed above was left untouched.{RESET}")
+    print("=" * 70)
+
+
 def run_uninstall():
     manager = UninstallManager()
 
@@ -107,9 +143,13 @@ def run_uninstall():
                 sys.stdout.write(f"{CLEAR_LINE}{PURPLE}{frame}{RESET} {status_box[0]}")
                 sys.stdout.flush()
 
-            removed_names = []
-            failed_names = []
+            removed_names: list[str] = []
+            failed_names: list[str] = []
             total_freed_all = 0
+            # Flipped once the loop has been through every app, so any other way
+            # out reports as a stop: Ctrl-C, SIGTERM (SystemExit, not
+            # KeyboardInterrupt) and a bug in the removal code all leave it False.
+            finished = False
 
             try:
                 with threaded_spinner(render_removal_spinner):
@@ -139,31 +179,17 @@ def run_uninstall():
                     # unused auto-installed package on the box, previewed or not;
                     # each app's own orphans now go in its own transaction, the one
                     # the preview simulated (execute_uninstall passes --autoremove).
+                finished = True
             finally:
                 sys.stdout.write(f"{CLEAR_LINE}")
                 sys.stdout.flush()
+                if removed_names:
+                    ScanCache.clear()
+                    UninstallManager.clear_scan_cache()
+                _print_removal_report(
+                    removed_names, failed_names, total_freed_all, interrupted=not finished
+                )
 
-            for name in removed_names:
-                print(f"{GREEN}✓{RESET} Removed {BOLD}{name}{RESET}")
-            for name in failed_names:
-                print(f"{RED}✗{RESET} Failed to remove {BOLD}{name}{RESET}")
-
-            # Final Summary — only report what actually succeeded.
-            if removed_names:
-                ScanCache.clear()
-                UninstallManager.clear_scan_cache()
-            print(f"\n{'=' * 70}")
-            print(f"{BLUE}Uninstall complete{RESET}")
-            names_str = ", ".join(removed_names) if removed_names else "none"
-            # Count and size get the same treatment as each other, the way the
-            # preview prompt colours its pair -- but in green, not the preview's
-            # purple: this is the report of what happened, not a question.
-            msg = f"Removed {GREEN}{len(removed_names)}{RESET} app(s), freed {GREEN}"
-            msg += f"{bytes_to_human(total_freed_all)}{RESET}: {names_str}"
-            print(msg)
-            if failed_names:
-                print(f" {RED}✗ Failed:{RESET} {', '.join(failed_names)}")
-            print("=" * 70)
             play_delete()
 
             # Standardized return/exit prompt

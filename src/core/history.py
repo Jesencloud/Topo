@@ -33,11 +33,21 @@ class DeletionEvent:
     path: str
 
 
+# The three ways a session line can close it. "ended" is the normal finish;
+# "interrupted" is Ctrl-C, written from the same `finally` that prints the
+# partial report, so the log says "stopped here on purpose". A session with no
+# closing line at all is neither -- it renders as "incomplete", which now means
+# what it says: the process died without getting the chance to write anything.
+SESSION_STATUSES = frozenset({"started", "ended", "interrupted"})
+_CLOSING_STATUSES = frozenset({"ended", "interrupted"})
+
+
 @dataclass
 class HistorySession:
     command: str
     started_at: str
     ended_at: str = ""
+    interrupted: bool = False
     events: list[DeletionEvent] = field(default_factory=list)
 
     @property
@@ -70,8 +80,12 @@ class HistorySession:
 
 
 def record_history_session(command: str, status: str) -> None:
-    """Record a session boundary in the deletion audit log."""
-    if status not in {"started", "ended"}:
+    """Record a session boundary in the deletion audit log.
+
+    *status* is one of SESSION_STATUSES; anything else is dropped rather than
+    written as an event the parser would not recognise.
+    """
+    if status not in SESSION_STATUSES:
         return
     record_deletion_audit(command, "session", status, 0)
 
@@ -95,9 +109,10 @@ def parse_deletion_history(log_path: Path | None = None) -> list[HistorySession]
                 if active is not None:
                     sessions.append(active)
                 active = HistorySession(command=event.path, started_at=event.timestamp)
-            elif event.status == "ended":
+            elif event.status in _CLOSING_STATUSES:
                 if active is not None:
                     active.ended_at = event.timestamp
+                    active.interrupted = event.status == "interrupted"
                     sessions.append(active)
                     active = None
             continue
@@ -124,7 +139,12 @@ def render_history(sessions: list[HistorySession], limit: int = 10) -> str:
     lines = ["Deletion History", ""]
     for session in sessions[-limit:][::-1]:
         ended = session.ended_at or "incomplete"
-        lines.append(f"{session.started_at} -> {ended}  {session.command}")
+        # "interrupted" and "incomplete" are different answers to "why does this
+        # session stop here", so they read differently: the first was Ctrl-C and
+        # the counts below it are the real total, the second means nothing closed
+        # the session and the counts may be short.
+        outcome = "  (interrupted)" if session.interrupted else ""
+        lines.append(f"{session.started_at} -> {ended}  {session.command}{outcome}")
         lines.append(
             "  "
             f"removed={session.removed}  "

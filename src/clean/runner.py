@@ -69,11 +69,21 @@ def _print_cleanup_summary(
     total_size: int,
     total_items: int,
     category_results: list[tuple[str, int, int]],
+    interrupted: bool = False,
 ) -> None:
-    """Prints the formatted completion breakdown and disk space summary."""
+    """Prints the formatted completion breakdown and disk space summary.
+
+    *interrupted* means the run stopped before its last group -- Ctrl-C, a kill,
+    or a task raising. Everything below is still true, it is just not the whole
+    run. The summary is printed either way, because the numbers describe files
+    that are already gone.
+    """
     free_now = shutil.disk_usage(os.path.expanduser("~")).free
     print("\n" + "=" * 60)
-    status_text = "Scan complete (Preview)" if dry_run else "Cleanup complete"
+    if interrupted:
+        status_text = "Scan interrupted (Preview)" if dry_run else "Cleanup interrupted"
+    else:
+        status_text = "Scan complete (Preview)" if dry_run else "Cleanup complete"
     print(f"{BLUE}{status_text}{RESET}")
 
     if category_results:
@@ -82,6 +92,8 @@ def _print_cleanup_summary(
             print(f"  • {name:<25} {GREEN}{bytes_to_human(size):>10}{RESET} ({items} items)")
 
     size_label = "\nTotal space freed" if not dry_run else "\nTotal space that can be freed"
+    if interrupted:
+        size_label += " before the interrupt"
     print(f"{size_label}: {GREEN}{bytes_to_human(total_size)}{RESET} | Items: {total_items}")
 
     if not dry_run:
@@ -91,6 +103,10 @@ def _print_cleanup_summary(
         print(f"Free space now: {bytes_to_human(free_now)}")
 
     print("=" * 60)
+    if interrupted:
+        print(
+            f"\n{GRAY}ℹ️  Stopped before the end: the groups above had already run, the rest never started.{RESET}"
+        )
     if dry_run:
         print(f"\n{GRAY}ℹ️  Run without --dry-run to actually delete these files.{RESET}")
 
@@ -123,25 +139,45 @@ def run_clean(dry_run: bool = False) -> bool:
     category_results: list[tuple[str, int, int]] = []
     execution_groups = TaskRegistry.build_execution_groups(detected_apps)
 
-    for header, tasks in execution_groups:
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            for task in tasks:
-                size, items, _ = task.action(dry_run=dry_run)
-                if size > 0 or items > 0:
-                    total_size += size
-                    total_items += items
-                    category_results.append((task.name, size, items))
+    # Ctrl-C in the middle of a group used to throw away everything this run had
+    # already deleted: the group's own `✓` lines were still sitting in `buf`, the
+    # summary never printed, and no closing session line reached the audit log, so
+    # `topo history` showed the run as `incomplete` forever. Every report step now
+    # runs from a `finally`, and each group flushes whatever it managed to write.
+    #
+    # `finished` flips on the one path that ran every group, so every other way
+    # out reports as a stop: Ctrl-C, SIGTERM (which arrives as SystemExit, not
+    # KeyboardInterrupt) and a task raising all leave it False. Claiming "complete"
+    # or logging "ended" for those would put a finish in the audit log that never
+    # happened.
+    finished = False
+    try:
+        for header, tasks in execution_groups:
+            buf = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(buf):
+                    for task in tasks:
+                        size, items, _ = task.action(dry_run=dry_run)
+                        if size > 0 or items > 0:
+                            total_size += size
+                            total_items += items
+                            category_results.append((task.name, size, items))
+            finally:
+                # redirect_stdout has already restored the real stdout by now, so
+                # this reaches the terminal even while an exception unwinds.
+                output = buf.getvalue()
+                if output.strip():
+                    print(header)
+                    print(output, end="")
+        finished = True
+    finally:
+        _print_cleanup_summary(
+            dry_run, total_size, total_items, category_results, interrupted=not finished
+        )
 
-        output = buf.getvalue()
-        if output.strip():
-            print(header)
-            print(output, end="")
+        if not dry_run:
+            ScanCache.clear()
 
-    _print_cleanup_summary(dry_run, total_size, total_items, category_results)
+        record_history_session(session_command, "ended" if finished else "interrupted")
 
-    if not dry_run:
-        ScanCache.clear()
-
-    record_history_session(session_command, "ended")
     return True
