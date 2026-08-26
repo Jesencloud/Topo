@@ -1,4 +1,5 @@
 import platform
+import re
 import shutil
 from pathlib import Path
 
@@ -253,6 +254,50 @@ def clean_zombies(dry_run: bool = False) -> tuple[int, int, int]:
     return 0, count, 1
 
 
+# A kernel package carries its version in its name: linux-image-6.8.0-45-generic
+# (Ubuntu), linux-image-6.1.0-18-amd64 (Debian). Names without one -- the
+# linux-image-generic / linux-image-amd64 metapackages -- are not kernels.
+_VERSIONED_KERNEL = re.compile(r"^linux-image-\d")
+# apt's own total for one operation. parse_size_from_text() cannot be pointed at
+# the transcript: fed the whole thing it matches "2 to remove" as 2 TB. The
+# sentence is English because the purge runs under APT_NONINTERACTIVE_ENV, and
+# matching "freed" keeps the "additional disk space will be used" wording out.
+_APT_FREED_SPACE = re.compile(
+    r"After this operation, ([0-9.]+)\s*([kMGTPE]?)B disk space will be freed"
+)
+# apt divides by 1000, not 1024 (apt-pkg's SizeToStr), so these are the decimal
+# multipliers rather than parse_size_from_text's binary ones. Every unit the
+# pattern accepts needs an entry here, or a match would raise instead of parse.
+_SI_MULTIPLIER = {
+    "": 1,
+    "k": 1000,
+    "M": 1000**2,
+    "G": 1000**3,
+    "T": 1000**4,
+    "P": 1000**5,
+    "E": 1000**6,
+}
+
+
+def _kernel_version_key(name: str) -> tuple[int, ...]:
+    """Every number in a kernel package name, as something sortable.
+
+    "linux-image-6.8.0-100-generic" -> (6, 8, 0, 100), which orders after
+    (6, 8, 0, 91). The prefix and the flavour suffix hold no digits, so
+    platform.release() ("6.8.0-45-generic") yields the same key as the package
+    that provides it -- that is how the running kernel is recognised.
+    """
+    return tuple(int(part) for part in re.findall(r"\d+", name))
+
+
+def _apt_freed_bytes(output: str) -> int:
+    """Bytes freed according to apt's own report, 0 when it did not say."""
+    match = _APT_FREED_SPACE.search(output)
+    if not match:
+        return 0
+    return int(float(match.group(1)) * _SI_MULTIPLIER[match.group(2)])
+
+
 def clean_old_kernels(dry_run: bool = False) -> tuple[int, int, int]:
     """Remove old kernel packages, keeping current and one previous version."""
     current_kernel = platform.release()
@@ -272,34 +317,55 @@ def clean_old_kernels(dry_run: bool = False) -> tuple[int, int, int]:
         res = run_command(["dpkg", "-l", "linux-image-*"], capture=True, env=C_LOCALE_ENV)
         if not res.ok or not res.stdout:
             return 0, 0, 0
-        installed = []
+        running = _kernel_version_key(current_kernel)
+        candidates: list[tuple[tuple[int, ...], str]] = []
         for line in res.stdout.splitlines():
-            if line.startswith("ii") and "linux-image-" in line:
-                parts = line.split()
-                if len(parts) >= 2:
-                    pkg = parts[1]
-                    is_meta = pkg.endswith("-generic") and not any(
-                        c.isdigit() for c in pkg.split("-")[2:3]
-                    )
-                    if is_meta:
-                        continue
-                    installed.append(pkg)
-        removable = [p for p in installed if current_kernel.split("-")[0] not in p]
-        if len(removable) <= 1:
+            if not line.startswith("ii"):
+                continue
+            parts = line.split()
+            if len(parts) < 2 or not _VERSIONED_KERNEL.match(parts[1]):
+                # Everything without a version in its name: the metapackages
+                # (linux-image-generic on Ubuntu, linux-image-amd64 on Debian)
+                # that pull in each new kernel -- purging one is how a machine
+                # stops receiving kernel updates -- plus linux-image-extra-* and
+                # linux-image-unsigned-*, which the orphan sweep collects once
+                # the image depending on them is gone.
+                continue
+            key = _kernel_version_key(parts[1])
+            if key == running:
+                # Never the kernel we booted from, whatever its flavour suffix.
+                continue
+            candidates.append((key, parts[1]))
+        # Sorted by version, because dpkg -l lists rows alphabetically and
+        # alphabetically "-100-generic" comes *before* "-91-generic": trusting
+        # that order kept the oldest kernel and purged the newest one.
+        candidates.sort()
+        # Newest of the rest survives -- that is the "one previous version" the
+        # docstring promises, and the entry a failed upgrade boots back into.
+        to_remove = [pkg for _key, pkg in candidates[:-1]]
+        if not to_remove:
             return 0, 0, 0
-        to_remove = removable[:-1]
         if dry_run:
             print(f"  {OK} {len(to_remove)} old kernel(s) would be removed")
             return 0, 0, 1
+        freed = 0
+        removed = 0
         for pkg in to_remove:
-            run_command(
+            purge = run_command(
                 [tool, "purge", "-y", pkg],
                 use_sudo=True,
                 capture=True,
                 env=APT_NONINTERACTIVE_ENV,
             )
-        print(f"  {OK} Removed {len(to_remove)} old kernel(s)")
-        return 0, len(to_remove), 1
+            if not purge.ok:
+                continue
+            removed += 1
+            freed += _apt_freed_bytes(purge.stdout)
+        if not removed:
+            return 0, 0, 0
+        freed_str = f" ({bytes_to_human(freed)})" if freed else ""
+        print(f"  {OK} Removed {removed} old kernel(s){freed_str}")
+        return freed, removed, 1
 
     elif manager.key == "dnf":
         res = run_command([tool, "repoquery", "--installonly", "--installed"], capture=True)
@@ -355,6 +421,9 @@ def clean_system_data(dry_run: bool = False) -> tuple[int, int, int]:
 
     The order is the one runner.py used to spell out task by task: package
     caches first, then what they leave behind, then logs, then processes.
+    Kernels go before the orphan sweep: purging linux-image-X orphans its
+    linux-modules-X, and in the other order those hundreds of megabytes waited
+    for the *next* `topo clean` to be collected.
 
     Each sub-cleaner prints its own line, so aggregating here changes the
     summary rather than the transcript -- the six tasks become one row, the
@@ -366,8 +435,8 @@ def clean_system_data(dry_run: bool = False) -> tuple[int, int, int]:
 
     for s, i, c in (
         clean_package_manager(dry_run),
-        clean_orphaned_packages(dry_run),
         clean_old_kernels(dry_run),
+        clean_orphaned_packages(dry_run),
         clean_journal(dry_run),
         clean_rotated_logs(dry_run),
         clean_zombies(dry_run),

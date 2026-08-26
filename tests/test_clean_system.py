@@ -320,24 +320,160 @@ def test_zombies_failure_and_empty_output():
         assert clean_zombies() == (0, 0, 0)
 
 
-def test_old_kernels_debian_and_dnf_paths():
-    # The branch follows os-release, not whichever tools happen to be installed:
-    # with dpkg present for `alien`, a Fedora box used to take the deb branch,
-    # find no linux-image-* rows and never ask dnf about its kernels.
-    deb = "ii linux-image-5.10.1 x\nii linux-image-5.10.2 x\nii linux-image-6.1.0 x\n"
+# Real `dpkg -l 'linux-image-*'` output, header and all. The row order is dpkg's
+# own -- alphabetical, which puts "-100-" ahead of "-31-" and the metapackage
+# last -- because the code under test must not read it as a version order.
+_UBUNTU_KERNEL_ROWS = """\
+Desired=Unknown/Install/Remove/Purge/Hold
+| Status=Not/Inst/Conf-files/Unpacked/halF-conf/Half-inst/trig-aWait/Trig-pend
+|/ Err?=(none)/Reinst-required (Status,Err: uppercase=bad)
+||/ Name                          Version       Architecture Description
++++-=============================-=============-============-=================
+ii  linux-image-6.8.0-100-generic 6.8.0-100.100 amd64        Signed kernel image
+ii  linux-image-6.8.0-31-generic  6.8.0-31.31   amd64        Signed kernel image
+ii  linux-image-6.8.0-45-generic  6.8.0-45.45   amd64        Signed kernel image
+ii  linux-image-generic           6.8.0.100.100 amd64        Generic metapackage
+"""
+_DEBIAN_KERNEL_ROWS = """\
+ii  linux-image-5.10.0-26-amd64 5.10.197-1 amd64 Linux 5.10 for 64-bit PCs
+ii  linux-image-5.10.0-28-amd64 5.10.209-2 amd64 Linux 5.10 for 64-bit PCs
+ii  linux-image-6.1.0-18-amd64  6.1.76-1   amd64 Linux 6.1 for 64-bit PCs
+ii  linux-image-amd64           6.1.76-1   amd64 Linux for 64-bit PCs (meta)
+"""
+# What `apt-get purge -y` prints. The "2 to remove" line is kept verbatim on
+# purpose: parse_size_from_text() reads it as 2 TB, which is why the code has its
+# own parser anchored on apt's sentence.
+_APT_PURGE_OUTPUT = """\
+Reading package lists...
+The following packages will be REMOVED:
+  linux-image-6.8.0-31-generic*
+0 upgraded, 0 newly installed, 2 to remove and 0 not upgraded.
+After this operation, 312 MB disk space will be freed.
+Removing linux-image-6.8.0-31-generic (6.8.0-31.31) ...
+"""
+
+
+_PURGE_OK = SimpleNamespace(ok=True, stdout="")
+
+
+def _purge_kernels(rows, os_id, release, purge=_PURGE_OK, dry_run=False):
+    """clean_old_kernels() over a `dpkg -l` listing; returns (purged, result)."""
+    purged = []
+
+    def fake_run_command(args, **kwargs):
+        if args[:2] == ["dpkg", "-l"]:
+            return SimpleNamespace(ok=True, stdout=rows)
+        purged.append(args)
+        return purge
+
     with (
-        patch("src.clean.system.get_os_id", return_value="ubuntu"),
-        patch("src.clean.system.platform.release", return_value="6.1.0-generic"),
+        patch("src.clean.system.get_os_id", return_value=os_id),
+        patch("src.clean.system.platform.release", return_value=release),
         patch("shutil.which", side_effect=lambda n: "/usr/bin/" + n),
-        patch("src.clean.system.run_command", return_value=SimpleNamespace(ok=True, stdout=deb)),
+        patch("src.clean.system.run_command", side_effect=fake_run_command),
     ):
-        assert clean_old_kernels(dry_run=True) == (0, 0, 1)
-        assert clean_old_kernels() == (0, 1, 1)
+        return purged, clean_old_kernels(dry_run=dry_run)
+
+
+def test_old_kernels_on_ubuntu_purges_the_oldest_not_the_newest():
+    """Every Ubuntu kernel package ends in -generic, and the whole cleaner used to
+    write them all off as metapackages, so `topo clean` silently did nothing.
+
+    The surviving pair also has to be the *newest* two: dpkg lists -100- before
+    -31-, so keeping "the last row" kept the oldest kernel and purged the rest.
+    """
+    purged, result = _purge_kernels(_UBUNTU_KERNEL_ROWS, "ubuntu", "6.8.0-45-generic")
+
+    assert purged == [["apt-get", "purge", "-y", "linux-image-6.8.0-31-generic"]]
+    assert result == (0, 1, 1)
+
+    dry_purged, dry_result = _purge_kernels(
+        _UBUNTU_KERNEL_ROWS, "ubuntu", "6.8.0-45-generic", dry_run=True
+    )
+
+    assert dry_purged == []
+    assert dry_result == (0, 0, 1)
+
+
+def test_old_kernels_on_debian_leaves_a_kernel_to_fall_back_to():
+    """Debian's metapackage is linux-image-amd64: no -generic suffix, and last in
+    dpkg's alphabetical order, so it used to take the "keep one previous kernel"
+    slot while both real fallbacks were purged -- leaving nothing but the running
+    kernel in GRUB.
+    """
+    purged, result = _purge_kernels(_DEBIAN_KERNEL_ROWS, "debian", "6.1.0-18-amd64")
+
+    # Three of the four rows survive: the metapackage that pulls in future
+    # kernels, the running kernel, and one bootable fallback.
+    assert purged == [["apt-get", "purge", "-y", "linux-image-5.10.0-26-amd64"]]
+    assert result == (0, 1, 1)
+
+
+def test_old_kernels_will_not_purge_the_last_fallback():
+    # The same listing without its oldest kernel: running, one fallback, and the
+    # metapackage, so there is nothing left to remove.
+    rows = "\n".join(_DEBIAN_KERNEL_ROWS.splitlines()[1:]) + "\n"
+
+    purged, result = _purge_kernels(rows, "debian", "6.1.0-18-amd64")
+
+    assert purged == []
+    assert result == (0, 0, 0)
+
+
+def test_old_kernels_reports_the_bytes_apt_says_it_freed():
+    # apt counts in decimal MB (apt-pkg divides by 1000), so 312 MB is 312e6 --
+    # not the 327e6 a binary reading would report.
+    purged, result = _purge_kernels(
+        _UBUNTU_KERNEL_ROWS,
+        "ubuntu",
+        "6.8.0-45-generic",
+        purge=SimpleNamespace(ok=True, stdout=_APT_PURGE_OUTPUT),
+    )
+
+    assert len(purged) == 1
+    assert result == (312_000_000, 1, 1)
+
+
+def test_old_kernels_counts_nothing_when_the_purge_fails():
+    purged, result = _purge_kernels(
+        _UBUNTU_KERNEL_ROWS,
+        "ubuntu",
+        "6.8.0-45-generic",
+        purge=SimpleNamespace(ok=False, stdout=""),
+    )
+
+    assert len(purged) == 1
+    assert result == (0, 0, 0)
+
+
+def test_apt_freed_bytes_reads_apts_sentence_and_nothing_else():
+    from src.clean import system as module
+
+    # Decimal, because apt's SizeToStr divides by 1000.
+    assert module._apt_freed_bytes("After this operation, 312 MB disk space will be freed.") == (
+        312_000_000
+    )
+    assert module._apt_freed_bytes("After this operation, 1.2 GB disk space will be freed.") == (
+        1_200_000_000
+    )
+    # Under a kilobyte apt leaves two spaces before the B ("%.0f %c" + "B").
+    assert module._apt_freed_bytes("After this operation, 512  B disk space will be freed.") == 512
+    # An install is not a free: this wording must not be counted.
+    assert module._apt_freed_bytes("After this operation, 12.3 MB of additional disk space") == 0
+    # The line parse_size_from_text() would have read as 2 TB.
+    assert module._apt_freed_bytes("0 upgraded, 0 newly installed, 2 to remove") == 0
+    assert module._apt_freed_bytes("") == 0
+
+
+def test_old_kernels_dnf_path():
+    # The branch follows os-release, not whichever tools happen to be installed:
+    # with dpkg present for `alien` -- as it is here -- a Fedora box used to take
+    # the deb branch, find no linux-image-* rows and never ask dnf about kernels.
     rpm = "5.10.1-1\n5.10.2-1\n6.1.0-1\n"
     with (
         patch("src.clean.system.get_os_id", return_value="fedora"),
         patch("src.clean.system.platform.release", return_value="6.1.0-1"),
-        patch("shutil.which", side_effect=lambda n: "/usr/bin/dnf" if n == "dnf" else None),
+        patch("shutil.which", side_effect=lambda n: "/usr/bin/" + n),
         patch("src.clean.system.run_command", return_value=SimpleNamespace(ok=True, stdout=rpm)),
     ):
         assert clean_old_kernels(dry_run=True) == (0, 0, 1)
