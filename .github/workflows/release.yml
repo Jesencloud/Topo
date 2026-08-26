@@ -71,7 +71,7 @@ jobs:
           test -x "$HOME/.topo/topo"
           test -L "$TOPO_LINK_DIR/topo"
           test "$(readlink -f "$TOPO_LINK_DIR/topo")" = "$(readlink -f "$HOME/.topo/topo")"
-          test "$($TOPO_LINK_DIR/topo --version)" = "topo ${version}"
+          test "$("$TOPO_LINK_DIR/topo" --version)" = "topo ${version}"
 
           repeat_output="$(bash install.sh --version "v${version}")"
           printf '%s\n' "$repeat_output"
@@ -176,19 +176,27 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          mkdir -p "$HOME/.local/bin"
-          rm -f "$HOME/.local/bin/topo"
-          sudo env SUDO_USER="$USER" SUDO_UID="$(id -u)" apt install -y ./dist/packages/topo_*_amd64.deb
+          sudo apt install -y ./dist/packages/topo_*_amd64.deb
+
+          # A "must not appear" check cannot be written `! grep ...`: errexit
+          # exempts a negated command, so those lines passed even with the
+          # forbidden string right there in the output (D16). The failing branch
+          # has to be an explicit exit.
+          must_not_contain() {
+            if grep -F "$1" <<<"$2"; then
+              echo "::error::output must not contain: $1"
+              exit 1
+            fi
+          }
 
           /usr/bin/topo --version
           test "$(cat /usr/lib/topo/.topo-install-source)" = "package"
 
-          hash -p "$HOME/.local/bin/topo" topo
-          if [ -x "$HOME/.local/bin/topo" ]; then
-            grep -F "Managed by topo package compatibility launcher" "$HOME/.local/bin/topo"
-          else
-            hash -r
-          fi
+          # The one thing left to check about the shell's view of the command:
+          # `hash -r` is what topo tells users to run, and after it `topo` has to
+          # be the package's own /usr/bin/topo.
+          hash -r
+          test "$(command -v topo)" = /usr/bin/topo
           topo --version
 
           # topo now reports failures through its exit code, so capture the
@@ -199,14 +207,14 @@ jobs:
           printf '%s\n' "$update_output"
           test "$update_status" -eq 0
           grep -F "Checking for updates" <<<"$update_output"
-          ! grep -F "sudo apt upgrade topo" <<<"$update_output"
-          ! grep -F "sudo dnf upgrade topo" <<<"$update_output"
+          must_not_contain "sudo apt upgrade topo" "$update_output"
+          must_not_contain "sudo dnf upgrade topo" "$update_output"
 
           remove_output="$(topo remove --yes)" && remove_status=0 || remove_status=$?
           printf '%s\n' "$remove_output"
           test "$remove_status" -eq 0
           grep -F "apt remove -y topo" <<<"$remove_output"
-          ! grep -F "dnf remove -y topo" <<<"$remove_output"
+          must_not_contain "dnf remove -y topo" "$remove_output"
           if dpkg-query -W -f='${Status}' topo 2>/dev/null | grep -F "install ok installed"; then
             echo "topo package is still installed"
             exit 1
@@ -230,6 +238,15 @@ jobs:
           set -euo pipefail
           dnf install -y ./dist/packages/topo-*-1.x86_64.rpm
 
+          # See the deb leg: `! grep ...` is exempt from errexit and asserted
+          # nothing (D16).
+          must_not_contain() {
+            if grep -F "$1" <<<"$2"; then
+              echo "::error::output must not contain: $1"
+              exit 1
+            fi
+          }
+
           topo --version
           test "$(cat /usr/lib/topo/.topo-install-source)" = "package"
 
@@ -237,15 +254,20 @@ jobs:
           printf '%s\n' "$update_output"
           test "$update_status" -eq 0
           grep -F "Checking for updates" <<<"$update_output"
-          ! grep -F "sudo apt upgrade topo" <<<"$update_output"
-          ! grep -F "sudo dnf upgrade topo" <<<"$update_output"
+          must_not_contain "sudo apt upgrade topo" "$update_output"
+          must_not_contain "sudo dnf upgrade topo" "$update_output"
 
           remove_output="$(topo remove --yes)" && remove_status=0 || remove_status=$?
           printf '%s\n' "$remove_output"
           test "$remove_status" -eq 0
           grep -F "dnf remove -y topo" <<<"$remove_output"
-          ! grep -F "apt remove -y topo" <<<"$remove_output"
-          ! rpm -q topo
+          must_not_contain "apt remove -y topo" "$remove_output"
+          # The deb leg's dpkg-query counterpart, in the shape errexit honours
+          # wherever it sits in the script rather than only as the last line.
+          if rpm -q topo >/dev/null 2>&1; then
+            echo "topo package is still installed"
+            exit 1
+          fi
 
   release-distro-smoke:
     name: Release Smoke Test (${{ matrix.name }})
@@ -276,13 +298,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Each leg ends by asserting the package is gone. As an `! cmd` that
+          # only held because it was the last line of the script -- errexit
+          # exempts a negated command, so anything appended below it would have
+          # silently turned the check off (D16).
+          refute_installed() {
+            # The probe is silenced because on the happy path it is a "no packages
+            # found" complaint, and the one line worth reading is the ::error::.
+            if "$@" >/dev/null 2>&1; then
+              echo "::error::topo package is still installed ($*)"
+              exit 1
+            fi
+          }
           case "${{ matrix.package }}" in
             deb)
               apt-get update
               apt-get install -y ./dist/packages/topo_*_amd64.deb
               topo --version
               topo remove --yes
-              ! dpkg-query -W topo >/dev/null 2>&1
+              refute_installed dpkg-query -W topo
               ;;
             rpm-zypper)
               zypper --non-interactive refresh
@@ -292,7 +326,7 @@ jobs:
               zypper --non-interactive install --allow-unsigned-rpm ./dist/packages/topo-*-1.x86_64.rpm
               topo --version
               topo remove --yes
-              ! rpm -q topo
+              refute_installed rpm -q topo
               ;;
             rpm-dnf)
               dnf install -y python3.11 python3.11-pip
@@ -301,7 +335,7 @@ jobs:
               dnf install -y ./dist/packages/topo-*-1.x86_64.rpm
               topo --version
               topo remove --yes
-              ! rpm -q topo
+              refute_installed rpm -q topo
               ;;
           esac
 

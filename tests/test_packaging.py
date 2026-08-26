@@ -1,10 +1,15 @@
 import os
+import re
 import subprocess
 from pathlib import Path
 
 from src.core.install_source import get_package_asset_name
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+# A statement whose first token is `!`. Not `if ! cmd; then`, where the negation is
+# part of a condition and does what it says.
+_NEGATED_STATEMENT = re.compile(r"^[ \t]+![ \t]", re.MULTILINE)
 
 _FPM_STUB = """#!/usr/bin/env bash
 printf '%s\\n' "$@" > "$(mktemp "$FPM_ARGV_DIR/argv.XXXXXX")"
@@ -78,6 +83,66 @@ def test_system_packages_do_not_modify_user_home_from_maintainer_scripts():
     assert "--after-remove" not in build_script
     assert not (REPO_ROOT / "packaging/scripts/after-install.sh").exists()
     assert not (REPO_ROOT / "packaging/scripts/after-remove.sh").exists()
+
+
+def test_the_deb_smoke_legs_assert_nothing_about_a_launcher_they_never_install():
+    """No scaffolding left over from the maintainer scripts (D12).
+
+    34cb0aa deleted after-install.sh, and with it the ~/.local/bin compatibility
+    launcher it used to write. What stayed behind in both deb smoke legs was the
+    setup for it: the mkdir/rm that made room, the SUDO_USER/SUDO_UID pair only
+    that script ever read, and
+
+        if [ -x "$HOME/.local/bin/topo" ]; then grep -F "Managed by ..." ...
+
+    whose then-branch can no longer be reached. An assertion that never runs is
+    worse than no assertion: it reads as coverage.
+
+    The string itself still belongs in src/manage/remove.py, which cleans up
+    launchers `topo link` writes on script installs -- this is about the workflows.
+    """
+    for workflow in (".github/workflows/release.yml", ".github/workflows/build-engine.yml"):
+        text = (REPO_ROOT / workflow).read_text()
+        assert "compatibility launcher" not in text, workflow
+        assert "SUDO_USER=" not in text, workflow
+        assert "SUDO_UID=" not in text, workflow
+        assert 'hash -p "$HOME/.local/bin/topo"' not in text, workflow
+        # What replaced it, in both legs: the remedy topo actually prints, and the
+        # resolution it is supposed to produce.
+        assert 'test "$(command -v topo)" = /usr/bin/topo' in text, workflow
+
+
+def test_no_ci_assertion_is_written_in_a_form_errexit_ignores():
+    """`! cmd` cannot fail a workflow step (D16).
+
+    bash exempts a negated command from errexit, so
+
+        ! grep -F "sudo apt upgrade topo" <<<"$update_output"
+
+    printed the forbidden line and carried on. Measured:
+    `set -euo pipefail; ! grep -F x <<<"xyz"; echo reached` prints xyz, then reached,
+    and exits 0. Twelve of these could not fail at all; five more -- the `! rpm -q
+    topo` closing each smoke leg -- held only because they sat on the last line of
+    their script, where the step's exit status is the last command's, and appending
+    one line below them would have switched them off silently.
+
+    The same exemption covers every command of an `&&` list but the last, which is why
+    `test ! -e X && test ! -L X` is two statements now: it asserted only the -L half,
+    so a leftover regular file passed the pair.
+
+    Every workflow, not just the two that had the defect: what is being pinned is the
+    shape, and the next "must not appear" check will be written somewhere else.
+    """
+    for workflow in sorted((REPO_ROOT / ".github/workflows").glob("*.yml")):
+        text = workflow.read_text()
+        negated = _NEGATED_STATEMENT.search(text)
+        assert negated is None, f"{workflow.name}: {text[negated.start() : negated.end() + 60]}"
+        assert " && test " not in text, workflow.name
+    # And the replacement really is there: a failing branch that exits.
+    for workflow in (".github/workflows/release.yml", ".github/workflows/build-engine.yml"):
+        text = (REPO_ROOT / workflow).read_text()
+        assert "must_not_contain()" in text, workflow
+        assert 'must_not_contain "sudo apt upgrade topo" "$update_output"' in text, workflow
 
 
 def test_a_prerelease_tag_never_reaches_the_packaging_job():
