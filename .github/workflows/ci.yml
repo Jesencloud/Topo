@@ -5,6 +5,12 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  # Lets a run be started against a branch without pushing to it. The web UI's
+  # "Re-run jobs" only re-runs an existing run at its own commit, which is no
+  # help when the question is whether an unpinned external dependency -- the
+  # stable Rust toolchain, apt's shellcheck -- is what changed. The other two
+  # workflows already carry this trigger.
+  workflow_dispatch:
 
 permissions:
   contents: read
