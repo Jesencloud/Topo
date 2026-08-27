@@ -1149,10 +1149,16 @@ class UninstallSelector(_PagedSelector):
         else:
             # Yellow is what the rest of the TUI uses to mean "look here": the
             # glyph on a warning notice is the same colour, and this line is
-            # standing in for one.
+            # standing in for one. The leading space turns into a mark at the
+            # same time, because YELLOW and GRAY are both empty strings whenever
+            # colours are off (--no-color, NO_COLOR) and a state told apart by
+            # colour alone would then say nothing at all -- the same reason the
+            # confirmation dialog marks its choice by shape. One bare column
+            # replaces one space, so no row below this one moves.
             hint_color = YELLOW if self.hint_highlighted else GRAY
+            hint_mark = MARK_PROMPT if self.hint_highlighted else " "
             buf.append(
-                f" {hint_color}Select apps to uninstall "
+                f"{hint_color}{hint_mark}Select apps to uninstall "
                 f"(Enter item numbers from this page, or press Space to select):{RESET}\033[K\n"
             )
             buf.append("\033[K\n")
