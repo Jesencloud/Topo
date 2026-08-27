@@ -11,12 +11,14 @@ from .core.constants import (
     BOLD,
     CLEAR_LINE,
     CLEAR_SCREEN,
+    FAIL,
     GRAY,
-    RED,
+    INFO,
+    OK,
     RESET,
     THEME_TITLE,
     TOPO_VERSION,
-    YELLOW,
+    WARN,
     setup_color_mode,
 )
 from .core.history import show_history
@@ -354,14 +356,14 @@ def _main() -> bool:
             # protected leaves the system in the state the caller asked for, so
             # `topo whitelist add` is safe to run unconditionally in a script.
             if add_to_whitelist(args.path):
-                print(f"✅ Added to whitelist: {args.path}")
+                print(f"{OK} Added to whitelist: {args.path}")
             else:
-                print(f"ℹ️  Path already whitelisted: {args.path}")
+                print(f"{INFO} Path already whitelisted: {args.path}")
         elif args.action == "remove":
             if remove_from_whitelist(args.path):
-                print(f"✅ Removed from whitelist: {args.path}")
+                print(f"{OK} Removed from whitelist: {args.path}")
             else:
-                print(f"❌ Path not found in whitelist: {args.path}")
+                print(f"{FAIL} Path not found in whitelist: {args.path}")
                 return False
         elif args.action == "list":
             from .core.whitelist import get_whitelist
@@ -405,7 +407,7 @@ def _main() -> bool:
         )
         # Refusals go to stderr: this run did nothing, and on the redirected-stdout
         # half of the guard stdout is precisely the file the user is collecting.
-        print(f"\n {YELLOW}⚠{RESET} {label} needs an interactive terminal.", file=sys.stderr)
+        print(f"\n {WARN} {label} needs an interactive terminal.", file=sys.stderr)
         print(f"  {GRAY}Refusing to run because {reason}.{RESET}", file=sys.stderr)
         print(
             f"  {GRAY}Run it from a terminal, or use a non-interactive command such as{RESET} "
@@ -509,7 +511,7 @@ def _execute_main_router(args, dry_run) -> bool:
         # Unreachable through argparse, which rejects unknown commands with
         # exit 2. It fires for a subparser added without a route -- a mistake
         # that used to be invisible.
-        print(f"\n {RED}✗{RESET} Command {args.command!r} has no handler.", file=sys.stderr)
+        print(f"\n {FAIL} Command {args.command!r} has no handler.", file=sys.stderr)
         return False
 
     # None means "no failure to report" (status, history, analyze, uninstall);

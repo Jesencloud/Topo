@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any, NoReturn
 
-from .constants import RESET, YELLOW
+from .constants import GRAY, RESET, WARN
 from .paths import get_config_dir
 from .text import sanitize_for_display
 
@@ -30,9 +30,10 @@ class SingleInstanceLock:
             with contextlib.suppress(OSError):
                 self._file_obj.close()
             self._file_obj = None
-        print(f"\n {YELLOW}⚠️  {message}{RESET}")
+        print(f"\n {WARN} {message}")
         if hint:
-            print(f" {YELLOW}   {hint}{RESET}")
+            # Three spaces: lines up under the message, one glyph and one space in.
+            print(f"   {GRAY}{hint}{RESET}")
         print()
         sys.exit(1)
 

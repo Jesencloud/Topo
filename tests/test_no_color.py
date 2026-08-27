@@ -5,6 +5,7 @@ import pytest
 
 from src.core.config import DEFAULT_CONFIG
 from src.core.constants import setup_color_mode
+from src.core.text import display_width
 
 
 @pytest.fixture(autouse=True)
@@ -149,6 +150,58 @@ def test_non_tty_redirection_blanks_terminal_control_in_consumers(monkeypatch):
         assert constants.CLEAR_SCREEN == ""
         assert optimize.CLEAR_SCREEN == ""
         assert optimize.CLEAR_LINE == ""
+
+
+GLYPH_NAMES = ("OK", "FAIL", "WARN", "INFO", "SKIP", "NA")
+
+
+def test_every_status_glyph_loses_its_color_and_keeps_its_shape(monkeypatch):
+    """The whole glyph vocabulary has to be in `_COLOR_NAMES`, and stay one column wide.
+
+    Each glyph constant embeds its own color, so one that was added to
+    constants.py but forgotten in `_COLOR_NAMES` would keep printing escapes
+    under --no-color -- silently, because every other glyph on the line obeys.
+    The shape has to survive too: --no-color removes the color, and the state a
+    line reports must then still be readable from the glyph alone.
+    """
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    from src.core import constants
+
+    with patch.object(sys.stdout, "isatty", return_value=True):
+        setup_color_mode(no_color=True)
+        bare = {name: getattr(constants, name) for name in GLYPH_NAMES}
+        for name, value in bare.items():
+            assert "\033" not in value, name
+            assert display_width(value) == 1, (name, value)
+        # Six distinct states need six distinguishable glyphs.
+        assert len(set(bare.values())) == len(GLYPH_NAMES)
+
+        setup_color_mode(no_color=False)
+        for name in GLYPH_NAMES:
+            colored = getattr(constants, name)
+            assert "\033" in colored, name
+            assert colored.endswith(constants.RESET), name
+            assert bare[name] in colored, name
+
+
+def test_leading_marks_are_colorless(monkeypatch):
+    """The three leading marks carry no color of their own, in either mode.
+
+    Their color belongs to the caller (a heading takes THEME_TITLE, a prompt
+    takes PURPLE), which is why they are absent from `_COLOR_NAMES`: propagating
+    them would be a no-op, and embedding a color would fight the caller's.
+    """
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    from src.core import constants
+
+    marks = (constants.MARK_SECTION, constants.MARK_PROMPT, constants.MARK_NOTE)
+    for no_color in (True, False):
+        with patch.object(sys.stdout, "isatty", return_value=True):
+            setup_color_mode(no_color=no_color)
+        for mark in marks:
+            assert "\033" not in mark
+            assert display_width(mark) == 1, mark
+    assert len(set(marks)) == 3
 
 
 def test_no_color_flag_reaches_from_imported_consumers(monkeypatch):

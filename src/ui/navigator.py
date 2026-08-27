@@ -19,6 +19,8 @@ from ..core.constants import (
     GRAY,
     GREEN,
     HIGHLIGHT,
+    MARK_PROMPT,
+    MARK_SECTION,
     PURPLE,
     RESET,
     THEME_TITLE,
@@ -824,7 +826,7 @@ class AnalyzeSelector(_PagedSelector):
 
         if self.selected_items:
             buf.append(
-                f"\n {THEME_TITLE}☉ Selected Items to Remove:{RESET} {GREEN}Enter{RESET}: {WHITE}Delete{RESET}\033[K\n"
+                f"\n {THEME_TITLE}{MARK_SECTION} Selected Items to Remove:{RESET} {GREEN}Enter{RESET}: {WHITE}Delete{RESET}\033[K\n"
             )
             selected_indices = sorted(list(self.selected_items))
             for i in range(0, len(selected_indices), 2):
@@ -913,7 +915,7 @@ class AnalyzeSelector(_PagedSelector):
                                 f"{size_text} known, {PURPLE}{unknown_count}{RESET} uncalculated"
                             )
                         self.confirm_text = (
-                            f"{PURPLE}➔{RESET} Delete {PURPLE}{count}{RESET} {item_text}, "
+                            f"{PURPLE}{MARK_PROMPT}{RESET} Delete {PURPLE}{count}{RESET} {item_text}, "
                             f"{size_text}  "
                             f"{GREEN}Enter{RESET} confirm, {GREEN}Space{RESET} cancel:"
                         )
@@ -1068,7 +1070,7 @@ class UninstallSelector(_PagedSelector):
 
         if self.selected_items:
             buf.append(
-                f"\n {THEME_TITLE}☉ Selected Apps to Remove:{RESET} "
+                f"\n {THEME_TITLE}{MARK_SECTION} Selected Apps to Remove:{RESET} "
                 f"Press {GREEN}Enter{RESET} {WHITE}to Uninstall{RESET}, {CYAN}ESC{RESET} {WHITE}to Exit{RESET}\033[K\n"
             )
             selected_names = [i["name"] for i in self.items if i["id"] in self.selected_items]
@@ -1198,7 +1200,7 @@ class UninstallPreviewSelector:
 
     def render(self):
         buf = ["\033[H"]
-        buf.append(f"\n {THEME_TITLE}➔{RESET} {THEME_TITLE}Uninstallation Preview{RESET}\033[K\n")
+        buf.append(f"\n {THEME_TITLE}{MARK_SECTION} Uninstallation Preview{RESET}\033[K\n")
         buf.append("\033[K\n")
         columns = max(20, shutil.get_terminal_size(fallback=(80, 24)).columns)
         collateral_width = columns - display_width(self._COLLATERAL_INDENT)
@@ -1285,7 +1287,9 @@ class TopFilesSelector:
             f" {GREEN}↑/↓{RESET}: {WHITE}Move{RESET} | {GREEN}Space{RESET}: {WHITE}Toggle{RESET} | {GREEN}Enter{RESET}: {WHITE}Delete{RESET} | {CYAN}ESC{RESET}: {WHITE}Back{RESET}\033[K\n"
         )
         if self.selected_items:
-            buf.append(f"\n {THEME_TITLE}☉ Selected Large Files to Remove:{RESET}\033[K\n")
+            buf.append(
+                f"\n {THEME_TITLE}{MARK_SECTION} Selected Large Files to Remove:{RESET}\033[K\n"
+            )
             # Two entries a line, each costing three spaces, the bullet and its
             # space, and the three cells icon_gap normalises every icon to.
             # Derived from the terminal rather than fixed so the pair does not
@@ -1362,7 +1366,7 @@ class TopFilesSelector:
                     )
                     item_text = "item" if count == 1 else "items"
                     self.confirm_text = (
-                        f"{PURPLE}➔{RESET} Delete {PURPLE}{count}{RESET} {item_text}, "
+                        f"{PURPLE}{MARK_PROMPT}{RESET} Delete {PURPLE}{count}{RESET} {item_text}, "
                         f"{PURPLE}{bytes_to_human(total_size)}{RESET}  "
                         f"{GREEN}Enter{RESET} confirm, {GREEN}Space{RESET} cancel:"
                     )

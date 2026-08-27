@@ -11,6 +11,9 @@ from ..core.constants import (
     BLUE,
     GRAY,
     GREEN,
+    INFO,
+    MARK_NOTE,
+    MARK_SECTION,
     PURPLE,
     RESET,
     THEME_TITLE,
@@ -39,15 +42,15 @@ class TaskRegistry:
     ) -> list[tuple[str, list[CleanupTask]]]:
         return [
             (
-                f"{THEME_TITLE}➤ System & Package Manager{RESET}",
+                f"{THEME_TITLE}{MARK_SECTION} System & Package Manager{RESET}",
                 [CleanupTask("System & Packages", clean_system_data)],
             ),
             (
-                f"{THEME_TITLE}➤ User Data Cleanup{RESET}",
+                f"{THEME_TITLE}{MARK_SECTION} User Data Cleanup{RESET}",
                 [CleanupTask("User Data & Trash", clean_user_data)],
             ),
             (
-                f"{THEME_TITLE}➤ Deep App Cleanup{RESET}",
+                f"{THEME_TITLE}{MARK_SECTION} Deep App Cleanup{RESET}",
                 [
                     CleanupTask(
                         "Deep App Caches",
@@ -58,7 +61,7 @@ class TaskRegistry:
                 ],
             ),
             (
-                f"{THEME_TITLE}➤ Developer Tools & AI Models{RESET}",
+                f"{THEME_TITLE}{MARK_SECTION} Developer Tools & AI Models{RESET}",
                 [CleanupTask("Developer Artifacts", clean_developer_tools)],
             ),
         ]
@@ -105,10 +108,10 @@ def _print_cleanup_summary(
     print("=" * 60)
     if interrupted:
         print(
-            f"\n{GRAY}ℹ️  Stopped before the end: the groups above had already run, the rest never started.{RESET}"
+            f"\n{INFO} {GRAY}Stopped before the end: the groups above had already run, the rest never started.{RESET}"
         )
     if dry_run:
-        print(f"\n{GRAY}ℹ️  Run without --dry-run to actually delete these files.{RESET}")
+        print(f"\n{INFO} {GRAY}Run without --dry-run to actually delete these files.{RESET}")
 
 
 def run_clean(dry_run: bool = False) -> bool:
@@ -123,7 +126,7 @@ def run_clean(dry_run: bool = False) -> bool:
 
     print(f"\n{PURPLE}Clean Your Linux{RESET}\n")
     print(
-        f"{GRAY}● Use 'topo clean --dry-run' to preview, 'topo whitelist --help' for whitelist details.{RESET}"
+        f"{GRAY}{MARK_NOTE} Use 'topo clean --dry-run' to preview, 'topo whitelist --help' for whitelist details.{RESET}"
     )
 
     if not system.authenticate_sudo_session(

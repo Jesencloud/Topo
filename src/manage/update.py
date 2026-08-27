@@ -9,7 +9,7 @@ from typing import Any
 
 from packaging.version import InvalidVersion, Version
 
-from ..core.constants import BOLD, GRAY, GREEN, RED, RESET, TOPO_VERSION
+from ..core.constants import BOLD, FAIL, GRAY, GREEN, OK, RESET, TOPO_VERSION
 from ..core.install_source import (
     PACKAGE_INSTALL,
     get_install_source,
@@ -182,7 +182,7 @@ def _verify_release_signature(
     sha256sums_path: Path, signature_path: Path, public_key_path: Path
 ) -> bool:
     if not shutil.which("gpg"):
-        print(f" {RED}❌ gpg tool not found in system PATH. Refusing unverified update.{RESET}")
+        print(f" {FAIL} gpg tool not found in system PATH. Refusing unverified update.")
         print(
             f" {GRAY}Signature verification requires gnupg. Install 'gnupg' package or update manually.{RESET}"
         )
@@ -193,7 +193,7 @@ def _verify_release_signature(
         gpg_home.mkdir(mode=0o700, exist_ok=True)
         gpg_home.chmod(0o700)
     except OSError as e:
-        print(f" {RED}❌ Failed to prepare temporary GPG home: {e}{RESET}")
+        print(f" {FAIL} Failed to prepare temporary GPG home: {e}")
         return False
 
     base_argv = ["gpg", "--batch", "--homedir", str(gpg_home)]
@@ -207,11 +207,11 @@ def _verify_release_signature(
             timeout=15,
         )
     except (OSError, subprocess.SubprocessError) as e:
-        print(f" {RED}❌ Failed to import Topo release key: {e}{RESET}")
+        print(f" {FAIL} Failed to import Topo release key: {e}")
         return False
 
     if import_result.returncode != 0:
-        print(f" {RED}❌ Failed to import Topo release key.{RESET}")
+        print(f" {FAIL} Failed to import Topo release key.")
         if detail := _subprocess_stderr_tail(import_result):
             print(f" {GRAY}{detail}{RESET}")
         return False
@@ -230,31 +230,31 @@ def _verify_release_signature(
             timeout=15,
         )
     except (OSError, subprocess.SubprocessError) as e:
-        print(f" {RED}❌ Failed to verify SHA256SUMS signature: {e}{RESET}")
+        print(f" {FAIL} Failed to verify SHA256SUMS signature: {e}")
         return False
 
     if verify_result.returncode != 0 or not _release_signature_status_matches(verify_result.stdout):
-        print(f" {RED}❌ SHA256SUMS signature verification failed.{RESET}")
+        print(f" {FAIL} SHA256SUMS signature verification failed.")
         if detail := _subprocess_stderr_tail(verify_result):
             print(f" {GRAY}{detail}{RESET}")
         return False
 
-    print(f" {GREEN}✓{RESET} Verified SHA256SUMS signature with Topo release key")
+    print(f" {OK} Verified SHA256SUMS signature with Topo release key")
     return True
 
 
 def _verify_release_checksum(package_path: Path, sha256sums_path: Path) -> bool:
     expected = _expected_sha256(sha256sums_path, package_path.name)
     if not expected:
-        print(f" {RED}❌ SHA256SUMS does not list {package_path.name}.{RESET}")
+        print(f" {FAIL} SHA256SUMS does not list {package_path.name}.")
         return False
     actual = _file_sha256(package_path)
     if actual != expected:
-        print(f" {RED}❌ Checksum mismatch for {package_path.name}.{RESET}")
+        print(f" {FAIL} Checksum mismatch for {package_path.name}.")
         print(f" {GRAY}Expected: {expected}{RESET}")
         print(f" {GRAY}Actual:   {actual}{RESET}")
         return False
-    print(f" {GREEN}✓{RESET} Verified SHA256 for {package_path.name}")
+    print(f" {OK} Verified SHA256 for {package_path.name}")
     return True
 
 
@@ -263,11 +263,11 @@ def _run_package_update(local_version: str, remote_tag: str) -> bool:
     if not asset_name:
         # Two ways to get here, and the message names both: an unlisted distro,
         # or a machine topo builds no package for (riscv64, armv7l, i686).
-        print(f" {RED}❌ No Topo package for this distribution or architecture.{RESET}")
+        print(f" {FAIL} No Topo package for this distribution or architecture.")
         return False
 
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", remote_tag):
-        print(f" {RED}❌ Refusing unsafe release tag: {remote_tag!r}{RESET}")
+        print(f" {FAIL} Refusing unsafe release tag: {remote_tag!r}")
         return False
 
     print(f" {GREEN}✨ New package available: {remote_tag}{RESET}")
@@ -296,7 +296,7 @@ def _run_package_update(local_version: str, remote_tag: str) -> bool:
                     _release_download_url(remote_tag, RELEASE_KEY_ASSET_NAME), public_key_path
                 )
         except (OSError, subprocess.SubprocessError) as e:
-            print(f" {RED}❌ Failed to download package update: {e}{RESET}")
+            print(f" {FAIL} Failed to download package update: {e}")
             if detail := _subprocess_stderr_tail(e):
                 print(f" {GRAY}{detail}{RESET}")
             return False
@@ -309,14 +309,14 @@ def _run_package_update(local_version: str, remote_tag: str) -> bool:
 
         command = get_package_upgrade_argv(package_path)
         if not command:
-            print(f" {RED}❌ Unsupported Linux distribution for package updates.{RESET}")
+            print(f" {FAIL} Unsupported Linux distribution for package updates.")
             return False
 
         print(f" {GRAY}Running package upgrade:{RESET} {BOLD}{' '.join(command)}{RESET}")
         try:
             process = subprocess.run(command, timeout=300)
         except (OSError, subprocess.SubprocessError) as e:
-            print(f" {RED}❌ Package upgrade failed: {e}{RESET}")
+            print(f" {FAIL} Package upgrade failed: {e}")
             return False
 
         if process.returncode == 0:
@@ -325,7 +325,7 @@ def _run_package_update(local_version: str, remote_tag: str) -> bool:
                 f" {GRAY}If your shell still uses an old command path, run:{RESET} {BOLD}hash -r{RESET}"
             )
             return True
-        print(f"\n {RED}❌ Package upgrade failed with exit code {process.returncode}{RESET}")
+        print(f"\n {FAIL} Package upgrade failed with exit code {process.returncode}")
         return False
 
 
@@ -333,7 +333,7 @@ def run_update() -> bool:
     """Update topo from the latest GitHub Release; False when the update did not happen.
 
     "Already up to date" and "local is newer" are successes -- the caller asked
-    for the newest version and has it. Everything printed with ❌ is a failure,
+    for the newest version and has it. Everything printed with ✗ is a failure,
     including a refused signature: the whole point of refusing an unverified
     update is that the caller must be able to tell.
     """
@@ -346,13 +346,13 @@ def run_update() -> bool:
     # this used to fall back to 0.0.0, i.e. reinstall against any remote tag.
     local_version = TOPO_VERSION
 
-    print(f" {GREEN}✓{RESET} Checking for updates...{RESET} (Local: v{local_version})")
+    print(f" {OK} Checking for updates... (Local: v{local_version})")
 
     # 2. Fetch latest stable release tag
     try:
         remote_tag = _fetch_latest_release_tag()
     except (OSError, subprocess.SubprocessError) as e:
-        print(f" {RED}❌ Failed to check latest release: {e}{RESET}")
+        print(f" {FAIL} Failed to check latest release: {e}")
         return False
 
     # 3. Compare and act
@@ -364,29 +364,29 @@ def run_update() -> bool:
     # thing that needs it -- if it is missing, the fetch has already failed.
     if not remote_tag:
         if shutil.which("curl"):
-            print(f" {RED}❌ Could not determine the latest release version.{RESET}")
+            print(f" {FAIL} Could not determine the latest release version.")
             print(
                 f" {GRAY}Check your network connection or GitHub availability, then retry.{RESET}"
             )
         else:
-            print(f" {RED}❌ curl not found in system PATH. Cannot check for updates.{RESET}")
+            print(f" {FAIL} curl not found in system PATH. Cannot check for updates.")
             print(f" {GRAY}Install the 'curl' package, or update manually.{RESET}")
         return False
 
     local_parsed = _parse_version(local_version)
     remote_parsed = _parse_version(remote_tag)
     if remote_parsed is None:
-        print(f" {RED}❌ Invalid release tag: {remote_tag!r}{RESET}")
+        print(f" {FAIL} Invalid release tag: {remote_tag!r}")
         return False
     if local_parsed is None:
-        print(f" {RED}❌ Invalid local version: {local_version!r}{RESET}")
+        print(f" {FAIL} Invalid local version: {local_version!r}")
         return False
     if remote_parsed == local_parsed:
-        print(f" {GREEN}✓{RESET} Topo is already up to date!{RESET} (v{local_version})")
+        print(f" {OK} Topo is already up to date! (v{local_version})")
         return True
     if remote_parsed < local_parsed:
         print(
-            f" {GREEN}✓{RESET} Local Topo is newer than remote.{RESET} "
+            f" {OK} Local Topo is newer than remote. "
             f"(local: v{local_version}, remote: {remote_tag})"
         )
         return True
@@ -398,7 +398,7 @@ def run_update() -> bool:
     # proved it parses, but the raw tag goes into a URL and is handed to the
     # installer, so reject anything with shell metacharacters or whitespace.
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", remote_tag):
-        print(f" {RED}❌ Refusing unsafe release tag: {remote_tag!r}{RESET}")
+        print(f" {FAIL} Refusing unsafe release tag: {remote_tag!r}")
         return False
 
     print(f" {GREEN}✨ New version available: {remote_tag}{RESET}")
@@ -425,16 +425,14 @@ def run_update() -> bool:
             )
 
             if not _verify_release_signature(sums_path, sig_path, key_path):
-                print(
-                    f"\n {RED}❌ Release signature verification failed. Aborting script update.{RESET}"
-                )
+                print(f"\n {FAIL} Release signature verification failed. Aborting script update.")
                 return False
 
             expected_sha = _expected_sha256(sums_path, "install.sh")
 
             if expected_sha is None:
                 print(
-                    f"\n {RED}❌ install.sh is not listed in the signed SHA256SUMS; aborting update.{RESET}"
+                    f"\n {FAIL} install.sh is not listed in the signed SHA256SUMS; aborting update."
                 )
                 return False
 
@@ -445,18 +443,16 @@ def run_update() -> bool:
             actual_sha = sha256(raw_bytes).hexdigest()
 
             if actual_sha.lower() != expected_sha.lower():
-                print(
-                    f"\n {RED}❌ SHA256 checksum mismatch for install.sh; aborting update.{RESET}"
-                )
+                print(f"\n {FAIL} SHA256 checksum mismatch for install.sh; aborting update.")
                 return False
 
             script = raw_bytes.decode("utf-8", errors="strict")
         except (OSError, UnicodeDecodeError, subprocess.SubprocessError) as e:
-            print(f"\n {RED}❌ Failed to download signature/installer assets: {e}{RESET}")
+            print(f"\n {FAIL} Failed to download signature/installer assets: {e}")
             return False
 
     if not script.lstrip().startswith("#!"):
-        print(f"\n {RED}❌ Downloaded installer is not a valid script; aborting update.{RESET}")
+        print(f"\n {FAIL} Downloaded installer is not a valid script; aborting update.")
         return False
 
     try:
@@ -468,7 +464,7 @@ def run_update() -> bool:
         if process.returncode == 0:
             print(f"\n {GREEN}✨ Topo has been successfully updated to {remote_tag}!{RESET}")
             return True
-        print(f"\n {RED}❌ Update failed with exit code {process.returncode}{RESET}")
+        print(f"\n {FAIL} Update failed with exit code {process.returncode}")
     except (OSError, subprocess.SubprocessError) as e:
-        print(f"\n {RED}❌ Error during update: {e}{RESET}")
+        print(f"\n {FAIL} Error during update: {e}")
     return False

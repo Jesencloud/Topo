@@ -33,12 +33,13 @@ from ...core.constants import (
     BLUE,
     CYAN,
     ERASE_BELOW,
+    FAIL,
     GRAY,
     MAGENTA,
     OK,
     PURPLE,
-    RED,
     RESET,
+    WARN,
     YELLOW,
 )
 from ...core.engine import get_rust_scan_data, get_rust_tree_data, normalize_scan_path
@@ -84,11 +85,11 @@ def _done_notice(text: str) -> str:
 
 
 def _warn_notice(text: str) -> str:
-    return _notice(f"{YELLOW}⚠{RESET}", text)
+    return _notice(WARN, text)
 
 
 def _fail_notice(text: str) -> str:
-    return _notice(f"{RED}✗{RESET}", text)
+    return _notice(FAIL, text)
 
 
 def _delete_notice(outcome: DeleteOutcome) -> str:

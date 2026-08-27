@@ -13,10 +13,10 @@ from .core import system
 from .core.app_cache import find_cleanable_cache_dirs, get_cache_cleanable_reason
 from .core.config import get_use_trash
 from .core.constants import (
-    GREEN,
     MAGENTA,
+    MARK_PROMPT,
     RESET,
-    YELLOW,
+    WARN,
 )
 from .core.engine import get_rust_scan_data, get_rust_tree_data, normalize_scan_path
 from .core.file_ops import (
@@ -429,7 +429,7 @@ def _permanent_fallback_consent(
         if ask is None or not (sys.stdin.isatty() and sys.stdout.isatty()):
             granted = False
             print(
-                f" {YELLOW}⚠{RESET} No trash backend available and no terminal to ask; "
+                f" {WARN} No trash backend available and no terminal to ask; "
                 "skipping instead of deleting permanently."
             )
             return granted
@@ -516,11 +516,12 @@ def _ensure_admin_for_delete(paths: list[Path]) -> str:
 
     print()
     if not system.ensure_sudo_session(
-        f"{MAGENTA}➔{RESET} File deletion requires admin access\n{MAGENTA}➔{RESET} Password: "
+        f"{MAGENTA}{MARK_PROMPT}{RESET} File deletion requires admin access\n"
+        f"{MAGENTA}{MARK_PROMPT}{RESET} Password: "
     ):
         return DELETE_CANCELLED_PROBLEM if system.SUDO_CANCELLED else DELETE_UNAUTHORIZED_PROBLEM
 
-    print(f"{GREEN}✓{RESET} Authorization successful.\n")
+    system.print_sudo_granted()
     return ""
 
 

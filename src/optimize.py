@@ -18,11 +18,12 @@ from .core.constants import (
     BOLD,
     CLEAR_LINE,
     CLEAR_SCREEN,
+    FAIL,
     GRAY,
-    GREEN,
+    OK,
     PURPLE,
-    RED,
     RESET,
+    SKIP,
     SQLITE_PROGRESS_INTERVAL,
 )
 from .core.desktop_entry import get_desktop_exec_command
@@ -82,10 +83,10 @@ def _which_admin_tool(name: str) -> str | None:
 
 def opt_log(message, success=True, skipped=False):
     if skipped:
-        icon = f"{GRAY}◎{RESET}"
+        icon = SKIP
         msg = f"{GRAY}{message} · skipped{RESET}"
     else:
-        icon = f"{GREEN}✓{RESET}" if success else f"{RED}✗{RESET}"
+        icon = OK if success else FAIL
         msg = f"{message}"
 
     with print_lock:
@@ -986,5 +987,5 @@ def optimize_system(dry_run: bool = False) -> bool:
         sys.stdout.flush()
 
     duration = time.time() - start_time
-    print(f"\n{GREEN}{BOLD}✔ All tasks completed in {duration:.1f}s.{RESET}")
+    print(f"\n{OK} {BOLD}All tasks completed in {duration:.1f}s.{RESET}")
     return True

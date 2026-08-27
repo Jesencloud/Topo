@@ -10,11 +10,15 @@ from ..core.constants import (
     BLUE,
     BOLD,
     CYAN,
+    FAIL,
     GRAY,
     GREEN,
+    NA,
+    OK,
     PURPLE,
     RED,
     RESET,
+    WARN,
     YELLOW,
     read_topo_version,
 )
@@ -84,11 +88,11 @@ def _print_tool_row(tool: str, args: list[str] | None = None, missing_note: str 
     """
     ok, detail = _check_tool(tool, args)
     if ok:
-        print(f"  {GREEN}✓{RESET} {tool:<10} {CYAN}{detail}{RESET}")
+        print(f"  {OK} {tool:<10} {CYAN}{detail}{RESET}")
     elif missing_note:
-        print(f"  {YELLOW}⚠{RESET} {tool:<10} {YELLOW}{detail} -- {missing_note}{RESET}")
+        print(f"  {WARN} {tool:<10} {YELLOW}{detail} -- {missing_note}{RESET}")
     else:
-        print(f"  {GRAY}-{RESET} {tool:<10} {GRAY}{detail}{RESET}")
+        print(f"  {NA} {tool:<10} {GRAY}{detail}{RESET}")
 
 
 def _command_failure_detail(result) -> str:
@@ -183,16 +187,16 @@ def run_doctor() -> bool:
     print(f"{BOLD}{BLUE}Rust Engine{RESET}")
     engine = get_core_binary()
     if engine and engine.exists():
-        print(f"  {GREEN}✓{RESET} Executable: {CYAN}{engine}{RESET}")
+        print(f"  {OK} Executable: {CYAN}{engine}{RESET}")
         engine_ok, engine_detail = _check_rust_engine_response(engine)
         if engine_ok:
-            print(f"  {GREEN}✓{RESET} Execution:  {GREEN}{engine_detail}{RESET}")
+            print(f"  {OK} Execution:  {GREEN}{engine_detail}{RESET}")
         else:
             failures.append("Rust engine does not run")
-            print(f"  {RED}✗{RESET} Execution:  {RED}Failed{RESET} ({engine_detail})")
+            print(f"  {FAIL} Execution:  {RED}Failed{RESET} ({engine_detail})")
     else:
         failures.append("Rust engine missing")
-        print(f"  {RED}✗{RESET} Executable: {RED}Not found{RESET} at {engine}")
+        print(f"  {FAIL} Executable: {RED}Not found{RESET} at {engine}")
     print()
 
     # 4. Update Prerequisites
@@ -206,9 +210,9 @@ def run_doctor() -> bool:
     manager = detect_package_manager()
     if manager is None:
         supported = ", ".join(m.label for m in PACKAGE_MANAGERS)
-        print(f"  {GRAY}-{RESET} No supported package manager detected ({supported})")
+        print(f"  {NA} No supported package manager detected ({supported})")
     else:
-        print(f"  {GREEN}✓{RESET} {'Detected':<10} {CYAN}{manager.label}{RESET}")
+        print(f"  {OK} {'Detected':<10} {CYAN}{manager.label}{RESET}")
         # The binaries topo actually runs, not the family's front-end names: it
         # used to probe `apt` and `dpkg` while running apt-get and dpkg-query, and
         # `dnf` on a Fedora where dnf is only a compat symlink to dnf5.
@@ -226,12 +230,12 @@ def run_doctor() -> bool:
 
     size_ok, size_detail = _check_rust_size_probe(engine)
     if size_ok is True:
-        print(f"  {GREEN}✓{RESET} Rust Fast Size Calculation: {GREEN}{size_detail}{RESET}")
+        print(f"  {OK} Rust Fast Size Calculation: {GREEN}{size_detail}{RESET}")
     elif size_ok is None:
-        print(f"  {GRAY}-{RESET} Rust Fast Size Calculation: {GRAY}{size_detail}{RESET}")
+        print(f"  {NA} Rust Fast Size Calculation: {GRAY}{size_detail}{RESET}")
     else:
         failures.append("Rust size probe failed")
-        print(f"  {RED}✗{RESET} Rust Fast Size Calculation: {RED}Failed{RESET} ({size_detail})")
+        print(f"  {FAIL} Rust Fast Size Calculation: {RED}Failed{RESET} ({size_detail})")
     print()
 
     # 7. Sudo Access
@@ -240,21 +244,21 @@ def run_doctor() -> bool:
         ["sudo", "-n", "true"], capture=True, timeout=DOCTOR_COMMAND_TIMEOUT
     ).ok
     if has_sudo_session:
-        print(f"  {GREEN}✓{RESET} Sudo Access: {GREEN}Active (Passwordless or Cached){RESET}")
+        print(f"  {OK} Sudo Access: {GREEN}Active (Passwordless or Cached){RESET}")
     else:
-        print(f"  {YELLOW}⚠{RESET} Sudo Access: {YELLOW}Requires Password prompt{RESET}")
+        print(f"  {WARN} Sudo Access: {YELLOW}Requires Password prompt{RESET}")
 
     config_dir = get_config_dir()
     if config_dir.exists():
-        print(f"  {GREEN}✓{RESET} Config Dir:  {CYAN}{config_dir}{RESET} (Exists)")
+        print(f"  {OK} Config Dir:  {CYAN}{config_dir}{RESET} (Exists)")
     else:
-        print(f"  {GRAY}-{RESET} Config Dir:  {GRAY}{config_dir}{RESET} (Missing)")
+        print(f"  {NA} Config Dir:  {GRAY}{config_dir}{RESET} (Missing)")
     print()
 
     if failures:
         print(f"{BOLD}{RED}Diagnostic complete: {len(failures)} problem(s) found.{RESET}")
         for failure in failures:
-            print(f"  {RED}✗{RESET} {failure}")
+            print(f"  {FAIL} {failure}")
         return False
 
     print(f"{BOLD}Diagnostic complete.{RESET}")

@@ -12,10 +12,13 @@ from .constants import (
     BOLD,
     CLEAR_LINE,
     ERASE_BELOW,
+    FAIL,
     GREEN,
+    MARK_PROMPT,
+    OK,
     PURPLE,
-    RED,
     RESET,
+    WARN,
     YELLOW,
 )
 
@@ -160,7 +163,7 @@ def authenticate_sudo_session(dry_run: bool, *, request_subject: str, action: st
 
     action_title = action.capitalize()
     print(
-        f"{PURPLE}➔{RESET} {request_subject} need sudo. "
+        f"{PURPLE}{MARK_PROMPT}{RESET} {request_subject} need sudo. "
         f"{GREEN}Enter{RESET} continue, {GREEN}Space {RESET}or{GREEN} ESC{RESET} cancel:",
         end=" ",
         flush=True,
@@ -176,16 +179,31 @@ def authenticate_sudo_session(dry_run: bool, *, request_subject: str, action: st
         return False
 
     if not ensure_sudo_session(
-        f"{PURPLE}➔{RESET} System {action} requires admin access\n{PURPLE}➔{RESET} Password: "
+        f"{PURPLE}{MARK_PROMPT}{RESET} System {action} requires admin access\n"
+        f"{PURPLE}{MARK_PROMPT}{RESET} Password: "
     ):
         if SUDO_CANCELLED:
-            print(f" {YELLOW}⚠️  {action_title} cancelled by user.{RESET}", end="")
+            print(f" {WARN} {action_title} cancelled by user.", end="")
         else:
-            print(f" {RED}✗{RESET} Authorization failed. {action_title} skipped.\n")
+            print(f" {FAIL} Authorization failed. {action_title} skipped.\n")
         return False
 
-    print(f"{GREEN}✓{RESET} Authorization successful.\n")
+    print_sudo_granted()
     return True
+
+
+def print_sudo_granted(*, trailing_blank: bool = True) -> None:
+    """Prints the line that says the sudo password was accepted.
+
+    Three places tell the user this -- here, analyze's delete path and the
+    uninstall screen -- and each used to hand-write the same f-string. They had
+    already drifted: two ended in a blank line, the uninstall screen's did not,
+    so the removal spinner's first frame printed hard against it.
+
+    *trailing_blank* keeps that difference and makes it a choice: pass False when
+    whatever prints next owns the line below (a spinner, a repainted frame).
+    """
+    print(f"{OK} Authorization successful.", end="\n\n" if trailing_blank else "\n")
 
 
 def ensure_sudo_session(prompt: str | None = None):
@@ -240,7 +258,7 @@ def _clear_interrupted_sudo_prompt(prompt: str | None = None) -> None:
 def setup_passwordless_sudo() -> bool:
     """Print the sudoers rule to enable passwordless sudo; False when it refused.
 
-    Every refusal path prints a ⚠️ and produces no usable rule for this script,
+    Every refusal path prints a ⚠ and produces no usable rule for this script,
     so a caller that pipes the output somewhere has to be able to tell. The
     user-writable case still prints a *different*, safe rule as advice -- it is
     deliberately still a failure: the rule the caller asked for was refused.
@@ -251,14 +269,13 @@ def setup_passwordless_sudo() -> bool:
     print(f"\n{BOLD}🛡️  Setup Passwordless Mode{RESET}")
 
     if not user or user == "unknown" or not _SAFE_USERNAME_RE.match(user):
-        print(
-            f"{YELLOW}⚠️  Could not determine a safe username; refusing to generate a sudoers rule.{RESET}"
-        )
+        print(f"{WARN} Could not determine a safe username; refusing to generate a sudoers rule.")
         return False
 
     if not _SAFE_SUDOERS_PATH_RE.match(script_path):
         print(
-            f"{YELLOW}⚠️  Could not generate a safe sudoers rule for path with special characters or spaces: {script_path!r}{RESET}"
+            f"{WARN} Could not generate a safe sudoers rule for path with special characters "
+            f"or spaces: {script_path!r}"
         )
         return False
 
@@ -277,7 +294,7 @@ def setup_passwordless_sudo() -> bool:
 
     if is_user_writable:
         print(
-            f"{YELLOW}⚠️  Refusing NOPASSWD rule for script at {script_path}:{RESET}\n"
+            f"{WARN} Refusing NOPASSWD rule for script at {script_path}:\n"
             f"  This script is user-writable. Granting NOPASSWD to user-writable scripts allows local privilege escalation.\n"
         )
         print(

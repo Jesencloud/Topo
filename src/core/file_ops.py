@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import get_min_age_days
-from .constants import SECONDS_PER_DAY
+from .constants import SECONDS_PER_DAY, WARN
 from .engine import get_core_binary, get_rust_scan_data
 from .paths import get_state_dir
 from .system import run_command
@@ -78,7 +78,7 @@ def _warn_audit_dropped(reason: str) -> None:
     if reason in _AUDIT_WARNINGS_EMITTED:
         return
     _AUDIT_WARNINGS_EMITTED.add(reason)
-    print(f"⚠ topo: deletion audit record dropped: {reason}", file=sys.stderr)
+    print(f"{WARN} topo: deletion audit record dropped: {reason}", file=sys.stderr)
 
 
 def _prepare_audit_log(log_path: Path) -> bool:

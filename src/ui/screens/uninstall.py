@@ -14,15 +14,19 @@ from ...core.constants import (
     CLEAR_LINE,
     CLEAR_SCREEN,
     CYAN,
+    FAIL,
     GRAY,
     GREEN,
+    INFO,
     MAGENTA,
+    MARK_PROMPT,
+    OK,
     PURPLE,
     RED,
     RESET,
     THEME_TITLE,
+    WARN,
     WHITE,
-    YELLOW,
 )
 from ...core.file_ops import bytes_to_human
 from ...core.scan_cache import ScanCache
@@ -61,9 +65,9 @@ def _print_removal_report(
     interrupted by user.") and no way to tell what had been removed.
     """
     for name in removed_names:
-        print(f"{GREEN}✓{RESET} Removed {BOLD}{name}{RESET}")
+        print(f"{OK} Removed {BOLD}{name}{RESET}")
     for name in failed_names:
-        print(f"{RED}✗{RESET} Failed to remove {BOLD}{name}{RESET}")
+        print(f"{FAIL} Failed to remove {BOLD}{name}{RESET}")
 
     # Final Summary — only report what actually succeeded.
     print(f"\n{'=' * 70}")
@@ -76,9 +80,11 @@ def _print_removal_report(
     msg += f"{bytes_to_human(total_freed)}{RESET}: {names_str}"
     print(msg)
     if failed_names:
-        print(f" {RED}✗ Failed:{RESET} {', '.join(failed_names)}")
+        # The label carries the emphasis, the glyph carries the colour; the names
+        # themselves stay plain so they can be copied out of the report.
+        print(f" {FAIL} {RED}Failed:{RESET} {', '.join(failed_names)}")
     if interrupted:
-        print(f" {GRAY}ℹ️  Anything not listed above was left untouched.{RESET}")
+        print(f" {INFO} {GRAY}Anything not listed above was left untouched.{RESET}")
     print("=" * 70)
 
 
@@ -119,22 +125,25 @@ def run_uninstall():
             needs_sudo = any(app["type"] in NEEDS_SUDO_TYPES for app, _, _ in all_targets)
             # Ensure sudo session (require password) outside raw mode so sudo can own input.
             if needs_sudo and not system.ensure_sudo_session(
-                f"{MAGENTA}➔{RESET} App removal requires admin access\n{MAGENTA}➔{RESET} Password: "
+                f"{MAGENTA}{MARK_PROMPT}{RESET} App removal requires admin access\n"
+                f"{MAGENTA}{MARK_PROMPT}{RESET} Password: "
             ):
                 if system.SUDO_CANCELLED:
                     # Navigator.wait_for_return already adds a leading newline
-                    print(f" {YELLOW}⚠️  Uninstall cancelled by user.{RESET}", end="")
+                    print(f" {WARN} Uninstall cancelled by user.", end="")
                     if not Navigator.wait_for_return(
                         f"Press {GREEN}Enter{RESET} {WHITE}to return to application list{RESET}, {CYAN}ESC{RESET} {WHITE}to exit...{RESET}"
                     ):
                         return
                     continue
                 else:
-                    print(f" {RED}✗{RESET} Authorization failed. Uninstall cancelled.\n")
+                    print(f" {FAIL} Authorization failed. Uninstall cancelled.\n")
                     return
 
             if needs_sudo:
-                print(f"{GREEN}✓{RESET} Authorization successful.")
+                # No trailing blank line: the removal spinner below owns the next
+                # line and repaints it in place.
+                system.print_sudo_granted(trailing_blank=False)
 
             # --- EXECUTION ---
             current_status = ["Processing..."]

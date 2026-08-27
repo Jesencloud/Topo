@@ -79,8 +79,44 @@ THEME_TITLE: str = ""
 GREEN_NB: str = ""
 GRAY_NB: str = ""
 HIGHLIGHT: str = ""
+
+# --- Status glyphs ---
+#
+# The whole vocabulary, in one place. Every one of them carries its own color and
+# its own {RESET}, so the sentence after it stays uncolored: a report line reads
+# `f"{OK} Removed {name}"`, never `f"{GREEN}✓ Removed {name}{RESET}"`. Only a
+# label word that genuinely needs emphasis (`Failed:`) may be colored, and then
+# as its own segment outside the glyph.
+#
+# Six states, and the two dim ones are not the same state:
+#   OK    something was done
+#   FAIL  something was attempted and did not work
+#   WARN  something needs attention but is not a failure
+#   INFO  an aside -- context, not an outcome
+#   SKIP  it exists, this run did not touch it (dry-run, whitelisted, running app)
+#   NA    it does not exist on this machine, so there was nothing to do
+# Reaching for SKIP where NA belongs tells the reader a choice was made when the
+# truth is there was nothing to choose.
+#
+# All six are single-column glyphs on purpose. ✅ / ❌ / ⚠️  are the double-wide
+# emoji forms of ✓ / ✗ / ⚠, and one of them in a column of narrow glyphs shifts
+# every following field by one cell -- which is why the emoji sites they replaced
+# each carried a hand-tuned extra space.
 OK: str = ""
+FAIL: str = ""
+WARN: str = ""
+INFO: str = ""
 SKIP: str = ""
+NA: str = ""
+
+# --- Leading marks ---
+#
+# What the line wants from you, not which module printed it. Colorless, because
+# the color is the caller's (a header takes THEME_TITLE, a prompt takes PURPLE),
+# and they are constants only so the three roles stay distinguishable:
+MARK_SECTION = "➤"  # a heading: everything below belongs to it
+MARK_PROMPT = "➔"  # this line is waiting for you to type or choose
+MARK_NOTE = "●"  # an aside about the line, or the run, above
 
 # One place to retune the dimmed-text color. WHITE / GRAY / GRAY_NB all resolve
 # to this; see the comment in _init_colors() for why they stay three names.
@@ -130,7 +166,11 @@ _COLOR_NAMES: tuple[str, ...] = (
     "GRAY_NB",
     "HIGHLIGHT",
     "OK",
+    "FAIL",
+    "WARN",
+    "INFO",
     "SKIP",
+    "NA",
 )
 
 # Terminal control sequences. Rebound by _init_terminal_control() and pushed out
@@ -176,7 +216,7 @@ def _init_colors(disable: bool = False):
         PURPLE, \
         EARTH, \
         THEME_TITLE
-    global GREEN_NB, GRAY_NB, HIGHLIGHT, OK, SKIP
+    global GREEN_NB, GRAY_NB, HIGHLIGHT, OK, FAIL, WARN, INFO, SKIP, NA
 
     if disable:
         BLUE = CYAN = MAGENTA = YELLOW = GREEN = RED = WHITE = GRAY = RESET = BOLD = PURPLE = (
@@ -184,7 +224,11 @@ def _init_colors(disable: bool = False):
         ) = THEME_TITLE = ""
         GREEN_NB = GRAY_NB = HIGHLIGHT = ""
         OK = "✓"
+        FAIL = "✗"
+        WARN = "⚠"
+        INFO = "ℹ"
         SKIP = "◎"
+        NA = "-"
     else:
         BLUE = "\033[1;34m"
         CYAN = "\033[1;36m"
@@ -196,9 +240,10 @@ def _init_colors(disable: bool = False):
         # high contrast on both dark and light backgrounds. They are kept as
         # three names because they mark three different intents -- WHITE dims a
         # value or an empty bar track, GRAY dims secondary text, GRAY_NB is the
-        # non-bold twin of GREEN_NB used by the SKIP glyph -- so any one of them
-        # can be retuned later without disturbing the other two. If you are
-        # comparing them expecting different escapes, they are not different yet.
+        # non-bold twin of GREEN_NB used by the dim glyphs (INFO / SKIP / NA) --
+        # so any one of them can be retuned later without disturbing the other
+        # two. If you are comparing them expecting different escapes, they are
+        # not different yet.
         WHITE = GRAY = GRAY_NB = _NEUTRAL_GRAY
         RESET = "\033[0m"
         BOLD = "\033[1m"
@@ -212,7 +257,13 @@ def _init_colors(disable: bool = False):
         HIGHLIGHT = "\033[1;37m\033[45m"
 
         OK = f"{GREEN_NB}✓{RESET}"
+        FAIL = f"{RED}✗{RESET}"
+        WARN = f"{YELLOW}⚠{RESET}"
+        # Dim on purpose: an aside must not compete with the outcome lines around
+        # it, and every INFO line's own text is GRAY for the same reason.
+        INFO = f"{GRAY_NB}ℹ{RESET}"
         SKIP = f"{GRAY_NB}◎{RESET}"
+        NA = f"{GRAY_NB}-{RESET}"
 
 
 # Terminal control sequences.

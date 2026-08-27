@@ -16,6 +16,7 @@ from ..core.constants import (
     CLEAN_CACHE_AGE_DAYS,
     DETECTED_APPS_FILE,
     GRAY,
+    INFO,
     OK,
     RESET,
     SKIP,
@@ -105,7 +106,9 @@ def proactive_app_detection():
             with open(DETECTED_APPS_FILE, "w") as f:
                 json.dump(detected, f, indent=2)
             if new_found:
-                msg = f"  {GRAY}ℹ️  Updated local app registry ({len(detected)} apps known){RESET}"
+                msg = (
+                    f"  {INFO} {GRAY}Updated local app registry ({len(detected)} apps known){RESET}"
+                )
                 print(msg)
         except OSError:
             pass

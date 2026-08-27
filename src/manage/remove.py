@@ -6,7 +6,19 @@ from pathlib import Path
 from typing import TypedDict
 
 from ..core import terminal_state
-from ..core.constants import BOLD, GRAY, GREEN, MAGENTA, PURPLE, RED, RESET, YELLOW
+from ..core.constants import (
+    BOLD,
+    FAIL,
+    GRAY,
+    GREEN,
+    MAGENTA,
+    MARK_PROMPT,
+    MARK_SECTION,
+    OK,
+    PURPLE,
+    RESET,
+    WARN,
+)
 from ..core.file_ops import bytes_to_human, get_size_fast, safe_remove
 from ..core.install_source import (
     PACKAGE_INSTALL,
@@ -204,7 +216,7 @@ def _confirm_removal(prompt: str, assume_yes: bool = False) -> bool:
         return True
 
     if not sys.stdin.isatty():
-        print(f"\n {YELLOW}⚠{RESET} Removing topo needs an interactive confirmation.")
+        print(f"\n {WARN} Removing topo needs an interactive confirmation.")
         print(
             f"  {GRAY}Run it from a terminal, pass{RESET} {BOLD}--yes{RESET}{GRAY} to skip this "
             f"prompt, or preview with{RESET} {BOLD}topo remove --dry-run{RESET}{GRAY}.{RESET}"
@@ -227,7 +239,7 @@ def _confirm_removal(prompt: str, assume_yes: bool = False) -> bool:
         terminal_state.restore_raw_state(fd, old_settings)
 
     if ch not in ("\r", "\n", "y", "Y"):
-        print(f"\n\n {YELLOW}⚠{RESET}{GRAY} Uninstallation cancelled.{RESET}")
+        print(f"\n\n {WARN}{GRAY} Uninstallation cancelled.{RESET}")
         return False
     return True
 
@@ -244,17 +256,19 @@ def run_remove(dry_run=False, assume_yes=False) -> bool:
     if get_install_source() == PACKAGE_INSTALL:
         command = get_package_remove_argv()
         if not command:
-            print(f"\n {RED}✗ Unsupported Linux distribution for package removal.{RESET}")
+            print(f"\n {FAIL} Unsupported Linux distribution for package removal.")
             return False
-        print(f"\n {MAGENTA}☉ Removing Topo through the system package manager.{RESET}\n")
+        print(
+            f"\n {MAGENTA}{MARK_SECTION} Removing Topo through the system package manager.{RESET}\n"
+        )
         # "Command:" and not "Running:": this line is printed before the
         # confirmation, so on the --dry-run and declined paths nothing runs.
         print(f" {GRAY}Command:{RESET} {BOLD}{' '.join(command)}{RESET}")
         if dry_run:
-            print(f" {GREEN}✓{RESET} Dry run complete. Package removal command was not executed.")
+            print(f" {OK} Dry run complete. Package removal command was not executed.")
             return True
         if not _confirm_removal(
-            f"\n {PURPLE}●{RESET} Remove the topo package: "
+            f"\n {PURPLE}{MARK_PROMPT}{RESET} Remove the topo package: "
             f"Press {GREEN}Enter{RESET} confirm, {GREEN}ESC{RESET} cancel: ",
             assume_yes,
         ):
@@ -263,17 +277,17 @@ def run_remove(dry_run=False, assume_yes=False) -> bool:
         try:
             process = subprocess.run(command, timeout=300)
         except (OSError, subprocess.SubprocessError) as e:
-            print(f" {RED}✗ Package removal failed: {e}{RESET}")
+            print(f" {FAIL} Package removal failed: {e}")
             return False
         if process.returncode == 0:
-            print(f"\n {GREEN}✓{RESET} Topo package removal completed.")
+            print(f"\n {OK} Topo package removal completed.")
             for label in _remove_package_user_residue():
-                print(f"  {GREEN}✓{RESET} Removed {label}")
+                print(f"  {OK} Removed {label}")
             print(
                 f" {GRAY}If your shell still uses an old command path, run:{RESET} {BOLD}hash -r{RESET}"
             )
             return True
-        print(f"\n {RED}✗ Package removal failed with exit code {process.returncode}.{RESET}")
+        print(f"\n {FAIL} Package removal failed with exit code {process.returncode}.")
         return False
 
     # 1. Identify files to remove
@@ -309,7 +323,7 @@ def run_remove(dry_run=False, assume_yes=False) -> bool:
         to_remove.append({"path": state_dir, "desc": "Deletion history / state", "type": "dir"})
 
     if not to_remove:
-        print(f" {GREEN}✓{RESET} No system integration found to remove.")
+        print(f" {OK} No system integration found to remove.")
         return True
 
     # Calculate total size and prepare detailed list
@@ -318,22 +332,20 @@ def run_remove(dry_run=False, assume_yes=False) -> bool:
     total_size: int = sum(item["size"] for item in to_remove)
 
     # 2. Preview (Compact Header)
-    print(f"\n{PURPLE} ●{RESET} The following items will be removed:{RESET}")
+    print(f"\n {PURPLE}{MARK_SECTION}{RESET} The following items will be removed:")
     for item in to_remove:
         size_str = bytes_to_human(int(item["size"]))
         disp_path = str(item["path"]).replace(str(Path.home()), "~")
-        print(f"  {GREEN}✓{RESET} {GRAY}{disp_path:<40} ({item['desc']}, {size_str}){RESET}")
+        print(f"  {OK} {GRAY}{disp_path:<40} ({item['desc']}, {size_str}){RESET}")
 
     if dry_run:
-        print(
-            f"\n {GREEN}✓{RESET} {GRAY}Dry run complete. Total to free: {bytes_to_human(total_size)}{RESET}"
-        )
+        print(f"\n {OK} {GRAY}Dry run complete. Total to free: {bytes_to_human(total_size)}{RESET}")
         print(f"  {GRAY}(Shell PATH entries added by topo would also be removed.){RESET}")
         return True
 
     # 3. Confirmation (Mole-style)
     if not _confirm_removal(
-        f"\n {PURPLE}●{RESET} Remove topo ({bytes_to_human(total_size)}): "
+        f"\n {PURPLE}{MARK_PROMPT}{RESET} Remove topo ({bytes_to_human(total_size)}): "
         f"Press {GREEN}Enter{RESET} confirm, {GREEN}ESC{RESET} cancel: ",
         assume_yes,
     ):
@@ -351,10 +363,10 @@ def run_remove(dry_run=False, assume_yes=False) -> bool:
             allow_self_removal=True,
         )
         if ok:
-            print(f"  {GREEN}✓{RESET} {GRAY}Removed {item['desc']}{RESET}")
+            print(f"  {OK} {GRAY}Removed {item['desc']}{RESET}")
         else:
             had_errors = True
-            print(f"  {RED}✗{RESET} Failed to remove {p}: {reason}")
+            print(f"  {FAIL} Failed to remove {p}: {reason}")
 
     # Deletion auditing can recreate XDG_STATE_HOME/topo, while protection
     # checks can recreate ~/.config/topo to read an empty whitelist after the
@@ -368,13 +380,13 @@ def run_remove(dry_run=False, assume_yes=False) -> bool:
             shutil.rmtree(generated_dir)
         except OSError as e:
             had_errors = True
-            print(f"  {RED}✗{RESET} Failed to remove {generated_dir}: {e}")
+            print(f"  {FAIL} Failed to remove {generated_dir}: {e}")
 
     if _strip_topo_path_lines():
-        print(f"  {GREEN}✓{RESET} {GRAY}Removed PATH entry from shell config{RESET}")
+        print(f"  {OK} {GRAY}Removed PATH entry from shell config{RESET}")
 
     if had_errors:
-        print(f"\n {YELLOW}⚠{RESET} {GRAY}Topo removal completed with errors (see above).{RESET}\n")
+        print(f"\n {WARN} {GRAY}Topo removal completed with errors (see above).{RESET}\n")
         return False
 
     print(f"\n {GREEN}✨ Topo has been successfully removed from your system!{RESET}\n")
