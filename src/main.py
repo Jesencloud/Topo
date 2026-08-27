@@ -376,21 +376,41 @@ def _main() -> bool:
 
     # Commands that cannot work without a terminal.
     #
-    # The TUI menu, analyze and uninstall all drive Navigator.raw_mode(), whose
-    # first act is termios.tcgetattr(stdin). termios.error is not an OSError
+    # Two separate reasons to refuse, one guard.
+    #
+    # stdin: the TUI menu, analyze and uninstall all drive Navigator.raw_mode(),
+    # whose first act is termios.tcgetattr(stdin). termios.error is not an OSError
     # subclass, so anything that hands topo a non-terminal stdin -- `echo | topo`,
     # `topo analyze < /dev/null`, cron, non-interactive ssh -- used to escape
-    # every handler on the way up and print a raw traceback. (`topo | cat` only
-    # redirects stdout and never hit this.) Guarding here covers all three entry
-    # points at once and keeps isatty knowledge out of the ui layer; raw_mode()
-    # itself must not degrade to a no-op, or the selector loop would spin against
-    # a pipe instead.
-    if args.command in {None, "analyze", "uninstall"} and not sys.stdin.isatty():
+    # every handler on the way up and print a raw traceback.
+    #
+    # stdout: `topo analyze | cat` keeps a real keyboard, so raw_mode() succeeds
+    # and the selector answers keys normally -- into a screen nobody can see. The
+    # whole alternate-screen frame goes down the pipe (76 escape sequences and 24
+    # absolute cursor moves for one run), the user drives a disk-deleting tool
+    # blind, and the run reports success. "Can we read keys" and "can anyone see
+    # what we draw" are different questions and this needs both answered yes.
+    #
+    # Guarding here covers all three entry points at once and keeps isatty
+    # knowledge out of the ui layer; raw_mode() itself must not degrade to a
+    # no-op, or the selector loop would spin against a pipe instead.
+    if args.command in {None, "analyze", "uninstall"} and not (
+        sys.stdin.isatty() and sys.stdout.isatty()
+    ):
         label = f"topo {args.command}" if args.command else "The topo menu"
-        print(f"\n {YELLOW}⚠{RESET} {label} needs an interactive terminal.")
+        reason = (
+            "its output is redirected, so the screen it draws would go nowhere"
+            if sys.stdin.isatty()
+            else "there is no terminal to read keys from"
+        )
+        # Refusals go to stderr: this run did nothing, and on the redirected-stdout
+        # half of the guard stdout is precisely the file the user is collecting.
+        print(f"\n {YELLOW}⚠{RESET} {label} needs an interactive terminal.", file=sys.stderr)
+        print(f"  {GRAY}Refusing to run because {reason}.{RESET}", file=sys.stderr)
         print(
             f"  {GRAY}Run it from a terminal, or use a non-interactive command such as{RESET} "
-            f"{BOLD}topo status{RESET}{GRAY} or{RESET} {BOLD}topo clean --dry-run{RESET}{GRAY}.{RESET}"
+            f"{BOLD}topo status{RESET}{GRAY} or{RESET} {BOLD}topo clean --dry-run{RESET}{GRAY}.{RESET}",
+            file=sys.stderr,
         )
         return False
 

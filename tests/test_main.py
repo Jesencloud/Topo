@@ -138,7 +138,9 @@ def test_main_menu_clean_action_routes_to_clean():
     # sudo) ends the loop without making `topo` itself exit non-zero.
     with (
         patch("sys.argv", ["topo"]),
+        # Both halves of the terminal guard: keys to read and a screen to draw on.
         patch("sys.stdin.isatty", return_value=True),
+        patch("sys.stdout.isatty", return_value=True),
         patch("src.main.terminal_state.install_signal_handlers"),
         patch("src.main.SingleInstanceLock", return_value=nullcontext()),
         patch("src.main.main_menu", return_value="clean"),
@@ -184,6 +186,7 @@ def test_interactive_commands_refuse_a_non_tty_instead_of_crashing(argv, target,
     with (
         patch("sys.argv", argv),
         patch("sys.stdin.isatty", return_value=False),
+        patch("sys.stdout.isatty", return_value=False),
         patch("src.main.terminal_state.install_signal_handlers"),
         patch("src.main.SingleInstanceLock") as lock_class,
         # QUIT_ACTION so a regressed guard fails on the assertions below instead
@@ -196,10 +199,40 @@ def test_interactive_commands_refuse_a_non_tty_instead_of_crashing(argv, target,
         topo_main.main()
     assert exit_info.value.code == 1
 
-    output = capsys.readouterr().out
-    assert f"{label} needs an interactive terminal" in output
-    assert "topo clean --dry-run" in output
+    # A refusal is not part of the report: it goes to stderr, so `topo > file`
+    # leaves the shell noisy and the file empty rather than the other way round.
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert f"{label} needs an interactive terminal" in captured.err
+    assert "no terminal to read keys from" in captured.err
+    assert "topo clean --dry-run" in captured.err
     mocked.assert_not_called()
+    lock_class.assert_not_called()
+
+
+def test_interactive_commands_refuse_a_redirected_screen_even_with_a_keyboard(capsys):
+    """`topo analyze | cat` has a keyboard but nowhere to draw.
+
+    Guarding stdin alone let this through: raw_mode() succeeded, the selector
+    answered keys, and the whole alternate-screen frame went down the pipe while
+    the user deleted files blind -- and the run still exited 0.
+    """
+    with (
+        patch("sys.argv", ["topo", "analyze"]),
+        patch("sys.stdin.isatty", return_value=True),
+        patch("sys.stdout.isatty", return_value=False),
+        patch("src.main.terminal_state.install_signal_handlers"),
+        patch("src.main.SingleInstanceLock") as lock_class,
+        patch("src.main.run_deep_analysis") as analyze,
+        pytest.raises(SystemExit) as exit_info,
+    ):
+        topo_main.main()
+
+    assert exit_info.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "output is redirected" in captured.err
+    analyze.assert_not_called()
     lock_class.assert_not_called()
 
 
@@ -340,6 +373,7 @@ def test_cli_authorize_link_failure_and_analyze_uninstall_routes():
         with (
             patch("sys.argv", ["topo", command]),
             patch("sys.stdin.isatty", return_value=True),
+            patch("sys.stdout.isatty", return_value=True),
             patch("src.main.terminal_state.install_signal_handlers"),
             patch("src.main.alternate_screen", return_value=nullcontext()),
             patch("src.main.SingleInstanceLock", return_value=nullcontext()),
