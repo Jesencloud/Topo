@@ -300,13 +300,13 @@ def test_run_uninstall_cancel():
         assert not mock_exec.called
 
 
-def test_run_uninstall_keeps_the_selection_when_the_preview_is_cancelled():
-    """Backing out of the preview returns to the list with the ticks intact.
+def test_run_uninstall_starts_over_when_the_preview_is_cancelled():
+    """Backing out of the preview returns to a freshly built, unticked list.
 
-    The preview is a step inside the selection, so declining it used to throw
-    away every tick *and* say nothing about it -- the list simply reappeared
-    empty. The notice is the one-shot kind: it is handed to the selector, which
-    drops it on the next keypress.
+    The preview is a step inside the selection, so declining it lands back on
+    the list rather than leaving the screen -- and the cancelled ticks are
+    dropped there. The cursor is not: the list reopens on the app the cancelled
+    uninstall was for, so a second look at it does not start with a hunt.
     """
     mock_apps = [
         {
@@ -319,11 +319,12 @@ def test_run_uninstall_keeps_the_selection_when_the_preview_is_cancelled():
         }
         for index in range(2)
     ]
-    visits: list[tuple[set[str], str]] = []
+    visits: list[tuple[set[str], int]] = []
 
     def fake_run(self):
-        visits.append((set(self.selected_items), self.notice))
+        visits.append((set(self.selected_items), self.selected_index))
         if len(visits) == 1:
+            self.selected_index = 1
             self.selected_items = {"app-1"}
             return [1]
         return []  # second visit: ESC out of the list
@@ -338,11 +339,7 @@ def test_run_uninstall_keeps_the_selection_when_the_preview_is_cancelled():
         run_uninstall()
 
     assert not mock_exec.called
-    assert len(visits) == 2
-    assert visits[0] == (set(), "")
-    kept_selection, notice = visits[1]
-    assert kept_selection == {"app-1"}
-    assert "cancelled" in notice
+    assert visits == [(set(), 0), (set(), 1)]
 
 
 def test_parse_size_to_bytes():

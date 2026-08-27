@@ -26,7 +26,6 @@ from ...core.constants import (
     RESET,
     SUMMARY_RULE_WIDTH,
     THEME_TITLE,
-    WARN,
     WHITE,
 )
 from ...core.file_ops import bytes_to_human
@@ -39,7 +38,6 @@ from ..navigator import (
     Navigator,
     UninstallPreviewSelector,
     UninstallSelector,
-    notice_line,
 )
 
 # The scan spinner and the list both paint it, so it lives in one place: a
@@ -54,13 +52,6 @@ SCREEN_TITLE = "Uninstall Apps"
 # are all removed as the invoking user. Asking for a password to uninstall a
 # Flatpak buys nothing, and a mistyped or cancelled prompt ended the run.
 NEEDS_SUDO_TYPES = frozenset({"APT", "DNF", "Pacman", "Snap", "Zypper"})
-
-# Backing out of the preview is not backing out of the screen: the preview is a
-# step *inside* the selection, so ESC there lands back on the list. It used to
-# land on a freshly built list with every tick thrown away and nothing said about
-# it, which read as though the program had forgotten the question was asked. The
-# sentence matches print_action_cancelled's, plus what the list can now add.
-PREVIEW_CANCELLED_NOTICE = "Uninstall cancelled — your selection is still ticked."
 
 
 def _print_removal_report(
@@ -103,11 +94,8 @@ def _print_removal_report(
 
 def run_uninstall():
     manager = UninstallManager()
-    # Both live outside the loop because both have to survive one turn of it: the
-    # ticks so the preview can be declined without losing them, and the notice so
-    # the reason arrives on the list that is about to be repainted.
-    selected_ids: set[str] = set()
-    pending_notice = ""
+    # The row the list reopens on, carried by app id across a turn of the loop.
+    focus_id = None
 
     while True:
         if not manager.has_fresh_scan_cache():
@@ -129,29 +117,28 @@ def run_uninstall():
             Navigator.wait_for_return()
             return
 
-        # Ticks are carried across a turn of this loop by app id, and the list can
-        # be rescanned in between (the cache goes stale on a clock, not on this
-        # screen's say-so). An id no longer on the list has no row to draw, so
-        # keeping it would only inflate the "n/total selected" counter and let
-        # Enter return an empty selection, which reads as an ESC.
-        selected_ids &= {str(app["id"]) for app in apps}
-        selector = UninstallSelector(
-            SCREEN_TITLE, apps, selected_ids=selected_ids, notice=pending_notice
-        )
-        pending_notice = ""
+        # A turn of this loop is one question, asked from an empty list: nothing
+        # a previous turn ticked is carried into it, so the rows drawn here are
+        # exactly the apps this scan found. The cursor is the one thing handed
+        # back, so a cancelled uninstall reopens on the app it was about instead
+        # of at the top of the list.
+        selector = UninstallSelector(SCREEN_TITLE, apps, focus_id=focus_id)
         selected_indices = selector.run()
-        # The selector's own set is the record of what is ticked, and it is the
-        # one that survives a rescan: it keys on app id, so the row indices this
-        # returns cannot stand in for it.
-        selected_ids = set(selector.selected_items)
 
         if not selected_indices:
             return
 
+        # Read before the preview opens, while the cursor is still where Enter
+        # left it: cancelling an uninstall is usually the start of a second look
+        # at the same app, and hunting for it again is the annoying part.
+        focus_id = selector.focused_id
+
         all_targets = manager.build_removal_targets([apps[i] for i in selected_indices])
 
         if not UninstallPreviewSelector(all_targets).run():
-            pending_notice = notice_line(WARN, PREVIEW_CANCELLED_NOTICE)
+            # Declining the preview backs out of the preview, not the screen, so
+            # this lands on the list again -- freshly built, with the cancelled
+            # ticks dropped, but with the cursor still on the app they were for.
             continue
 
         needs_sudo = any(app["type"] in NEEDS_SUDO_TYPES for app, _, _ in all_targets)
@@ -232,10 +219,6 @@ def run_uninstall():
             )
 
         play_delete()
-        # The question this selection asked has been answered, so the next pass
-        # starts empty -- carrying the ticks forward is for the paths that come
-        # back without having removed anything.
-        selected_ids = set()
 
         # Standardized return/exit prompt
         if not Navigator.wait_for_return(

@@ -1204,7 +1204,7 @@ def test_delete_notice_reports_success_partial_and_total_failure():
     Analyze repaints the whole frame right after a delete, so the batch's own
     prints were overwritten within the same tick: a success said nothing at all
     and a refusal flashed. Each outcome now becomes the notice the *next* frame
-    draws, and the glyph is what tells them apart.
+    draws under its key hints, and the glyph is what tells them apart.
     """
     deleted_all = _delete_notice(DeleteOutcome(deleted=3, freed_bytes=2 * 1024**3))
     assert "✓" in deleted_all

@@ -119,16 +119,22 @@ def _fit_ansi_line(line, width):
     return "".join(out)
 
 
-def _viewport_top_for_focus(focus_line, total_lines, height):
+def _viewport_top_for_focus(focus_line, total_lines, height, keep_tail=False):
     if total_lines <= height:
         return 0
 
     max_top = total_lines - height
     focus_line = max(0, min(focus_line, total_lines - 1))
+    # A frame whose last line has something to say (a notice sits under the key
+    # hints) is shown bottom-anchored instead of centred on the cursor -- but only
+    # while that window still holds the cursor's row, which stays the thing the
+    # viewport exists to keep on screen.
+    if keep_tail and focus_line >= max_top:
+        return max_top
     return max(0, min(focus_line - height // 2, max_top))
 
 
-def _write_scrollable_frame(parts, focus_line=None, scroll_top=None):
+def _write_scrollable_frame(parts, focus_line=None, scroll_top=None, keep_tail=False):
     """Render a virtual full-screen frame with a right-edge scrollbar."""
     size = shutil.get_terminal_size(fallback=(80, 24))
     width = max(1, size.columns)
@@ -142,7 +148,7 @@ def _write_scrollable_frame(parts, focus_line=None, scroll_top=None):
     focus = 0 if focus_line is None else focus_line
     max_top = max(0, total_lines - height)
     if scroll_top is None:
-        top = _viewport_top_for_focus(focus, total_lines, height)
+        top = _viewport_top_for_focus(focus, total_lines, height, keep_tail)
     else:
         top = max(0, min(scroll_top, max_top))
 
@@ -173,9 +179,9 @@ def _write_scrollable_frame(parts, focus_line=None, scroll_top=None):
     )
 
 
-def _render_scrollable_frame(owner, parts, focus_line=None):
+def _render_scrollable_frame(owner, parts, focus_line=None, keep_tail=False):
     scroll_top = getattr(owner, "_scroll_top", None)
-    state = _write_scrollable_frame(parts, focus_line, scroll_top)
+    state = _write_scrollable_frame(parts, focus_line, scroll_top, keep_tail)
     owner._frame_state = state
     if not state.scrollable:
         owner._scroll_top = None
@@ -365,9 +371,9 @@ NOTICE_TEXT_LIMIT = 96
 def notice_line(glyph: str, text: str) -> str:
     """One notice line: a coloured glyph, then plain text, clamped to one row.
 
-    Only the glyph is coloured. A frame's notices are told apart by that glyph
-    (done / warning / failed), so dyeing the whole sentence would just make the
-    colour the message.
+    Only the glyph is coloured, and whatever the caller coloured inside *text*:
+    a frame's notices are told apart by that glyph (done / warning / failed), so
+    dyeing the whole sentence would just make the colour the message.
 
     It lives here rather than in the analyze screen that first needed it because
     the selectors below raise notices of their own now -- "nothing is selected
@@ -375,8 +381,13 @@ def notice_line(glyph: str, text: str) -> str:
     """
     if not text:
         return ""
-    if len(text) > NOTICE_TEXT_LIMIT:
-        text = text[: NOTICE_TEXT_LIMIT - 1].rstrip() + "…"
+    if display_width(ANSI_CSI_RE.sub("", text)) > NOTICE_TEXT_LIMIT:
+        # Measured in terminal cells with the escapes taken out first, not in
+        # len(): a notice can carry colour inside it (the count and size a delete
+        # reports do), and charging its escape bytes to the budget would clip a
+        # sentence that fits. _fit_ansi_line cuts on the same measure and closes
+        # the colour it cut through, so the row cannot bleed into the frame below.
+        text = _fit_ansi_line(text, NOTICE_TEXT_LIMIT - 1) + "…"
     return f"{glyph} {text}"
 
 
@@ -809,11 +820,6 @@ class AnalyzeSelector(_PagedSelector):
             else f" {GRAY}Select a category to explore (Total: {total_disk}):{RESET}"
         )
         buf.append(f"{hint}\033[K\n")
-        if self.notice:
-            # The notice arrives already carrying its own glyph and colour: a
-            # finished delete reports success here, and a fixed yellow "⚠"
-            # prefix would have marked "Deleted 3 items" as a warning.
-            buf.append(f"{self.notice}\033[K\n")
         buf.append("\033[K\n")
 
         total_len = len(self.items)
@@ -927,6 +933,13 @@ class AnalyzeSelector(_PagedSelector):
         buf.append("\n\033[K\n")
         for p in prompts:
             buf.append(f"{p}\033[K\n")
+        if self.notice:
+            # Under the hints rather than over the list: this is the answer to the
+            # key just pressed, and a row inserted above the list moved every one
+            # of its rows down the moment a delete finished. The notice arrives
+            # already carrying its own glyph and colour, so a fixed yellow "⚠"
+            # here would mark "Deleted 3 items" as a warning.
+            buf.append(f" {self.notice}\033[K\n")
 
         if self.selected_items:
             buf.append(
@@ -947,7 +960,7 @@ class AnalyzeSelector(_PagedSelector):
             buf.append(f"\n {self.confirm_text}\033[K\n")
 
         buf.append("\033[J")  # Clear remaining
-        _render_scrollable_frame(self, buf, focus_line)
+        _render_scrollable_frame(self, buf, focus_line, keep_tail=bool(self.notice))
 
     def run(self):
         with _selector_session() as fd:
@@ -1056,25 +1069,43 @@ class UninstallSelector(_PagedSelector):
     # instead, which made the footer's arrow point the wrong way for that one key.
     _DESCENDING_BY_DEFAULT = frozenset({"size_bytes", "install_time"})
 
-    # What Enter needs before it will do anything. Space (or a row number) is the
-    # only way to arm the list, so a silent no-op left the user unable to tell a
-    # mis-keyed Enter from a hung program.
-    NOTHING_SELECTED_NOTICE = "Nothing selected yet — press Space (or type a row number) first."
-
-    def __init__(self, title, items, selected_ids=None, notice=""):
+    def __init__(self, title, items, focus_id=None):
         self.title = title
         self.items = items
-        self.selected_index = 0
-        # Handed in so the screen can reopen this list on the ticks the user
-        # already made: cancelling the preview goes back to the screen it came
-        # from, and a fresh selector would have thrown that work away.
-        self.selected_items: set[str] = set(selected_ids or ())
-        self.notice = notice
+        # Keyed on app id, not row index: the sort keys reorder the rows under
+        # the ticks, and Enter has to remove the apps the user pointed at.
+        self.selected_items: set[str] = set()
+        # Lit by an Enter that had nothing to remove, and dropped by the next
+        # key. The line it lights is the one that says how to tick a row, so the
+        # answer to a mis-keyed Enter costs the list no rows -- the notice this
+        # replaces pushed every row of the frame down while it was up.
+        self.hint_highlighted = False
         self.sort_key = "install_time"
         self.sort_reverse = self.sort_key in self._DESCENDING_BY_DEFAULT
         self.page_size = 15
-        self.current_page = 0
         self._sort_items()
+        # Where the cursor opens, named by app id rather than row number and
+        # resolved after the sort: the screen hands one back when a cancelled
+        # uninstall reopens this list, and the list it reopens has been scanned
+        # and sorted again, so last turn's row number need not be the same app.
+        # An id this scan no longer lists -- the app really was removed -- falls
+        # back to the first row.
+        self.selected_index = self._row_of(focus_id)
+        self.current_page = self.selected_index // self.page_size
+
+    def _row_of(self, item_id):
+        """The row an app id sits on now, or the first row if this scan lost it."""
+        if item_id is None:
+            return 0
+        for row, item in enumerate(self.items):
+            if item["id"] == item_id:
+                return row
+        return 0
+
+    @property
+    def focused_id(self):
+        """The id of the app under the cursor, for reopening the list on it."""
+        return self._selection_key(self.selected_index)
 
     def _sort_items(self):
         if self.sort_key == "name":
@@ -1116,13 +1147,14 @@ class UninstallSelector(_PagedSelector):
             focus_line = _frame_line_count(buf)
             buf.append(f"\n   {GRAY}No applications found{RESET}\033[K\n")
         else:
+            # Yellow is what the rest of the TUI uses to mean "look here": the
+            # glyph on a warning notice is the same colour, and this line is
+            # standing in for one.
+            hint_color = YELLOW if self.hint_highlighted else GRAY
             buf.append(
-                f" {GRAY}Select apps to uninstall "
+                f" {hint_color}Select apps to uninstall "
                 f"(Enter item numbers from this page, or press Space to select):{RESET}\033[K\n"
             )
-            if self.notice:
-                # Already carries its own glyph and colour, same as Analyze's.
-                buf.append(f"{self.notice}\033[K\n")
             buf.append("\033[K\n")
             total_pages = (total_len + self.page_size - 1) // self.page_size
             self.current_page = max(0, min(self.current_page, total_pages - 1))
@@ -1225,10 +1257,10 @@ class UninstallSelector(_PagedSelector):
                 if _consume_mouse(self, key):
                     continue
                 _clear_manual_scroll(self)
-                # A notice answers the keypress that raised it and nothing more,
-                # so the next key takes it away -- including the key that puts a
-                # new one up, which is set below this line.
-                self.notice = ""
+                # The highlight answers one keypress and nothing more, so the
+                # next key takes it away -- including the Enter that puts it back
+                # up, which is handled below this line.
+                self.hint_highlighted = False
                 total_len = len(self.items)
                 if key in (Navigator.UP, "\x1bOA"):
                     self._move_cursor(-1)
@@ -1277,7 +1309,10 @@ class UninstallSelector(_PagedSelector):
                     self._toggle_current_page_selection()
                 elif key in Navigator.ENTER:
                     if not self.selected_items:
-                        self.notice = notice_line(WARN, self.NOTHING_SELECTED_NOTICE)
+                        # Nothing to remove, so Enter does nothing -- but it says
+                        # so: the hint above the list lights up instead of the
+                        # screen sitting there looking hung.
+                        self.hint_highlighted = True
                         continue
                     return [
                         i for i, item in enumerate(self.items) if item["id"] in self.selected_items

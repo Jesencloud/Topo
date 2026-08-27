@@ -100,7 +100,7 @@ def render_buffer(selector, width=100):
         ),
         patch(
             "src.ui.navigator._render_scrollable_frame",
-            side_effect=lambda _owner, parts, _focus=None: frames.append(parts),
+            side_effect=lambda _owner, parts, _focus=None, **_kwargs: frames.append(parts),
         ),
     ):
         selector.render()

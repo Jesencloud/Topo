@@ -35,6 +35,7 @@ from ...core.constants import (
     ERASE_BELOW,
     FAIL,
     GRAY,
+    GREEN,
     MAGENTA,
     OK,
     PURPLE,
@@ -87,16 +88,20 @@ def _delete_notice(outcome: DeleteOutcome) -> str:
 
     Success used to have no feedback at all -- only the delete sound, which says
     nothing on a muted laptop or over ssh -- and the failures printed straight to
-    the terminal, where the next frame overwrote them within the same tick.
+    the terminal, where the next frame overwrote them within the same tick. The
+    line the frame draws for it sits under the key hints, so putting one up costs
+    the list no rows.
     """
     freed = bytes_to_human(outcome.freed_bytes)
+    # Count and size are the pair the uninstall report colours, and they get the
+    # same green here: it is the same statement of what a removal just freed, so
+    # the two screens should not read as two different kinds of report. The words
+    # around them stay plain -- the glyph is what says how the batch went.
+    tally = f"Deleted {GREEN}{plural(outcome.deleted, 'item')}{RESET}, freed {GREEN}{freed}{RESET}"
     if outcome.deleted and not outcome.failed:
-        return _done_notice(f"Deleted {plural(outcome.deleted, 'item')}, freed {freed}.")
+        return _done_notice(f"{tally}.")
     if outcome.deleted:
-        return _warn_notice(
-            f"Deleted {plural(outcome.deleted, 'item')}, freed {freed}; "
-            f"{outcome.failed} left: {outcome.first_problem}"
-        )
+        return _warn_notice(f"{tally}; {outcome.failed} left: {outcome.first_problem}")
     if outcome.failed:
         return _fail_notice(
             f"{plural(outcome.failed, 'item')} not deleted: {outcome.first_problem}"
