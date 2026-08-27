@@ -1,7 +1,13 @@
 import shutil
 from pathlib import Path
 
-from ..core.constants import CLEAN_CARGO_AGE_DAYS, DEFAULT_PROJECT_SEARCH_PATHS, DEV_CACHES, OK
+from ..core.constants import (
+    CLEAN_CARGO_AGE_DAYS,
+    DEFAULT_PROJECT_SEARCH_PATHS,
+    DEV_CACHES,
+    OK,
+    SKIP,
+)
 from ..core.file_ops import (
     bytes_to_human,
     clean_path_by_age,
@@ -24,7 +30,7 @@ def clean_tool_cache(description, command_args, cache_path=None, dry_run=False):
 
     if dry_run:
         if total_size > 0 or not cache_path:
-            print(f"  {OK} {description} ({bytes_to_human(total_size)}) would be cleaned")
+            print(f"  {SKIP} {description} ({bytes_to_human(total_size)}) would be cleaned")
             return total_size, 1
         return 0, 0
 
@@ -47,7 +53,7 @@ def clean_docker(dry_run=False):
     """Clean unused Docker data."""
     if shutil.which("docker"):
         if dry_run:
-            print(f"  {OK} Docker (unused images/volumes) would be pruned")
+            print(f"  {SKIP} Docker (unused images/volumes) would be pruned")
             return 0, 1
         use_sudo = True
         if run_command(["docker", "info"], capture=True, timeout=10).ok:
@@ -67,7 +73,7 @@ def clean_podman(dry_run=False):
     items = 0
     if shutil.which("podman"):
         if dry_run:
-            print(f"  {OK} Podman (unused images/volumes) would be pruned")
+            print(f"  {SKIP} Podman (unused images/volumes) would be pruned")
             items += 1
         else:
             res = run_command(["podman", "system", "prune", "-f"], capture=True)
@@ -91,7 +97,7 @@ def clean_multipass(dry_run=False):
     """Purges deleted Multipass instances."""
     if shutil.which("multipass"):
         if dry_run:
-            print(f"  {OK} Multipass deleted instances would be purged")
+            print(f"  {SKIP} Multipass deleted instances would be purged")
             return 0, 1
         res = run_command(["multipass", "purge"], capture=True)
         if res and res.returncode == 0:
@@ -112,8 +118,8 @@ def clean_ai_models(dry_run=False):
         if i > 0:
             total_size += s
             total_items += i
-            status = "would be cleaned" if dry_run else "cleaned"
-            print(f"  {OK} {target.label} ({bytes_to_human(s)}) {status}")
+            glyph, status = (SKIP, "would be cleaned") if dry_run else (OK, "cleaned")
+            print(f"  {glyph} {target.label} ({bytes_to_human(s)}) {status}")
     return total_size, total_items
 
 
@@ -136,8 +142,8 @@ def clean_java_caches(dry_run=False):
         if i > 0:
             total_size += s
             total_items += i
-            status = "would be cleaned" if dry_run else "cleaned"
-            print(f"  {OK} {label} ({bytes_to_human(s)}) {status}")
+            glyph, status = (SKIP, "would be cleaned") if dry_run else (OK, "cleaned")
+            print(f"  {glyph} {label} ({bytes_to_human(s)}) {status}")
     return total_size, total_items
 
 
@@ -162,8 +168,8 @@ def clean_python_pycache(dry_run=False):
             continue
 
     if total_items > 0:
-        status = "would be cleaned" if dry_run else "cleaned"
-        print(f"  {OK} Python __pycache__ ({bytes_to_human(total_size)}) {status}")
+        glyph, status = (SKIP, "would be cleaned") if dry_run else (OK, "cleaned")
+        print(f"  {glyph} Python __pycache__ ({bytes_to_human(total_size)}) {status}")
     return total_size, total_items
 
 
@@ -194,8 +200,8 @@ def clean_cargo_cache(dry_run: bool = False) -> tuple[int, int]:
     register_cleaned_path(cargo_path)
     s, i = clean_path_by_age(cargo_path, days=CLEAN_CARGO_AGE_DAYS, dry_run=dry_run)
     if i > 0:
-        status = "would be cleaned" if dry_run else "cleaned"
-        print(f"  {OK} Cargo cache ({bytes_to_human(s)}) {status}")
+        glyph, status = (SKIP, "would be cleaned") if dry_run else (OK, "cleaned")
+        print(f"  {glyph} Cargo cache ({bytes_to_human(s)}) {status}")
         return s, i
     return 0, 0
 

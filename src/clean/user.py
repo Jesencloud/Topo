@@ -9,6 +9,7 @@ from ..core.constants import (
     CLEAN_BACKUP_AGE_DAYS,
     CLEAN_TEMP_AGE_DAYS,
     OK,
+    SKIP,
 )
 from ..core.file_ops import (
     age_cutoff,
@@ -32,7 +33,7 @@ def clean_trash(dry_run=False):
         size = get_size_fast(trash_path) if trash_path.exists() else 0
         if dry_run:
             if size > 0:
-                print(f"  {OK} User Trash ({bytes_to_human(size)}) would be emptied")
+                print(f"  {SKIP} User Trash ({bytes_to_human(size)}) would be emptied")
                 return size, 1, 1
             return 0, 0, 0
 
@@ -55,7 +56,7 @@ def clean_trash(dry_run=False):
         size = get_size_fast(td)
         if dry_run:
             if size > 0:
-                print(f"  {OK} {td} ({bytes_to_human(size)}) would be cleaned")
+                print(f"  {SKIP} {td} ({bytes_to_human(size)}) would be cleaned")
                 total_size += size
                 total_items += 1
             continue
@@ -126,8 +127,8 @@ def clean_system_temp(dry_run=False, min_age_days=CLEAN_TEMP_AGE_DAYS):
         except OSError:
             continue
     if total_items > 0:
-        status = "would be cleaned" if dry_run else "cleaned"
-        print(f"  {OK} Stale temp files ({bytes_to_human(total_size)}) {status}")
+        glyph, status = (SKIP, "would be cleaned") if dry_run else (OK, "cleaned")
+        print(f"  {glyph} Stale temp files ({bytes_to_human(total_size)}) {status}")
         return total_size, total_items, 1
     return 0, 0, 0
 
@@ -207,8 +208,8 @@ def clean_user_logs(dry_run=False):
             continue
 
     if total_items > 0:
-        status = "would be cleaned" if dry_run else "cleaned"
-        print(f"  {OK} User log files ({bytes_to_human(total_size)}) {status}")
+        glyph, status = (SKIP, "would be cleaned") if dry_run else (OK, "cleaned")
+        print(f"  {glyph} User log files ({bytes_to_human(total_size)}) {status}")
         return total_size, total_items, 1
     return 0, 0, 0
 
@@ -264,10 +265,10 @@ def clean_backup_files(dry_run=False, min_age_days=CLEAN_BACKUP_AGE_DAYS):
 
     if total_items > 0:
         if use_trash:
-            status = "would be trashed" if dry_run else "moved to trash"
+            glyph, status = (SKIP, "would be trashed") if dry_run else (OK, "moved to trash")
         else:
-            status = "would be deleted" if dry_run else "deleted"
-        print(f"  {OK} Backup/swap files ({bytes_to_human(total_size)}) {status}")
+            glyph, status = (SKIP, "would be deleted") if dry_run else (OK, "deleted")
+        print(f"  {glyph} Backup/swap files ({bytes_to_human(total_size)}) {status}")
         return total_size, total_items, 1
     return 0, 0, 0
 
@@ -282,7 +283,7 @@ def clean_thumbnails(dry_run=False):
         return 0, 0, 0
 
     if dry_run:
-        print(f"  {OK} Desktop thumbnail cache ({bytes_to_human(size)}) would be cleaned")
+        print(f"  {SKIP} Desktop thumbnail cache ({bytes_to_human(size)}) would be cleaned")
         return size, 1, 1
 
     if safe_remove(thumb_dir, use_trash=False)[0]:

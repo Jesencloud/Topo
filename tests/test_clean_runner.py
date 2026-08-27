@@ -1,9 +1,47 @@
+import re
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
 from src.clean.runner import CleanupTask, TaskRegistry, _print_cleanup_summary, run_clean
+
+CLEAN_PACKAGE = Path(__file__).resolve().parent.parent / "src" / "clean"
+
+# `glyph, status = (SKIP, "would be cleaned") if dry_run else (OK, "cleaned")`
+_GLYPH_PHRASE_PAIR = re.compile(r'\((OK|SKIP), "([^"]*)"\)')
+
+
+def test_no_preview_line_wears_the_glyph_of_a_finished_delete():
+    """Every dry-run line in clean/ carries SKIP, and no `would` line carries OK.
+
+    `✓ npm cache (40 MB) would be cleaned` differed from the real delete's
+    `✓ npm cache (40 MB) cleaned` by a verb tense alone -- the one difference a
+    reader skimming a 40-line report does not catch, and the one that survives
+    neither `--no-color` nor a paste into an issue. There are 20-odd such lines
+    across four modules and each was written by hand, so the rule is checked
+    over the source: a new cleaner copied from an old one is exactly how the
+    green `✓` would come back.
+    """
+    offenders = []
+    checked = 0
+    for module in sorted(CLEAN_PACKAGE.glob("*.py")):
+        for lineno, line in enumerate(module.read_text(encoding="utf-8").splitlines(), 1):
+            where = f"{module.name}:{lineno}"
+            if "{OK}" in line and "would" in line:
+                offenders.append(where)
+            for glyph, phrase in _GLYPH_PHRASE_PAIR.findall(line):
+                # The tense and the glyph are chosen as one tuple precisely so
+                # they cannot drift apart; this is that pairing, asserted.
+                checked += 1
+                if phrase.startswith("would") != (glyph == "SKIP"):
+                    offenders.append(f"{where} ({glyph} paired with {phrase!r})")
+            if "{SKIP}" in line:
+                checked += 1
+    assert offenders == []
+    # A sweep that matched nothing would pass just as quietly.
+    assert checked > 20
 
 
 def test_build_execution_groups_contains_all_cleanup_categories():

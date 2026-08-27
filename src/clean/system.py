@@ -3,7 +3,7 @@ import re
 import shutil
 from pathlib import Path
 
-from ..core.constants import OK
+from ..core.constants import OK, SKIP
 from ..core.file_ops import bytes_to_human, get_size_fast, parse_size_from_text, safe_remove
 from ..core.heavy_cache import PACKAGE_MANAGER_CACHE_DEFS
 from ..core.package_manager import detect_package_manager, resolve_admin_tool
@@ -31,8 +31,13 @@ class DryRunReporter:
         size_str = f" ({bytes_to_human(freed_bytes)})" if freed_bytes > 0 else ""
         items_str = f" ({items_count} items)" if items_count > 0 and freed_bytes == 0 else ""
 
+        # A preview line must not wear the glyph a finished delete wears. `✓ ...
+        # would be cleaned` differed from `✓ Cleaned ...` by a verb tense alone,
+        # which survives neither a skim nor a paste with the colors stripped; `◎`
+        # says "it is there, this run left it alone" on its own. Every dry-run
+        # line in clean/ pairs SKIP with the conditional tense for that reason.
         if dry_run:
-            print(f"  {OK} {action_name}{size_str}{items_str} would be cleaned")
+            print(f"  {SKIP} {action_name}{size_str}{items_str} would be cleaned")
         else:
             print(f"  {OK} Cleaned {action_name}{size_str}{items_str}")
 
@@ -45,7 +50,7 @@ def clean_snaps(dry_run: bool = False) -> tuple[int, int, int]:
         return 0, 0, 0
 
     if dry_run:
-        print(f"  {OK} Old Snap revisions would be removed")
+        print(f"  {SKIP} Old Snap revisions would be removed")
         return 0, 0, 1
 
     # The revision table is matched on the English word "disabled".
@@ -126,7 +131,7 @@ def clean_package_manager(dry_run: bool = False) -> tuple[int, int, int]:
 
     if dry_run:
         size_hint = f" ({bytes_to_human(pre_size)})" if pre_size > 0 else ""
-        print(f"  {OK} {manager.label} cache{size_hint} would be cleaned")
+        print(f"  {SKIP} {manager.label} cache{size_hint} would be cleaned")
         return freed + pre_size, snap_items, snap_cats + 1
 
     res = run_command(
@@ -154,7 +159,7 @@ def clean_journal(dry_run: bool = False) -> tuple[int, int, int]:
         return 0, 0, 0
 
     if dry_run:
-        print(f"  {OK} journal logs would be vacuumed")
+        print(f"  {SKIP} journal logs would be vacuumed")
         return 0, 0, 1
 
     res = run_command(
@@ -191,7 +196,7 @@ def clean_orphaned_packages(dry_run: bool = False) -> tuple[int, int, int]:
         if not orphans:
             return 0, 0, 0
         if dry_run:
-            print(f"  {OK} {orphans} orphaned {manager.label} package(s) would be removed")
+            print(f"  {SKIP} {orphans} orphaned {manager.label} package(s) would be removed")
             return 0, 0, 1
         res = run_command(
             [tool, "autoremove", "-y"],
@@ -216,7 +221,7 @@ def clean_orphaned_packages(dry_run: bool = False) -> tuple[int, int, int]:
             # autoremove` takes the rpm transaction lock even to resolve, so there
             # is no unprivileged preview, and running it under sudo to get one is
             # the very thing --dry-run exists to avoid.
-            print(f"  {OK} Orphaned {manager.label} packages would be autoremoved")
+            print(f"  {SKIP} Orphaned {manager.label} packages would be autoremoved")
             return 0, 0, 1
         res = run_command([tool, "autoremove", "-y"], use_sudo=True, capture=True, env=C_LOCALE_ENV)
         if res.ok:
@@ -247,7 +252,9 @@ def clean_orphaned_packages(dry_run: bool = False) -> tuple[int, int, int]:
         if list_res.ok and list_res.stdout.strip():
             orphans = list_res.stdout.split()
             if dry_run:
-                print(f"  {OK} {len(orphans)} orphaned {manager.label} package(s) would be removed")
+                print(
+                    f"  {SKIP} {len(orphans)} orphaned {manager.label} package(s) would be removed"
+                )
                 return 0, 0, 1
             remove_res = run_command(
                 [tool, "-Rns", "--noconfirm"] + orphans,
@@ -282,7 +289,7 @@ def clean_zombies(dry_run: bool = False) -> tuple[int, int, int]:
 
     count = len(zombies)
     if dry_run:
-        print(f"  {OK} {count} zombie processes detected")
+        print(f"  {SKIP} {count} zombie processes detected")
         return 0, 0, 1
 
     parents = set(z["ppid"] for z in zombies)
@@ -492,7 +499,7 @@ def clean_old_kernels(dry_run: bool = False) -> tuple[int, int, int]:
         if not to_remove:
             return 0, 0, 0
         if dry_run:
-            print(f"  {OK} {len(to_remove)} old kernel(s) would be removed")
+            print(f"  {SKIP} {len(to_remove)} old kernel(s) would be removed")
             return 0, 0, 1
         freed = 0
         removed = 0
@@ -546,7 +553,7 @@ def clean_old_kernels(dry_run: bool = False) -> tuple[int, int, int]:
         if not stale:
             return 0, 0, 0
         if dry_run:
-            print(f"  {OK} {len(stale)} old kernel(s) would be removed")
+            print(f"  {SKIP} {len(stale)} old kernel(s) would be removed")
             return 0, 0, 1
         # Every subpackage of every stale version, in one transaction. Each
         # version used to be taken apart instead: `removable[:-1]` counted *rows*,

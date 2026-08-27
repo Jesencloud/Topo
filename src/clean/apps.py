@@ -160,8 +160,8 @@ def clean_app_generic(name, paths, process_names=None, dry_run=False):
                 continue
 
     if found and (total_freed > 0 or dry_run):
-        status = "would be cleaned" if dry_run else "cache cleaned"
-        print(f"  {OK} {name} ({bytes_to_human(total_freed)}) {status}")
+        glyph, status = (SKIP, "would be cleaned") if dry_run else (OK, "cache cleaned")
+        print(f"  {glyph} {name} ({bytes_to_human(total_freed)}) {status}")
         return total_freed, items_cleaned
     return 0, 0
 
@@ -203,7 +203,7 @@ def clean_flatpak_unused(dry_run=False):
     if not shutil.which("flatpak"):
         return 0, 0
     if dry_run:
-        print(f"  {OK} Flatpak runtimes would be checked")
+        print(f"  {SKIP} Flatpak runtimes would be checked")
         return 0, 0
 
     scopes = [("--user", False)]
@@ -271,7 +271,7 @@ def clean_generic_xdg_caches(days=CLEAN_CACHE_AGE_DAYS, dry_run=False):
     except OSError:
         pass
     if dry_run and total_size > 0:
-        msg = f"  {OK} Other app caches ({bytes_to_human(total_size)}) would be checked"
+        msg = f"  {SKIP} Other app caches ({bytes_to_human(total_size)}) would be checked"
         print(msg)
     return total_size, total_items
 
@@ -436,7 +436,9 @@ def clean_orphaned_remnants(dry_run=False, max_age_days=60):
         pass
 
     if dry_run and total_size > 0:
-        msg = f"  {OK} Orphaned app cache remnants ({bytes_to_human(total_size)}) would be cleaned"
+        msg = (
+            f"  {SKIP} Orphaned app cache remnants ({bytes_to_human(total_size)}) would be cleaned"
+        )
         print(msg)
     return total_size, total_items
 
@@ -478,7 +480,7 @@ def clean_snap_cache(dry_run=False):
         pass
 
     if dry_run and total_size > 0:
-        print(f"  {OK} Snap application caches ({bytes_to_human(total_size)}) would be checked")
+        print(f"  {SKIP} Snap application caches ({bytes_to_human(total_size)}) would be checked")
     return total_size, total_items
 
 
@@ -554,8 +556,8 @@ def clean_steam_shader_cache(dry_run=False):
             pass
 
     if total_items > 0:
-        status = "would be cleaned" if dry_run else "cleaned"
-        print(f"  {OK} GPU/Steam/Proton shader cache ({bytes_to_human(total_size)}) {status}")
+        glyph, status = (SKIP, "would be cleaned") if dry_run else (OK, "cleaned")
+        print(f"  {glyph} GPU/Steam/Proton shader cache ({bytes_to_human(total_size)}) {status}")
     return total_size, total_items
 
 
@@ -606,8 +608,8 @@ def clean_ide_caches(dry_run=False):
             pass
 
     if total_items > 0:
-        status = "would be cleaned" if dry_run else "cleaned"
-        print(f"  {OK} IDE/Editor caches ({bytes_to_human(total_size)}) {status}")
+        glyph, status = (SKIP, "would be cleaned") if dry_run else (OK, "cleaned")
+        print(f"  {glyph} IDE/Editor caches ({bytes_to_human(total_size)}) {status}")
     return total_size, total_items
 
 
