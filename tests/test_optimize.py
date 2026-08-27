@@ -109,7 +109,7 @@ def test_run_systemd_user_service_cleanup_removes_broken_unit(test_env):
     ):
         result = run_systemd_user_service_cleanup(dry_run=False)
 
-    assert result == "Removed 1 broken user systemd service(s)"
+    assert result == "Removed 1 broken user systemd service"
     assert not service_file.exists()
     mock_run.assert_called_once_with(
         ["systemctl", "--user", "daemon-reload"], capture=True, timeout=10
@@ -138,7 +138,7 @@ def test_run_systemd_user_service_cleanup_dry_run_keeps_file(test_env):
     with patch("pathlib.Path.home", return_value=test_env):
         result = run_systemd_user_service_cleanup(dry_run=True)
 
-    assert result == "Found 1 broken user systemd service(s)"
+    assert result == "Found 1 broken user systemd service"
     assert service_file.exists()
 
 
@@ -325,7 +325,7 @@ def test_run_broken_symlink_cleanup_removes_only_broken_links(test_env):
     ):
         result = run_broken_symlink_cleanup(dry_run=False)
 
-    assert result == "Removed 1 broken user symlink(s)"
+    assert result == "Removed 1 broken user symlink"
     assert not broken_link.exists()
     assert not broken_link.is_symlink()
     assert valid_link.exists()
@@ -346,7 +346,7 @@ def test_run_broken_symlink_cleanup_keeps_link_without_trash_backend(test_env):
     ):
         result = run_broken_symlink_cleanup(dry_run=False)
 
-    assert result == "Kept 1 broken user symlink(s) (no trash backend available)"
+    assert result == "Kept 1 broken user symlink (no trash backend available)"
     assert broken_link.is_symlink()
 
 
@@ -442,7 +442,7 @@ def test_run_user_systemd_reset_failed_resets_failed_units():
     ):
         result = run_user_systemd_reset_failed(dry_run=False)
 
-    assert result == "Reset 2 failed user systemd unit state(s)"
+    assert result == "Reset 2 failed user systemd unit states"
     assert mock_run.call_args_list[0].args[0] == [
         "systemctl",
         "--user",
@@ -469,7 +469,7 @@ def test_run_user_systemd_reset_failed_dry_run_does_not_reset():
     ):
         result = run_user_systemd_reset_failed(dry_run=True)
 
-    assert result == "Found 1 failed user systemd unit(s)"
+    assert result == "Found 1 failed user systemd unit"
     assert mock_run.call_count == 1
 
 
@@ -514,7 +514,7 @@ def test_run_system_systemd_reset_failed_uses_sudo_and_the_system_scope():
     ):
         result = run_system_systemd_reset_failed(dry_run=False)
 
-    assert result == "Reset 1 failed system systemd unit state(s)"
+    assert result == "Reset 1 failed system systemd unit state"
     # No --user anywhere: the system manager is the default scope, and the reset
     # is the only half that needs privileges -- listing must not ask for them.
     assert mock_run.call_args_list[0].args[0] == [
@@ -571,7 +571,7 @@ def test_vacuum_finds_databases_behind_a_wildcard_profile_directory(test_env):
         patch("pathlib.Path.home", return_value=test_env),
         patch("src.optimize._is_any_process_running", return_value=False),
     ):
-        assert run_vacuum_all(dry_run=True) == "Found 2 database(s) to optimize"
+        assert run_vacuum_all(dry_run=True) == "Found 2 databases to optimize"
 
 
 def test_vacuum_covers_flatpak_and_non_default_chromium_profiles(test_env):
@@ -587,7 +587,7 @@ def test_vacuum_covers_flatpak_and_non_default_chromium_profiles(test_env):
         patch("pathlib.Path.home", return_value=test_env),
         patch("src.optimize._is_any_process_running", return_value=False),
     ):
-        assert run_vacuum_all(dry_run=True) == "Found 4 database(s) to optimize"
+        assert run_vacuum_all(dry_run=True) == "Found 4 databases to optimize"
 
 
 def test_every_browser_pattern_is_relative_and_wildcards_one_profile_level():
@@ -621,7 +621,7 @@ def test_vacuum_reaches_snap_and_non_firefox_gecko_profiles(test_env):
         patch("pathlib.Path.home", return_value=test_env),
         patch("src.optimize._is_any_process_running", return_value=False),
     ):
-        assert run_vacuum_all(dry_run=True) == "Found 2 database(s) to optimize"
+        assert run_vacuum_all(dry_run=True) == "Found 2 databases to optimize"
 
 
 def test_vacuum_reaches_a_browser_whose_root_is_its_profile(test_env):
@@ -636,7 +636,7 @@ def test_vacuum_reaches_a_browser_whose_root_is_its_profile(test_env):
         patch("pathlib.Path.home", return_value=test_env),
         patch("src.optimize._is_any_process_running", return_value=False),
     ):
-        assert run_vacuum_all(dry_run=True) == "Found 1 database(s) to optimize"
+        assert run_vacuum_all(dry_run=True) == "Found 1 database to optimize"
 
 
 def test_run_desktop_database_refresh_dry_run(test_env):
@@ -963,8 +963,8 @@ def test_icon_cache_refresh_targets_theme_directories_not_the_root(test_env):
         patch("src.optimize.shutil.which", return_value="/usr/bin/gtk-update-icon-cache"),
         patch("src.optimize.run_command", return_value=CommandResult(["gtk"], 0)) as run,
     ):
-        assert run_icon_cache_refresh(dry_run=True) == "1 user icon theme cache(s) would be rebuilt"
-        assert run_icon_cache_refresh() == "Rebuilt 1 user icon theme cache(s)"
+        assert run_icon_cache_refresh(dry_run=True) == "1 user icon theme cache would be rebuilt"
+        assert run_icon_cache_refresh() == "Rebuilt 1 user icon theme cache"
         # -q and -f only: GTK3 reads -t as --ignore-theme-index, GTK4 as --index-only.
         assert run.call_args.args[0] == ["gtk-update-icon-cache", "-q", "-f", str(theme)]
 
@@ -1223,5 +1223,5 @@ def test_chromium_snap_profiles_are_covered(test_env):
         patch("pathlib.Path.home", return_value=test_env),
         patch("src.optimize._is_any_process_running", return_value=False),
     ):
-        assert run_vacuum_all(dry_run=True) == "Found 1 database(s) to optimize"
+        assert run_vacuum_all(dry_run=True) == "Found 1 database to optimize"
     assert db.exists()

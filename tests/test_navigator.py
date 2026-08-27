@@ -24,6 +24,7 @@ from src.ui.navigator import (
     UninstallSelector,
     draw_bar,
     format_percent,
+    hint_lines,
     icon_gap,
     pad_and_truncate,
 )
@@ -766,6 +767,56 @@ def test_analyze_name_sort_keeps_directories_first_when_reversed():
     assert [item["name"] for item in sel.items] == ["b-dir", "a-dir", "z-file", "a-file"]
 
 
+ANALYZE_FOOTER_HINTS = (
+    "Page 1/2",
+    "↑↓←→",
+    "Space: Select",
+    "A: All",
+    "Enter: Open",
+    "F: Location",
+    "R: Reload",
+    "S: Sort",
+    "ESC: Back",
+)
+
+
+def _analyze_footer(width):
+    lines = render_lines(AnalyzeSelector("t", _analyze_items()), width)
+    start = next(i for i, line in enumerate(lines) if "↑↓" in line)
+    return [line for line in lines[start:] if line.strip()]
+
+
+def test_analyze_footer_is_one_line_when_the_terminal_can_hold_it():
+    # It used to be two by construction, which left a normal-width window with
+    # two short ragged rows for hints that fit comfortably on one.
+    footer = _analyze_footer(140)
+
+    assert len(footer) == 1
+    for hint in ANALYZE_FOOTER_HINTS:
+        assert hint in footer[0]
+
+
+def test_analyze_footer_keeps_every_hint_as_the_terminal_narrows():
+    # Frame lines are cut to the terminal's width rather than wrapped, so the
+    # hints have to be split before they reach it -- otherwise the tail of the
+    # line goes missing, and the tail is where "ESC: Back" lives.
+    for width in (140, 100, 80, 60, 40):
+        footer = _analyze_footer(width)
+        joined = " ".join(footer)
+
+        assert all(display_width(line) <= width for line in footer)
+        for hint in ANALYZE_FOOTER_HINTS:
+            assert hint in joined, (width, hint, footer)
+
+
+def test_hint_lines_spreads_the_hints_evenly_once_a_split_is_needed():
+    chunks = ["one", "two", "three", "four", "five", "six"]
+
+    assert hint_lines(chunks, 200) == ["one | two | three | four | five | six"]
+    # Filling the first line to the edge would leave "six" alone on the second.
+    assert hint_lines(chunks, 34) == ["one | two | three", "four | five | six"]
+
+
 # --- UninstallSelector ---
 def test_uninstall_hint_uses_gray():
     selector = UninstallSelector("t", _uninstall_items()[:2])
@@ -953,6 +1004,44 @@ def test_uninstall_defaults_to_install_time_sort():
 
     assert sel.sort_key == "install_time"
     assert [item["id"] for item in sel.items] == ["new-small", "old-large"]
+
+
+def test_uninstall_switching_sort_key_does_not_reverse_the_order_too():
+    """`↓` means descending on every key, and only a repeat press flips it.
+
+    The name branch used to sort by `not sort_reverse` while the footer drew the
+    arrow from `sort_reverse`, so the arrow lied for that one key; and the flip sat
+    on the shared S/N/T path, so switching field reversed the direction as well.
+    """
+    names = ["beta", "alpha", "gamma"]
+    items = [
+        {
+            "id": name,
+            "name": name,
+            "size_bytes": index * 1000,
+            "size_str": "1.0 KB",
+            "install_time": index,
+        }
+        for index, name in enumerate(names)
+    ]
+    sel = UninstallSelector("t", items)
+
+    # Name: ascending by default, and the arrow says so.
+    drive(sel, ["n", Navigator.ESC])
+    assert sel.sort_reverse is False
+    assert [item["id"] for item in sel.items] == ["alpha", "beta", "gamma"]
+
+    # The same key again is the only thing that reverses.
+    drive(sel, ["n", Navigator.ESC])
+    assert sel.sort_reverse is True
+    assert [item["id"] for item in sel.items] == ["gamma", "beta", "alpha"]
+
+    # A different key keeps its own default -- largest first -- rather than
+    # inheriting the reversal above.
+    drive(sel, ["s", Navigator.ESC])
+    assert sel.sort_key == "size_bytes"
+    assert sel.sort_reverse is True
+    assert [item["id"] for item in sel.items] == ["gamma", "alpha", "beta"]
 
 
 def test_uninstall_enter_without_selection_does_not_confirm_hovered_app():

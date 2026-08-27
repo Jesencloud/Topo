@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .constants import FAIL, GRAY, INFO, NA, OK, RESET, SKIP, THEME_TITLE, WARN
 from .file_ops import (
     audit_log_is_trusted,
     bytes_to_human,
@@ -132,29 +133,65 @@ def parse_deletion_history(log_path: Path | None = None) -> list[HistorySession]
     return sessions
 
 
-def render_history(sessions: list[HistorySession], limit: int = 10) -> str:
-    if not sessions:
-        return "No deletion history found."
+def _count_field(glyph: str, label: str, count: int) -> str:
+    """One ``glyph label=count`` field, glyphed only when the count has something to say.
 
-    lines = ["Deletion History", ""]
+    A zero takes ``NA`` instead of its own glyph: a green ``✓ removed=0`` claims a
+    success that never happened, and a red ``✗ failed=0`` reports a failure that
+    never happened either. Both are single-column, so the row keeps its shape
+    whichever way each count lands.
+    """
+    return f"{glyph if count else NA} {label}={count}"
+
+
+def _event_glyph(status: str) -> str:
+    """The glyph for one audit-log status, by the same sets the counts are tallied with."""
+    if status in REMOVED_STATUSES or status.startswith(TRASHED_PREFIXES):
+        return OK
+    if status in FAILED_STATUSES:
+        return FAIL
+    if status in SKIPPED_STATUSES or status.startswith(SKIPPED_PREFIXES):
+        return SKIP
+    # A status no classifier claims is counted nowhere either, so the row says so
+    # rather than picking the nearest glyph.
+    return NA
+
+
+def render_history(sessions: list[HistorySession], limit: int = 10) -> str:
+    # Every other command prints a blank line, its title, then a blank line;
+    # history was the one that opened straight onto data, which read as though the
+    # banner had run into the output.
+    header = ["", f"{THEME_TITLE}Deletion History{RESET}", ""]
+    if not sessions:
+        return "\n".join([*header, f"{INFO} {GRAY}No deletion history found.{RESET}"])
+
+    lines = list(header)
     for session in sessions[-limit:][::-1]:
-        ended = session.ended_at or "incomplete"
+        ended = session.ended_at or f"{WARN} incomplete"
         # "interrupted" and "incomplete" are different answers to "why does this
         # session stop here", so they read differently: the first was Ctrl-C and
         # the counts below it are the real total, the second means nothing closed
-        # the session and the counts may be short.
-        outcome = "  (interrupted)" if session.interrupted else ""
+        # the session and the counts may be short. Both take WARN -- neither is a
+        # failure, and both are the reason to read the counts with suspicion.
+        outcome = f"  {WARN} interrupted" if session.interrupted else ""
         lines.append(f"{session.started_at} -> {ended}  {session.command}{outcome}")
+        # The `key=value` fields stay exactly as they were: this output is grepped
+        # and cut by scripts. The glyphs are prefixes, not a new format.
         lines.append(
             "  "
-            f"removed={session.removed}  "
-            f"trashed={session.trashed}  "
-            f"skipped={session.skipped}  "
-            f"failed={session.failed}  "
-            f"size={bytes_to_human(session.total_size)}"
+            + "  ".join(
+                [
+                    _count_field(OK, "removed", session.removed),
+                    _count_field(OK, "trashed", session.trashed),
+                    _count_field(SKIP, "skipped", session.skipped),
+                    _count_field(FAIL, "failed", session.failed),
+                    f"size={bytes_to_human(session.total_size)}",
+                ]
+            )
         )
         for event in session.events[-3:]:
-            lines.append(f"    {event.status:<20} {sanitize_for_display(event.path)}")
+            glyph = _event_glyph(event.status)
+            lines.append(f"    {glyph} {event.status:<20} {sanitize_for_display(event.path)}")
     return "\n".join(lines)
 
 

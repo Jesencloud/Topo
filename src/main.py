@@ -22,7 +22,7 @@ from .core.constants import (
     setup_color_mode,
 )
 from .core.history import show_history
-from .core.lock import SingleInstanceLock
+from .core.lock import LockUnavailable, SingleInstanceLock
 from .core.whitelist import add_to_whitelist, remove_from_whitelist
 from .manage.doctor import run_doctor
 from .manage.install import run_install_link
@@ -201,6 +201,17 @@ def _run_alternate_tui(command, *args):
 # pass/fail outcome return a bool. A user cancelling a confirmation counts as
 # failure, not success: the operation did not happen, and `topo remove && ...`
 # must not run the rest.
+#
+# Two rules ride along with the codes, because a script reading them wants the
+# same split in the text:
+#   * a report goes to stdout, a refusal or a failure goes to stderr. The
+#     no-terminal refusals above, the router's unknown-command fallback, the
+#     instance guard and the sudo authorization failure all print there, so
+#     `topo clean > report.txt` collects the report and nothing else.
+#   * nothing under this contract calls sys.exit() for an outcome.
+#     `action() is not False` in _execute_main_router is the only place an
+#     outcome becomes an exit code, which is why the instance guard raises
+#     LockUnavailable instead of exiting where it stands.
 def main():
     terminal_state.install_signal_handlers()
     try:
@@ -436,8 +447,14 @@ def _main() -> bool:
     }
 
     if args.command in LOCK_REQUIRED_COMMANDS:
-        with SingleInstanceLock():
-            return _execute_main_router(args, dry_run)
+        try:
+            with SingleInstanceLock():
+                return _execute_main_router(args, dry_run)
+        except LockUnavailable:
+            # The guard has already said why, on stderr. Returning False sends this
+            # through main()'s single exit-code conversion point instead of exiting
+            # from inside the guard -- same code 1, one place that produces it.
+            return False
     return _execute_main_router(args, dry_run)
 
 

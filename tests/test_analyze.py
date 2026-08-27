@@ -34,10 +34,9 @@ from src.analyze import (
 )
 from src.core.file_ops import CACHEDIR_TAG_SIGNATURE, has_valid_cachedir_tag
 from src.core.scan_cache import ScanCache
-from src.ui.navigator import ANSI_CSI_RE
+from src.ui.navigator import ANSI_CSI_RE, NOTICE_TEXT_LIMIT
 from src.ui.screens.analyze import (
     ENGINE_SCAN_FAILED_NOTICE,
-    NOTICE_TEXT_LIMIT,
     XDG_OPEN_MISSING_NOTICE,
     _confirm_permanent_delete,
     _delete_notice,
@@ -1209,7 +1208,7 @@ def test_delete_notice_reports_success_partial_and_total_failure():
     """
     deleted_all = _delete_notice(DeleteOutcome(deleted=3, freed_bytes=2 * 1024**3))
     assert "✓" in deleted_all
-    assert "Deleted 3 item(s), freed 2.0 GiB." in ANSI_CSI_RE.sub("", deleted_all)
+    assert "Deleted 3 items, freed 2.0 GiB." in ANSI_CSI_RE.sub("", deleted_all)
 
     partial = _delete_notice(
         DeleteOutcome(deleted=1, failed=2, freed_bytes=1024, first_problem="Skipped /x: busy")
@@ -1219,7 +1218,7 @@ def test_delete_notice_reports_success_partial_and_total_failure():
 
     failed = _delete_notice(DeleteOutcome(failed=2, first_problem="Skipped /x: busy"))
     assert "✗" in failed
-    assert "2 item(s) not deleted: Skipped /x: busy" in ANSI_CSI_RE.sub("", failed)
+    assert "2 items not deleted: Skipped /x: busy" in ANSI_CSI_RE.sub("", failed)
 
     # Nothing was even attempted: the admin prompt was declined. The reason is
     # the whole message -- there are no counts worth reporting.

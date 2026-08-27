@@ -44,7 +44,7 @@ def test_run_doctor_continues_when_version_file_is_missing(tmp_path, capsys):
     # install tree is broken. The report still prints in full -- doctor's job is
     # to describe the environment, not to bail on the first problem -- but the
     # exit code has to say something went wrong.
-    assert "Diagnostic complete: 2 problem(s) found." in output
+    assert "Diagnostic complete: 2 problems found." in output
     assert "✗ VERSION unreadable" in output
     assert "✗ Rust engine missing" in output
 
@@ -134,7 +134,7 @@ def test_doctor_probes_the_binaries_topo_actually_runs(tmp_path, capsys):
     assert APT.label in output
     # Only the engine is a hard failure -- an absent curl, gpg, apt-get or
     # dpkg-query is a machine's normal state, not a broken install.
-    assert "Diagnostic complete: 1 problem(s) found." in output
+    assert "Diagnostic complete: 1 problem found." in output
 
 
 def test_doctor_warns_about_update_prerequisites_without_failing(tmp_path, capsys):
@@ -148,7 +148,7 @@ def test_doctor_warns_about_update_prerequisites_without_failing(tmp_path, capsy
     # Nothing in the matrix claimed this machine, and the report says so instead
     # of silently listing no package tools at all.
     assert "No supported package manager detected" in output
-    assert "Diagnostic complete: 1 problem(s) found." in output
+    assert "Diagnostic complete: 1 problem found." in output
 
 
 @pytest.mark.parametrize(

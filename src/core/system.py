@@ -28,7 +28,6 @@ _SAFE_SUDOERS_PATH_RE = re.compile(r"/[A-Za-z0-9._+/-]*\Z")
 # Global flag to track if user explicitly cancelled sudo auth
 SUDO_CANCELLED = False
 DEFAULT_COMMAND_TIMEOUT = 300
-SUDO_INTERRUPT_EXTRA_CLEAR_LINES = 8
 
 # Every output parser in Topo matches English words ("Uninstalling", "disabled",
 # "Total reclaimed space") and English unit suffixes, so any command whose stdout
@@ -183,9 +182,11 @@ def authenticate_sudo_session(dry_run: bool, *, request_subject: str, action: st
         f"{PURPLE}{MARK_PROMPT}{RESET} Password: "
     ):
         if SUDO_CANCELLED:
-            print(f" {WARN} {action_title} cancelled by user.", end="")
+            # Nothing follows this on the cancel path, so the newline has to come
+            # from here: without it the shell prompt printed onto the same line.
+            print_action_cancelled(action_title)
         else:
-            print(f" {FAIL} Authorization failed. {action_title} skipped.\n")
+            print(f" {FAIL} Authorization failed. {action_title} skipped.\n", file=sys.stderr)
         return False
 
     print_sudo_granted()
@@ -204,6 +205,23 @@ def print_sudo_granted(*, trailing_blank: bool = True) -> None:
     whatever prints next owns the line below (a spinner, a repainted frame).
     """
     print(f"{OK} Authorization successful.", end="\n\n" if trailing_blank else "\n")
+
+
+def print_action_cancelled(action: str, *, newline: bool = True) -> None:
+    """Prints the line that says the user backed out, for *action* ("Uninstall").
+
+    The other half of the pair print_sudo_granted started. Four sites wrote this
+    sentence by hand and all four had drifted: two spellings of the glyph, a gray
+    body in one of them, "by user" in three, and one that printed with ``end=""``
+    where nothing followed to supply the line break -- that one ran the shell
+    prompt onto the notice. "by user" is gone because every path that can reach
+    this line is the user's own doing; saying so adds nothing.
+
+    *newline* is False for the callers whose next output opens with its own line
+    break (Navigator.wait_for_return does), which is the one thing the four sites
+    genuinely differed about.
+    """
+    print(f" {WARN} {action} cancelled.", end="\n" if newline else "")
 
 
 def ensure_sudo_session(prompt: str | None = None):
@@ -237,9 +255,21 @@ def ensure_sudo_session(prompt: str | None = None):
 
 
 def _clear_interrupted_sudo_prompt(prompt: str | None = None) -> None:
+    """Erase the sudo prompt Ctrl-C left half-answered, and nothing else.
+
+    It used to rewind ``prompt_lines + 8`` lines: eight was a guess at how much of
+    the *caller's* frame stood above the prompt, taken from the tallest frame at
+    the time. The guess is wrong in both directions -- above a shorter frame it
+    ate lines sudo never wrote, above a taller one it left part of the frame
+    standing -- and it was only ever needed because nothing said out loud that the
+    prompt had been abandoned. Now the caller says it (print_action_cancelled),
+    so this only has to remove sudo's own prompt lines.
+    """
     prompt_lines = prompt.count("\n") + 1 if prompt else 1
-    lines_to_rewind = prompt_lines + SUDO_INTERRUPT_EXTRA_CLEAR_LINES
-    clear_sequence = CLEAR_LINE + (f"\033[1A{CLEAR_LINE}" * lines_to_rewind) + ERASE_BELOW
+    # The cursor sits on the prompt's last line, so that line is cleared where it
+    # is and every line above it needs a rewind of its own. ERASE_BELOW sweeps
+    # whatever sudo left below the cursor on the way out.
+    clear_sequence = CLEAR_LINE + (f"\033[1A{CLEAR_LINE}" * (prompt_lines - 1)) + ERASE_BELOW
     try:
         # Rewinding the cursor needs a cursor. CLEAR_LINE and ERASE_BELOW already
         # empty themselves when stdout is not a terminal, but the \033[1A above is

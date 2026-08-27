@@ -48,7 +48,14 @@ from ...core.file_types import DIRECTORY_ICON, icon_for_entry
 from ...core.scan_cache import ScanCache
 from ...core.spinner import DEFAULT_SPINNER_FRAMES
 from ...core.system import run_command
-from ..navigator import AnalyzeSelector, ConfirmSelector, Navigator, TopFilesSelector
+from ...core.text import plural
+from ..navigator import (
+    AnalyzeSelector,
+    ConfirmSelector,
+    Navigator,
+    TopFilesSelector,
+    notice_line,
+)
 
 
 def _confirm_permanent_delete(question: str) -> bool:
@@ -60,36 +67,19 @@ def _confirm_permanent_delete(question: str) -> bool:
     return ConfirmSelector(question).run()
 
 
-# The notice line sits inside an absolutely positioned frame, so it has to stay
-# one line: a wrapped notice pushes every row below it down until the next full
-# repaint. Reasons can carry a path, so they are clamped rather than trusted.
-NOTICE_TEXT_LIMIT = 96
-
-
-def _notice(glyph: str, text: str) -> str:
-    """One notice line: a coloured glyph, then plain text, clamped to one row.
-
-    Only the glyph is coloured. The frame carries three kinds of notice now
-    (done / warning / failed) and they are told apart by that glyph, so dyeing
-    the whole sentence would just make the colour the message.
-    """
-    if not text:
-        return ""
-    if len(text) > NOTICE_TEXT_LIMIT:
-        text = text[: NOTICE_TEXT_LIMIT - 1].rstrip() + "…"
-    return f"{glyph} {text}"
-
-
+# Three names for the three kinds of notice this screen raises. The clamp and the
+# format live in navigator, next to the frames whose geometry they protect -- the
+# selectors there raise notices of their own now.
 def _done_notice(text: str) -> str:
-    return _notice(OK, text)
+    return notice_line(OK, text)
 
 
 def _warn_notice(text: str) -> str:
-    return _notice(WARN, text)
+    return notice_line(WARN, text)
 
 
 def _fail_notice(text: str) -> str:
-    return _notice(FAIL, text)
+    return notice_line(FAIL, text)
 
 
 def _delete_notice(outcome: DeleteOutcome) -> str:
@@ -101,14 +91,16 @@ def _delete_notice(outcome: DeleteOutcome) -> str:
     """
     freed = bytes_to_human(outcome.freed_bytes)
     if outcome.deleted and not outcome.failed:
-        return _done_notice(f"Deleted {outcome.deleted} item(s), freed {freed}.")
+        return _done_notice(f"Deleted {plural(outcome.deleted, 'item')}, freed {freed}.")
     if outcome.deleted:
         return _warn_notice(
-            f"Deleted {outcome.deleted} item(s), freed {freed}; "
+            f"Deleted {plural(outcome.deleted, 'item')}, freed {freed}; "
             f"{outcome.failed} left: {outcome.first_problem}"
         )
     if outcome.failed:
-        return _fail_notice(f"{outcome.failed} item(s) not deleted: {outcome.first_problem}")
+        return _fail_notice(
+            f"{plural(outcome.failed, 'item')} not deleted: {outcome.first_problem}"
+        )
     # Nothing was attempted: the admin prompt was declined, or the selection was
     # empty. first_problem carries the reason when there is one.
     return _fail_notice(outcome.first_problem)

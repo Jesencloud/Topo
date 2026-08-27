@@ -13,6 +13,7 @@ from ..core.system import (
     get_os_id,
     run_command,
 )
+from ..core.text import plural
 
 
 class DryRunReporter:
@@ -196,7 +197,9 @@ def clean_orphaned_packages(dry_run: bool = False) -> tuple[int, int, int]:
         if not orphans:
             return 0, 0, 0
         if dry_run:
-            print(f"  {SKIP} {orphans} orphaned {manager.label} package(s) would be removed")
+            print(
+                f"  {SKIP} {plural(orphans, f'orphaned {manager.label} package')} would be removed"
+            )
             return 0, 0, 1
         res = run_command(
             [tool, "autoremove", "-y"],
@@ -210,7 +213,7 @@ def clean_orphaned_packages(dry_run: bool = False) -> tuple[int, int, int]:
             # apt's decimal kB/MB as binary ones (D7).
             freed = _apt_freed_bytes(res.stdout)
             print(
-                f"  {OK} Removed {orphans} orphaned {manager.label} package(s)"
+                f"  {OK} Removed {plural(orphans, f'orphaned {manager.label} package')}"
                 f" ({bytes_to_human(freed)})"
             )
             return freed, orphans, 1
@@ -242,7 +245,7 @@ def clean_orphaned_packages(dry_run: bool = False) -> tuple[int, int, int]:
                 # when its preview finds no orphans.
                 return 0, 0, 0
             print(
-                f"  {OK} Removed {items} orphaned {manager.label} package(s)"
+                f"  {OK} Removed {plural(items, f'orphaned {manager.label} package')}"
                 f" ({bytes_to_human(freed)})"
             )
             return freed, items, 1
@@ -253,7 +256,7 @@ def clean_orphaned_packages(dry_run: bool = False) -> tuple[int, int, int]:
             orphans = list_res.stdout.split()
             if dry_run:
                 print(
-                    f"  {SKIP} {len(orphans)} orphaned {manager.label} package(s) would be removed"
+                    f"  {SKIP} {plural(len(orphans), f'orphaned {manager.label} package')} would be removed"
                 )
                 return 0, 0, 1
             remove_res = run_command(
@@ -264,7 +267,7 @@ def clean_orphaned_packages(dry_run: bool = False) -> tuple[int, int, int]:
             )
             if remove_res.ok:
                 freed = parse_size_from_text(remove_res.stdout)
-                print(f"  {OK} Removed {len(orphans)} orphaned {manager.label} package(s)")
+                print(f"  {OK} Removed {plural(len(orphans), f'orphaned {manager.label} package')}")
                 return freed, len(orphans), 1
 
     return 0, 0, 0
@@ -499,7 +502,7 @@ def clean_old_kernels(dry_run: bool = False) -> tuple[int, int, int]:
         if not to_remove:
             return 0, 0, 0
         if dry_run:
-            print(f"  {SKIP} {len(to_remove)} old kernel(s) would be removed")
+            print(f"  {SKIP} {plural(len(to_remove), 'old kernel')} would be removed")
             return 0, 0, 1
         freed = 0
         removed = 0
@@ -517,7 +520,7 @@ def clean_old_kernels(dry_run: bool = False) -> tuple[int, int, int]:
         if not removed:
             return 0, 0, 0
         freed_str = f" ({bytes_to_human(freed)})" if freed else ""
-        print(f"  {OK} Removed {removed} old kernel(s){freed_str}")
+        print(f"  {OK} Removed {plural(removed, 'old kernel')}{freed_str}")
         return freed, removed, 1
 
     elif manager.key == "dnf":
@@ -553,7 +556,7 @@ def clean_old_kernels(dry_run: bool = False) -> tuple[int, int, int]:
         if not stale:
             return 0, 0, 0
         if dry_run:
-            print(f"  {SKIP} {len(stale)} old kernel(s) would be removed")
+            print(f"  {SKIP} {plural(len(stale), 'old kernel')} would be removed")
             return 0, 0, 1
         # Every subpackage of every stale version, in one transaction. Each
         # version used to be taken apart instead: `removable[:-1]` counted *rows*,
@@ -568,7 +571,7 @@ def clean_old_kernels(dry_run: bool = False) -> tuple[int, int, int]:
             return 0, 0, 0
         freed = _dnf_freed_bytes(remove.stdout)
         freed_str = f" ({bytes_to_human(freed)})" if freed else ""
-        print(f"  {OK} Removed {len(stale)} old kernel(s){freed_str}")
+        print(f"  {OK} Removed {plural(len(stale), 'old kernel')}{freed_str}")
         return freed, len(stale), 1
 
     return 0, 0, 0

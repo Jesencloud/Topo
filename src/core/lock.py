@@ -13,6 +13,18 @@ from .text import sanitize_for_display
 LOCK_FILE_PATH = get_config_dir() / "topo.lock"
 
 
+class LockUnavailable(RuntimeError):
+    """The instance guard could not be taken; the reason is already on stderr.
+
+    `_fail` used to call `sys.exit(1)` itself. The code was right, but it bypassed
+    the single place that turns an outcome into an exit code (`main()`'s
+    `if not ok: raise SystemExit(1)`), so anything added there later -- logging,
+    telemetry, cleanup -- would have missed this path. `__enter__` cannot return
+    False to refuse, hence an exception: main() catches it and returns False like
+    any other command that did not do what it was asked.
+    """
+
+
 class SingleInstanceLock:
     """POSIX fcntl file-lock based single instance guard.
 
@@ -25,17 +37,22 @@ class SingleInstanceLock:
         self._file_obj: Any = None
 
     def _fail(self, message: str, hint: str = "") -> NoReturn:
-        """Report why the guard could not be taken, then abort."""
+        """Report why the guard could not be taken, then abort.
+
+        On stderr: every one of these is "this run did nothing", and a caller
+        piping topo's output somewhere wants the refusal separated from the report
+        it was expecting.
+        """
         if self._file_obj is not None:
             with contextlib.suppress(OSError):
                 self._file_obj.close()
             self._file_obj = None
-        print(f"\n {WARN} {message}")
+        print(f"\n {WARN} {message}", file=sys.stderr)
         if hint:
             # Three spaces: lines up under the message, one glyph and one space in.
-            print(f"   {GRAY}{hint}{RESET}")
-        print()
-        sys.exit(1)
+            print(f"   {GRAY}{hint}{RESET}", file=sys.stderr)
+        print(file=sys.stderr)
+        raise LockUnavailable(message)
 
     def _holder_pid(self) -> str:
         """Best-effort read of the PID recorded by the instance holding the lock."""

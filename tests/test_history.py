@@ -129,9 +129,9 @@ def test_interrupted_session_closes_and_reads_differently_from_incomplete(tmp_pa
     assert killed.ended_at == ""
 
     output = render_history([stopped, killed])
-    assert "2026-05-31T10:00:02+08:00  clean  (interrupted)" in output
-    assert "incomplete  clean" in output
-    assert "incomplete  clean  (interrupted)" not in output
+    assert "2026-05-31T10:00:02+08:00  clean  ⚠ interrupted" in output
+    assert "⚠ incomplete  clean" in output
+    assert "incomplete  clean  ⚠ interrupted" not in output
 
 
 def test_record_history_session_writes_interrupted_and_drops_unknown_statuses():

@@ -16,11 +16,13 @@ from ..core.constants import (
     MARK_SECTION,
     PURPLE,
     RESET,
+    SUMMARY_RULE_WIDTH,
     THEME_TITLE,
 )
 from ..core.file_ops import bytes_to_human
 from ..core.history import record_history_session
 from ..core.scan_cache import ScanCache
+from ..core.text import plural
 from .apps import clean_apps_deep, proactive_app_detection
 from .dev import clean_developer_tools
 from .system import clean_system_data
@@ -82,7 +84,7 @@ def _print_cleanup_summary(
     that are already gone.
     """
     free_now = shutil.disk_usage(os.path.expanduser("~")).free
-    print("\n" + "=" * 60)
+    print("\n" + "=" * SUMMARY_RULE_WIDTH)
     if interrupted:
         status_text = "Scan interrupted (Preview)" if dry_run else "Cleanup interrupted"
     else:
@@ -92,7 +94,9 @@ def _print_cleanup_summary(
     if category_results:
         print(f"Breakdown:{RESET}")
         for name, size, items in category_results:
-            print(f"  • {name:<25} {GREEN}{bytes_to_human(size):>10}{RESET} ({items} items)")
+            print(
+                f"  • {name:<25} {GREEN}{bytes_to_human(size):>10}{RESET} ({plural(items, 'item')})"
+            )
 
     size_label = "\nTotal space freed" if not dry_run else "\nTotal space that can be freed"
     if interrupted:
@@ -105,7 +109,7 @@ def _print_cleanup_summary(
             print(f"Equivalent to ~{movies:.1f} 4K movies of storage.")
         print(f"Free space now: {bytes_to_human(free_now)}")
 
-    print("=" * 60)
+    print("=" * SUMMARY_RULE_WIDTH)
     if interrupted:
         print(
             f"\n{INFO} {GRAY}Stopped before the end: the groups above had already run, the rest never started.{RESET}"
@@ -125,9 +129,13 @@ def run_clean(dry_run: bool = False) -> bool:
     detected_apps = proactive_app_detection()
 
     print(f"\n{PURPLE}Clean Your Linux{RESET}\n")
-    print(
-        f"{GRAY}{MARK_NOTE} Use 'topo clean --dry-run' to preview, 'topo whitelist --help' for whitelist details.{RESET}"
-    )
+    # The `--dry-run` half is only news to someone who has not used it. Inside a
+    # dry run it contradicted the closing line ("Run without --dry-run to
+    # actually delete these files."), which was already conditional -- this one
+    # simply never asked. The whitelist half is worth saying either way.
+    hint = "'topo whitelist --help' for whitelist details."
+    hint = f"See {hint}" if dry_run else f"Use 'topo clean --dry-run' to preview, {hint}"
+    print(f"{GRAY}{MARK_NOTE} {hint}{RESET}")
 
     if not system.authenticate_sudo_session(
         dry_run, request_subject="System caches", action="cleanup"

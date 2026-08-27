@@ -24,6 +24,7 @@ from ..core.constants import (
     PURPLE,
     RESET,
     THEME_TITLE,
+    WARN,
     WHITE,
     YELLOW,
 )
@@ -31,7 +32,7 @@ from ..core.file_ops import bytes_to_human
 from ..core.file_types import DIRECTORY_ICON, icon_for_entry
 from ..core.render import draw_bar, format_percent, get_color_for_percent
 from ..core.sound import is_muted, play_click, toggle_mute
-from ..core.text import char_width, display_width, sanitize_for_display
+from ..core.text import char_width, display_width, plural, sanitize_for_display
 
 ANSI_CSI_RE = re.compile("\x1b\\[[0-?]*[ -/]*[@-~]")
 SGR_MOUSE_RE = re.compile("\x1b\\[<(?P<button>\\d+);(?P<x>\\d+);(?P<y>\\d+)(?P<final>[mM])")
@@ -354,6 +355,82 @@ def _continuation_marker(page_end: int, total: int) -> str:
     return f"{_ROW_NUMBER_INDENT}{'...' if page_end < total else ''}"
 
 
+# The notice line sits inside an absolutely positioned frame, so it has to stay
+# one line: a wrapped notice pushes every row below it down until the next full
+# repaint. Text can carry a path, which has no length limit, so it is clamped
+# rather than trusted.
+NOTICE_TEXT_LIMIT = 96
+
+
+def notice_line(glyph: str, text: str) -> str:
+    """One notice line: a coloured glyph, then plain text, clamped to one row.
+
+    Only the glyph is coloured. A frame's notices are told apart by that glyph
+    (done / warning / failed), so dyeing the whole sentence would just make the
+    colour the message.
+
+    It lives here rather than in the analyze screen that first needed it because
+    the selectors below raise notices of their own now -- "nothing is selected
+    yet" needs the same one-line guarantee as "deleted 3 items".
+    """
+    if not text:
+        return ""
+    if len(text) > NOTICE_TEXT_LIMIT:
+        text = text[: NOTICE_TEXT_LIMIT - 1].rstrip() + "…"
+    return f"{glyph} {text}"
+
+
+HINT_SEPARATOR = " | "
+
+
+def _greedy_hint_lines(chunks: list[str], budget: int) -> list[str]:
+    """Fewest ``|``-separated lines holding *chunks*, filling each in turn."""
+    lines: list[str] = []
+    current = ""
+    for chunk in chunks:
+        candidate = f"{current}{HINT_SEPARATOR}{chunk}" if current else chunk
+        if current and display_width(candidate) > budget:
+            lines.append(current)
+            current = chunk
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    return lines
+
+
+def hint_lines(chunks: list[str], width: int) -> list[str]:
+    """Pack key hints into as few ``|``-separated lines as *width* holds.
+
+    Frame lines are cut to the terminal's width, not wrapped, so a footer that
+    overruns loses its tail -- and the tail is where "ESC: Back" sits. The
+    analyze footer answered that by being split in two by hand, which spent a
+    second row even on the wide terminals where the hints fit on one: two short
+    ragged lines where one would do. Choosing the split from the terminal's real
+    width keeps the one-line footer wherever there is room for it and still never
+    drops a hint.
+
+    Chunks must be plain text; the caller colours whole lines, so the widths
+    measured here are the cells the hints actually occupy.
+    """
+    # Two cells are not the footer's to spend: the leading space every line
+    # carries, and the column the scrollbar takes when the frame scrolls.
+    budget = max(1, width - 2)
+    lines = _greedy_hint_lines(chunks, budget)
+    if len(lines) > 1:
+        # Filling each line to the edge leaves the last one with whatever is
+        # left, which at some widths is a single hint sitting alone under a full
+        # row. Same number of lines, an even number of hints on each: only taken
+        # if it actually fits, so the greedy layout stays the guarantee.
+        per_line = (len(chunks) + len(lines) - 1) // len(lines)
+        groups = [chunks[i : i + per_line] for i in range(0, len(chunks), per_line)]
+        if len(groups) == len(lines) and all(
+            display_width(HINT_SEPARATOR.join(group)) <= budget for group in groups
+        ):
+            lines = [HINT_SEPARATOR.join(group) for group in groups]
+    return lines
+
+
 class Navigator:
     UP = "\x1b[A"
     DOWN = "\x1b[B"
@@ -493,7 +570,11 @@ class Navigator:
     def wait_for_return(message=None):
         """Standardized non-blocking return/exit prompt."""
         if message is None:
-            msg_str = f"Press {GREEN}Enter{RESET} {WHITE}to return to Main Menu{RESET}, {GREEN}ESC{RESET} {WHITE}to exit Topo...{RESET}"
+            # Green for the key that carries on, cyan for the key that leaves --
+            # the split every selector footer already draws. This prompt was the
+            # one place ESC came up green, which made "exit Topo" look like the
+            # same kind of answer as "return to Main Menu".
+            msg_str = f"Press {GREEN}Enter{RESET} {WHITE}to return to Main Menu{RESET}, {CYAN}ESC{RESET} {WHITE}to exit Topo...{RESET}"
         else:
             msg_str = message
         print(f"\n{msg_str} ", end="", flush=True)
@@ -809,16 +890,39 @@ class AnalyzeSelector(_PagedSelector):
         buf.append(f"{_continuation_marker(end, total_len)}\033[K")
 
         order_icon = "↓" if self.sort_reverse else "↑"
-        page_info = f" Page {self.current_page + 1} of {total_pages} |" if total_pages > 1 else ""
+        page_hint = f"Page {self.current_page + 1}/{total_pages}" if total_pages > 1 else ""
 
         if self.can_select:
-            prompts = [
-                f"{GRAY}{page_info} ↑↓←→ | PgUp/PgDn: Page | A: All | F: Open Location | R: Reload | S: Sort {order_icon}{RESET}"
+            # One chunk per key, laid out to the terminal by hint_lines(): on a
+            # normal-width window they all fit on one row, and only a narrow one
+            # pays for a second. PgUp/PgDn is left out because <-/-> page too and
+            # the counter to its left already says paging exists; Enter is spelled
+            # out because it is the one key whose meaning depends on the list's
+            # state -- it deletes what is ticked, and drills into the hovered row
+            # when nothing is. ESC says where it goes, like every other frame's.
+            chunks = [
+                page_hint,
+                "↑↓←→",
+                "Space: Select",
+                "A: All",
+                f"Enter: {'Delete' if self.selected_items else 'Open'}",
+                "F: Location",
+                "R: Reload",
+                f"S: Sort {order_icon}",
+                "ESC: Back",
             ]
         else:
-            prompts = [
-                f"{GRAY}{page_info} ↑↓→ | F: Enter Folder | R: Reload | S: Sort {order_icon}{RESET}"
+            chunks = [
+                page_hint,
+                "↑↓→",
+                "Enter/F: Enter Folder",
+                "R: Reload",
+                f"S: Sort {order_icon}",
+                "ESC: Back",
             ]
+        prompts = [
+            f" {GRAY}{line}{RESET}" for line in hint_lines([c for c in chunks if c], columns)
+        ]
 
         buf.append("\n\033[K\n")
         for p in prompts:
@@ -905,17 +1009,19 @@ class AnalyzeSelector(_PagedSelector):
                         unknown_count = sum(
                             1 for item in selected if not item.get("size_known", True)
                         )
-                        item_text = "item" if count == 1 else "items"
+                        item_text = plural(count, "item")
                         # The numbers carry the weight of the decision, so they
                         # are the coloured part -- same treatment the uninstall
-                        # preview gives its app count and size.
+                        # preview gives its app count and size. The noun rides
+                        # inside the colour with the count, the way the unit does
+                        # in "1.2 GiB" next to it.
                         size_text = f"{PURPLE}{bytes_to_human(total_size)}{RESET}"
                         if unknown_count:
                             size_text = (
                                 f"{size_text} known, {PURPLE}{unknown_count}{RESET} uncalculated"
                             )
                         self.confirm_text = (
-                            f"{PURPLE}{MARK_PROMPT}{RESET} Delete {PURPLE}{count}{RESET} {item_text}, "
+                            f"{PURPLE}{MARK_PROMPT}{RESET} Delete {PURPLE}{item_text}{RESET}, "
                             f"{size_text}  "
                             f"{GREEN}Enter{RESET} confirm, {GREEN}Space{RESET} cancel:"
                         )
@@ -944,20 +1050,35 @@ class AnalyzeSelector(_PagedSelector):
 
 
 class UninstallSelector(_PagedSelector):
-    def __init__(self, title, items):
+    # `↓` has to mean the same thing on all three keys, so the *default* direction
+    # is what varies: newest and largest first for the two numeric keys, A→Z for
+    # name. The name branch used to get there with `reverse=not self.sort_reverse`
+    # instead, which made the footer's arrow point the wrong way for that one key.
+    _DESCENDING_BY_DEFAULT = frozenset({"size_bytes", "install_time"})
+
+    # What Enter needs before it will do anything. Space (or a row number) is the
+    # only way to arm the list, so a silent no-op left the user unable to tell a
+    # mis-keyed Enter from a hung program.
+    NOTHING_SELECTED_NOTICE = "Nothing selected yet — press Space (or type a row number) first."
+
+    def __init__(self, title, items, selected_ids=None, notice=""):
         self.title = title
         self.items = items
         self.selected_index = 0
-        self.selected_items: set[str] = set()
+        # Handed in so the screen can reopen this list on the ticks the user
+        # already made: cancelling the preview goes back to the screen it came
+        # from, and a fresh selector would have thrown that work away.
+        self.selected_items: set[str] = set(selected_ids or ())
+        self.notice = notice
         self.sort_key = "install_time"
-        self.sort_reverse = True
+        self.sort_reverse = self.sort_key in self._DESCENDING_BY_DEFAULT
         self.page_size = 15
         self.current_page = 0
         self._sort_items()
 
     def _sort_items(self):
         if self.sort_key == "name":
-            self.items.sort(key=lambda x: x.get("name", "").lower(), reverse=not self.sort_reverse)
+            self.items.sort(key=lambda x: x.get("name", "").lower(), reverse=self.sort_reverse)
         elif self.sort_key == "install_time":
             self.items.sort(
                 key=lambda x: (x.get("install_time", 0), x.get("size_bytes", 0)),
@@ -999,6 +1120,9 @@ class UninstallSelector(_PagedSelector):
                 f" {GRAY}Select apps to uninstall "
                 f"(Enter item numbers from this page, or press Space to select):{RESET}\033[K\n"
             )
+            if self.notice:
+                # Already carries its own glyph and colour, same as Analyze's.
+                buf.append(f"{self.notice}\033[K\n")
             buf.append("\033[K\n")
             total_pages = (total_len + self.page_size - 1) // self.page_size
             self.current_page = max(0, min(self.current_page, total_pages - 1))
@@ -1101,6 +1225,10 @@ class UninstallSelector(_PagedSelector):
                 if _consume_mouse(self, key):
                     continue
                 _clear_manual_scroll(self)
+                # A notice answers the keypress that raised it and nothing more,
+                # so the next key takes it away -- including the key that puts a
+                # new one up, which is set below this line.
+                self.notice = ""
                 total_len = len(self.items)
                 if key in (Navigator.UP, "\x1bOA"):
                     self._move_cursor(-1)
@@ -1127,19 +1255,29 @@ class UninstallSelector(_PagedSelector):
                     if idx is not None:
                         self._toggle_selection(idx)
                 elif len(key) == 1 and key.lower() in ("s", "n", "t"):
-                    self.sort_key = (
+                    requested = (
                         "size_bytes"
                         if key.lower() == "s"
                         else "name"
                         if key.lower() == "n"
                         else "install_time"
                     )
-                    self.sort_reverse = not self.sort_reverse
+                    # Pressing the key you are already sorted by flips the
+                    # direction; pressing a different one only changes the field,
+                    # and takes that field's own default direction. The flip used
+                    # to sit on the shared path, so switching from Size to Name
+                    # reversed the order nobody asked to reverse.
+                    if requested == self.sort_key:
+                        self.sort_reverse = not self.sort_reverse
+                    else:
+                        self.sort_key = requested
+                        self.sort_reverse = requested in self._DESCENDING_BY_DEFAULT
                     self._sort_items()
                 elif len(key) == 1 and key.lower() == "a":
                     self._toggle_current_page_selection()
                 elif key in Navigator.ENTER:
                     if not self.selected_items:
+                        self.notice = notice_line(WARN, self.NOTHING_SELECTED_NOTICE)
                         continue
                     return [
                         i for i, item in enumerate(self.items) if item["id"] in self.selected_items
@@ -1254,6 +1392,11 @@ class UninstallPreviewSelector:
 
 
 class TopFilesSelector:
+    # Enter deletes what is ticked, and only that. It used to fall back to the
+    # hovered row, which made the same keypress mean "open this directory" in the
+    # Analyze list this screen is entered from and "delete this file" here.
+    NOTHING_SELECTED_NOTICE = "Nothing selected yet — press Space to tick the files to delete."
+
     def __init__(self, title, items):
         self.title, self.items, self.selected_index, self.selected_items = (
             title,
@@ -1261,12 +1404,15 @@ class TopFilesSelector:
             0,
             set(),
         )
+        self.notice = ""
         self.confirming_delete = False
         self.confirm_text = ""
 
     def render(self):
         buf = ["\033[H"]
         buf.append(f"\n {THEME_TITLE}{self.title}{RESET}\033[K\n")
+        if self.notice:
+            buf.append(f"{self.notice}\033[K\n")
         buf.append("\033[K\n")
         viewport = 20
         start = max(0, self.selected_index - viewport // 2)
@@ -1284,7 +1430,7 @@ class TopFilesSelector:
             )
         buf.append("\033[K\n")
         buf.append(
-            f" {GREEN}↑/↓{RESET}: {WHITE}Move{RESET} | {GREEN}Space{RESET}: {WHITE}Toggle{RESET} | {GREEN}Enter{RESET}: {WHITE}Delete{RESET} | {CYAN}ESC{RESET}: {WHITE}Back{RESET}\033[K\n"
+            f" {GREEN}↑/↓{RESET}: {WHITE}Move{RESET} | {GREEN}Space{RESET}: {WHITE}Toggle{RESET} | {GREEN}Enter{RESET}: {WHITE}Delete selected{RESET} | {CYAN}ESC{RESET}: {WHITE}Back{RESET}\033[K\n"
         )
         if self.selected_items:
             buf.append(
@@ -1329,15 +1475,14 @@ class TopFilesSelector:
                 if _consume_mouse(self, key):
                     continue
                 _clear_manual_scroll(self)
+                # One keypress, one notice: the next key clears it, and a branch
+                # below can put a fresh one up in its place.
+                self.notice = ""
 
                 if self.confirming_delete:
                     if key in Navigator.ENTER:
                         self.confirming_delete = False
-                        return (
-                            list(self.selected_items)
-                            if self.selected_items
-                            else [self.selected_index]
-                        )
+                        return list(self.selected_items)
                     if key == Navigator.SPACE or key == Navigator.ESC or len(key) > 1:
                         self.confirming_delete = False
                         continue
@@ -1355,18 +1500,19 @@ class TopFilesSelector:
                     else:
                         self.selected_items.add(self.selected_index)
                 elif key in Navigator.ENTER:
+                    if not self.selected_items:
+                        self.notice = notice_line(WARN, self.NOTHING_SELECTED_NOTICE)
+                        continue
                     self.confirming_delete = True
-                    selected_idxs = (
-                        list(self.selected_items) if self.selected_items else [self.selected_index]
-                    )
+                    selected_idxs = list(self.selected_items)
                     count = len(selected_idxs)
                     total_size = sum(
                         self.items[i].get("size", self.items[i].get("size_bytes", 0))
                         for i in selected_idxs
                     )
-                    item_text = "item" if count == 1 else "items"
+                    item_text = plural(count, "item")
                     self.confirm_text = (
-                        f"{PURPLE}{MARK_PROMPT}{RESET} Delete {PURPLE}{count}{RESET} {item_text}, "
+                        f"{PURPLE}{MARK_PROMPT}{RESET} Delete {PURPLE}{item_text}{RESET}, "
                         f"{PURPLE}{bytes_to_human(total_size)}{RESET}  "
                         f"{GREEN}Enter{RESET} confirm, {GREEN}Space{RESET} cancel:"
                     )
@@ -1400,7 +1546,11 @@ class ConfirmSelector:
         y = self._chip("Yes", self.selected_index == 0)
         n = self._chip("No", self.selected_index == 1)
         focus_line = _frame_line_count(buf)
-        buf.append(f"  {y}   {n}\033[K\n\n")
+        buf.append(f"  {y}   {n}\033[K\n")
+        # Every other frame ends on a line of key hints; this one -- the last stop
+        # before a permanent delete -- was the only one that left its keys unsaid,
+        # so the two answer keys and the fact that ESC is No had to be guessed.
+        buf.append(f"\n  {GRAY}←/→ | Y/N | Enter: Confirm | ESC: Cancel{RESET}\033[K\n\n")
         buf.append("\033[J")
         _render_scrollable_frame(self, buf, focus_line)
 

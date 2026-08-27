@@ -118,6 +118,13 @@ MARK_SECTION = "➤"  # a heading: everything below belongs to it
 MARK_PROMPT = "➔"  # this line is waiting for you to type or choose
 MARK_NOTE = "●"  # an aside about the line, or the run, above
 
+# The `====` rule a run's closing summary is boxed in. clean drew 60 and the
+# uninstall report drew 70, so two summaries in one session had two widths. 70 is
+# the wider of the two on purpose: the uninstall report lists application names,
+# which are the longest thing either box has to hold, and a rule narrower than
+# its content reads as a broken box rather than a tidy one.
+SUMMARY_RULE_WIDTH = 70
+
 # One place to retune the dimmed-text color. WHITE / GRAY / GRAY_NB all resolve
 # to this; see the comment in _init_colors() for why they stay three names.
 _NEUTRAL_GRAY = "\033[38;5;244m"

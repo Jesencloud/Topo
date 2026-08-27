@@ -8,6 +8,7 @@ import pytest
 from lock_helpers import RECORD_LOCK_HOLDER, external_holder
 
 from src.core.lock import (
+    LockUnavailable,
     SingleInstanceLock,
     is_file_locked,
     is_sqlite_busy,
@@ -57,18 +58,22 @@ def test_single_instance_lock_creates_private_directory(tmp_path):
 
 
 def test_single_instance_lock_reports_holder_pid(tmp_path, capsys):
-    """A genuine second instance is named as such, with the holder's PID."""
+    """A genuine second instance is named as such, with the holder's PID.
+
+    On stderr, and as an exception rather than sys.exit(1): the refusal means this
+    run did nothing, and main() owns the conversion to exit code 1.
+    """
     lock_path = tmp_path / "held.lock"
     with (
         external_holder(_INSTANCE_LOCK_HOLDER, lock_path),
-        pytest.raises(SystemExit) as exc,
+        pytest.raises(LockUnavailable),
     ):
         SingleInstanceLock(lock_file=lock_path).__enter__()
-    assert exc.value.code == 1
-    out = capsys.readouterr().out
-    assert "Another topo instance" in out
-    assert "already running" in out
-    assert "PID" in out
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "Another topo instance" in captured.err
+    assert "already running" in captured.err
+    assert "PID" in captured.err
 
 
 def test_single_instance_lock_rejects_symlinked_lock_file(tmp_path, capsys):
@@ -78,13 +83,13 @@ def test_single_instance_lock_rejects_symlinked_lock_file(tmp_path, capsys):
     link = tmp_path / "topo.lock"
     link.symlink_to(real)
 
-    with pytest.raises(SystemExit) as exc:
+    with pytest.raises(LockUnavailable):
         SingleInstanceLock(lock_file=link).__enter__()
 
-    assert exc.value.code == 1
-    out = capsys.readouterr().out
-    assert "Cannot open the lock file" in out
-    assert "Another topo instance" not in out
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "Cannot open the lock file" in captured.err
+    assert "Another topo instance" not in captured.err
 
 
 def test_single_instance_lock_reports_undecipherable_directory(tmp_path, capsys):
@@ -93,13 +98,13 @@ def test_single_instance_lock_reports_undecipherable_directory(tmp_path, capsys)
     blocker.write_text("not a directory")
     lock_path = blocker / "sub" / "topo.lock"
 
-    with pytest.raises(SystemExit) as exc:
+    with pytest.raises(LockUnavailable):
         SingleInstanceLock(lock_file=lock_path).__enter__()
 
-    assert exc.value.code == 1
-    out = capsys.readouterr().out
-    assert "Cannot create the lock directory" in out
-    assert "Another topo instance" not in out
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "Cannot create the lock directory" in captured.err
+    assert "Another topo instance" not in captured.err
 
 
 def test_single_instance_lock_fd_is_close_on_exec(tmp_path):

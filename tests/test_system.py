@@ -120,7 +120,31 @@ def test_ensure_sudo_session_clears_prompt_line_on_keyboard_interrupt():
     clear_sequence = write.call_args.args[0]
     assert clear_sequence.startswith("\r\033[K")
     assert clear_sequence.endswith("\033[J")
-    assert clear_sequence.count("\033[1A") == 1 + system.SUDO_INTERRUPT_EXTRA_CLEAR_LINES
+    # A one-line prompt is cleared where the cursor already is: no rewind at all.
+    # This used to rewind eight lines past it, guessing at the caller's frame.
+    assert clear_sequence.count("\033[1A") == 0
+    system.SUDO_CANCELLED = False
+
+
+def test_ensure_sudo_session_rewinds_one_line_per_extra_prompt_line():
+    """Only sudo's own prompt is erased -- one rewind per line above the cursor."""
+    system.SUDO_CANCELLED = False
+    with (
+        patch(
+            "src.core.system.run_command",
+            side_effect=[
+                CommandResult(["sudo", "-k"], 0),
+                CommandResult(["sudo", "-n", "true"], 1),
+                KeyboardInterrupt,
+            ],
+        ),
+        _as_terminal(),
+        patch("sys.stdout.write") as write,
+        patch("sys.stdout.flush"),
+    ):
+        assert system.ensure_sudo_session("Admin access needed\nPassword: ") is False
+
+    assert write.call_args.args[0].count("\033[1A") == 1
     system.SUDO_CANCELLED = False
 
 
@@ -170,7 +194,7 @@ def test_ensure_sudo_session_treats_sigint_return_as_user_cancel():
     clear_sequence = write.call_args.args[0]
     assert clear_sequence.startswith("\r\033[K")
     assert clear_sequence.endswith("\033[J")
-    assert clear_sequence.count("\033[1A") == 1 + system.SUDO_INTERRUPT_EXTRA_CLEAR_LINES
+    assert clear_sequence.count("\033[1A") == 0
     system.SUDO_CANCELLED = False
 
 

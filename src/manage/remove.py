@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 from typing import TypedDict
 
-from ..core import terminal_state
+from ..core import system, terminal_state
 from ..core.constants import (
     BOLD,
     FAIL,
@@ -239,7 +239,11 @@ def _confirm_removal(prompt: str, assume_yes: bool = False) -> bool:
         terminal_state.restore_raw_state(fd, old_settings)
 
     if ch not in ("\r", "\n", "y", "Y"):
-        print(f"\n\n {WARN}{GRAY} Uninstallation cancelled.{RESET}")
+        # The prompt was printed with end="" and answered in raw mode, so the
+        # cursor is still sitting at the end of it: one newline closes that line,
+        # the second keeps the blank line this notice has always had above it.
+        print("\n")
+        system.print_action_cancelled("Uninstallation")
         return False
     return True
 
@@ -336,7 +340,11 @@ def run_remove(dry_run=False, assume_yes=False) -> bool:
     for item in to_remove:
         size_str = bytes_to_human(int(item["size"]))
         disp_path = str(item["path"]).replace(str(Path.home()), "~")
-        print(f"  {OK} {GRAY}{disp_path:<40} ({item['desc']}, {size_str}){RESET}")
+        # `•` and not `{OK}`: nothing has been removed yet when this list prints,
+        # so a ✓ per line claimed an outcome the preview cannot have. The two
+        # `Dry run complete.` lines below keep their `{OK}` -- what completed there
+        # is the preview itself.
+        print(f"  {GRAY}• {disp_path:<40} ({item['desc']}, {size_str}){RESET}")
 
     if dry_run:
         print(f"\n {OK} {GRAY}Dry run complete. Total to free: {bytes_to_human(total_size)}{RESET}")

@@ -161,7 +161,7 @@ def test_clean_orphaned_packages_fedora(mock_get_os_id, mock_run, mock_which):
     with patch("builtins.print") as mock_print:
         assert clean_orphaned_packages(dry_run=False) == (576 * 1024, 2, 1)
 
-    assert "Removed 2 orphaned DNF package(s) (576.0 KiB)" in mock_print.call_args[0][0]
+    assert "Removed 2 orphaned DNF packages (576.0 KiB)" in mock_print.call_args[0][0]
     mock_run.assert_called_with(
         ["dnf", "autoremove", "-y"], use_sudo=True, capture=True, env=C_LOCALE_ENV
     )
@@ -242,7 +242,7 @@ def test_clean_orphaned_packages_dry_run_counts_what_apt_would_remove(
     with patch("builtins.print") as mock_print:
         assert clean_orphaned_packages(dry_run=True) == (0, 0, 1)
 
-    assert "2 orphaned APT package(s) would be removed" in mock_print.call_args[0][0]
+    assert "2 orphaned APT packages would be removed" in mock_print.call_args[0][0]
     # One command, unprivileged: --dry-run is what makes that possible, and it
     # narrates the same transaction `-y` would run.
     mock_run.assert_called_once_with(

@@ -300,6 +300,51 @@ def test_run_uninstall_cancel():
         assert not mock_exec.called
 
 
+def test_run_uninstall_keeps_the_selection_when_the_preview_is_cancelled():
+    """Backing out of the preview returns to the list with the ticks intact.
+
+    The preview is a step inside the selection, so declining it used to throw
+    away every tick *and* say nothing about it -- the list simply reappeared
+    empty. The notice is the one-shot kind: it is handed to the selector, which
+    drops it on the next keypress.
+    """
+    mock_apps = [
+        {
+            "id": f"app-{index}",
+            "name": f"App {index}",
+            "size_bytes": 100,
+            "size_str": "100B",
+            "type": "DNF",
+            "install_time": 0,
+        }
+        for index in range(2)
+    ]
+    visits: list[tuple[set[str], str]] = []
+
+    def fake_run(self):
+        visits.append((set(self.selected_items), self.notice))
+        if len(visits) == 1:
+            self.selected_items = {"app-1"}
+            return [1]
+        return []  # second visit: ESC out of the list
+
+    with (
+        patch("src.uninstall.UninstallManager.run_full_scan", return_value=mock_apps),
+        patch("src.ui.screens.uninstall.UninstallSelector.run", fake_run),
+        patch("src.ui.screens.uninstall.UninstallPreviewSelector.run", return_value=False),
+        patch("src.uninstall.UninstallManager.find_residue_paths", return_value=[]),
+        patch("src.uninstall.UninstallManager.execute_uninstall") as mock_exec,
+    ):
+        run_uninstall()
+
+    assert not mock_exec.called
+    assert len(visits) == 2
+    assert visits[0] == (set(), "")
+    kept_selection, notice = visits[1]
+    assert kept_selection == {"app-1"}
+    assert "cancelled" in notice
+
+
 def test_parse_size_to_bytes():
     from src.core.file_ops import parse_size_to_bytes
 
@@ -1406,7 +1451,7 @@ def test_run_uninstall_failed_package_not_counted(capsys):
         run_uninstall()
 
     out = capsys.readouterr().out
-    assert "Removed 0 app(s)" in out
+    assert "Removed 0 apps" in out
     assert "Failed:" in out
 
 
@@ -1453,7 +1498,7 @@ def test_run_uninstall_does_not_autoremove_the_whole_machine(capsys):
         ["apt-get", "purge", "--autoremove", "-s", "firefox"]
     ]
     assert not any(call.kwargs.get("use_sudo") for call in mock_run_cmd.call_args_list)
-    assert "Removed 1 app(s)" in capsys.readouterr().out
+    assert "Removed 1 app" in capsys.readouterr().out
 
 
 def test_find_residue_paths_skips_visible_home_workspace(test_env):
@@ -1972,7 +2017,7 @@ def test_run_uninstall_reports_apps_already_removed_before_a_ctrl_c(capsys):
     assert "Removed Firefox" in out
     assert "Chromium" not in out
     assert "Uninstall interrupted" in out
-    assert "Removed 1 app(s)" in out
+    assert "Removed 1 app" in out
     assert "left untouched" in out
     # The scan cache is stale either way -- one app really is gone.
     clear_cache.assert_called_once_with()

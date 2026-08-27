@@ -58,3 +58,18 @@ def char_width(char: str) -> int:
 def display_width(text: str) -> int:
     """Total terminal cells *text* occupies. Assumes ANSI escapes are stripped."""
     return sum(char_width(char) for char in text)
+
+
+def plural(count: int, singular: str, plural: str | None = None) -> str:
+    """*count* and its noun, agreeing: ``plural(1, "item")`` -> ``"1 item"``.
+
+    Three conventions had grown up instead of one: `(1 items)` in the clean
+    summary, the evasive `1 app(s)` in the uninstall report, and a hand-written
+    conditional in the selectors. The first is wrong, the second reads like
+    generated text, and the third is the same three lines copied around. The
+    default plural is *singular* + "s"; pass one explicitly for a noun that does
+    not inflect that way.
+    """
+    if plural is None:
+        plural = f"{singular}s"
+    return f"{count} {singular if count == 1 else plural}"

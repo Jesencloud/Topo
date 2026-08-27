@@ -125,11 +125,13 @@ def test_clean_sudo_cancel_prompt_has_no_trailing_blank_line():
     cancel_calls = [
         call
         for call in mock_print.call_args_list
-        if call.args and "Cleanup cancelled by user" in call.args[0]
+        if call.args and "Cleanup cancelled" in call.args[0]
     ]
     assert cancel_calls
+    # One line break, and it comes from `end`: the notice used to print with
+    # end="" and nothing after it, which put the shell prompt on the same line.
     assert "\n" not in cancel_calls[-1].args[0]
-    assert cancel_calls[-1].kwargs["end"] == ""
+    assert cancel_calls[-1].kwargs["end"] == "\n"
 
 
 def test_optimize_sudo_cancel_prompt_has_no_trailing_blank_line():
@@ -145,8 +147,8 @@ def test_optimize_sudo_cancel_prompt_has_no_trailing_blank_line():
     cancel_calls = [
         call
         for call in mock_print.call_args_list
-        if call.args and "Optimization cancelled by user" in call.args[0]
+        if call.args and "Optimization cancelled" in call.args[0]
     ]
     assert cancel_calls
     assert "\n" not in cancel_calls[-1].args[0]
-    assert cancel_calls[-1].kwargs["end"] == ""
+    assert cancel_calls[-1].kwargs["end"] == "\n"

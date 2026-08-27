@@ -337,6 +337,33 @@ def test_installation_mutating_commands_hold_the_single_instance_lock(argv, targ
     lock.__exit__.assert_called_once()
 
 
+def test_a_held_lock_becomes_exit_code_one_with_nothing_on_stdout(capsys):
+    """`topo clean` while another instance holds the lock: refuse, exit 1, stay quiet.
+
+    The guard raises LockUnavailable instead of calling sys.exit() so that main()
+    keeps a single place where an outcome becomes an exit code; this pins both
+    halves of that -- the code, and the fact that the reason lands on stderr so a
+    redirected report file stays empty rather than collecting the refusal.
+    """
+    with (
+        patch("sys.argv", ["topo", "clean", "--dry-run"]),
+        patch("src.main.terminal_state.install_signal_handlers"),
+        patch("src.main.system.get_os_id", return_value="test-os"),
+        patch(
+            "src.main.SingleInstanceLock",
+            side_effect=topo_main.LockUnavailable("Another instance is running"),
+        ),
+        patch("src.main.run_clean") as clean,
+        pytest.raises(SystemExit) as exit_info,
+    ):
+        topo_main.main()
+
+    assert exit_info.value.code == 1
+    clean.assert_not_called()
+    captured = capsys.readouterr()
+    assert captured.out == ""
+
+
 def test_status_does_not_take_the_single_instance_lock():
     with (
         patch("sys.argv", ["topo", "status"]),

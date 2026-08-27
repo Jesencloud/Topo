@@ -38,6 +38,7 @@ from .core.file_ops import (
 from .core.lock import is_file_locked, is_sqlite_busy
 from .core.spinner import threaded_spinner
 from .core.system import C_LOCALE_ENV, has_sudo, run_command
+from .core.text import plural
 
 # Lock to ensure parallel tasks don't corrupt the terminal output
 print_lock = threading.Lock()
@@ -251,9 +252,15 @@ def run_vacuum_all(dry_run=False):
         return f"{', '.join(sorted(busy_apps))} running; database optimization skipped"
     if not db_files:
         return None
+    # The same tail on both messages: what was skipped is decided above, and a
+    # preview and a real run skip the same apps for the same reason.
+    suffix = (
+        f"; skipped {plural(len(busy_apps), 'running app')}: {', '.join(sorted(busy_apps))}"
+        if busy_apps
+        else ""
+    )
     if dry_run:
-        suffix = f"; skipped running app(s): {', '.join(sorted(busy_apps))}" if busy_apps else ""
-        return f"Found {len(db_files)} database(s) to optimize{suffix}"
+        return f"Found {plural(len(db_files), 'database')} to optimize{suffix}"
 
     total_saved = 0
     # Nested pool or just direct execution since we are already in a pool
@@ -261,8 +268,7 @@ def run_vacuum_all(dry_run=False):
         total_saved += vacuum_single_db(db)
 
     saved_str = f" (compressed {bytes_to_human(total_saved)})" if total_saved > 0 else ""
-    suffix = f"; skipped running app(s): {', '.join(sorted(busy_apps))}" if busy_apps else ""
-    return f"Optimized {len(db_files)} browser database(s){saved_str}{suffix}"
+    return f"Optimized {plural(len(db_files), 'browser database')}{saved_str}{suffix}"
 
 
 @register_optimization_task
@@ -422,9 +428,9 @@ def run_systemd_user_service_cleanup(dry_run=False):
             return None
         if shutil.which("systemctl"):
             run_command(["systemctl", "--user", "daemon-reload"], capture=True, timeout=10)
-        return f"Removed {removed} broken user systemd service(s)"
+        return f"Removed {plural(removed, 'broken user systemd service')}"
 
-    return f"Found {len(broken_units)} broken user systemd service(s)"
+    return f"Found {plural(len(broken_units), 'broken user systemd service')}"
 
 
 def _reset_failed_units(
@@ -461,7 +467,7 @@ def _reset_failed_units(
         return None
 
     if dry_run:
-        return f"Found {len(failed_units)} failed {label} systemd unit(s)"
+        return f"Found {plural(len(failed_units), f'failed {label} systemd unit')}"
 
     reset_result = run_command(
         ["systemctl", *scope_args, "reset-failed"],
@@ -470,7 +476,7 @@ def _reset_failed_units(
         use_sudo=use_sudo,
     )
     if reset_result.ok:
-        return f"Reset {len(failed_units)} failed {label} systemd unit state(s)"
+        return f"Reset {plural(len(failed_units), f'failed {label} systemd unit state')}"
     return None
 
 
@@ -710,12 +716,12 @@ def run_broken_symlink_cleanup(dry_run=False):
             continue
 
     if removed > 0:
-        message = f"Removed {removed} broken user symlink(s)"
+        message = f"Removed {plural(removed, 'broken user symlink')}"
         if kept_no_trash:
             message += f" ({kept_no_trash} kept: no trash backend available)"
         return message
     if kept_no_trash:
-        return f"Kept {kept_no_trash} broken user symlink(s) (no trash backend available)"
+        return f"Kept {plural(kept_no_trash, 'broken user symlink')} (no trash backend available)"
     return None
 
 
@@ -812,7 +818,7 @@ def run_icon_cache_refresh(dry_run=False):
     if not themes:
         return None
     if dry_run:
-        return f"{len(themes)} user icon theme cache(s) would be rebuilt"
+        return f"{plural(len(themes), 'user icon theme cache')} would be rebuilt"
     rebuilt = 0
     for theme in themes:
         if run_command(
@@ -821,7 +827,7 @@ def run_icon_cache_refresh(dry_run=False):
             rebuilt += 1
     if rebuilt == 0:
         return None
-    return f"Rebuilt {rebuilt} user icon theme cache(s)"
+    return f"Rebuilt {plural(rebuilt, 'user icon theme cache')}"
 
 
 @register_optimization_task

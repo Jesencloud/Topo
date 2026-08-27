@@ -27,6 +27,7 @@ from ..core.install_source import get_install_root, get_install_source
 from ..core.package_manager import PACKAGE_MANAGERS, detect_package_manager, resolve_admin_tool
 from ..core.paths import get_config_dir
 from ..core.system import C_LOCALE_ENV, get_invoking_user, get_os_id, run_command
+from ..core.text import plural
 
 DOCTOR_COMMAND_TIMEOUT = 5
 VERSION_UNAVAILABLE = "Unavailable (VERSION missing, empty or unreadable)"
@@ -256,7 +257,7 @@ def run_doctor() -> bool:
     print()
 
     if failures:
-        print(f"{BOLD}{RED}Diagnostic complete: {len(failures)} problem(s) found.{RESET}")
+        print(f"{BOLD}{RED}Diagnostic complete: {plural(len(failures), 'problem')} found.{RESET}")
         for failure in failures:
             print(f"  {FAIL} {failure}")
         return False
