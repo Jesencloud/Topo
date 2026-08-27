@@ -90,6 +90,26 @@ def _has_rpm_database() -> bool:
     return False
 
 
+def _is_sandbox_app_data(path: Path) -> bool:
+    """Whether this path is the single directory a sandboxed app keeps everything in.
+
+    `~/.var/app/<app-id>` (Flatpak) and `~/snap/<name>` (Snap) are not a cache
+    and not one config file: they are the whole of the app's user data in one
+    directory -- a browser's bookmarks and saved passwords included, since a
+    sandboxed browser has nowhere else to put them. So they go to the trash even
+    when config.json asked for a permanent wipe: `use_trash=false` is a request
+    to actually free the space a cache occupies, not a waiver on data that
+    cannot be regenerated. Only the directory named after the app qualifies;
+    anything deeper is already inside it and travels with it.
+
+    Deciding this by directory root rather than by application means there is no
+    per-app list to keep: whichever app is being removed, this is where a
+    sandbox puts its data.
+    """
+    home = Path.home()
+    return path.parent in (home / ".var/app", home / "snap")
+
+
 @dataclass(frozen=True, eq=False)
 class _ResidueEntryIndex:
     """One scanned root plus compact lookup tables for residue candidates.
@@ -907,6 +927,14 @@ class UninstallManager:
                     parts = line.split("\t")
                     if len(parts) >= 3:
                         app_name, app_id, size_str = parts[0], parts[1], parts[2]
+                        # Which installation the app lives in decides who is
+                        # allowed to remove it, so it is carried on the record
+                        # instead of being asked for again at removal time --
+                        # where the answer would arrive too late for the sudo
+                        # session the screen takes before it enters raw mode. A
+                        # flatpak that prints fewer columns than were asked for
+                        # leaves this empty, which removal reads as "unknown".
+                        scope = parts[3].strip() if len(parts) > 3 else ""
                         install_time = 0
                         try:
                             paths_to_check = [
@@ -927,11 +955,12 @@ class UninstallManager:
                             continue
 
                         size_bytes = parse_size_to_bytes(size_str)
-                        apps.append(
-                            self._app_record(
-                                app_id, app_name, size_bytes, size_str, "Flatpak", install_time
-                            )
+                        record = self._app_record(
+                            app_id, app_name, size_bytes, size_str, "Flatpak", install_time
                         )
+                        if scope:
+                            record["flatpak_scope"] = scope
+                        apps.append(record)
         except (OSError, subprocess.SubprocessError):
             pass
         return apps
@@ -1687,6 +1716,31 @@ class UninstallManager:
                     patterns.append(pattern)
         self._terminate_process_patterns(patterns)
 
+    @staticmethod
+    def _flatpak_scope(app: dict[str, Any]) -> str:
+        """Which installation this Flatpak lives in, or "" when the scan could not tell.
+
+        `flatpak list --columns=installation` prints "system", "user", or the id
+        of a custom installation. The third answer normalises to "": its
+        ownership is whatever the admin who created that installation decided,
+        so the removal is left exactly as it was before any of this.
+        """
+        scope = str(app.get("flatpak_scope") or "").strip().lower()
+        return scope if scope in ("system", "user") else ""
+
+    @classmethod
+    def flatpak_removal_needs_sudo(cls, app: dict[str, Any]) -> bool:
+        """Whether removing this Flatpak has to be root's work.
+
+        A system-wide installation lives under /var/lib/flatpak, which the
+        invoking user cannot write; flatpak falls back to asking polkit, and a
+        session with no polkit agent -- ssh, a bare tty -- simply fails there.
+        The screen calls this to decide whether to take a sudo session before it
+        enters raw mode, and execute_uninstall calls it to build the command, so
+        the authorization and the command that needs it cannot disagree.
+        """
+        return app.get("type") == "Flatpak" and cls._flatpak_scope(app) == "system"
+
     def execute_uninstall(self, app: dict[str, Any], paths: list[Path]):
         """Terminates app and removes all files."""
         app_name = str(app.get("name") or app.get("id") or "unknown")
@@ -1726,7 +1780,21 @@ class UninstallManager:
 
             # 2. Binary uninstall
             if app["type"] == "Flatpak":
-                res = system.run_command(["flatpak", "uninstall", "-y", app["id"]], capture=True)
+                # The scope is not what makes the app findable -- `flatpak
+                # uninstall` searches both installations to resolve a ref -- it
+                # decides which copy goes when the same ref is installed in
+                # both, and it names the installation the sudo decision was
+                # made for.
+                scope = self._flatpak_scope(app)
+                flatpak_cmd = ["flatpak", "uninstall"]
+                if scope:
+                    flatpak_cmd.append(f"--{scope}")
+                flatpak_cmd += ["-y", app["id"]]
+                res = system.run_command(
+                    flatpak_cmd,
+                    use_sudo=self.flatpak_removal_needs_sudo(app),
+                    capture=True,
+                )
             elif app["type"] == "Snap":
                 res = system.run_command(
                     ["snap", "remove", "--purge", app["id"]], use_sudo=True, capture=True
@@ -1819,6 +1887,15 @@ class UninstallManager:
             # but hard-protected credentials/system paths remain blocked.
             removed_details = []
             removed_systemd_service = False
+            # Nothing is deleted while the app is still installed. The removal
+            # above fails for reasons that have nothing to do with the data --
+            # no polkit agent for a system-wide Flatpak, a lock held by another
+            # package manager, a package the type dispatch does not know -- and
+            # deleting the configuration of an app that is still there is the
+            # worst of both outcomes: the user has an installed app that has
+            # forgotten everything, and a retry cannot bring it back. Leaving
+            # the paths alone makes the failure retryable.
+            data_left_in_place = bool(paths) and package_status != "removed"
             # Residue removal is recoverable (trash) rather than a permanent
             # wipe: residue discovery is heuristic, so a mis-matched user
             # directory must be undoable. config.json's use_trash=false is the
@@ -1827,14 +1904,19 @@ class UninstallManager:
             # hard-protected paths (whitelist, credentials, system, XDG
             # user-data dirs) stay blocked.
             use_trash = get_use_trash()
-            for p in paths:
-                success, _ = safe_remove(p, use_trash=use_trash, allow_app_data_removal=True)
-                if success and str(p).endswith(".service") and ".config/systemd/user" in str(p):
-                    removed_systemd_service = True
-                try:
-                    removed_details.append((success, str(p.relative_to(Path.home()))))
-                except ValueError:
-                    removed_details.append((success, str(p)))
+            if package_status == "removed":
+                for p in paths:
+                    success, _ = safe_remove(
+                        p,
+                        use_trash=use_trash or _is_sandbox_app_data(p),
+                        allow_app_data_removal=True,
+                    )
+                    if success and str(p).endswith(".service") and ".config/systemd/user" in str(p):
+                        removed_systemd_service = True
+                    try:
+                        removed_details.append((success, str(p.relative_to(Path.home()))))
+                    except ValueError:
+                        removed_details.append((success, str(p)))
 
             if removed_systemd_service and shutil.which("systemctl"):
                 system.run_command(
@@ -1845,6 +1927,7 @@ class UninstallManager:
             return {
                 "package_removed": package_status == "removed",
                 "removed_paths": removed_details,
+                "data_left_in_place": data_left_in_place,
             }
         finally:
             if package_status == "failed" and not package_event_recorded:

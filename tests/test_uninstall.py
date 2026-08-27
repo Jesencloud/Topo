@@ -1020,7 +1020,9 @@ def test_pre_scan_queries_dpkg_even_when_rpm_is_also_installed(tmp_path, monkeyp
 @patch("subprocess.run")
 def test_run_full_scan_flatpaks(mock_run, mock_which):
     mock_which.side_effect = lambda x: "/usr/bin/flatpak" if x == "flatpak" else None
-    mock_run.return_value = MagicMock(returncode=0, stdout="MyApp\tcom.example.MyApp\t1.2 GB\n")
+    mock_run.return_value = MagicMock(
+        returncode=0, stdout="MyApp\tcom.example.MyApp\t1.2 GB\tsystem\n"
+    )
 
     mgr = UninstallManager()
     with (
@@ -1035,6 +1037,9 @@ def test_run_full_scan_flatpaks(mock_run, mock_which):
     assert myapp is not None
     assert myapp["name"] == "MyApp"
     assert myapp["type"] == "Flatpak"
+    # The installation column was fetched all along and then dropped, so removal
+    # could not tell whose flatpak it was about to touch.
+    assert myapp["flatpak_scope"] == "system"
 
 
 @patch("src.uninstall.system.run_command")
@@ -1083,8 +1088,130 @@ def test_execute_uninstall_flatpak(mock_run, mock_run_cmd, test_env):
 
     assert details["removed_paths"] == []
     mock_run_cmd.assert_called_with(
-        ["flatpak", "uninstall", "-y", "com.example.MyApp"], capture=True
+        ["flatpak", "uninstall", "-y", "com.example.MyApp"], use_sudo=False, capture=True
     )
+
+
+@patch("src.core.system.run_command")
+@patch("subprocess.run")
+def test_execute_uninstall_flatpak_system_scope_takes_sudo(mock_run, mock_run_cmd, test_env):
+    """A system-wide Flatpak lives under /var/lib/flatpak, which the invoking user
+    cannot write. Without sudo the removal falls back to polkit, which simply has
+    nobody to ask over ssh -- and the failure then costs the app its data."""
+    mgr = UninstallManager()
+    app = {
+        "name": "MyApp",
+        "id": "com.example.MyApp",
+        "type": "Flatpak",
+        "size_bytes": 1000,
+        "flatpak_scope": "system",
+    }
+
+    mock_run.return_value = MagicMock(returncode=1)  # No process running
+    mock_run_cmd.return_value = MagicMock(returncode=0)
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.uninstall.safe_remove", return_value=(True, "OK")),
+    ):
+        mgr.execute_uninstall(app, [])
+
+    assert UninstallManager.flatpak_removal_needs_sudo(app) is True
+    mock_run_cmd.assert_called_with(
+        ["flatpak", "uninstall", "--system", "-y", "com.example.MyApp"],
+        use_sudo=True,
+        capture=True,
+    )
+
+
+@patch("src.core.system.run_command")
+@patch("subprocess.run")
+def test_execute_uninstall_flatpak_user_scope_asks_for_no_password(
+    mock_run, mock_run_cmd, test_env
+):
+    mgr = UninstallManager()
+    app = {
+        "name": "MyApp",
+        "id": "com.example.MyApp",
+        "type": "Flatpak",
+        "size_bytes": 1000,
+        "flatpak_scope": "user",
+    }
+
+    mock_run.return_value = MagicMock(returncode=1)
+    mock_run_cmd.return_value = MagicMock(returncode=0)
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.uninstall.safe_remove", return_value=(True, "OK")),
+    ):
+        mgr.execute_uninstall(app, [])
+
+    assert UninstallManager.flatpak_removal_needs_sudo(app) is False
+    mock_run_cmd.assert_called_with(
+        ["flatpak", "uninstall", "--user", "-y", "com.example.MyApp"],
+        use_sudo=False,
+        capture=True,
+    )
+
+
+@patch("src.core.system.run_command")
+@patch("subprocess.run")
+def test_execute_uninstall_keeps_data_when_the_package_removal_fails(
+    mock_run, mock_run_cmd, test_env
+):
+    """A2's failure mode used to cost the user their data: the removal failed, and
+    the residue pass ran anyway, so the app was still installed and had forgotten
+    everything. Nothing is deleted while the package is still there."""
+    mgr = UninstallManager()
+    app = {"name": "MyApp", "id": "com.example.MyApp", "type": "Flatpak", "size_bytes": 1000}
+    residue = test_env / ".var/app/com.example.MyApp"
+    residue.mkdir(parents=True)
+
+    mock_run.return_value = MagicMock(returncode=1)
+    mock_run_cmd.return_value = MagicMock(ok=False, returncode=1)
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.uninstall.safe_remove") as mock_remove,
+    ):
+        details = mgr.execute_uninstall(app, [residue])
+
+    assert mock_remove.call_args_list == []
+    assert details["package_removed"] is False
+    assert details["removed_paths"] == []
+    assert details["data_left_in_place"] is True
+    assert residue.is_dir()
+
+
+@patch("src.core.system.run_command")
+@patch("subprocess.run")
+def test_sandbox_app_data_goes_to_the_trash_even_with_trash_disabled(
+    mock_run, mock_run_cmd, test_env
+):
+    """use_trash=false asks for the space a cache occupies to actually be freed; it
+    is not a waiver on ~/.var/app/<id>, which is the whole of a sandboxed app's
+    data -- a browser's bookmarks and saved passwords included."""
+    mgr = UninstallManager()
+    app = {"name": "MyApp", "id": "com.example.MyApp", "type": "Flatpak", "size_bytes": 1000}
+    sandbox = test_env / ".var/app/com.example.MyApp"
+    snap_data = test_env / "snap/myapp"
+    cache = test_env / ".cache/myapp"
+    for p in (sandbox, snap_data, cache):
+        p.mkdir(parents=True)
+
+    mock_run.return_value = MagicMock(returncode=1)
+    mock_run_cmd.return_value = MagicMock(ok=True, returncode=0)
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.uninstall.get_use_trash", return_value=False),
+        patch("src.uninstall.safe_remove", return_value=(True, "OK")) as mock_remove,
+    ):
+        mgr.execute_uninstall(app, [sandbox, snap_data, cache])
+
+    trashed = {call.args[0]: call.kwargs["use_trash"] for call in mock_remove.call_args_list}
+    assert trashed == {sandbox: True, snap_data: True, cache: False}
 
 
 @patch("src.core.system.run_command")

@@ -47,10 +47,12 @@ from ..navigator import (
 # instruction without repeating the same verb twice.
 SCREEN_TITLE = "Uninstall Apps"
 
-# Only these ask a system package manager to remove something; Flatpak (user
-# installation), NPM's global prefix and standalone CLI binaries under ~/.local
-# are all removed as the invoking user. Asking for a password to uninstall a
-# Flatpak buys nothing, and a mistyped or cancelled prompt ended the run.
+# Only these ask a system package manager to remove something; NPM's global
+# prefix and standalone CLI binaries under ~/.local are removed as the invoking
+# user. Flatpak is not a fixed answer and so is not listed here: a user
+# installation needs nothing, while a system-wide one lives under
+# /var/lib/flatpak and is root's to remove -- UninstallManager decides that per
+# app, and the same call builds the command, so the two cannot disagree.
 NEEDS_SUDO_TYPES = frozenset({"APT", "DNF", "Pacman", "Snap", "Zypper"})
 
 
@@ -60,6 +62,7 @@ def _print_removal_report(
     total_freed: int,
     *,
     interrupted: bool = False,
+    data_kept: bool = False,
 ) -> None:
     """Print what the removal loop actually managed to do, per app and in total.
 
@@ -87,6 +90,11 @@ def _print_removal_report(
         # The label carries the emphasis, the glyph carries the colour; the names
         # themselves stay plain so they can be copied out of the report.
         print(f" {FAIL} {RED}Failed:{RESET} {', '.join(failed_names)}")
+        if data_kept:
+            # Said once, and only when there was data to keep: a failed removal
+            # that also wiped the app's configuration would leave nothing to
+            # retry with, so the two now stand or fall together.
+            print(f" {INFO} {GRAY}Their application data was left in place.{RESET}")
     if interrupted:
         print(f" {INFO} {GRAY}Anything not listed above was left untouched.{RESET}")
     print("=" * SUMMARY_RULE_WIDTH)
@@ -141,7 +149,10 @@ def run_uninstall():
             # ticks dropped, but with the cursor still on the app they were for.
             continue
 
-        needs_sudo = any(app["type"] in NEEDS_SUDO_TYPES for app, _, _ in all_targets)
+        needs_sudo = any(
+            app["type"] in NEEDS_SUDO_TYPES or UninstallManager.flatpak_removal_needs_sudo(app)
+            for app, _, _ in all_targets
+        )
         # Ensure sudo session (require password) outside raw mode so sudo can own input.
         if needs_sudo and not system.ensure_sudo_session(
             f"{MAGENTA}{MARK_PROMPT}{RESET} App removal requires admin access\n"
@@ -174,6 +185,9 @@ def run_uninstall():
         removed_names: list[str] = []
         failed_names: list[str] = []
         total_freed_all = 0
+        # Set by the first app whose removal failed with residue still on disk,
+        # so the report can say the data is still there without naming it twice.
+        data_kept = False
         # Flipped once the loop has been through every app, so any other way
         # out reports as a stop: Ctrl-C, SIGTERM (SystemExit, not
         # KeyboardInterrupt) and a bug in the removal code all leave it False.
@@ -202,6 +216,8 @@ def run_uninstall():
                             total_freed_all += app["size_bytes"]
                     else:
                         failed_names.append(safe_app_name)
+                        if result.get("data_left_in_place"):
+                            data_kept = True
                 # No cleanup follows the loop. The system-wide `apt-get
                 # autoremove --purge -y` that used to run here took every
                 # unused auto-installed package on the box, previewed or not;
@@ -215,7 +231,11 @@ def run_uninstall():
                 ScanCache.clear()
                 UninstallManager.clear_scan_cache()
             _print_removal_report(
-                removed_names, failed_names, total_freed_all, interrupted=not finished
+                removed_names,
+                failed_names,
+                total_freed_all,
+                interrupted=not finished,
+                data_kept=data_kept,
             )
 
         play_delete()

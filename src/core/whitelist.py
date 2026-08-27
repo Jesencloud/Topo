@@ -246,6 +246,11 @@ LINUX_PROTECTED_FLATPAK_APP_IDS = [
     "md.obsidian.Obsidian",
     "org.gnome.World.Secrets",
     "org.keepassxc.KeePassXC",
+    # Thunderbird moved to its own domain; the Flathub build has published
+    # net.thunderbird.Thunderbird since 2025, so an id-only match on the old
+    # name protects nothing on a machine installed since. Both stay listed --
+    # the old one is still what an installation from before the rename reports.
+    "net.thunderbird.Thunderbird",
     "org.mozilla.Thunderbird",
     "org.pgadmin.pgadmin4",
     "org.telegram.desktop",
