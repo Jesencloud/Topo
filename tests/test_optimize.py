@@ -27,6 +27,7 @@ from src.optimize import (
     run_broken_symlink_cleanup,
     run_coredump_cleanup,
     run_desktop_database_refresh,
+    run_dns_flush,
     run_fccache,
     run_flatpak_repair,
     run_fstrim,
@@ -408,6 +409,132 @@ def test_run_broken_symlink_cleanup_skips_user_dirs_unless_opted_in(test_env, mo
 
     assert result == "Found 1 broken user symlinks"
     assert broken_link.is_symlink()
+
+
+def test_dns_cache_flushers_lists_both_when_both_daemons_are_live():
+    """nscd caches what glibc resolved through resolved's stub, so both stack."""
+    with (
+        patch.object(optimize, "_RESOLVED_RUNTIME_DIR", MagicMock(**{"is_dir.return_value": True})),
+        patch.object(optimize, "_NSCD_SOCKET", MagicMock(**{"exists.return_value": True})),
+        patch("src.optimize.shutil.which", return_value="/usr/bin/resolvectl"),
+        patch("src.optimize._which_admin_tool", return_value="/usr/sbin/nscd"),
+    ):
+        flushers = optimize._dns_cache_flushers()
+
+    assert [(label, cmd) for label, cmd, _ in flushers] == [
+        ("resolvectl", ["resolvectl", "flush-caches"]),
+        ("nscd", ["nscd", "-i", "hosts"]),
+    ]
+
+
+def test_dns_cache_flushers_ignores_tools_whose_daemon_is_not_running():
+    """resolvectl ships with systemd and Debian packages an nscd nobody enables."""
+    with (
+        patch.object(
+            optimize, "_RESOLVED_RUNTIME_DIR", MagicMock(**{"is_dir.return_value": False})
+        ),
+        patch.object(optimize, "_NSCD_SOCKET", MagicMock(**{"exists.return_value": False})),
+        patch("src.optimize.shutil.which", return_value="/usr/bin/resolvectl"),
+        patch("src.optimize._which_admin_tool", return_value="/usr/sbin/nscd"),
+    ):
+        assert optimize._dns_cache_flushers() == []
+
+
+def test_run_dns_flush_asks_for_no_password_when_the_user_may_flush():
+    """systemd v243+ (Debian 11, Ubuntu 20.04 on) lets an ordinary user flush."""
+    with (
+        patch.object(
+            optimize,
+            "_dns_cache_flushers",
+            return_value=[("resolvectl", ["resolvectl", "flush-caches"], True)],
+        ),
+        patch("src.optimize.run_command") as mock_run,
+    ):
+        mock_run.return_value = CommandResult(["resolvectl"], 0)
+        res = run_dns_flush(dry_run=False)
+
+    assert res == "DNS resolver cache flushed (resolvectl)"
+    assert mock_run.call_count == 1
+    assert mock_run.call_args.args[0] == ["resolvectl", "flush-caches"]
+    assert not mock_run.call_args.kwargs.get("use_sudo")
+
+
+def test_run_dns_flush_retries_as_root_when_the_user_may_not():
+    with (
+        patch.object(
+            optimize,
+            "_dns_cache_flushers",
+            return_value=[("resolvectl", ["resolvectl", "flush-caches"], True)],
+        ),
+        patch(
+            "src.optimize.run_command",
+            side_effect=[CommandResult(["resolvectl"], 1), CommandResult(["resolvectl"], 0)],
+        ) as mock_run,
+    ):
+        res = run_dns_flush(dry_run=False)
+
+    assert res == "DNS resolver cache flushed (resolvectl)"
+    assert mock_run.call_count == 2
+    assert mock_run.call_args_list[1].kwargs["use_sudo"] is True
+
+
+def test_run_dns_flush_never_asks_nscd_as_the_user():
+    """nscd checks getuid() itself, so an unprivileged try only wastes a fork."""
+    with (
+        patch.object(
+            optimize,
+            "_dns_cache_flushers",
+            return_value=[("nscd", ["nscd", "-i", "hosts"], False)],
+        ),
+        patch("src.optimize.run_command") as mock_run,
+    ):
+        mock_run.return_value = CommandResult(["nscd"], 0)
+        res = run_dns_flush(dry_run=False)
+
+    assert res == "DNS resolver cache flushed (nscd)"
+    assert mock_run.call_count == 1
+    assert mock_run.call_args.args[0] == ["nscd", "-i", "hosts"]
+    assert mock_run.call_args.kwargs["use_sudo"] is True
+
+
+def test_run_dns_flush_reports_every_cache_it_dropped():
+    with (
+        patch.object(
+            optimize,
+            "_dns_cache_flushers",
+            return_value=[
+                ("resolvectl", ["resolvectl", "flush-caches"], True),
+                ("nscd", ["nscd", "-i", "hosts"], False),
+            ],
+        ),
+        patch("src.optimize.run_command", return_value=CommandResult(["x"], 0)),
+    ):
+        assert run_dns_flush(dry_run=False) == "DNS resolver caches flushed (resolvectl, nscd)"
+
+
+def test_run_dns_flush_keeps_quiet_when_no_resolver_caches():
+    with (
+        patch.object(optimize, "_dns_cache_flushers", return_value=[]),
+        patch("src.optimize.run_command") as mock_run,
+    ):
+        assert run_dns_flush(dry_run=False) is None
+
+    mock_run.assert_not_called()
+
+
+def test_run_dns_flush_dry_run_touches_nothing():
+    with (
+        patch.object(
+            optimize,
+            "_dns_cache_flushers",
+            return_value=[("resolvectl", ["resolvectl", "flush-caches"], True)],
+        ),
+        patch("src.optimize.run_command") as mock_run,
+    ):
+        res = run_dns_flush(dry_run=True)
+
+    assert res == "DNS resolver cache would be flushed (resolvectl)"
+    mock_run.assert_not_called()
 
 
 def test_run_tmpfiles_cleanup():

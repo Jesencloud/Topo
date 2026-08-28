@@ -14,6 +14,7 @@ ignore_names = [
     "run_ldconfig",
     "run_locale_gen",
     "run_man_db_refresh",
+    "run_dns_flush",
     "run_autostart_cleanup",
     "run_systemd_user_service_cleanup",
     "run_user_systemd_reset_failed",

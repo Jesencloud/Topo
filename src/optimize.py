@@ -47,6 +47,20 @@ SQLITE_MIN_FREE_BYTES = 5 * 1024 * 1024
 SQLITE_MIN_FREE_RATIO = 0.10
 SQLITE_VACUUM_TIMEOUT = 20
 COREDUMP_DIR = Path("/var/lib/systemd/coredump")
+# systemd-resolved's RuntimeDirectory, and the closest thing to a fork-free
+# "is resolved in charge here". Fedora ships resolvectl in systemd itself, so
+# the binary is present on a box whose DNS goes through NetworkManager's dnsmasq
+# or a plain /etc/resolv.conf, where a flush has nothing to flush; Debian and
+# Ubuntu put it in the systemd-resolved package, which can still be installed
+# and masked. The unit sets RuntimeDirectoryPreserve=yes, so a resolved that ran
+# once and was stopped leaves this behind -- the cost there is a failed command
+# reported as nothing, not a wrong answer.
+_RESOLVED_RUNTIME_DIR = Path("/run/systemd/resolve")
+# glibc's own _PATH_NSCDSOCKET. nscd creates it on startup, so it answers "is
+# there an nscd to talk to" -- the binary alone does not, and Debian ships the
+# package for a daemon most machines never enable. /var/run is a symlink to /run
+# on any systemd machine, so the literal glibc path resolves either way.
+_NSCD_SOCKET = Path("/var/run/nscd/socket")
 _MIN_RAM_SWAP_RATIO = 2
 _SWAPS_TABLE = Path("/proc/swaps")
 _ZRAM_DEVICE_RE = re.compile(r"^zram\d+$")
@@ -349,6 +363,68 @@ def run_man_db_refresh(dry_run=False):
     if run_command(["mandb", "-q"], capture=True).ok:
         return "Manual page database index updated (mandb)"
     return None
+
+
+def _dns_cache_flushers() -> list[tuple[str, list[str], bool]]:
+    """Every resolver cache on this machine: (label, command, may run as the user).
+
+    A list rather than a first match, because the two stack: nscd caches what
+    glibc looked up, and on a systemd machine glibc looked it up through
+    resolved's stub, so flushing only the front one leaves the stale answer in
+    the other. Each entry is proven live by the runtime file its daemon creates
+    rather than by the presence of the tool, which proves nothing on either
+    distro family (see _RESOLVED_RUNTIME_DIR and _NSCD_SOCKET).
+
+    nscd is looked up through _which_admin_tool because it lives in /usr/sbin,
+    which Debian keeps out of a non-root PATH.
+    """
+    flushers: list[tuple[str, list[str], bool]] = []
+    if shutil.which("resolvectl") and _RESOLVED_RUNTIME_DIR.is_dir():
+        # FlushCaches has been SD_BUS_VTABLE_UNPRIVILEGED with no polkit check
+        # behind it since systemd v243 -- Debian 11, Ubuntu 20.04, and every
+        # release after. Only v241 and older make it root's alone, which is what
+        # the sudo retry is left for.
+        flushers.append(("resolvectl", ["resolvectl", "flush-caches"], True))
+    if _which_admin_tool("nscd") and _NSCD_SOCKET.exists():
+        # No unprivileged attempt: nscd checks getuid() itself and answers
+        # "Only root is allowed to use this option!" without touching the cache.
+        flushers.append(("nscd", ["nscd", "-i", "hosts"], False))
+    return flushers
+
+
+def _dns_flush_report(labels: list[str], verb: str) -> str:
+    """Build the task's one-line result, pluralised for how many caches it names."""
+    noun = "cache" if len(labels) == 1 else "caches"
+    return f"DNS resolver {noun} {verb} ({', '.join(labels)})"
+
+
+@register_optimization_task
+def run_dns_flush(dry_run=False):
+    """Drop the resolver's cached answers so a stale record stops being served.
+
+    This frees no disk space -- the caches are a few MB inside a running daemon
+    -- and belongs here for the other reason Optimization exists: an entry
+    cached before a DNS record moved keeps pointing at the old address for the
+    rest of its TTL, and this is the switch that makes the machine ask again.
+    """
+    flushers = _dns_cache_flushers()
+    if not flushers:
+        return None
+    if dry_run:
+        return _dns_flush_report([label for label, _, _ in flushers], "would be flushed")
+
+    flushed = []
+    for label, cmd, may_run_as_user in flushers:
+        if may_run_as_user and run_command(cmd, capture=True).ok:
+            flushed.append(label)
+            continue
+        # The batch already holds the sudo session, so the retry costs a fork
+        # and no prompt.
+        if run_command(cmd, use_sudo=True, capture=True).ok:
+            flushed.append(label)
+    if not flushed:
+        return None
+    return _dns_flush_report(flushed, "flushed")
 
 
 @register_optimization_task
