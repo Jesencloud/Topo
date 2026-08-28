@@ -4,8 +4,15 @@ import shutil
 from pathlib import Path
 
 from ..core.constants import OK, SKIP
-from ..core.file_ops import bytes_to_human, get_size_fast, parse_size_from_text, safe_remove
+from ..core.file_ops import (
+    bytes_to_human,
+    get_size_fast,
+    parse_size_from_text,
+    record_deletion_audit,
+    safe_remove,
+)
 from ..core.heavy_cache import PACKAGE_MANAGER_CACHE_DEFS
+from ..core.lock import is_file_locked
 from ..core.package_manager import detect_package_manager, resolve_admin_tool
 from ..core.system import (
     APT_NONINTERACTIVE_ENV,
@@ -14,6 +21,7 @@ from ..core.system import (
     run_command,
 )
 from ..core.text import plural
+from ..core.whitelist import is_system_cleanable_content
 
 
 class DryRunReporter:
@@ -79,14 +87,17 @@ def clean_snaps(dry_run: bool = False) -> tuple[int, int, int]:
 
 
 def _get_package_manager_cache_paths(cleaner_key: str) -> list[Path]:
-    """The cache paths to measure, from the table Analyze reads too.
+    """The cache roots to look in, from the table Analyze reads too.
 
     Every path of the family that exists, not just the first: dnf5 moved the
-    cache to /var/cache/libdnf5 and leaves the old /var/cache/dnf behind, and one
-    `dnf clean packages` empties both; apt's two pkgcache.bin indexes sit beside
-    archives/ and go in the same `apt-get clean`. apt's own `partial/`
-    subdirectory is deliberately not listed -- get_size_fast() already recurses
-    into it, so naming it separately only counted its bytes twice.
+    cache to /var/cache/libdnf5 and leaves the old /var/cache/dnf behind, so both
+    have to be looked at; apt's two pkgcache.bin indexes sit beside archives/ and
+    go in the same `apt-get clean`. apt's own `partial/` subdirectory is
+    deliberately not listed -- get_size_fast() already recurses into it, so
+    naming it separately only counted its bytes twice.
+
+    For apt these roots *are* what gets emptied, so measuring them measures the
+    clean. For dnf they are not: see _repo_cache_cleanable_paths().
     """
     for definition in PACKAGE_MANAGER_CACHE_DEFS:
         if definition.key == cleaner_key:
@@ -106,6 +117,197 @@ def _measure_package_cache_size(cache_paths: list[Path]) -> int:
     scanning it, which is what apt's two binary indexes need.
     """
     return sum(get_size_fast(p) for p in cache_paths if p.exists())
+
+
+# A libdnf cache directory is named "<repo id>-<16 hex digits of its config>".
+_DNF_REPO_CACHE_DIR = re.compile(r"^(?P<repo_id>.+)-[0-9a-f]{16}$")
+# What `dnf clean packages dbcache` empties inside each repository's directory:
+# the downloaded rpms and the solv indexes generated from repodata. repodata/
+# itself is deliberately absent -- deleting it is what forces a re-download.
+_DNF_CLEANED_SUBDIRS = ("packages", "solv")
+# Where dnf4 keeps the same generated indexes: loose files beside the repository
+# directories rather than inside them. Listed so a dnf4 box measures its dbcache
+# too, and harmless on dnf5, where no such file exists.
+_DNF4_DBCACHE_SUFFIXES = (".solv", ".solvx")
+# PackageKit -- what GNOME Software and Discover talk to -- keeps a third copy of
+# the same thing, and no package-manager command empties it: 200 MiB on the
+# machine this was written for. Its rpm backend is libdnf, so the layout is the
+# one above, just buried under <releasever>/metadata/, which is why the search
+# below descends instead of listing one level.
+_PACKAGEKIT_CACHE = Path("/var/cache/PackageKit")
+# How far to descend looking for repository directories. 3 reaches PackageKit's
+# "44/metadata/<repo>"; nothing legitimate is deeper, and a bound keeps this from
+# ever walking into a repository's own contents.
+_REPO_CACHE_SEARCH_DEPTH = 3
+# rpm's transaction lock, and the only trustworthy answer to "is a package
+# transaction happening right now". The daemon that owns one of these caches is
+# dbus-activated but does not exit promptly -- on the machine this was written
+# for it had been idle for thirteen hours -- so "is the process alive" would
+# have parked the sweep forever, which is the same never-fires bug in a new
+# place. The lock is held for the install itself, the window worth waiting out.
+_RPM_TRANSACTION_LOCK = Path("/var/lib/rpm/.rpm.lock")
+# An update downloaded now and installed at the next boot leaves its packages
+# sitting in one of these caches in the meantime, so the sweep has to stand down
+# while one is staged. systemd's marker and PackageKit's are unambiguous; dnf5
+# instead records a status, and only two of its values mean "staged": its own
+# `offline status` prints "run `dnf5 offline reboot`" for download-complete and
+# ready, and for transaction-incomplete -- what a failed attempt leaves behind
+# for months -- it prints a post-mortem instead. Reading the file rather than
+# tomllib because the tests still run on 3.10, where tomllib does not exist.
+_OFFLINE_UPDATE_MARKERS = (Path("/system-update"), Path("/var/lib/PackageKit/prepared-update"))
+_OFFLINE_TRANSACTION_STATE = Path(
+    "/usr/lib/sysimage/libdnf5/offline/offline-transaction-state.toml"
+)
+_OFFLINE_STATUS_LINE = re.compile(r'^\s*status\s*=\s*"([^"]*)"', re.MULTILINE)
+_OFFLINE_STAGED_STATUSES = frozenset({"ready", "download-complete"})
+
+
+def _offline_update_is_staged() -> bool:
+    """Whether an update is downloaded and waiting for the reboot that installs it."""
+    if any(marker.exists() for marker in _OFFLINE_UPDATE_MARKERS):
+        return True
+    try:
+        state = _OFFLINE_TRANSACTION_STATE.read_text(errors="replace")
+    except FileNotFoundError:
+        # No transaction was ever recorded, which is the ordinary case.
+        return False
+    except OSError:
+        # There is a state file and it cannot be read. "Cannot tell" is not
+        # "nothing staged", and the file dnf5 writes is world-readable, so this
+        # is a strange machine rather than a common one: leave the cache alone.
+        return True
+    status = _OFFLINE_STATUS_LINE.search(state)
+    return bool(status and status.group(1) in _OFFLINE_STAGED_STATUSES)
+
+
+def _repo_cache_dirs(cache_roots: list[Path]) -> list[tuple[str, Path]]:
+    """Every "<repo id>-<hash>" directory under *cache_roots*, with its repo id.
+
+    The same libdnf layout sits at different depths depending on who wrote it:
+    /var/cache/libdnf5/<repo>, but /var/cache/PackageKit/<releasever>/metadata/
+    <repo>. Descent stops at the first match, so nothing inside a repository's
+    own directory can be read as another repository.
+    """
+    found: list[tuple[str, Path]] = []
+    frontier = [(root, 0) for root in cache_roots]
+    while frontier:
+        directory, depth = frontier.pop()
+        try:
+            entries = sorted(directory.iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            if entry.is_symlink() or not entry.is_dir():
+                continue
+            match = _DNF_REPO_CACHE_DIR.match(entry.name)
+            if match:
+                found.append((match["repo_id"], entry))
+            elif depth < _REPO_CACHE_SEARCH_DEPTH:
+                frontier.append((entry, depth + 1))
+    # Sorted because the walk is depth-first over several roots: the order it
+    # finds things in is an implementation detail, and this list decides the
+    # order of an `rm` argv and of the audit lines that follow it.
+    found.sort(key=lambda pair: pair[1])
+    return found
+
+
+def _repo_cache_cleanable_paths(cache_roots: list[Path]) -> list[Path]:
+    """The paths a `clean packages dbcache` reaches, or would if it could reach here.
+
+    Measuring the cache roots instead is what made the preview lie: it counted
+    repodata/ -- on a default Fedora nearly the whole of the cache, since
+    keepcache is false and there are no rpms to count -- and then promised those
+    bytes to a command that never touches them. `topo clean --dry-run` said
+    1.2 GiB and the real run freed nothing, which is exactly what it should have
+    said it would.
+    """
+    paths = [
+        subdir
+        for _, repo_dir in _repo_cache_dirs(cache_roots)
+        for name in _DNF_CLEANED_SUBDIRS
+        if (subdir := repo_dir / name).is_dir()
+    ]
+    for root in cache_roots:
+        try:
+            entries = sorted(root.iterdir())
+        except OSError:
+            continue
+        paths.extend(e for e in entries if e.is_file() and e.suffix in _DNF4_DBCACHE_SUFFIXES)
+    return paths
+
+
+def _dnf_orphaned_repo_caches(tool: str, cache_roots: list[Path]) -> list[Path]:
+    """Cache directories belonging to repositories that are no longer configured.
+
+    dnf only ever cleans the repositories it still knows about, so deleting a
+    .repo file strands its entire cache directory -- repodata, dbcache and all --
+    with nothing left that will ever collect it. Nothing is re-downloaded for a
+    repository that no longer exists, which is why these go even though the
+    repodata of a live repository stays.
+
+    Every uncertainty is resolved as "not an orphan": an unreadable root, a
+    repolist that failed, a directory name that does not carry the id-hash shape.
+    A repository whose *configuration* changed keeps its id, so its stale
+    directory is left behind rather than risk reading dnf's answer too freely.
+    """
+    if not cache_roots:
+        return []
+    res = run_command([tool, "repolist", "--all"], capture=True, env=C_LOCALE_ENV)
+    if not res.ok or not res.stdout:
+        return []
+    # First column of dnf's own table; ids never contain whitespace. The header
+    # and any summary line contribute junk entries, which can only ever make a
+    # directory look configured -- the safe direction.
+    configured = {line.split()[0] for line in res.stdout.splitlines() if line.split()}
+
+    orphans: list[Path] = []
+    for repo_id, repo_dir in _repo_cache_dirs(cache_roots):
+        # "@commandline" and friends are dnf's own pseudo-repositories; they
+        # never appear in repolist and are not anybody's leftovers.
+        if repo_id.startswith("@") or repo_id in configured:
+            continue
+        # The /var carve-out decides, not this function: only what the
+        # whitelist already calls cleanable system content may be removed.
+        if is_system_cleanable_content(repo_dir):
+            orphans.append(repo_dir)
+    return orphans
+
+
+def _remove_unreachable_cache_paths(paths: list[Path]) -> None:
+    """Delete the package caches no clean command reaches.
+
+    Three kinds end up here. dnf5daemon-server -- what GNOME Software installs
+    through on Fedora -- keeps its own cachedir, and no dnf CLI command empties
+    it: 881 MiB of downloaded rpms had collected there on the machine this was
+    written for, every byte promised by the preview and none of it reachable by
+    the clean. PackageKit keeps a third copy, 200 MiB of it, belonging to no
+    command at all. Stranded repository directories are the same problem
+    arriving by a different road.
+
+    All root's to remove, and none of it goes to the trash: /var/cache is
+    outside the trash spec, and everything here is a cache by definition -- an
+    rpm re-downloads, a solv index regenerates.
+
+    One `rm` for the lot, then each path is asked whether it is actually gone, so
+    a partial failure is audited as the partial failure it was.
+    """
+    targets = [p for p in paths if p.exists() and is_system_cleanable_content(p)]
+    if not targets:
+        return
+    sizes = {path: get_size_fast(path) for path in targets}
+    run_command(
+        ["rm", "-rf", "--one-file-system", "--", *(str(path) for path in targets)],
+        use_sudo=True,
+        capture=True,
+    )
+    for path in targets:
+        removed = not path.exists()
+        record_deletion_audit(
+            path,
+            "sudo-permanent",
+            "removed" if removed else "failed",
+            sizes[path] if removed else None,
+        )
 
 
 def clean_package_manager(dry_run: bool = False) -> tuple[int, int, int]:
@@ -128,7 +330,26 @@ def clean_package_manager(dry_run: bool = False) -> tuple[int, int, int]:
         return freed, snap_items, snap_cats
 
     cache_paths = _get_package_manager_cache_paths(manager.key)
-    pre_size = _measure_package_cache_size(cache_paths)
+    # Caches laid out the libdnf way, holding per-repository packages/, solv/ and
+    # repodata/. PackageKit's is one on every family and belongs to nobody's
+    # clean command, so Topo clears it itself; on an rpm box dnf's own roots are
+    # read the same way, because its command reaches only part of them.
+    repo_style_roots = [_PACKAGEKIT_CACHE] if _PACKAGEKIT_CACHE.is_dir() else []
+    if manager.key == "dnf":
+        repo_style_roots = cache_paths + repo_style_roots
+        # Nothing under dnf's roots is safe to promise wholesale, so the measured
+        # set is built from the parts alone.
+        measured_paths = _repo_cache_cleanable_paths(repo_style_roots)
+        measured_paths += _dnf_orphaned_repo_caches(tool, repo_style_roots)
+        sweepable = measured_paths
+    else:
+        # apt's roots *are* what `apt-get clean` empties, so they are promised as
+        # they stand; only the PackageKit part is Topo's to remove. Orphans are
+        # left alone here: finding them means asking the package manager which
+        # repositories it still has, and `repolist` is dnf's word, not apt's.
+        sweepable = _repo_cache_cleanable_paths(repo_style_roots)
+        measured_paths = cache_paths + sweepable
+    pre_size = _measure_package_cache_size(measured_paths)
 
     if dry_run:
         size_hint = f" ({bytes_to_human(pre_size)})" if pre_size > 0 else ""
@@ -138,7 +359,17 @@ def clean_package_manager(dry_run: bool = False) -> tuple[int, int, int]:
     res = run_command(
         [tool, *manager.cache_clean_args], use_sudo=True, capture=True, env=C_LOCALE_ENV
     )
-    post_size = _measure_package_cache_size(cache_paths)
+    if (
+        sweepable
+        and res.ok
+        and not is_file_locked(_RPM_TRANSACTION_LOCK)
+        and not _offline_update_is_staged()
+    ):
+        # Three conditions, each for its own reason: the package manager's own
+        # clean went through, no transaction is installing out of the packages/
+        # being swept, and no download is waiting for the reboot that installs it.
+        _remove_unreachable_cache_paths(sweepable)
+    post_size = _measure_package_cache_size(measured_paths)
     measured_freed = max(0, pre_size - post_size)
 
     if measured_freed > 0:

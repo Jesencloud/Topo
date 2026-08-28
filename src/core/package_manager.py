@@ -81,7 +81,16 @@ DNF = PackageManager(
     families=("fedora", "rhel"),
     query_tool="rpm",
     admin_tools=("dnf5", "dnf"),
-    cache_clean_args=("clean", "packages"),
+    # `packages` alone had nothing to delete on a default Fedora: keepcache is
+    # false, so a downloaded rpm is gone the moment its transaction finishes,
+    # and what actually fills /var/cache/libdnf5 is metadata. `dbcache` adds the
+    # solv/ indexes libdnf5 *generates* from that metadata -- man dnf5-clean:
+    # "forces DNF5 to regenerate the cache files", locally, with no download --
+    # so this frees the regenerable half and still leaves repodata/ alone.
+    # Deliberately not `all`, and not `metadata`: those make the next dnf
+    # command re-download every repository's metadata, which is the cost 6f0a8be
+    # removed on purpose.
+    cache_clean_args=("clean", "packages", "dbcache"),
     package_format="rpm",
     # Deliberately the unversioned `dnf`, not the resolved dnf5: these strings go
     # into the update/remove transcript the CI smoke tests grep for, and dnf is

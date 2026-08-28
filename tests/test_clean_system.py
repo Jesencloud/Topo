@@ -1,6 +1,9 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+from src.clean import system
 from src.clean.system import (
     DryRunReporter,
     clean_journal,
@@ -80,6 +83,19 @@ Remove  1 Package
 Freed space: 120 k
 Complete!
 """
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_packagekit_cache(tmp_path_factory):
+    """Keep the host's own /var/cache/PackageKit out of every test in this file.
+
+    clean_package_manager() reads that path directly, so without this a Fedora
+    developer machine put its 200 MiB of real cache into an openSUSE test's
+    measurements -- and its directories into the rm the test asserts on.
+    """
+    absent = tmp_path_factory.mktemp("no-packagekit") / "absent"
+    with patch.object(system, "_PACKAGEKIT_CACHE", absent):
+        yield
 
 
 def test_package_cache_paths_cover_supported_managers(monkeypatch):
@@ -336,20 +352,295 @@ def test_clean_snaps(mock_run, mock_which):
 @patch("shutil.which")
 @patch("src.clean.system.run_command")
 @patch("src.clean.system.get_os_id")
-def test_clean_package_manager_fedora(mock_get_os_id, mock_run, mock_which):
+def test_clean_package_manager_fedora(mock_get_os_id, mock_run, mock_which, tmp_path):
     mock_get_os_id.return_value = "fedora"
     mock_which.side_effect = lambda x: "/usr/bin/dnf" if x == "dnf" else None
-    mock_run.return_value = MagicMock(returncode=0, stdout="freed 100 MB")
+    mock_run.return_value = MagicMock(returncode=0, ok=True, stdout="freed 100 MB")
 
-    s, i, c = clean_package_manager(dry_run=False)
-    assert i == 1
-    assert c == 1
-    mock_run.assert_called_with(
-        ["dnf", "clean", "packages"], use_sudo=True, capture=True, env=C_LOCALE_ENV
+    # An empty cache root, so the run reaches the clean without the machine's own
+    # /var/cache/libdnf5 deciding what the test measures or removes.
+    with patch("src.clean.system._get_package_manager_cache_paths", return_value=[tmp_path]):
+        s, i, c = clean_package_manager(dry_run=False)
+        assert i == 1
+        assert c == 1
+        mock_run.assert_any_call(
+            ["dnf", "clean", "packages", "dbcache"], use_sudo=True, capture=True, env=C_LOCALE_ENV
+        )
+
+        s, i, c = clean_package_manager(dry_run=True)
+        assert c == 1
+
+
+def _dnf_cache_tree(root, repo_dir, *, repodata=0, solv=0, packages=0):
+    """Build one repository's cache directory the way libdnf5 lays it out."""
+    for name, size in (("repodata", repodata), ("solv", solv), ("packages", packages)):
+        if size:
+            sub = root / repo_dir / name
+            sub.mkdir(parents=True)
+            (sub / "blob").write_bytes(b"x" * size)
+    return root / repo_dir
+
+
+def test_repo_cache_cleanable_paths_leaves_repodata_out(tmp_path):
+    """The preview promised repodata to a command that never touches it."""
+    _dnf_cache_tree(tmp_path, "fedora-cff72538bc9825a4", repodata=4096, solv=512, packages=256)
+    (tmp_path / "updates-3cc07c89a20302f2.solv").write_bytes(b"x" * 128)
+
+    found = {
+        p.relative_to(tmp_path).as_posix() for p in system._repo_cache_cleanable_paths([tmp_path])
+    }
+
+    assert found == {
+        "fedora-cff72538bc9825a4/packages",
+        "fedora-cff72538bc9825a4/solv",
+        "updates-3cc07c89a20302f2.solv",
+    }
+
+
+def test_clean_package_manager_dry_run_promises_only_what_dnf_will_delete(tmp_path, capsys):
+    """The reported bug: 1.2 GiB previewed, nothing freed. Only solv/ is at stake."""
+    _dnf_cache_tree(tmp_path, "fedora-cff72538bc9825a4", repodata=100_000, solv=2048)
+
+    with (
+        patch("src.clean.system.get_os_id", return_value="fedora"),
+        patch("shutil.which", side_effect=lambda x: "/usr/bin/dnf" if x == "dnf" else None),
+        patch("src.clean.system._get_package_manager_cache_paths", return_value=[tmp_path]),
+        patch(
+            "src.clean.system.run_command",
+            return_value=MagicMock(returncode=0, ok=True, stdout="fedora enabled\n"),
+        ),
+    ):
+        size, _, _ = clean_package_manager(dry_run=True)
+
+    # The 100 KB of repodata is not promised; it is also still there afterwards.
+    assert size == 2048
+    assert "(2.0 KiB)" in capsys.readouterr().out
+    assert (tmp_path / "fedora-cff72538bc9825a4/repodata").is_dir()
+
+
+def test_dnf_orphaned_repo_caches_finds_what_dnf_will_never_collect(tmp_path):
+    """A removed .repo strands its whole cache; dnf only cleans repos it knows."""
+    _dnf_cache_tree(tmp_path, "fedora-cff72538bc9825a4", repodata=64)
+    _dnf_cache_tree(tmp_path, "old-vendor-1a27fa61fdd77ffb", repodata=64)
+    _dnf_cache_tree(tmp_path, "@commandline-f1fcf1ce45c07955", repodata=64)
+    (tmp_path / "not-a-repo-dir").mkdir()
+
+    repolist = MagicMock(
+        returncode=0, ok=True, stdout="repo id    repo name    status\nfedora  Fedora 44  enabled\n"
     )
+    with (
+        patch("src.clean.system.run_command", return_value=repolist) as mock_run,
+        patch("src.clean.system.is_system_cleanable_content", return_value=True),
+    ):
+        orphans = system._dnf_orphaned_repo_caches("dnf5", [tmp_path])
 
-    s, i, c = clean_package_manager(dry_run=True)
-    assert c == 1
+    assert [p.name for p in orphans] == ["old-vendor-1a27fa61fdd77ffb"]
+    assert mock_run.call_args.args[0] == ["dnf5", "repolist", "--all"]
+    assert not mock_run.call_args.kwargs.get("use_sudo")
+
+
+def test_repo_cache_dirs_reaches_packagekits_nested_layout(tmp_path):
+    """PackageKit buries the same libdnf layout under <releasever>/metadata/."""
+    nested = tmp_path / "44" / "metadata"
+    _dnf_cache_tree(nested, "fedora-cff72538bc9825a4", repodata=64, solv=128)
+    _dnf_cache_tree(tmp_path, "flat-1a27fa61fdd77ffb", solv=32)
+
+    found = {repo_id: path for repo_id, path in system._repo_cache_dirs([tmp_path])}
+
+    assert set(found) == {"fedora", "flat"}
+    assert found["fedora"] == nested / "fedora-cff72538bc9825a4"
+    # Descent stops at the repository, so its own repodata/ is never mistaken
+    # for another one.
+    cleanable = {p.name for p in system._repo_cache_cleanable_paths([tmp_path])}
+    assert cleanable == {"solv"}
+
+
+def test_packagekit_cache_is_swept_on_a_deb_box(tmp_path):
+    """No apt command empties PackageKit's cache, so Topo clears that part.
+
+    apt's own roots stay out of the sweep: `apt-get clean` owns those, and if it
+    failed there is a reason not to force the issue behind it.
+    """
+    apt_root = tmp_path / "apt"
+    (apt_root / "archives").mkdir(parents=True)
+    (apt_root / "archives" / "some.deb").write_bytes(b"d" * 2048)
+    packagekit = tmp_path / "PackageKit"
+    _dnf_cache_tree(packagekit / "44" / "metadata", "vendor-1a27fa61fdd77ffb", packages=512)
+
+    calls = []
+
+    def run_side_effect(cmd, **kwargs):
+        calls.append(cmd)
+        return MagicMock(returncode=0, ok=True, stdout="")
+
+    with (
+        patch("src.clean.system.get_os_id", return_value="ubuntu"),
+        patch("shutil.which", side_effect=lambda x: "/usr/bin/apt-get" if x == "apt-get" else None),
+        patch("src.clean.system._get_package_manager_cache_paths", return_value=[apt_root]),
+        patch.object(system, "_PACKAGEKIT_CACHE", packagekit),
+        patch("src.clean.system.is_system_cleanable_content", return_value=True),
+        patch("src.clean.system.is_file_locked", return_value=False),
+        patch("src.clean.system.run_command", side_effect=run_side_effect),
+    ):
+        clean_package_manager(dry_run=False)
+
+    assert calls[0] == ["apt-get", "clean"]
+    # No `repolist`: that is dnf's word for which repositories exist, not apt's.
+    assert not any("repolist" in cmd for cmd in calls)
+    assert calls[-1] == [
+        "rm",
+        "-rf",
+        "--one-file-system",
+        "--",
+        str(packagekit / "44/metadata/vendor-1a27fa61fdd77ffb/packages"),
+    ]
+
+
+def test_clean_package_manager_stands_down_for_a_staged_offline_update(tmp_path):
+    """Those packages are what the next boot installs; dnf5 calls that "ready"."""
+    _dnf_cache_tree(tmp_path, "fedora-cff72538bc9825a4", packages=4096)
+    state = tmp_path / "offline-transaction-state.toml"
+    state.write_text('[offline-transaction-state]\nstatus = "ready"\n')
+
+    def run_side_effect(cmd, **kwargs):
+        if cmd[1:2] == ["repolist"]:
+            return MagicMock(returncode=0, ok=True, stdout="fedora  Fedora 44  enabled\n")
+        return MagicMock(returncode=0, ok=True, stdout="")
+
+    with (
+        patch("src.clean.system.get_os_id", return_value="fedora"),
+        patch("shutil.which", side_effect=lambda x: "/usr/bin/dnf" if x == "dnf" else None),
+        patch("src.clean.system._get_package_manager_cache_paths", return_value=[tmp_path]),
+        patch("src.clean.system.is_system_cleanable_content", return_value=True),
+        patch("src.clean.system.is_file_locked", return_value=False),
+        patch.object(system, "_OFFLINE_TRANSACTION_STATE", state),
+        patch.object(system, "_OFFLINE_UPDATE_MARKERS", ()),
+        patch("src.clean.system.run_command", side_effect=run_side_effect) as mock_run,
+    ):
+        clean_package_manager(dry_run=False)
+
+    assert not any(call.args[0][0] == "rm" for call in mock_run.call_args_list)
+
+
+def test_a_failed_offline_attempt_does_not_park_the_sweep_forever(tmp_path):
+    """ "transaction-incomplete" is a post-mortem, not a download waiting to install.
+
+    The state file left by a failed attempt sat on the machine this was written
+    for eleven days; treating any state file as "staged" would have made the
+    sweep never fire again.
+    """
+    state = tmp_path / "offline-transaction-state.toml"
+    state.write_text('[offline-transaction-state]\nstatus = "transaction-incomplete"\n')
+
+    with (
+        patch.object(system, "_OFFLINE_TRANSACTION_STATE", state),
+        patch.object(system, "_OFFLINE_UPDATE_MARKERS", ()),
+    ):
+        assert system._offline_update_is_staged() is False
+
+    marker = tmp_path / "system-update"
+    marker.mkdir()
+    with (
+        patch.object(system, "_OFFLINE_TRANSACTION_STATE", tmp_path / "absent.toml"),
+        patch.object(system, "_OFFLINE_UPDATE_MARKERS", (marker,)),
+    ):
+        assert system._offline_update_is_staged() is True
+
+
+def test_dnf_orphaned_repo_caches_keeps_everything_when_repolist_fails(tmp_path):
+    """No answer from dnf means no orphans, never "everything is an orphan"."""
+    _dnf_cache_tree(tmp_path, "old-vendor-1a27fa61fdd77ffb", repodata=64)
+
+    with (
+        patch(
+            "src.clean.system.run_command",
+            return_value=MagicMock(returncode=1, ok=False, stdout=""),
+        ),
+        patch("src.clean.system.is_system_cleanable_content", return_value=True),
+    ):
+        assert system._dnf_orphaned_repo_caches("dnf5", [tmp_path]) == []
+
+
+def test_dnf_orphaned_repo_caches_obeys_the_var_carve_out(tmp_path):
+    """Removal is the whitelist's decision, not this function's."""
+    _dnf_cache_tree(tmp_path, "old-vendor-1a27fa61fdd77ffb", repodata=64)
+
+    repolist = MagicMock(returncode=0, ok=True, stdout="fedora  Fedora 44  enabled\n")
+    with (
+        patch("src.clean.system.run_command", return_value=repolist),
+        patch("src.clean.system.is_system_cleanable_content", return_value=False),
+    ):
+        assert system._dnf_orphaned_repo_caches("dnf5", [tmp_path]) == []
+
+
+def test_clean_package_manager_sweeps_what_dnf_clean_cannot_reach(tmp_path):
+    """The daemon's cachedir and stranded repos both go, in one rm."""
+    daemon_pkgs = _dnf_cache_tree(tmp_path, "fedora-cff72538bc9825a4", packages=4096)
+    orphan = _dnf_cache_tree(tmp_path, "old-vendor-1a27fa61fdd77ffb", repodata=4096)
+
+    def run_side_effect(cmd, **kwargs):
+        if cmd[1:2] == ["repolist"]:
+            return MagicMock(returncode=0, ok=True, stdout="fedora  Fedora 44  enabled\n")
+        return MagicMock(returncode=0, ok=True, stdout="")
+
+    with (
+        patch("src.clean.system.get_os_id", return_value="fedora"),
+        patch("shutil.which", side_effect=lambda x: "/usr/bin/dnf" if x == "dnf" else None),
+        patch("src.clean.system._get_package_manager_cache_paths", return_value=[tmp_path]),
+        patch("src.clean.system.is_system_cleanable_content", return_value=True),
+        patch("src.clean.system.is_file_locked", return_value=False),
+        patch("src.clean.system.run_command", side_effect=run_side_effect) as mock_run,
+    ):
+        clean_package_manager(dry_run=False)
+
+    removal = mock_run.call_args_list[-1]
+    assert removal.args[0][:4] == ["rm", "-rf", "--one-file-system", "--"]
+    assert set(removal.args[0][4:]) == {str(daemon_pkgs / "packages"), str(orphan)}
+    assert removal.kwargs["use_sudo"] is True
+
+
+def test_clean_package_manager_waits_out_a_running_rpm_transaction(tmp_path):
+    """Those packages/ files are what a transaction in flight installs from."""
+    _dnf_cache_tree(tmp_path, "fedora-cff72538bc9825a4", packages=4096)
+
+    def run_side_effect(cmd, **kwargs):
+        if cmd[1:2] == ["repolist"]:
+            return MagicMock(returncode=0, ok=True, stdout="fedora  Fedora 44  enabled\n")
+        return MagicMock(returncode=0, ok=True, stdout="")
+
+    with (
+        patch("src.clean.system.get_os_id", return_value="fedora"),
+        patch("shutil.which", side_effect=lambda x: "/usr/bin/dnf" if x == "dnf" else None),
+        patch("src.clean.system._get_package_manager_cache_paths", return_value=[tmp_path]),
+        patch("src.clean.system.is_system_cleanable_content", return_value=True),
+        patch("src.clean.system.is_file_locked", return_value=True),
+        patch("src.clean.system.run_command", side_effect=run_side_effect) as mock_run,
+    ):
+        clean_package_manager(dry_run=False)
+
+    assert not any(call.args[0][0] == "rm" for call in mock_run.call_args_list)
+
+
+def test_clean_package_manager_leaves_the_cache_alone_when_the_clean_failed(tmp_path):
+    """A failed clean usually means the lock is held; the sweep waits for it too."""
+    _dnf_cache_tree(tmp_path, "fedora-cff72538bc9825a4", packages=4096)
+
+    def run_side_effect(cmd, **kwargs):
+        if cmd[1:2] == ["repolist"]:
+            return MagicMock(returncode=0, ok=True, stdout="fedora  Fedora 44  enabled\n")
+        return MagicMock(returncode=1, ok=False, stdout="")
+
+    with (
+        patch("src.clean.system.get_os_id", return_value="fedora"),
+        patch("shutil.which", side_effect=lambda x: "/usr/bin/dnf" if x == "dnf" else None),
+        patch("src.clean.system._get_package_manager_cache_paths", return_value=[tmp_path]),
+        patch("src.clean.system.is_system_cleanable_content", return_value=True),
+        patch("src.clean.system.is_file_locked", return_value=False),
+        patch("src.clean.system.run_command", side_effect=run_side_effect) as mock_run,
+    ):
+        clean_package_manager(dry_run=False)
+
+    assert not any(call.args[0][0] == "rm" for call in mock_run.call_args_list)
 
 
 @patch("shutil.which")
@@ -473,7 +764,10 @@ def test_package_manager_dnf5_measured_and_failed_paths():
     ):
         assert clean_package_manager() == (80, 1, 1)
         run.assert_called_once_with(
-            ["dnf5", "clean", "packages"], use_sudo=True, capture=True, env=C_LOCALE_ENV
+            ["dnf5", "clean", "packages", "dbcache"],
+            use_sudo=True,
+            capture=True,
+            env=C_LOCALE_ENV,
         )
     with (
         patch("src.clean.system.get_os_id", return_value="fedora"),
