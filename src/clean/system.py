@@ -18,6 +18,7 @@ from ..core.package_manager import detect_package_manager, resolve_admin_tool
 from ..core.system import (
     APT_NONINTERACTIVE_ENV,
     C_LOCALE_ENV,
+    PACKAGE_TRANSACTION_TIMEOUT,
     get_os_id,
     run_command,
 )
@@ -77,6 +78,7 @@ def clean_snaps(dry_run: bool = False) -> tuple[int, int, int]:
                     ["snap", "remove", parts[0], "--revision", parts[2]],
                     use_sudo=True,
                     capture=True,
+                    timeout=PACKAGE_TRANSACTION_TIMEOUT,
                 )
                 if rm_res.ok:
                     count += 1
@@ -450,6 +452,7 @@ def clean_orphaned_packages(dry_run: bool = False) -> tuple[int, int, int]:
             use_sudo=True,
             capture=True,
             env=APT_NONINTERACTIVE_ENV,
+            timeout=PACKAGE_TRANSACTION_TIMEOUT,
         )
         if res.ok:
             # apt's own total, not parse_size_from_text over the whole transcript:
@@ -470,7 +473,13 @@ def clean_orphaned_packages(dry_run: bool = False) -> tuple[int, int, int]:
             # the very thing --dry-run exists to avoid.
             print(f"  {SKIP} Orphaned {manager.label} packages would be autoremoved")
             return 0, 0, 1
-        res = run_command([tool, "autoremove", "-y"], use_sudo=True, capture=True, env=C_LOCALE_ENV)
+        res = run_command(
+            [tool, "autoremove", "-y"],
+            use_sudo=True,
+            capture=True,
+            env=C_LOCALE_ENV,
+            timeout=PACKAGE_TRANSACTION_TIMEOUT,
+        )
         if res.ok:
             # Both numbers come from dnf's transaction summary. What they replace:
             # parse_size_from_text() over the entire transcript, which returns the
@@ -508,6 +517,7 @@ def clean_orphaned_packages(dry_run: bool = False) -> tuple[int, int, int]:
                 use_sudo=True,
                 capture=True,
                 env=C_LOCALE_ENV,
+                timeout=PACKAGE_TRANSACTION_TIMEOUT,
             )
             if remove_res.ok:
                 # pacman's own total, for the same reason apt and dnf get one:
@@ -774,6 +784,7 @@ def clean_old_kernels(dry_run: bool = False) -> tuple[int, int, int]:
                 use_sudo=True,
                 capture=True,
                 env=APT_NONINTERACTIVE_ENV,
+                timeout=PACKAGE_TRANSACTION_TIMEOUT,
             )
             if not purge.ok:
                 continue
@@ -827,7 +838,11 @@ def clean_old_kernels(dry_run: bool = False) -> tuple[int, int, int]:
         # with no image behind it, and one dnf resolved away anyway.
         packages = [nevra for nevras in stale.values() for nevra in nevras]
         remove = run_command(
-            [tool, "remove", "-y", *packages], use_sudo=True, capture=True, env=C_LOCALE_ENV
+            [tool, "remove", "-y", *packages],
+            use_sudo=True,
+            capture=True,
+            env=C_LOCALE_ENV,
+            timeout=PACKAGE_TRANSACTION_TIMEOUT,
         )
         if not remove.ok:
             return 0, 0, 0

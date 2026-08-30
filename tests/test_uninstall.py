@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.core.history import parse_deletion_history
-from src.core.system import APT_NONINTERACTIVE_ENV, C_LOCALE_ENV
+from src.core.system import APT_NONINTERACTIVE_ENV, C_LOCALE_ENV, PACKAGE_TRANSACTION_TIMEOUT
 from src.ui.screens.uninstall import run_uninstall
 from src.uninstall import (
     UninstallManager,
@@ -1088,7 +1088,10 @@ def test_execute_uninstall_flatpak(mock_run, mock_run_cmd, test_env):
 
     assert details["removed_paths"] == []
     mock_run_cmd.assert_called_with(
-        ["flatpak", "uninstall", "-y", "com.example.MyApp"], use_sudo=False, capture=True
+        ["flatpak", "uninstall", "-y", "com.example.MyApp"],
+        use_sudo=False,
+        capture=True,
+        timeout=PACKAGE_TRANSACTION_TIMEOUT,
     )
 
 
@@ -1121,6 +1124,7 @@ def test_execute_uninstall_flatpak_system_scope_takes_sudo(mock_run, mock_run_cm
         ["flatpak", "uninstall", "--system", "-y", "com.example.MyApp"],
         use_sudo=True,
         capture=True,
+        timeout=PACKAGE_TRANSACTION_TIMEOUT,
     )
 
 
@@ -1152,6 +1156,7 @@ def test_execute_uninstall_flatpak_user_scope_asks_for_no_password(
         ["flatpak", "uninstall", "--user", "-y", "com.example.MyApp"],
         use_sudo=False,
         capture=True,
+        timeout=PACKAGE_TRANSACTION_TIMEOUT,
     )
 
 
@@ -1233,7 +1238,10 @@ def test_execute_uninstall_snap(mock_run_cmd, test_env):
 
     assert details["removed_paths"] == []
     mock_run_cmd.assert_any_call(
-        ["snap", "remove", "--purge", "my-snap"], use_sudo=True, capture=True
+        ["snap", "remove", "--purge", "my-snap"],
+        use_sudo=True,
+        capture=True,
+        timeout=PACKAGE_TRANSACTION_TIMEOUT,
     )
 
 
@@ -1268,7 +1276,10 @@ def test_execute_uninstall_dnf(mock_run, mock_run_cmd, test_env):
     assert len(details["removed_paths"]) == 1
     # Check DNF removal command
     mock_run_cmd.assert_called_with(
-        ["dnf", "remove", "-y", "heavy-app"], use_sudo=True, capture=True
+        ["dnf", "remove", "-y", "heavy-app"],
+        use_sudo=True,
+        capture=True,
+        timeout=PACKAGE_TRANSACTION_TIMEOUT,
     )
     # The app was reported running, so it must have been signalled: SIGTERM first,
     # then SIGKILL because the second /proc pass still lists it.
@@ -1298,13 +1309,15 @@ def test_execute_uninstall_apt(mock_run_cmd, test_env):
     assert details["removed_paths"] == []
     # apt-get, and with debconf muted: apt warns about its unstable CLI when
     # captured, and a maintainer-script prompt nobody can see would hang the
-    # removal until the command timeout (D3). --autoremove takes the dependencies
-    # this removal orphans with it, the way -Rns and --clean-deps do (D6).
+    # removal for good, now that this call runs without a deadline (D3).
+    # --autoremove takes the dependencies this removal orphans with it, the way
+    # -Rns and --clean-deps do (D6).
     mock_run_cmd.assert_any_call(
         ["apt-get", "purge", "--autoremove", "-y", "firefox"],
         use_sudo=True,
         capture=True,
         env=APT_NONINTERACTIVE_ENV,
+        timeout=PACKAGE_TRANSACTION_TIMEOUT,
     )
 
 
@@ -1327,7 +1340,10 @@ def test_execute_uninstall_pacman(mock_run_cmd, test_env):
 
     assert details["removed_paths"] == []
     mock_run_cmd.assert_any_call(
-        ["pacman", "-Rns", "--noconfirm", "firefox"], use_sudo=True, capture=True
+        ["pacman", "-Rns", "--noconfirm", "firefox"],
+        use_sudo=True,
+        capture=True,
+        timeout=PACKAGE_TRANSACTION_TIMEOUT,
     )
 
 
@@ -1379,6 +1395,7 @@ def test_execute_uninstall_zypper(mock_run_cmd, test_env):
         use_sudo=True,
         capture=True,
         env=C_LOCALE_ENV,
+        timeout=PACKAGE_TRANSACTION_TIMEOUT,
     )
 
 

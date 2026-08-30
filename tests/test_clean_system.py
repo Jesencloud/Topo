@@ -16,7 +16,7 @@ from src.clean.system import (
     clean_zombies,
 )
 from src.core.constants import OK, SKIP
-from src.core.system import APT_NONINTERACTIVE_ENV, C_LOCALE_ENV
+from src.core.system import APT_NONINTERACTIVE_ENV, C_LOCALE_ENV, PACKAGE_TRANSACTION_TIMEOUT
 
 # `apt-get autoremove` as debian:stable-slim really narrates it. The Remv lines
 # are the simulation's: a real run prints its per-package progress as "Removing
@@ -179,7 +179,11 @@ def test_clean_orphaned_packages_fedora(mock_get_os_id, mock_run, mock_which):
 
     assert "Removed 2 orphaned DNF packages (576.0 KiB)" in mock_print.call_args[0][0]
     mock_run.assert_called_with(
-        ["dnf", "autoremove", "-y"], use_sudo=True, capture=True, env=C_LOCALE_ENV
+        ["dnf", "autoremove", "-y"],
+        use_sudo=True,
+        capture=True,
+        env=C_LOCALE_ENV,
+        timeout=PACKAGE_TRANSACTION_TIMEOUT,
     )
 
     # dnf4 is still what RHEL 9 and Leap run, and it words all three of the lines
@@ -239,6 +243,7 @@ def test_clean_orphaned_packages_ubuntu(mock_get_os_id, mock_run, mock_which):
         use_sudo=True,
         capture=True,
         env=APT_NONINTERACTIVE_ENV,
+        timeout=PACKAGE_TRANSACTION_TIMEOUT,
     )
 
 
@@ -342,7 +347,10 @@ def test_clean_snaps(mock_run, mock_which):
     assert i == 1
     assert c == 1
     mock_run.assert_any_call(
-        ["snap", "remove", "core22", "--revision", "1234"], use_sudo=True, capture=True
+        ["snap", "remove", "core22", "--revision", "1234"],
+        use_sudo=True,
+        capture=True,
+        timeout=PACKAGE_TRANSACTION_TIMEOUT,
     )
 
     s, i, c = clean_snaps(dry_run=True)

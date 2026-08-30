@@ -2,6 +2,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from src.core.file_ops import validate_path_for_deletion
+from src.core.system import PACKAGE_TRANSACTION_TIMEOUT
 from src.manage.remove import (
     _launcher_points_to_package,
     _launcher_points_to_topo,
@@ -69,7 +70,12 @@ def test_run_remove_executes_package_manager_removal(
     assert not state_dir.exists()
     assert not script_dir.exists()
     assert not launcher.exists()
-    mock_run.assert_called_once_with(["sudo", "apt", "remove", "-y", "topo"], timeout=300)
+    # No deadline: a SIGKILL landing in this transaction leaves the package
+    # manager needing manual repair, and the user has already confirmed the
+    # command above.
+    mock_run.assert_called_once_with(
+        ["sudo", "apt", "remove", "-y", "topo"], timeout=PACKAGE_TRANSACTION_TIMEOUT
+    )
 
 
 @patch("src.manage.remove.get_install_source", return_value="package")
@@ -350,7 +356,9 @@ def test_package_remove_yes_skips_the_prompt_without_a_terminal(
     assert "Topo package removal completed" in output
     assert "Removed Temporary scan cache" in output
     assert not cache_dir.exists()
-    mock_run.assert_called_once_with(["dnf", "remove", "-y", "topo"], timeout=300)
+    mock_run.assert_called_once_with(
+        ["dnf", "remove", "-y", "topo"], timeout=PACKAGE_TRANSACTION_TIMEOUT
+    )
 
 
 def test_script_remove_yes_skips_the_prompt_without_a_terminal(test_env, monkeypatch, capsys):

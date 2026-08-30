@@ -28,6 +28,27 @@ _SAFE_SUDOERS_PATH_RE = re.compile(r"/[A-Za-z0-9._+/-]*\Z")
 # Global flag to track if user explicitly cancelled sudo auth
 SUDO_CANCELLED = False
 DEFAULT_COMMAND_TIMEOUT = 300
+# The destructive package transactions get no deadline at all. subprocess.run
+# SIGKILLs the child when one expires, and with capture=True there is no pty for
+# sudo to fork a monitor into, so it execs the tool directly: the process killed
+# is dpkg or rpm itself, mid-transaction, and the user is left to run
+# `dpkg --configure -a` by hand. Removing a kernel runs update-initramfs and
+# update-grub (os-prober included) from a maintainer script, which on an
+# encrypted root or a spinning disk is minutes per kernel, so 300 seconds was a
+# bet on the disk rather than a safety margin. A slow dpkg is strictly better
+# than a killed one, and the single-instance lock guarantees no second topo is
+# waiting on this one.
+#
+# What the deadline used to backstop is covered without it: every call site
+# passing this is non-interactive by construction (-y, --noconfirm,
+# --non-interactive), and the ones whose output is captured also get
+# APT_NONINTERACTIVE_ENV below, so no prompt can appear behind a spinner where
+# nobody can see it. The two that go straight to subprocess -- topo removing and
+# upgrading its own package -- keep the terminal, so a debconf question there is
+# answerable rather than invisible. Ctrl-C stays available in both shapes, and it
+# sends SIGINT, which apt and dpkg unwind from cleanly, rather than the SIGKILL a
+# timeout delivers.
+PACKAGE_TRANSACTION_TIMEOUT: float | None = None
 
 # Every output parser in Topo matches English words ("Uninstalling", "disabled",
 # "Total reclaimed space") and English unit suffixes, so any command whose stdout
@@ -40,8 +61,10 @@ C_LOCALE_ENV = {"LC_ALL": "C", "LANGUAGE": "C", "LANG": "C"}
 
 # A deb package's prerm/postrm may ask debconf a question. run_command captures
 # output but leaves stdin attached, so the prompt would be swallowed while the
-# terminal shows a spinner and the removal would sit there until the command
-# timeout expires. noninteractive makes debconf take the defaults instead.
+# terminal shows a spinner -- and since every call that passes
+# PACKAGE_TRANSACTION_TIMEOUT waits with no deadline, nothing would ever call time
+# on it. noninteractive makes debconf take the defaults instead, which is now the
+# only thing standing between an unanswerable prompt and a removal that never ends.
 APT_NONINTERACTIVE_ENV = {**C_LOCALE_ENV, "DEBIAN_FRONTEND": "noninteractive"}
 
 
@@ -95,7 +118,10 @@ def run_command(
     args: list[str],
     use_sudo=False,
     capture=True,
-    timeout=DEFAULT_COMMAND_TIMEOUT,
+    # None means no deadline: subprocess.run kills the child when one expires, so
+    # anything whose death is worse than its slowness passes None here. See
+    # PACKAGE_TRANSACTION_TIMEOUT.
+    timeout: float | None = DEFAULT_COMMAND_TIMEOUT,
     env: dict[str, str] | None = None,
     # Opt-in only: a child that inherits our stdin can read the keystrokes a TUI
     # screen is waiting for. xdg-open needs it detached because with no desktop

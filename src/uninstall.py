@@ -1794,10 +1794,14 @@ class UninstallManager:
                     flatpak_cmd,
                     use_sudo=self.flatpak_removal_needs_sudo(app),
                     capture=True,
+                    timeout=system.PACKAGE_TRANSACTION_TIMEOUT,
                 )
             elif app["type"] == "Snap":
                 res = system.run_command(
-                    ["snap", "remove", "--purge", app["id"]], use_sudo=True, capture=True
+                    ["snap", "remove", "--purge", app["id"]],
+                    use_sudo=True,
+                    capture=True,
+                    timeout=system.PACKAGE_TRANSACTION_TIMEOUT,
                 )
             elif app["type"] == "NPM":
                 res = system.run_command(
@@ -1845,12 +1849,14 @@ class UninstallManager:
                     use_sudo=True,
                     capture=True,
                     env=system.APT_NONINTERACTIVE_ENV,
+                    timeout=system.PACKAGE_TRANSACTION_TIMEOUT,
                 )
             elif app["type"] == "Pacman":
                 res = system.run_command(
                     ["pacman", "-Rns", "--noconfirm", app["id"]],
                     use_sudo=True,
                     capture=True,
+                    timeout=system.PACKAGE_TRANSACTION_TIMEOUT,
                 )
             elif app["type"] == "Zypper":
                 res = system.run_command(
@@ -1863,11 +1869,15 @@ class UninstallManager:
                     use_sudo=True,
                     capture=True,
                     env=system.C_LOCALE_ENV,
+                    timeout=system.PACKAGE_TRANSACTION_TIMEOUT,
                 )
             elif app["type"] == "DNF":
                 dnf_cmd = resolve_admin_tool(DNF)
                 res = system.run_command(
-                    [dnf_cmd, "remove", "-y", app["id"]], use_sudo=True, capture=True
+                    [dnf_cmd, "remove", "-y", app["id"]],
+                    use_sudo=True,
+                    capture=True,
+                    timeout=system.PACKAGE_TRANSACTION_TIMEOUT,
                 )
             else:
                 # Named explicitly rather than fallen through to: the old else ran

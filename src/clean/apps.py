@@ -38,7 +38,7 @@ from ..core.file_ops import (
     safe_remove,
 )
 from ..core.json_store import read_json, write_json_atomic
-from ..core.system import C_LOCALE_ENV, run_command
+from ..core.system import C_LOCALE_ENV, PACKAGE_TRANSACTION_TIMEOUT, run_command
 from ..core.text import sanitize_for_display
 
 
@@ -229,6 +229,7 @@ def clean_flatpak_unused(dry_run=False):
             use_sudo=use_sudo,
             capture=True,
             env=C_LOCALE_ENV,
+            timeout=PACKAGE_TRANSACTION_TIMEOUT,
         )
         if res.ok and res.stdout and "Uninstalling" in res.stdout:
             freed += parse_size_from_text(res.stdout)

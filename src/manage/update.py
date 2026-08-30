@@ -16,6 +16,7 @@ from ..core.install_source import (
     get_package_asset_name,
     get_package_upgrade_argv,
 )
+from ..core.system import PACKAGE_TRANSACTION_TIMEOUT
 
 RELEASE_KEY_ASSET_NAME = "topo-release-public.asc"
 RELEASE_SIGNATURE_ASSET_NAME = "SHA256SUMS.asc"
@@ -344,7 +345,10 @@ def _run_package_update(local_version: str, remote_tag: str) -> bool:
 
         print(f" {GRAY}Running package upgrade:{RESET} {BOLD}{' '.join(command)}{RESET}")
         try:
-            process = subprocess.run(command, timeout=300)
+            # Same no-deadline rule as the removals: this is dpkg or rpm unpacking
+            # and configuring a package, and a SIGKILL in the middle of it leaves
+            # topo itself half-installed.
+            process = subprocess.run(command, timeout=PACKAGE_TRANSACTION_TIMEOUT)
         except (OSError, subprocess.SubprocessError) as e:
             print(f" {FAIL} Package upgrade failed: {e}")
             return False

@@ -279,7 +279,13 @@ def run_remove(dry_run=False, assume_yes=False) -> bool:
             return False
         print()
         try:
-            process = subprocess.run(command, timeout=300)
+            # No deadline, like every other package transaction: subprocess.run
+            # SIGKILLs the child when one expires, and what dies here is the
+            # package manager removing topo -- mid-transaction, leaving dpkg to be
+            # repaired by hand. The command is non-interactive (-y / --noconfirm /
+            # --non-interactive) and the user has already confirmed it above, so
+            # there is nothing for a deadline to rescue anyone from.
+            process = subprocess.run(command, timeout=system.PACKAGE_TRANSACTION_TIMEOUT)
         except (OSError, subprocess.SubprocessError) as e:
             print(f" {FAIL} Package removal failed: {e}")
             return False

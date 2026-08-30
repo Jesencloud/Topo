@@ -24,6 +24,7 @@ from src.core.install_source import get_install_root
 from src.core.lock import LOCK_FILE_PATH
 from src.core.package_manager import PACKAGE_MANAGERS
 from src.core.paths import get_config_dir, get_state_dir
+from src.core.system import PACKAGE_TRANSACTION_TIMEOUT
 from src.core.whitelist import get_whitelist_file
 from src.manage.update import _parse_version
 from src.ui.screens.uninstall import NEEDS_SUDO_TYPES
@@ -192,3 +193,161 @@ def test_no_subprocess_call_decodes_child_output_strictly():
     reintroduce the same crash somewhere new.
     """
     assert _capturing_text_subprocess_calls() == []
+
+
+# The tools whose transaction database a SIGKILL can leave needing manual repair.
+# npm and multipass are deliberately not here: a killed `npm uninstall -g` leaves
+# files behind, not a package manager that refuses to run until a human runs
+# `dpkg --configure -a`.
+_PACKAGE_TOOLS = {
+    "apt",
+    "apt-get",
+    "dpkg",
+    "dnf",
+    "dnf5",
+    "yum",
+    "rpm",
+    "pacman",
+    "zypper",
+    "snap",
+    "flatpak",
+}
+_DESTRUCTIVE_SUBCOMMANDS = {
+    "purge",
+    "remove",
+    "autoremove",
+    "uninstall",
+    "erase",
+    "-R",
+    "-Rs",
+    "-Rns",
+}
+# Helpers that hand back a whole package-manager argv. The tokens live in
+# core/package_manager.py's dataclasses, a module away from any call, so nothing
+# in the calling function spells "remove" -- the name of the builder is the only
+# thing there is to match on.
+_PACKAGE_ARGV_BUILDERS = {"get_package_remove_argv", "get_package_upgrade_argv"}
+# A resolver run is not a transaction: nothing is half-removed when it is killed,
+# so these keep the plain default. The list is longer than "--dry-run" because
+# uninstall.py's collateral preview asks each tool in its own dialect -- apt-get
+# purge -s, pacman -Rns --print-format, dnf repoquery, rpm -q --whatrequires --
+# and four of those spell a removal subcommand on the way to asking a question.
+_PREVIEW_MARKERS = {
+    "--dry-run",
+    "--simulate",
+    "--assume-no",
+    "--print-format",
+    "repoquery",
+    "--whatrequires",
+}
+
+
+def _string_constants(node: ast.AST) -> set[str]:
+    return {
+        n.value for n in ast.walk(node) if isinstance(n, ast.Constant) and isinstance(n.value, str)
+    }
+
+
+def _called_name(call: ast.Call) -> str:
+    func = call.func
+    return func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+
+
+def _package_transactions_without_the_shared_timeout() -> list[tuple[str, int]]:
+    """Every destructive package transaction in src/ that keeps a deadline."""
+    offenders = []
+    root = Path(__file__).parents[1] / "src"
+    for path in sorted(root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for scope in ast.walk(tree):
+            if not isinstance(scope, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            # argv is sometimes built up under a name first -- appended to (the
+            # flatpak branch of uninstall.py adds its scope flag) or handed over
+            # whole by one of the builders -- so the assignments in the same
+            # function have to be read alongside the call itself.
+            built: dict[str, set[str]] = {}
+            from_builder: set[str] = set()
+            for node in ast.walk(scope):
+                targets = []
+                if isinstance(node, ast.Assign):
+                    targets = [t for t in node.targets if isinstance(t, ast.Name)]
+                elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
+                    targets = [node.target]
+                for target in targets:
+                    built.setdefault(target.id, set()).update(_string_constants(node.value))
+                    for call in ast.walk(node.value):
+                        if (
+                            isinstance(call, ast.Call)
+                            and _called_name(call) in _PACKAGE_ARGV_BUILDERS
+                        ):
+                            from_builder.add(target.id)
+            for node in ast.walk(scope):
+                if not isinstance(node, ast.Call) or not node.args:
+                    continue
+                called = _called_name(node)
+                # subprocess.run as well as run_command: topo's own removal and
+                # upgrade go straight to subprocess, and they are the two most
+                # consequential package transactions in the tree.
+                if called not in {"run_command", "run"}:
+                    continue
+                argv = node.args[0]
+                tokens = _string_constants(argv)
+                if isinstance(argv, ast.Name):
+                    tokens |= built.get(argv.id, set())
+                handed_over = isinstance(argv, ast.Name) and argv.id in from_builder
+                if not handed_over:
+                    if not tokens & _DESTRUCTIVE_SUBCOMMANDS or tokens & _PREVIEW_MARKERS:
+                        continue
+                    # apt-get's -s is the one preview flag short enough to collide
+                    # with something else, so it only counts when apt is the tool.
+                    if "-s" in tokens and tokens & {"apt", "apt-get"}:
+                        continue
+                kwargs = {kw.arg: kw.value for kw in node.keywords}
+                # Three ways to recognise a package manager, because none of them
+                # is present everywhere: the tool named in the argv (uninstall.py
+                # spells it out), a use_sudo keyword (what every privileged branch
+                # in clean/ has, and those lead with a resolved `tool` variable
+                # rather than a literal), or an argv assembled under a name above
+                # the call. The last two are deliberately loose -- over-including a
+                # call costs one explicit keyword, under-including it costs a
+                # half-finished transaction.
+                if not (
+                    handed_over
+                    or tokens & _PACKAGE_TOOLS
+                    or "use_sudo" in kwargs
+                    or not isinstance(argv, ast.List)
+                ):
+                    continue
+                timeout = kwargs.get("timeout")
+                if timeout is None or not ast.unparse(timeout).endswith(
+                    "PACKAGE_TRANSACTION_TIMEOUT"
+                ):
+                    offenders.append((str(path.relative_to(root)), node.lineno))
+    return offenders
+
+
+def test_no_package_transaction_runs_on_a_deadline():
+    """One timeout policy for the package transactions: none of them may have one.
+
+    subprocess.run SIGKILLs the child when a timeout expires, and with capture=True
+    sudo execs the tool instead of forking a monitor, so the process killed is dpkg
+    or rpm itself, mid-transaction. Purging a kernel runs update-initramfs and
+    update-grub from a maintainer script, minutes per kernel on an encrypted root,
+    and the 300-second default used to cover ten such calls -- the kernel loop
+    would then walk into the next purge with dpkg already half-configured.
+
+    Both shapes are in scope. The two most consequential transactions in the tree
+    are not run_command calls at all: `topo remove` and `topo update` hand a
+    get_package_*_argv() list straight to subprocess.run, and those two had kept a
+    literal timeout=300 while every removal around them was being freed of one.
+
+    Structural, like the two guards above, because the failure mode is an omission:
+    the default applies to every call that says nothing, so the next removal added
+    without the keyword is back on a deadline, and nothing about it looks wrong.
+    """
+    assert _package_transactions_without_the_shared_timeout() == []
+    # None rather than a generous number: a finite deadline only moves the cliff,
+    # and every call site above is non-interactive by construction, so there is
+    # nothing for a deadline to rescue the user from.
+    assert PACKAGE_TRANSACTION_TIMEOUT is None
