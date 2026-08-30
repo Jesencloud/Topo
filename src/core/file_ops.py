@@ -621,28 +621,62 @@ def clean_path_by_age(path: str | Path, days: int, dry_run: bool = False) -> tup
     return total_size, items_count
 
 
+# One table for both halves of the job: the units the pattern accepts and the
+# power of 1024 each one means. They used to be two hand-kept lists that had
+# already drifted -- the pattern took E, the multiplier chain stopped at P, so
+# "10 EB" parsed as 10 bytes.
+_SIZE_UNIT_POWERS = {"K": 1, "M": 2, "G": 3, "T": 4, "P": 5, "E": 6}
+_SIZE_PREFIXES = "".join(_SIZE_UNIT_POWERS)
+# What makes this safe to point at a line of command output:
+#
+# (?<![0-9A-Za-z.,]) the number may not start inside a word. A machine-id is one
+#     continuous word, so no position in 76223d7d...f06ec503c can begin a match
+#     -- that hex string used to yield "06" + "e" = 6 bytes from the journal path
+#     journalctl prints before its total.
+# [0-9]+(?:,[0-9]{3})* accepts thousands separators, so "1,234 MB" is 1234 MB
+#     rather than the 234 MB a match starting after the comma used to report. The
+#     groups must be three digits: a de_DE "1,2 GB" is then not read at all,
+#     rather than read as 12 GB.
+# (?![A-Za-z]) the unit may not be the first letter of a word. This is what keeps
+#     the bare-prefix alternative -- there to read systemd's suffix-less "1.1G" --
+#     from reading "Removing 12 packages" as 12 PiB.
+_SIZE_PATTERN = re.compile(
+    rf"(?<![0-9A-Za-z.,])(?P<sign>-)?(?P<value>[0-9]+(?:,[0-9]{{3}})*(?:\.[0-9]+)?)\s*"
+    rf"(?P<unit>[{_SIZE_PREFIXES}]i?B|[{_SIZE_PREFIXES}]|B)(?![A-Za-z])",
+    re.IGNORECASE,
+)
+
+
 def parse_size_to_bytes(text: str) -> int:
-    """Parse a human-readable size string as bytes using binary units."""
+    """Parse a human-readable size string as bytes using binary units.
+
+    Reads the *first* size in the text, which is only ever correct when the text
+    is a size and nothing else, or when the caller has already anchored on the
+    line it wants (journal_freed_bytes below, _apt_freed_bytes and friends in
+    clean/system.py). Fed a whole transcript it answers about whatever token
+    happens to come first, which is not the same question as "how much was
+    freed".
+    """
     if not text or text == "N/A":
         return 0
-    match = re.search(r"([0-9.]+)\s*([KMGTPE]?I?B|[KMGTPE])", text, re.IGNORECASE)
+    match = _SIZE_PATTERN.search(text)
     if match:
+        if match.group("sign"):
+            # No cleanup command reports freeing a negative number of bytes, so
+            # this is a misread rather than a measurement -- and reading it as a
+            # positive size, which dropping the sign used to do, is the worst of
+            # the available answers.
+            return 0
         try:
-            val = float(match.group(1))
-        except ValueError:
-            val = 0.0
-        unit = match.group(2).upper()
-        if "P" in unit:
-            val *= 1024**5
-        elif "T" in unit:
-            val *= 1024**4
-        elif "G" in unit:
-            val *= 1024**3
-        elif "M" in unit:
-            val *= 1024**2
-        elif "K" in unit:
-            val *= 1024
-        return int(val)
+            # The pattern admits only digits and three-digit groups, so float()
+            # cannot fail on the value itself. 309 digits or more of them become
+            # inf, and int() refuses to convert that.
+            return int(
+                float(match.group("value").replace(",", ""))
+                * 1024 ** _SIZE_UNIT_POWERS.get(match.group("unit")[0].upper(), 0)
+            )
+        except OverflowError:
+            return 0
     # A bare numeric string (no unit) is treated as raw bytes — but only when the
     # whole value is numeric, so stray digits in command output aren't misread.
     stripped = text.strip()
@@ -652,6 +686,26 @@ def parse_size_to_bytes(text: str) -> int:
         except ValueError:
             return 0
     return 0
+
+
+# journalctl's own total, one line per journal directory it vacuumed:
+# "Vacuuming done, freed 1.1G of archived journals from /var/log/journal/<id>."
+# Anchored on that sentence because the "Deleted archived journal <path> (128.0M)"
+# lines above it come first and carry both a per-file size and the machine-id
+# whose hex digits parse_size_to_bytes used to read as a size of its own.
+# systemd formats these with FORMAT_BYTES: 1024-based, and with no B after the
+# prefix ("1.1G"), which is why the bare-prefix unit exists at all.
+_JOURNAL_VACUUM_FREED = re.compile(r"freed\s+(\S+)\s+of\s+archived\s+journals", re.IGNORECASE)
+
+
+def journal_freed_bytes(output: str) -> int:
+    """Bytes journalctl says its vacuum freed, 0 when it did not say.
+
+    Summed rather than taken from one line: journal_directory_vacuum() reports
+    per directory, so a machine with both /var/log/journal and /run/log/journal
+    prints two totals and the freed space is their sum.
+    """
+    return sum(parse_size_to_bytes(size) for size in _JOURNAL_VACUUM_FREED.findall(output))
 
 
 # Alias for semantic clarity in command output parsing

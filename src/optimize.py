@@ -32,7 +32,7 @@ from .core.file_ops import (
     bytes_to_human,
     comm_pattern,
     get_size,
-    parse_size_from_text,
+    journal_freed_bytes,
     safe_remove,
 )
 from .core.lock import is_file_locked, is_sqlite_busy
@@ -661,8 +661,11 @@ def run_journal_optimization(dry_run=False):
     res = run_command(
         ["journalctl", "--vacuum-time=3d"], use_sudo=True, capture=True, env=C_LOCALE_ENV
     )
-    if res.ok and res.stdout:
-        freed = parse_size_from_text(res.stdout)
+    if res.ok:
+        # Both streams and journalctl's own total; see clean_journal() for why
+        # stdout alone is empty here and what reading the first size in this
+        # transcript instead used to report.
+        freed = journal_freed_bytes(f"{res.stdout}\n{res.stderr}")
         if freed > 0:
             return f"Journal vacuumed to 3 days (Reclaimed {bytes_to_human(freed)})"
     return "Journal already optimized (under 3 days)"

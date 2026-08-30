@@ -661,10 +661,16 @@ def test_clean_package_manager_ubuntu(mock_get_os_id, mock_run, mock_which):
 @patch("src.clean.system.run_command")
 def test_clean_journal(mock_run, mock_which):
     mock_which.return_value = "/usr/bin/journalctl"
-    mock_run.return_value = MagicMock(returncode=0, stdout="freed 200 MB")
+    # Deliberately on stdout: journalctl uses stderr (see the test below), and
+    # both streams are read, so this pins that stdout is still one of them.
+    mock_run.return_value = MagicMock(
+        returncode=0,
+        stdout="Vacuuming done, freed 200.0M of archived journals from /var/log/journal/abc.\n",
+        stderr="",
+    )
 
     s, i, c = clean_journal(dry_run=False)
-    assert s > 0
+    assert s == 200 * 1024**2
     assert i == 1
     assert c == 1
     mock_run.assert_called_with(
@@ -673,6 +679,56 @@ def test_clean_journal(mock_run, mock_which):
 
     s, i, c = clean_journal(dry_run=True)
     assert c == 1
+
+
+@patch("shutil.which")
+@patch("src.clean.system.run_command")
+def test_clean_journal_reports_the_size_journalctl_reported(mock_run, mock_which):
+    """The 1.1 GiB vacuum that used to be announced as "6.0 B" -- or not at all.
+
+    Two defects in one row. The size came from the machine-id in the path of the
+    first deleted file -- "06" followed by "e", read as 6 bytes with a unit that
+    had no multiplier. And the whole transcript arrives on *stderr*, which this
+    used not to read, so in practice the row was silently skipped: `res.stdout` is
+    empty for `journalctl --vacuum-*`, verified on Fedora 44. The narration below
+    therefore sits on stderr, where journalctl puts it.
+    """
+    mock_which.return_value = "/usr/bin/journalctl"
+    mock_run.return_value = MagicMock(
+        returncode=0,
+        stdout="",
+        stderr=(
+            "Deleted archived journal /var/log/journal/76223d7d25d54f59a3700c2f06ec503c/"
+            "system@0005f1e2b3c4.journal~ (128.0M).\n"
+            "Vacuuming done, freed 1.1G of archived journals from "
+            "/var/log/journal/76223d7d25d54f59a3700c2f06ec503c.\n"
+        ),
+    )
+
+    freed, items, cats = clean_journal(dry_run=False)
+
+    assert (freed, items, cats) == (int(1.1 * 1024**3), 1, 1)
+
+
+@patch("shutil.which")
+@patch("src.clean.system.run_command")
+def test_clean_journal_claims_nothing_when_the_vacuum_freed_nothing(mock_run, mock_which):
+    # journalctl always says "Vacuuming done", once per journal directory; on an
+    # already-small journal it says it freed 0B, and there is no row for that.
+    # This is verbatim what the machine this was written on prints.
+    mock_which.return_value = "/usr/bin/journalctl"
+    mock_run.return_value = MagicMock(
+        returncode=0,
+        stdout="",
+        stderr=(
+            "Vacuuming done, freed 0B of archived journals from /var/log/journal.\n"
+            "Vacuuming done, freed 0B of archived journals from "
+            "/var/log/journal/76223d7d25d54f59a3700c2f06ec503c.\n"
+            "Vacuuming done, freed 0B of archived journals from /run/log/journal.\n"
+        ),
+    )
+
+    assert clean_journal(dry_run=False) == (0, 0, 0)
 
 
 @patch("shutil.which")
@@ -799,6 +855,38 @@ def test_orphaned_pacman_paths():
         assert clean_orphaned_packages(dry_run=True) == (0, 0, 1)
         assert clean_orphaned_packages() == (0, 2, 1)
         assert run.call_args_list[-1].args[0] == ["pacman", "-Rns", "--noconfirm", "foo", "bar"]
+
+
+def test_orphaned_pacman_reports_pacmans_own_total():
+    """Anchored on the total, like the apt and dnf branches beside it.
+
+    With VerbosePkgLists in pacman.conf -- which is what makes this more than a
+    tidiness argument -- the per-package table comes first and its Net Change
+    column is negative for a removal. Read from the front, the transcript's first
+    size is one package's "-12.34 MiB", not the transaction's total.
+    """
+    removal = (
+        "checking dependencies...\n\n"
+        "Package (2)  Old Version  Net Change\n\n"
+        "libfoo       1.2.3-1      -12.34 MiB\n"
+        "libbar       4.5-2         -0.50 MiB\n\n"
+        "Total Removed Size:  12.84 MiB\n"
+    )
+
+    def run(cmd, **kwargs):
+        if cmd[:2] == ["pacman", "-Qtdq"]:
+            return SimpleNamespace(ok=True, stdout="libfoo\nlibbar\n")
+        return SimpleNamespace(ok=True, stdout=removal)
+
+    with (
+        patch("src.clean.system.get_os_id", return_value="arch"),
+        patch("shutil.which", side_effect=lambda n: "/usr/bin/pacman" if n == "pacman" else None),
+        patch("src.clean.system.run_command", side_effect=run),
+    ):
+        freed, items, cats = clean_orphaned_packages()
+
+    assert freed == int(12.84 * 1024**2)
+    assert (items, cats) == (2, 1)
 
 
 def test_zombies_failure_and_empty_output():

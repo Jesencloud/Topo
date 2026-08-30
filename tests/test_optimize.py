@@ -981,6 +981,31 @@ def test_service_helpers_and_database_refresh(tmp_path):
         assert optimize.run_desktop_database_refresh() is None
 
 
+def test_journal_optimization_reports_journalctls_own_total():
+    """Same two defects as `topo clean`'s journal row, in the other vacuum command.
+
+    journalctl narrates on stderr, so reading stdout alone meant this always
+    returned "already optimized" no matter how much it freed. And the transcript's
+    first line names the file it deleted, where the machine-id in the path used to
+    be where the reported size came from: "06" then "e", six bytes, for a vacuum
+    that freed 1.1 GiB.
+    """
+    narration = (
+        "Deleted archived journal /var/log/journal/76223d7d25d54f59a3700c2f06ec503c/"
+        "system@0005f1e2b3c4.journal~ (128.0M).\n"
+        "Vacuuming done, freed 1.1G of archived journals from "
+        "/var/log/journal/76223d7d25d54f59a3700c2f06ec503c.\n"
+    )
+    with (
+        patch("src.optimize.shutil.which", return_value="/usr/bin/journalctl"),
+        patch(
+            "src.optimize.run_command",
+            return_value=CommandResult(["journalctl"], 0, stdout="", stderr=narration),
+        ),
+    ):
+        assert run_journal_optimization() == "Journal vacuumed to 3 days (Reclaimed 1.1 GiB)"
+
+
 def test_swap_journal_repo_and_coredump_error_paths(tmp_path):
     with (
         patch("src.optimize.shutil.which", return_value=None),

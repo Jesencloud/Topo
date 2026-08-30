@@ -7,6 +7,7 @@ from ..core.constants import OK, SKIP
 from ..core.file_ops import (
     bytes_to_human,
     get_size_fast,
+    journal_freed_bytes,
     parse_size_from_text,
     record_deletion_audit,
     safe_remove,
@@ -397,8 +398,20 @@ def clean_journal(dry_run: bool = False) -> tuple[int, int, int]:
     res = run_command(
         ["journalctl", "--vacuum-size=1M"], use_sudo=True, capture=True, env=C_LOCALE_ENV
     )
-    if res.ok and res.stdout:
-        freed = parse_size_from_text(res.stdout)
+    if res.ok:
+        # journalctl narrates the vacuum on *stderr*: those lines come from
+        # log_info(), which writes to the log target, and the log target of a
+        # non-tty invocation is the error stream. Verified on Fedora 44 --
+        # `journalctl --vacuum-time=100y` leaves stdout empty and prints one
+        # "Vacuuming done" line per journal directory on stderr. Reading stdout
+        # alone, as this did, meant the row below never printed at all.
+        #
+        # And journalctl's own total rather than the first size in the
+        # transcript: the "Deleted archived journal <path> (128.0M)" lines come
+        # first, and the machine-id in those paths used to be read as the size
+        # itself -- one hex run of "06" followed by "e" made a 1.1 GiB vacuum
+        # report 6.0 B.
+        freed = journal_freed_bytes(f"{res.stdout}\n{res.stderr}")
         if freed > 0:
             print(f"  {OK} Vacuumed journal logs ({bytes_to_human(freed)})")
             return freed, 1, 1
@@ -497,7 +510,11 @@ def clean_orphaned_packages(dry_run: bool = False) -> tuple[int, int, int]:
                 env=C_LOCALE_ENV,
             )
             if remove_res.ok:
-                freed = parse_size_from_text(remove_res.stdout)
+                # pacman's own total, for the same reason apt and dnf get one:
+                # with VerbosePkgLists set, the per-package table comes first and
+                # its Net Change column is negative on a removal, so the first
+                # size in the transcript is one package's "-12.34 MiB".
+                freed = _pacman_freed_bytes(remove_res.stdout)
                 print(f"  {OK} Removed {plural(len(orphans), f'orphaned {manager.label} package')}")
                 return freed, len(orphans), 1
 
@@ -666,6 +683,20 @@ def _dnf_removal_count(output: str) -> int:
         if match:
             return int(match.group(1))
     return 0
+
+
+# pacman's own total, printed above the confirmation prompt and under
+# --noconfirm alike: "Total Removed Size:  12.34 MiB". pacman counts in 1024s
+# (its size_to_str divides by 1024), so the matched size goes to
+# parse_size_from_text() unchanged. Same shape as dnf4's "Freed space:" pattern
+# above, for the same reason: an anchor on one tool's own total line.
+_PACMAN_REMOVED_SIZE = re.compile(r"Total Removed Size:\s*([0-9.]+\s*[kKMGTPE]?i?B?)")
+
+
+def _pacman_freed_bytes(output: str) -> int:
+    """Bytes freed according to pacman's own report, 0 when it did not say."""
+    match = _PACMAN_REMOVED_SIZE.search(output)
+    return parse_size_from_text(match.group(1)) if match else 0
 
 
 def clean_old_kernels(dry_run: bool = False) -> tuple[int, int, int]:

@@ -17,6 +17,7 @@ from src.core.file_ops import (
     get_deletion_log_path,
     get_size,
     is_app_running,
+    journal_freed_bytes,
     parse_size_from_text,
     parse_size_to_bytes,
     record_deletion_audit,
@@ -556,6 +557,76 @@ def test_parse_size_from_text():
     assert parse_size_to_bytes("deleted 5 files") == 0
     # Invalid float captures (like '...' MB) safely fallback to 0 instead of crashing.
     assert parse_size_to_bytes("Need ... MB of disk space") == 0
+
+
+# What `journalctl --vacuum-size=1M` prints on the machine this was found on. The
+# trap is the first line: the machine-id in the path holds "06" followed by "e",
+# which the old pattern read as 6 bytes with unit E -- and E had no multiplier, so
+# a 1.1 GiB vacuum was reported as "6.0 B".
+JOURNAL_VACUUM_OUTPUT = (
+    "Deleted archived journal /var/log/journal/76223d7d25d54f59a3700c2f06ec503c/"
+    "system@0005f1e2b3c4.journal~ (128.0M).\n"
+    "Vacuuming done, freed 1.1G of archived journals from "
+    "/var/log/journal/76223d7d25d54f59a3700c2f06ec503c.\n"
+)
+
+
+def test_parse_size_ignores_the_numbers_that_are_not_sizes():
+    """Every way the old pattern found a size where the text held none.
+
+    Two things made it possible: `[KMGTPE]` accepted a single bare letter as a
+    unit -- under IGNORECASE, so hex digits counted -- and nothing stopped a match
+    from starting in the middle of a word.
+    """
+    # A unit letter that is really the first letter of the next word.
+    assert parse_size_from_text("Removing 12 packages") == 0
+    assert parse_size_from_text("Deleted 3 entries") == 0
+    # A number that starts inside a word: any hex run in a path or an id.
+    assert parse_size_from_text("/var/log/journal/76223d7d25d54f59a3700c2f06ec503c") == 0
+    # A size the whole way through is still read, wherever it sits in the line.
+    assert parse_size_from_text("Total reclaimed space: 1.2 GiB") == int(1.2 * 1024**3)
+
+
+def test_parse_size_reads_the_whole_number_and_refuses_a_negative_one():
+    # Thousands separators: the old pattern matched from after the comma and
+    # reported 234 MB for a line that said 1,234 MB. Groups of three only, so a
+    # comma-decimal locale ("1,2 GB" in de_DE) is not read as 12 GB instead.
+    assert parse_size_to_bytes("1,234 MB") == 1234 * 1024**2
+    assert parse_size_to_bytes("1,2 GB") == 0
+    # A negative size is a misread rather than a measurement -- no cleanup command
+    # reports freeing negative bytes -- and dropping the sign, which is what used
+    # to happen, is the worst of the available answers.
+    assert parse_size_to_bytes("-5 MB") == 0
+    # Units and multipliers are one table now, so E cannot be accepted without a
+    # multiplier again: "10 EB" used to parse as 10 bytes.
+    assert parse_size_to_bytes("10 EB") == 10 * 1024**6
+    # A number too large to be a float is not a size either. It reaches int() as
+    # inf, which raises rather than returning something wrong.
+    assert parse_size_to_bytes(f"{'9' * 400} MB") == 0
+
+
+def test_journal_freed_bytes_reads_journalctls_own_total():
+    assert journal_freed_bytes(JOURNAL_VACUUM_OUTPUT) == int(1.1 * 1024**3)
+    # And not the per-file line above it, which is what anchoring on the sentence
+    # is for -- reading the transcript from the front finds 128.0M at best.
+    assert parse_size_from_text(JOURNAL_VACUUM_OUTPUT) == 128 * 1024**2
+
+
+def test_journal_freed_bytes_sums_every_directory_it_vacuumed():
+    # systemd vacuums each journal directory separately and reports each one, so
+    # the freed space is the sum rather than any single line.
+    both = (
+        "Vacuuming done, freed 1.1G of archived journals from /var/log/journal/abc.\n"
+        "Vacuuming done, freed 512.0M of archived journals from /run/log/journal/abc.\n"
+    )
+
+    assert journal_freed_bytes(both) == int(1.1 * 1024**3) + 512 * 1024**2
+
+
+def test_journal_freed_bytes_claims_nothing_when_journalctl_freed_nothing():
+    assert journal_freed_bytes("Vacuuming done, freed 0B of archived journals from /x.\n") == 0
+    assert journal_freed_bytes("Deleted archived journal /var/log/journal/abc (0B).\n") == 0
+    assert journal_freed_bytes("") == 0
 
 
 def test_safe_remove_edge_cases(test_env):
