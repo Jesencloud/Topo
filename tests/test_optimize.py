@@ -11,12 +11,16 @@ from src.core.file_ops import TRASH_UNAVAILABLE_REASON
 from src.core.system import CommandResult
 from src.optimize import (
     _REPO_REFRESH_COMMANDS,
+    _SWAPOFF_BYTES_PER_SECOND,
+    _SWAPOFF_MIN_TIMEOUT,
+    _SWAPON_TIMEOUT,
     OptimizationRegistry,
     _extract_service_exec_targets,
     _is_any_process_running,
     _is_sqlite_database,
     _points_at_transient_mount,
     _service_exec_target_exists,
+    _swap_is_active,
     _swap_is_zram_backed,
     _systemd_timer_enabled,
     _updatedb_is_scheduled,
@@ -1078,6 +1082,115 @@ def test_unreadable_swap_table_counts_as_unsafe(tmp_path):
     """No proof the reset is reversible is not the same as proof that it is."""
     with patch("src.optimize._SWAPS_TABLE", tmp_path / "missing"):
         assert _swap_is_zram_backed() is True
+    # The other reader of that table biases the other way: it decides a warning
+    # the user is asked to act on, and crying wolf is the worse outcome there.
+    with patch("src.optimize._SWAPS_TABLE", tmp_path / "missing"):
+        assert _swap_is_active() is True
+    # A readable but empty table is the same "cannot tell": the kernel prints the
+    # column header even with every area off, so no header at all means the path
+    # is not procfs. Counting lines alone would have read it as "swap is off" and
+    # sent the user to run swapon for nothing.
+    masked = tmp_path / "masked-swaps"
+    masked.write_text("")
+    with patch("src.optimize._SWAPS_TABLE", masked):
+        assert _swap_is_active() is True
+
+
+def test_swap_is_restored_after_swapoff_is_killed(tmp_path):
+    """The restore used to hang off `if swapoff.ok`, so a timeout skipped it.
+
+    swapoff -a disables the areas one at a time, so the SIGKILL that ends a
+    timeout can land with some or all of them already off -- which is precisely
+    when swapon -a has to run, and precisely when it did not. The machine then had
+    no swap until its next reboot.
+    """
+    calls = []
+
+    def run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        if cmd[0] == "swapoff":
+            return CommandResult(cmd, -9, timed_out=True)
+        return CommandResult(cmd, 0)
+
+    with (
+        patch("src.optimize.shutil.which", return_value="/usr/sbin/swapoff"),
+        patch("src.optimize._SWAPS_TABLE", _swaps_table(tmp_path, "/dev/sda2")),
+        patch("builtins.open", mock_open(read_data=_MEMINFO_RAM_RICH)),
+        patch("src.optimize.run_command", side_effect=run),
+    ):
+        # No line either way: the swap is back, and a reset that was killed
+        # halfway has nothing to claim.
+        assert run_swap_management() is None
+
+    assert [cmd for cmd, _ in calls] == [["swapoff", "-a"], ["swapon", "-a"]]
+
+
+def test_swap_left_off_is_reported_instead_of_passing_silently(tmp_path):
+    """A machine left without swap has to hear about it.
+
+    The task returns None here rather than a string, because optimize_system
+    prints every returned string with the OK glyph -- so the warning is logged
+    directly, with the FAIL one.
+    """
+    empty_table = tmp_path / "swaps"
+    empty_table.write_text(_SWAPS_HEADER)
+
+    with (
+        patch("src.optimize.shutil.which", return_value="/usr/sbin/swapoff"),
+        patch("src.optimize._SWAPS_TABLE", empty_table),
+        patch("builtins.open", mock_open(read_data=_MEMINFO_RAM_RICH)),
+        patch("src.optimize.run_command", return_value=CommandResult(["swapoff"], 0)),
+        patch("src.optimize.opt_log") as logged,
+    ):
+        assert run_swap_management() is None
+
+    logged.assert_called_once_with("Swap was left off; run `sudo swapon -a`", success=False)
+
+
+def test_a_partial_fstab_restore_still_counts_as_a_reset(tmp_path):
+    """swapon -a's exit status must not decide what the table already answers.
+
+    It is nonzero when any one fstab entry fails to come back, even though the
+    others did -- and swap being back is the whole question here. Gating the
+    success line on that status instead would have made a run that reclaimed the
+    swap and restored it print nothing at all.
+    """
+    with (
+        patch("src.optimize.shutil.which", return_value="/usr/sbin/swapoff"),
+        patch("src.optimize._SWAPS_TABLE", _swaps_table(tmp_path, "/dev/sda2")),
+        patch("builtins.open", mock_open(read_data=_MEMINFO_RAM_RICH)),
+        patch(
+            "src.optimize.run_command",
+            side_effect=lambda cmd, **kw: CommandResult(cmd, 0 if cmd[0] == "swapoff" else 64),
+        ),
+        patch("src.optimize.opt_log") as logged,
+    ):
+        assert run_swap_management().startswith("Swap reset successful")
+    logged.assert_not_called()
+
+
+def test_swapoff_timeout_scales_with_the_swap_it_has_to_read_back(tmp_path):
+    """Two minutes was a bet on the disk; the pages have to come back first."""
+    timeouts = {}
+
+    def run(cmd, **kwargs):
+        timeouts[cmd[0]] = kwargs.get("timeout")
+        return CommandResult(cmd, 0)
+
+    with (
+        patch("src.optimize.shutil.which", return_value="/usr/sbin/swapoff"),
+        patch("src.optimize._SWAPS_TABLE", _swaps_table(tmp_path, "/dev/sda2")),
+        patch("builtins.open", mock_open(read_data=_MEMINFO_RAM_RICH)),
+        patch("src.optimize.run_command", side_effect=run),
+    ):
+        assert run_swap_management().startswith("Swap reset successful")
+
+    # _MEMINFO_RAM_RICH has ~5.7 GiB swapped out, which does not come back from a
+    # spinning disk inside the old flat 120s.
+    used_swap = (8000000 - 2000000) * 1024
+    assert timeouts["swapoff"] == used_swap // _SWAPOFF_BYTES_PER_SECOND
+    assert timeouts["swapoff"] > _SWAPOFF_MIN_TIMEOUT
+    assert timeouts["swapon"] == _SWAPON_TIMEOUT
 
 
 def test_glib_schema_compile_follows_the_shared_refresh_helper(test_env):

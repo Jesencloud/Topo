@@ -64,6 +64,19 @@ _NSCD_SOCKET = Path("/var/run/nscd/socket")
 _MIN_RAM_SWAP_RATIO = 2
 _SWAPS_TABLE = Path("/proc/swaps")
 _ZRAM_DEVICE_RE = re.compile(r"^zram\d+$")
+# How long `swapoff -a` may take, scaled by how much is actually swapped out.
+# Every other timeout in this module ends in a command that did not finish; this
+# one ends in a SIGKILL landing in the middle of a partially disabled swap, so a
+# flat 120 seconds was a bet on the disk: swapoff has to read every swapped-out
+# page back into RAM, and several GB of that from a spinning disk does not fit in
+# two minutes. 30 MB/s is a deliberately pessimistic floor for that read -- a
+# healthy SATA disk does better, and being generous here costs nothing, because
+# the command returns as soon as it is done.
+_SWAPOFF_MIN_TIMEOUT = 120
+_SWAPOFF_BYTES_PER_SECOND = 30 * 1024**2
+# The restore is a table lookup plus mkswap-less activation: quick, and not worth
+# scaling. It is also the one call in the pair that must not be skipped.
+_SWAPON_TIMEOUT = 30
 REPO_REFRESH_TIMEOUT = 120
 UPDATEDB_TIMEOUT = 600
 OPTIMIZATION_MAX_WORKERS = 4
@@ -610,6 +623,33 @@ def _swap_is_zram_backed() -> bool:
     return False
 
 
+def _swap_is_active() -> bool:
+    """Whether /proc/swaps still lists a swap area.
+
+    Asked after the restore instead of trusting `swapon -a`'s exit status, which
+    is nonzero when any single fstab entry fails even though the rest came back,
+    and which says nothing about a restore that reported success and yet enabled
+    nothing. The warning this decides is one the user is asked to act on, so it
+    has to be about the machine's actual state.
+
+    An unreadable /proc/swaps -- no procfs -- answers "yes": telling someone their
+    swap is off when it is not sends them to run swapon for nothing, which is a
+    worse outcome here than staying quiet.
+    """
+    try:
+        table = _SWAPS_TABLE.read_text().splitlines()
+    except OSError:
+        return True
+    if not table:
+        # Not the real /proc/swaps: the kernel prints the column header even with
+        # every area disabled, so an empty read means something else is mounted
+        # there (a container can mask the path with an empty file). Same "cannot
+        # tell" as a read that failed, and the same answer.
+        return True
+    # First line is the column header; a lone header means nothing is enabled.
+    return len(table) > 1
+
+
 @register_optimization_task
 def run_swap_management(dry_run=False):
     """Reset swap if RAM is plentiful to reduce micro-stutter."""
@@ -642,8 +682,34 @@ def run_swap_management(dry_run=False):
                 return f"Swap would be reset (Currently using {bytes_to_human(used_swap)})"
 
             # swapoff -a can take time as data is moved back to RAM
-            if run_command(["swapoff", "-a"], use_sudo=True, timeout=120).ok:
-                run_command(["swapon", "-a"], use_sudo=True, timeout=30)
+            off = run_command(
+                ["swapoff", "-a"],
+                use_sudo=True,
+                timeout=max(_SWAPOFF_MIN_TIMEOUT, used_swap // _SWAPOFF_BYTES_PER_SECOND),
+            )
+            # Unconditionally, and not inside `if off.ok` where it used to live:
+            # swapoff -a disables the areas one at a time, so a run killed at the
+            # timeout has already turned some -- possibly all -- of them off. The
+            # restore was the part being skipped exactly when it mattered, which
+            # left the machine running without swap until its next reboot, and
+            # since the function then fell through to `return None`, and
+            # optimize_system prints nothing for None, it did so in silence.
+            #
+            # Its exit status is deliberately not consulted: swapon -a is nonzero
+            # when any single fstab entry fails even though the rest came back,
+            # and it is zero on a run that enabled nothing. Only the table it
+            # writes to /proc/swaps answers the question either line below asks.
+            run_command(["swapon", "-a"], use_sudo=True, timeout=_SWAPON_TIMEOUT)
+            if not _swap_is_active():
+                # The one failure in this batch that leaves the system worse than
+                # it was found, so it gets a line of its own -- printed here
+                # rather than returned, because optimize_system gives every
+                # returned string the OK glyph, and a checkmark is not what this
+                # sentence means. opt_log takes print_lock, so it is safe to call
+                # from a pool worker.
+                opt_log("Swap was left off; run `sudo swapon -a`", success=False)
+                return None
+            if off.ok:
                 return f"Swap reset successful (Reclaimed {bytes_to_human(used_swap)})"
     except (OSError, ValueError):
         pass
