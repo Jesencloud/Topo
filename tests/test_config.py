@@ -157,3 +157,50 @@ def test_get_min_age_days_falls_back_on_a_corrupt_value(test_env):
     _write_raw_config({"config_version": CONFIG_VERSION, "min_age_days": "soon"})
 
     assert get_min_age_days() == DEFAULT_CONFIG["min_age_days"]
+
+
+def test_an_unparsable_config_falls_back_without_being_overwritten(test_env):
+    # Unlike the whitelist, defaulting here is the safe direction (use_trash on),
+    # so it stays quiet -- but the file the user still has to fix must survive.
+    config_dir = get_config_dir()
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_file = config_dir / "config.json"
+    config_file.write_text('{"use_trash": fal')
+    clear_config_cache()
+
+    assert load_config() == DEFAULT_CONFIG
+    assert config_file.read_text() == '{"use_trash": fal'
+
+
+def test_a_config_whose_bytes_are_not_utf8_falls_back(test_env):
+    # A theme name written by an editor in latin-1 used to raise
+    # UnicodeDecodeError before the first line of any command's output.
+    config_dir = get_config_dir()
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "config.json").write_bytes(b'{"config_version": 2, "theme_color": "caf\xe9"}')
+    clear_config_cache()
+
+    assert load_config()["theme_color"] == DEFAULT_CONFIG["theme_color"]
+
+
+def test_saving_the_config_leaves_no_scratch_file_behind(test_env):
+    save_config(load_config())
+
+    assert sorted(p.name for p in get_config_dir().iterdir()) == ["config.json"]
+
+
+def test_a_failed_save_keeps_the_stored_config(test_env, monkeypatch):
+    _write_raw_config({"config_version": CONFIG_VERSION, "theme_color": "cyan"})
+    config_file = get_config_dir() / "config.json"
+
+    def dump_then_die(data, fp, **kwargs):
+        fp.write("{")
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(json, "dump", dump_then_die)
+    assert save_config({"config_version": CONFIG_VERSION, "theme_color": "green"}) is False
+
+    monkeypatch.undo()
+    clear_config_cache()
+    assert json.loads(config_file.read_text())["theme_color"] == "cyan"
+    assert load_config()["theme_color"] == "cyan"

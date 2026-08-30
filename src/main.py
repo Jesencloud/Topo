@@ -366,15 +366,26 @@ def _main() -> bool:
             # A duplicate is not a failure: adding a path that is already
             # protected leaves the system in the state the caller asked for, so
             # `topo whitelist add` is safe to run unconditionally in a script.
-            if add_to_whitelist(args.path):
+            # A write that did not happen *is* one, and used to be reported with
+            # that same "already whitelisted" line and an exit status of 0 --
+            # so a full disk or a corrupt whitelist looked exactly like success.
+            result = add_to_whitelist(args.path)
+            if result == "changed":
                 print(f"{OK} Added to whitelist: {args.path}")
-            else:
+            elif result == "unchanged":
                 print(f"{INFO} Path already whitelisted: {args.path}")
-        elif args.action == "remove":
-            if remove_from_whitelist(args.path):
-                print(f"{OK} Removed from whitelist: {args.path}")
             else:
+                print(f"{FAIL} Could not update the whitelist: {args.path}")
+                return False
+        elif args.action == "remove":
+            result = remove_from_whitelist(args.path)
+            if result == "changed":
+                print(f"{OK} Removed from whitelist: {args.path}")
+            elif result == "unchanged":
                 print(f"{FAIL} Path not found in whitelist: {args.path}")
+                return False
+            else:
+                print(f"{FAIL} Could not update the whitelist: {args.path}")
                 return False
         elif args.action == "list":
             from .core.whitelist import get_whitelist

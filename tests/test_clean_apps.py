@@ -1,3 +1,4 @@
+import json
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
@@ -103,6 +104,78 @@ def test_proactive_app_detection_skips_symlinks(test_env):
     assert all(
         "important-data" not in p for info in detected.values() for p in info.get("paths", [])
     )
+
+
+def test_an_unreadable_app_registry_is_rebuilt_instead_of_crashing(test_env):
+    # This file is derived data, so the safe answer is to rebuild it -- but the
+    # old reader could not get that far: json.load() on bytes that are not UTF-8
+    # raises UnicodeDecodeError, a ValueError that slipped past
+    # `except (OSError, JSONDecodeError)` and turned `topo clean` into a traceback.
+    registry = test_env / "detected_apps.json"
+    registry.write_bytes(b'{"caf\xe9": {"paths": []}')
+
+    with (
+        patch("src.clean.apps.DETECTED_APPS_FILE", registry),
+        patch("shutil.which", return_value=None),
+    ):
+        detected = proactive_app_detection()
+
+    assert detected == {}
+    # Rewritten, so the next run does not re-read the same unusable file.
+    assert json.loads(registry.read_text()) == {}
+
+
+def test_an_app_registry_holding_the_wrong_shape_is_not_trusted(test_env):
+    # A JSON list parses fine and then explodes on .items().
+    registry = test_env / "detected_apps.json"
+    registry.write_text(json.dumps(["firefox"]))
+
+    with (
+        patch("src.clean.apps.DETECTED_APPS_FILE", registry),
+        patch("shutil.which", return_value=None),
+    ):
+        assert proactive_app_detection() == {}
+
+
+def test_an_app_entry_that_is_not_a_dict_is_dropped(test_env):
+    # One level further down: the top-level dict is fine, and then info.get()
+    # raises AttributeError on the entry someone hand-edited to a bare number.
+    registry = test_env / "detected_apps.json"
+    registry.write_text(json.dumps({"firefox": 3}))
+
+    with (
+        patch("src.clean.apps.DETECTED_APPS_FILE", registry),
+        patch("shutil.which", return_value=None),
+    ):
+        assert proactive_app_detection() == {}
+
+    # And rewritten, so the same unusable entry is not re-read on every run.
+    assert json.loads(registry.read_text()) == {}
+
+
+def test_a_failed_registry_write_keeps_the_previous_one(test_env):
+    registry = test_env / "detected_apps.json"
+    registry.write_text(json.dumps({"olddata": {"paths": [str(test_env)], "procs": ["olddata"]}}))
+
+    def dump_then_die(data, fp, **kwargs):
+        fp.write("{")
+        raise OSError("No space left on device")
+
+    with (
+        patch("src.clean.apps.DETECTED_APPS_FILE", registry),
+        patch("shutil.which", return_value="/usr/bin/newapp"),
+        patch("json.dump", dump_then_die),
+        patch("pathlib.Path.iterdir") as mock_iter,
+    ):
+        found = MagicMock()
+        found.is_dir.return_value = True
+        found.is_symlink.return_value = False
+        found.name = "newapp"
+        mock_iter.return_value = [found]
+        proactive_app_detection()
+
+    assert json.loads(registry.read_text())["olddata"]["procs"] == ["olddata"]
+    assert list(test_env.glob("detected_apps.json.tmp-*")) == []
 
 
 def test_clean_flatpak_unused():

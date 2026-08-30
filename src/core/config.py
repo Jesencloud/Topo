@@ -1,8 +1,8 @@
-import json
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from .json_store import read_json, write_json_atomic
 from .paths import get_config_dir
 
 
@@ -47,15 +47,16 @@ def load_config() -> dict[str, Any]:
     config (the title color is resolved before the first line of output), and a
     read that wrote would mean `topo remove` created ~/.config/topo/config.json
     at startup and then reported it as leftover configuration it had removed.
-    """
-    config_file = get_config_file()
-    if not config_file.exists():
-        return deepcopy(DEFAULT_CONFIG)
 
-    try:
-        with open(config_file) as f:
-            user_config = json.load(f)
-    except (OSError, json.JSONDecodeError):
+    Unlike the whitelist, falling back here is the conservative direction and
+    stays silent: the defaults are the *safer* settings (``use_trash`` on), and
+    nothing about them can widen what a cleanup deletes. What must not happen is
+    writing those defaults back over a file that merely failed to parse, so the
+    save below is reached only from the legacy-migration branch, which by then has
+    a file it could read.
+    """
+    user_config, state = read_json(get_config_file())
+    if state != "ok":
         return deepcopy(DEFAULT_CONFIG)
 
     if isinstance(user_config, dict) and "config_version" not in user_config:
@@ -98,9 +99,9 @@ def normalize_config(user_config: Any) -> dict[str, Any]:
 def save_config(config: dict[str, Any]) -> bool:
     try:
         get_config_dir().mkdir(parents=True, exist_ok=True)
-        with open(get_config_file(), "w") as f:
-            json.dump(config, f, indent=4)
     except OSError:
+        return False
+    if not write_json_atomic(get_config_file(), config):
         return False
     clear_config_cache()
     return True

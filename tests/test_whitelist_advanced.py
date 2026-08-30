@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from src.core.whitelist import (
     _compiled_home_protection_paths,
@@ -18,7 +19,7 @@ def test_whitelist_persistence(test_env):
     my_secure_folder.mkdir()
 
     # 1. Add to whitelist
-    assert add_to_whitelist(str(my_secure_folder)) is True
+    assert add_to_whitelist(str(my_secure_folder)) == "changed"
     assert str(my_secure_folder.resolve()) in get_whitelist()
     assert is_protected(my_secure_folder) is True
 
@@ -27,7 +28,7 @@ def test_whitelist_persistence(test_env):
     assert is_protected(child_file) is True
 
     # 3. Remove from whitelist
-    assert remove_from_whitelist(str(my_secure_folder)) is True
+    assert remove_from_whitelist(str(my_secure_folder)) == "changed"
     assert is_protected(my_secure_folder) is False
     assert is_protected(child_file) is False
 
@@ -43,7 +44,7 @@ def test_protection_rules_are_compiled_once_and_whitelist_changes_invalidate(tes
 
     protected = test_env / "protected"
     protected.mkdir()
-    assert add_to_whitelist(str(protected)) is True
+    assert add_to_whitelist(str(protected)) == "changed"
     assert _compiled_whitelist_paths.cache_info().currsize == 0
     assert is_protected(protected / "child") is True
 
@@ -67,6 +68,97 @@ def test_legacy_seeded_system_paths_are_ignored(test_env):
 
     assert get_whitelist() == [str(test_env / "keep")]
     assert is_protected("/var/tmp/topo-stale.tmp") is False
+
+
+def _write_raw_whitelist(payload: bytes) -> Path:
+    whitelist_file = get_whitelist_file()
+    whitelist_file.parent.mkdir(parents=True, exist_ok=True)
+    whitelist_file.write_bytes(payload)
+    return whitelist_file
+
+
+def test_an_unreadable_whitelist_warns_and_is_never_overwritten(test_env, monkeypatch, capsys):
+    """The failure that must not be silent.
+
+    A truncated whitelist used to parse as nothing, and nothing is exactly what a
+    fresh install looks like -- so every path the user had protected by hand went
+    unprotected with no output to notice it by. Worse, `topo whitelist add` then
+    rewrote the file from that empty list, turning a recoverable corruption into a
+    permanent loss of the other entries.
+    """
+    monkeypatch.setattr("src.core.whitelist._WHITELIST_WARNING_EMITTED", False)
+    corrupt = b'["' + str(test_env / "keep").encode() + b'", "/also'
+    whitelist_file = _write_raw_whitelist(corrupt)
+
+    assert get_whitelist() == []
+    warning = capsys.readouterr().err
+    assert str(whitelist_file) in warning
+    assert "NOT protected" in warning
+
+    assert add_to_whitelist(str(test_env / "new")) == "failed"
+    assert remove_from_whitelist(str(test_env / "keep")) == "failed"
+    assert whitelist_file.read_bytes() == corrupt
+
+
+def test_the_unreadable_whitelist_warning_is_printed_once(test_env, monkeypatch, capsys):
+    # A scan asks about tens of thousands of paths; the whitelist is consulted for
+    # every one of them.
+    monkeypatch.setattr("src.core.whitelist._WHITELIST_WARNING_EMITTED", False)
+    _write_raw_whitelist(b"{not json")
+
+    for _ in range(5):
+        get_whitelist()
+
+    assert capsys.readouterr().err.count("cannot read") == 1
+
+
+def test_a_whitelist_that_is_not_a_list_is_not_trusted(test_env, monkeypatch):
+    monkeypatch.setattr("src.core.whitelist._WHITELIST_WARNING_EMITTED", False)
+    whitelist_file = _write_raw_whitelist(json.dumps({"paths": ["/keep"]}).encode())
+
+    assert get_whitelist() == []
+    assert add_to_whitelist(str(test_env / "new")) == "failed"
+    assert json.loads(whitelist_file.read_text()) == {"paths": ["/keep"]}
+
+
+def test_non_string_entries_are_dropped_without_distrusting_the_file(test_env):
+    keep = str(test_env / "keep")
+    _write_raw_whitelist(json.dumps([keep, 3, None]).encode())
+
+    # A list is still a list: the entries it does hold are honoured, and the file
+    # stays writable -- only a file we cannot read at all freezes the writers.
+    assert get_whitelist() == [keep]
+    assert add_to_whitelist(str(test_env / "new")) == "changed"
+
+
+def test_a_whitelist_whose_bytes_are_not_utf8_does_not_crash(test_env, monkeypatch):
+    # json.loads() on raw bytes raises UnicodeDecodeError, a ValueError that slips
+    # past `except (OSError, JSONDecodeError)` and out through main().
+    monkeypatch.setattr("src.core.whitelist._WHITELIST_WARNING_EMITTED", False)
+    _write_raw_whitelist(b'["/home/caf\xe9"]')
+
+    assert get_whitelist() == ["/home/caf�"]
+
+
+def test_adding_the_same_path_twice_is_unchanged_not_a_failure(test_env):
+    folder = test_env / "twice"
+    folder.mkdir()
+
+    assert add_to_whitelist(str(folder)) == "changed"
+    assert add_to_whitelist(str(folder)) == "unchanged"
+    assert remove_from_whitelist(str(folder)) == "changed"
+    assert remove_from_whitelist(str(folder)) == "unchanged"
+
+
+def test_writing_the_whitelist_leaves_no_scratch_file_behind(test_env):
+    folder = test_env / "scratch"
+    folder.mkdir()
+    whitelist_file = get_whitelist_file()
+
+    add_to_whitelist(str(folder))
+    remove_from_whitelist(str(folder))
+
+    assert list(whitelist_file.parent.glob("whitelist.json.tmp-*")) == []
 
 
 def test_linux_sensitive_app_data_is_protected(test_env):

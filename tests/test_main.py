@@ -412,11 +412,26 @@ def test_cli_authorize_link_failure_and_analyze_uninstall_routes():
 
 def test_whitelist_cli_success_duplicate_remove_failure_and_list(capsys):
     cases = [
-        (["topo", "whitelist", "add", "/tmp/x"], "add_to_whitelist", True),
-        (["topo", "whitelist", "add", "/tmp/x"], "add_to_whitelist", False),
-        (["topo", "whitelist", "remove", "/tmp/x"], "remove_from_whitelist", True),
+        (
+            ["topo", "whitelist", "add", "/tmp/x"],
+            "add_to_whitelist",
+            "changed",
+            "Added to whitelist",
+        ),
+        (
+            ["topo", "whitelist", "add", "/tmp/x"],
+            "add_to_whitelist",
+            "unchanged",
+            "already whitelisted",
+        ),
+        (
+            ["topo", "whitelist", "remove", "/tmp/x"],
+            "remove_from_whitelist",
+            "changed",
+            "Removed from whitelist",
+        ),
     ]
-    for argv, function, result in cases:
+    for argv, function, result, expected in cases:
         with (
             patch("sys.argv", argv),
             patch("src.main.terminal_state.install_signal_handlers"),
@@ -424,14 +439,25 @@ def test_whitelist_cli_success_duplicate_remove_failure_and_list(capsys):
         ):
             topo_main.main()
         mocked.assert_called_once_with("/tmp/x")
-    with (
-        patch("sys.argv", ["topo", "whitelist", "remove", "/tmp/x"]),
-        patch("src.main.terminal_state.install_signal_handlers"),
-        patch("src.main.remove_from_whitelist", return_value=False),
-        pytest.raises(SystemExit) as exc,
+        assert expected in capsys.readouterr().out
+
+    # Every way of not doing what was asked has to exit non-zero. "the path was
+    # not there" and "the whitelist could not be written" used to be the same
+    # False, which made a full disk or an unparsable whitelist print the ordinary
+    # duplicate line and exit 0.
+    for action, function, result in (
+        ("remove", "remove_from_whitelist", "unchanged"),
+        ("remove", "remove_from_whitelist", "failed"),
+        ("add", "add_to_whitelist", "failed"),
     ):
-        topo_main.main()
-    assert exc.value.code == 1
+        with (
+            patch("sys.argv", ["topo", "whitelist", action, "/tmp/x"]),
+            patch("src.main.terminal_state.install_signal_handlers"),
+            patch(f"src.main.{function}", return_value=result),
+            pytest.raises(SystemExit) as exc,
+        ):
+            topo_main.main()
+        assert exc.value.code == 1
     with (
         patch("sys.argv", ["topo", "whitelist"]),
         patch("src.main.terminal_state.install_signal_handlers"),

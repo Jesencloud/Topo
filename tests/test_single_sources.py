@@ -110,6 +110,46 @@ def test_every_layer_knows_every_package_manager_in_the_matrix(monkeypatch):
         assert clean_system._get_package_manager_cache_paths(key), key
 
 
+def _hand_rolled_json_file_io() -> list[tuple[str, int]]:
+    """Every ``json.dump``/``json.load`` in src/ outside json_store.py.
+
+    ``json.loads`` on a string is not in scope -- parsing a subprocess's stdout is
+    a different job. This looks only for the two calls that take a file object,
+    which is where the truncate-then-write and the strict-decode live.
+    """
+    calls = []
+    root = Path(__file__).parents[1] / "src"
+    for path in sorted(root.rglob("*.py")):
+        if path.name == "json_store.py":
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            if node.func.attr not in {"dump", "load"}:
+                continue
+            if isinstance(node.func.value, ast.Name) and node.func.value.id == "json":
+                calls.append((str(path.relative_to(root)), node.lineno))
+    return calls
+
+
+def test_topo_json_state_is_read_and_written_in_one_place():
+    """One reader and one writer for the config, the whitelist and the registry.
+
+    All three used to open and dump by hand, and all three had the same two bugs.
+    ``open(path, "w")`` truncates before the replacement is written, so an
+    interrupted dump leaves an empty file where the old one was -- for the
+    whitelist, a lost protection rather than a lost setting. And ``json.load`` on
+    a file whose bytes are not UTF-8 raises UnicodeDecodeError, a ValueError that
+    every one of their ``except (OSError, JSONDecodeError)`` clauses missed.
+
+    Structural, like the subprocess guard above, because the failure mode is the
+    obvious way to write it: the next state file added by hand would arrive with
+    both defects again.
+    """
+    assert _hand_rolled_json_file_io() == []
+
+
 def _capturing_text_subprocess_calls() -> list[ast.Call]:
     """Every text-mode subprocess call in src/ that reads the child's output."""
     calls = []

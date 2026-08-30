@@ -1,14 +1,17 @@
 import functools
-import json
 import os
+import sys
 from pathlib import Path
+from typing import Literal
 
 from .browser_paths import (
     BROWSER_FLATPAK_APP_IDS,
     BROWSER_PROFILE_PATHS,
     CLEANABLE_APP_CACHE_DIR_NAMES,
 )
+from .constants import WARN
 from .install_source import get_install_root
+from .json_store import read_json, write_json_atomic
 from .paths import get_config_dir
 
 PATH_RESOLVE_ERRORS = (OSError, RuntimeError)
@@ -274,55 +277,102 @@ def _ensure_config():
         if not config_dir.exists():
             config_dir.mkdir(parents=True, exist_ok=True)
         if not whitelist_file.exists():
-            with open(whitelist_file, "w") as f:
-                # Seed with empty list; critical paths are hardcoded for safety
-                json.dump([], f, indent=4)
+            # Seed with empty list; critical paths are hardcoded for safety.
+            write_json_atomic(whitelist_file, [])
     except OSError:
         pass
 
 
-def get_whitelist():
+_WHITELIST_WARNING_EMITTED = False
+
+
+def _warn_whitelist_unreadable() -> None:
+    """Say once, on stderr, that the whitelist exists but could not be read.
+
+    Silence was the whole failure mode here: an unreadable whitelist came back as
+    an empty list, and an empty list means "the user has protected nothing" --
+    indistinguishable from never having added anything. Every path added by hand
+    would go unprotected with nothing on screen to notice it by, which for a tool
+    whose job is deleting files is the worst possible direction to fail in.
+    """
+    global _WHITELIST_WARNING_EMITTED
+    if _WHITELIST_WARNING_EMITTED:
+        return
+    _WHITELIST_WARNING_EMITTED = True
+    print(
+        f"{WARN} topo: cannot read {get_whitelist_file()} -- the paths you added "
+        "by hand are NOT protected in this run. Fix the file, or delete it to "
+        "start a new whitelist.",
+        file=sys.stderr,
+    )
+
+
+def _read_whitelist() -> tuple[list[str], bool]:
+    """The stored entries, plus whether the file could be trusted at all.
+
+    A missing file is trustworthy and empty -- that is what a fresh install looks
+    like. A file that is present but unparsable, or that holds something other
+    than a list of strings, is neither: it gets a warning, and the writers below
+    refuse to overwrite it so whatever is left stays recoverable.
+    """
+    data, state = read_json(get_whitelist_file())
+    if state == "missing":
+        return [], True
+    if state == "unreadable" or not isinstance(data, list):
+        _warn_whitelist_unreadable()
+        return [], False
+    return [
+        path for path in data if isinstance(path, str) and path not in LEGACY_SEEDED_WHITELIST_PATHS
+    ], True
+
+
+def get_whitelist() -> list[str]:
+    """The paths the user has protected by hand; empty when there are none.
+
+    Callers that are about to *write* the list back must use _read_whitelist()
+    instead: this cannot distinguish "nothing protected" from "cannot tell", and
+    writing the first over the second is what loses the protections.
+    """
     _ensure_config()
-    try:
-        with open(get_whitelist_file()) as f:
-            data = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return []
-    if not isinstance(data, list):
-        return []
-    return [path for path in data if path not in LEGACY_SEEDED_WHITELIST_PATHS]
+    entries, _ = _read_whitelist()
+    return entries
 
 
-def add_to_whitelist(path_str: str) -> bool:
+# changed   the file now says something different from what it said before
+# unchanged the request was already satisfied; nothing was written
+# failed    the file could not be read or could not be written -- the caller must
+#           not report this as either of the above
+WhitelistWriteResult = Literal["changed", "unchanged", "failed"]
+
+
+def add_to_whitelist(path_str: str) -> WhitelistWriteResult:
     _ensure_config()
     path = Path(path_str).expanduser().resolve()
-    current = get_whitelist()
-    if str(path) not in current:
-        current.append(str(path))
-        try:
-            with open(get_whitelist_file(), "w") as f:
-                json.dump(current, f, indent=4)
-            _clear_protection_caches()
-            return True
-        except OSError:
-            return False
-    return False
-
-
-def remove_from_whitelist(path_str: str) -> bool:
-    _ensure_config()
-    path = Path(path_str).expanduser().resolve()
-    current = get_whitelist()
+    current, trustworthy = _read_whitelist()
+    if not trustworthy:
+        return "failed"
     if str(path) in current:
-        current.remove(str(path))
-        try:
-            with open(get_whitelist_file(), "w") as f:
-                json.dump(current, f, indent=4)
-            _clear_protection_caches()
-            return True
-        except OSError:
-            return False
-    return False
+        return "unchanged"
+    current.append(str(path))
+    if not write_json_atomic(get_whitelist_file(), current):
+        return "failed"
+    _clear_protection_caches()
+    return "changed"
+
+
+def remove_from_whitelist(path_str: str) -> WhitelistWriteResult:
+    _ensure_config()
+    path = Path(path_str).expanduser().resolve()
+    current, trustworthy = _read_whitelist()
+    if not trustworthy:
+        return "failed"
+    if str(path) not in current:
+        return "unchanged"
+    current.remove(str(path))
+    if not write_json_atomic(get_whitelist_file(), current):
+        return "failed"
+    _clear_protection_caches()
+    return "changed"
 
 
 @functools.lru_cache(maxsize=4096)

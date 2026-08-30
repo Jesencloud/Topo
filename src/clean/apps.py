@@ -1,4 +1,3 @@
-import json
 import shutil
 from collections.abc import Callable
 from pathlib import Path
@@ -38,6 +37,7 @@ from ..core.file_ops import (
     register_cleaned_path,
     safe_remove,
 )
+from ..core.json_store import read_json, write_json_atomic
 from ..core.system import C_LOCALE_ENV, run_command
 from ..core.text import sanitize_for_display
 
@@ -45,12 +45,20 @@ from ..core.text import sanitize_for_display
 def proactive_app_detection():
     """Scans for installed apps and matches them with their folders. Also prunes dead entries."""
     detected = {}
-    if DETECTED_APPS_FILE.exists():
-        try:
-            with open(DETECTED_APPS_FILE) as f:
-                detected = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            pass
+    # Unlike the whitelist, this file is derived data: everything in it was found
+    # by the scan below and will be found again, so a file we cannot read is
+    # rebuilt rather than protected. What it must not do is crash -- json.load()
+    # on a hand-edited file whose bytes are not UTF-8 raises UnicodeDecodeError,
+    # a ValueError that `except (OSError, JSONDecodeError)` does not catch -- or
+    # be trusted to hold a dict just because it parsed.
+    stored, state = read_json(DETECTED_APPS_FILE)
+    if isinstance(stored, dict):
+        # One level deep, because a value that is not a dict parses fine and then
+        # raises AttributeError on info.get("paths") in the prune below.
+        detected = {name: info for name, info in stored.items() if isinstance(info, dict)}
+    unusable_registry = state != "missing" and (
+        not isinstance(stored, dict) or len(detected) != len(stored)
+    )
 
     # 1. Health Check: Prune entries that no longer have a binary AND no longer have data
     original_count = len(detected)
@@ -99,19 +107,22 @@ def proactive_app_detection():
         except OSError:
             pass
 
-    # Save if we found NEW things OR if we PRUNED old things
-    if new_found or len(detected) != original_count or not DETECTED_APPS_FILE.exists():
+    # Save if we found NEW things OR if we PRUNED old things -- or if what is
+    # there cannot be read, in which case leaving it alone would mean re-reading
+    # the same unusable file on every run.
+    if (
+        new_found
+        or len(detected) != original_count
+        or unusable_registry
+        or not DETECTED_APPS_FILE.exists()
+    ):
         try:
             DETECTED_APPS_FILE.parent.mkdir(parents=True, exist_ok=True)
-            with open(DETECTED_APPS_FILE, "w") as f:
-                json.dump(detected, f, indent=2)
-            if new_found:
-                msg = (
-                    f"  {INFO} {GRAY}Updated local app registry ({len(detected)} apps known){RESET}"
-                )
-                print(msg)
         except OSError:
-            pass
+            return detected
+        if write_json_atomic(DETECTED_APPS_FILE, detected) and new_found:
+            msg = f"  {INFO} {GRAY}Updated local app registry ({len(detected)} apps known){RESET}"
+            print(msg)
     return detected
 
 
