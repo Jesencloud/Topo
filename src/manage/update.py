@@ -44,6 +44,14 @@ def _fetch_latest_release_tag() -> str:
             ],
             stderr=subprocess.DEVNULL,
             text=True,
+            # Nothing here is guaranteed to be UTF-8: a captive portal or a
+            # corporate proxy answers with its own Latin-1 error page rather than
+            # with GitHub's JSON. Strict decoding would raise UnicodeDecodeError,
+            # a ValueError that the except tuple below cannot catch, so an update
+            # check behind a bad proxy ended in a traceback. Replacing the bad
+            # bytes lets json.loads fail instead, which *is* handled -- and the
+            # redirect fallback right below gets its turn.
+            errors="replace",
             timeout=15,
         )
         tag = json.loads(data).get("tag_name", "")
@@ -67,6 +75,10 @@ def _fetch_latest_release_tag() -> str:
             ],
             stderr=subprocess.DEVNULL,
             text=True,
+            # Same reason. A tag carrying U+FFFD fails the version parse and the
+            # `[A-Za-z0-9._+-]` tag check in run_update(), so a mangled redirect
+            # is refused as an invalid tag rather than crashing the updater.
+            errors="replace",
             timeout=15,
         )
         return latest_redirect_url.rstrip("/").rsplit("/", 1)[-1].split("?", 1)[0].strip()
@@ -105,6 +117,13 @@ def _download_file(url: str, destination: Path, timeout: int = 60, attempts: int
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
                 text=True,
+                # curl quotes the URL and the output path back in its diagnostics,
+                # and a temp dir under a non-UTF-8 $TMPDIR puts undecodable bytes
+                # in there. Strict decoding would turn a failed download -- the
+                # case this retry loop exists for -- into an uncaught
+                # UnicodeDecodeError that escapes both this except and the one in
+                # _run_package_update().
+                errors="replace",
                 timeout=timeout,
             )
             if result.returncode == 0:
@@ -204,6 +223,11 @@ def _verify_release_signature(
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             text=True,
+            # gpg echoes a key's uid, which is free-form bytes chosen by whoever
+            # made the key. Replacing the undecodable ones only ever degrades the
+            # message _subprocess_stderr_tail() prints; it cannot affect the
+            # verdict, which comes from the exit code.
+            errors="replace",
             timeout=15,
         )
     except (OSError, subprocess.SubprocessError) as e:
@@ -227,6 +251,12 @@ def _verify_release_signature(
             ],
             capture_output=True,
             text=True,
+            # Cannot loosen the check: _release_signature_status_matches() accepts
+            # only a `[GNUPG:] VALIDSIG` line whose fingerprint fullmatches
+            # [0-9A-F]{40}, and U+FFFD is neither of those. So replacement can
+            # only ever turn a pass into a refusal, never the other way round --
+            # while strict decoding would crash on a uid gpg cannot decode.
+            errors="replace",
             timeout=15,
         )
     except (OSError, subprocess.SubprocessError) as e:

@@ -116,6 +116,15 @@ def run_command(
             cmd,
             capture_output=capture,
             text=True,
+            # A filename is an arbitrary byte string on Linux, so any command that
+            # echoes one back -- rm, dpkg-query, flatpak, journalctl -- can emit
+            # bytes that are not UTF-8. Strict decoding raises UnicodeDecodeError,
+            # which is a ValueError: it slips past the except clauses below and
+            # past main()'s KeyboardInterrupt-only handler, so one latin-1
+            # filename turned any topo command into a raw traceback. Replacing
+            # the undecodable bytes matches _decode_output() below, which the
+            # timeout path has always used -- the mismatch was the bug.
+            errors="replace",
             check=False,
             timeout=timeout,
             env=child_env,

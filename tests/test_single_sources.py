@@ -6,6 +6,7 @@ hand in six places next to the get_config_dir() that exists for it, and the XDG
 state directory was derived three times -- twice by the command that deletes it.
 """
 
+import ast
 from pathlib import Path
 
 from src.clean import system as clean_system
@@ -107,3 +108,47 @@ def test_every_layer_knows_every_package_manager_in_the_matrix(monkeypatch):
     monkeypatch.setattr(clean_system.Path, "exists", lambda self: True)
     for key in keys:
         assert clean_system._get_package_manager_cache_paths(key), key
+
+
+def _capturing_text_subprocess_calls() -> list[ast.Call]:
+    """Every text-mode subprocess call in src/ that reads the child's output."""
+    calls = []
+    root = Path(__file__).parents[1] / "src"
+    for path in sorted(root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            if node.func.attr not in {"run", "check_output", "Popen"}:
+                continue
+            kwargs = {kw.arg for kw in node.keywords}
+            if not kwargs & {"text", "universal_newlines", "encoding"}:
+                continue
+            # check_output always captures; the others only when asked to. A
+            # `stdout=DEVNULL` counts as asked-for here, which is fine: the pair
+            # of them is what a capturing call looks like, and being generous
+            # costs an unnecessary errors= at worst.
+            captures = node.func.attr == "check_output" or bool(
+                kwargs & {"capture_output", "stdout", "stderr"}
+            )
+            if captures and "errors" not in kwargs:
+                calls.append((str(path.relative_to(root)), node.lineno))
+    return calls
+
+
+def test_no_subprocess_call_decodes_child_output_strictly():
+    """One decoding policy for captured output: never the strict default.
+
+    A filename is an arbitrary byte string on Linux and a proxy can answer in any
+    encoding, so any command whose output topo reads can hand back bytes that are
+    not UTF-8. Strict decoding raises UnicodeDecodeError inside subprocess itself
+    -- a ValueError, so neither `except OSError` nor `except SubprocessError`
+    stops it, and main() only catches KeyboardInterrupt. That is how one Latin-1
+    filename used to turn any topo command into a raw traceback, and how a
+    captive portal's error page used to crash `topo update`.
+
+    This is a structural guard rather than six separate cases because the failure
+    mode is a missing keyword: the next call site added without it would
+    reintroduce the same crash somewhere new.
+    """
+    assert _capturing_text_subprocess_calls() == []

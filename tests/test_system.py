@@ -1,5 +1,6 @@
 import signal
 import subprocess
+import sys
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
@@ -20,11 +21,52 @@ def test_run_command_success_result(mock_run):
         ["echo", "ok"],
         capture_output=True,
         text=True,
+        errors="replace",
         check=False,
         timeout=5,
         env=None,
         stdin=None,
     )
+
+
+def test_run_command_survives_output_that_is_not_utf8():
+    """A real child writing undecodable bytes must not take the process down.
+
+    Filenames are arbitrary byte strings on Linux, so anything that echoes one
+    back can emit non-UTF-8 output. Strict decoding raises UnicodeDecodeError,
+    which is a ValueError -- neither OSError nor SubprocessError -- so it escaped
+    run_command's own except clauses and main()'s KeyboardInterrupt-only handler
+    and surfaced as a raw traceback. No mock here: the decoding happens inside
+    subprocess.run, which is exactly the part a mock would replace.
+    """
+    result = run_command(
+        [sys.executable, "-c", r"import sys; sys.stdout.buffer.write(b'\xff\xfe latin1\n')"],
+        timeout=30,
+    )
+
+    assert result.ok is True
+    assert result.returncode == 0
+    assert "latin1" in result.stdout
+    # U+FFFD, one per undecodable byte -- the same substitution _decode_output()
+    # has always applied on the timeout path.
+    assert result.stdout.startswith("��")
+
+
+def test_run_command_survives_stderr_that_is_not_utf8():
+    """The same for stderr: a failing command's diagnostics get decoded too."""
+    result = run_command(
+        [
+            sys.executable,
+            "-c",
+            r"import sys; sys.stderr.buffer.write(b'cannot remove \xed\xa0 file\n'); sys.exit(1)",
+        ],
+        timeout=30,
+    )
+
+    assert result.ok is False
+    assert result.returncode == 1
+    assert "cannot remove" in result.stderr
+    assert "�" in result.stderr
 
 
 @patch("subprocess.run")
