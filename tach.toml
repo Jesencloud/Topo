@@ -66,6 +66,17 @@ depends_on = ["src.core"]
 
 [[modules]]
 path = "src.uninstall"
+depends_on = ["src.core", "src.uninstall.discovery"]
+
+# Finding installed apps, split out of the uninstall manager. A nested module
+# rather than just another file in the package, because the direction has to
+# stay one-way: this half only reads (eight package managers, no deletion), and
+# nothing here may reach back for manager.py, the half that removes files.
+# Nesting is what lets tach say so -- discovery.py's code is excluded from
+# src.uninstall above, so an import of the manager from here would be an edge
+# this config does not grant.
+[[modules]]
+path = "src.uninstall.discovery"
 depends_on = ["src.core"]
 
 [[modules]]

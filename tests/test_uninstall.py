@@ -10,10 +10,24 @@ from src.core.constants import AppType
 from src.core.history import parse_deletion_history
 from src.core.system import APT_NONINTERACTIVE_ENV, C_LOCALE_ENV, PACKAGE_TRANSACTION_TIMEOUT
 from src.ui.screens.uninstall import run_uninstall
-from src.uninstall import (
-    UninstallManager,
+from src.uninstall.discovery import (
+    _app_record,
+    _dpkg_install_time,
     _has_deb_database,
     _has_rpm_database,
+    _is_system_component,
+    _pre_scan_package_desktop_names,
+    _scan_apt_packages,
+    _scan_flatpak_apps,
+    _scan_npm_global_packages,
+    _scan_pacman_packages,
+    _scan_rpm_packages,
+    _scan_snap_apps,
+    discover_installed_apps,
+    strip_package_arch,
+)
+from src.uninstall.manager import (
+    UninstallManager,
     _ResidueEntryIndex,
 )
 
@@ -49,8 +63,8 @@ def package_databases(monkeypatch, tmp_path_factory):
     rpm_dir = db_root / "rpmdb"
     rpm_dir.mkdir()
     (rpm_dir / "rpmdb.sqlite").write_bytes(b"SQLite format 3\x00")
-    monkeypatch.setattr("src.uninstall._DPKG_STATUS_FILE", status)
-    monkeypatch.setattr("src.uninstall._RPM_DB_DIR", rpm_dir)
+    monkeypatch.setattr("src.uninstall.discovery._DPKG_STATUS_FILE", status)
+    monkeypatch.setattr("src.uninstall.discovery._RPM_DB_DIR", rpm_dir)
     return SimpleNamespace(deb=status, rpm=rpm_dir)
 
 
@@ -76,7 +90,7 @@ def deterministic_gram_buckets(monkeypatch):
 
 def test_run_uninstall_no_apps():
     with (
-        patch("src.uninstall.UninstallManager.run_full_scan", return_value=[]),
+        patch("src.uninstall.manager.UninstallManager.run_full_scan", return_value=[]),
         patch("src.ui.navigator.Navigator.wait_for_return") as mock_wait,
     ):
         run_uninstall()
@@ -88,7 +102,7 @@ def test_run_uninstall_escape_selector():
         {"id": "test", "name": "Test", "size_bytes": 100, "size_str": "100B", "type": "DNF"}
     ]
     with (
-        patch("src.uninstall.UninstallManager.run_full_scan", return_value=mock_apps),
+        patch("src.uninstall.manager.UninstallManager.run_full_scan", return_value=mock_apps),
         patch("src.ui.screens.uninstall.UninstallSelector.run", return_value=[]),
     ):
         run_uninstall()
@@ -124,13 +138,15 @@ def test_run_uninstall_asks_for_a_password_only_when_a_removal_needs_root(
     """Flatpak, NPM and CLI removals all run as the invoking user, so a password
     prompt for them is pure friction -- and a cancelled one ended the run (P5)."""
     with (
-        patch("src.uninstall.UninstallManager.run_full_scan", return_value=[_ui_app(app_type)]),
+        patch(
+            "src.uninstall.manager.UninstallManager.run_full_scan", return_value=[_ui_app(app_type)]
+        ),
         patch("src.ui.screens.uninstall.UninstallSelector.run", return_value=[0]),
         patch("src.ui.screens.uninstall.UninstallPreviewSelector.run", return_value=True),
-        patch("src.uninstall.UninstallManager.find_residue_paths", return_value=[]),
-        patch("src.uninstall.UninstallManager._candidate_process_names", return_value=[]),
+        patch("src.uninstall.manager.UninstallManager.find_residue_paths", return_value=[]),
+        patch("src.uninstall.manager.UninstallManager._candidate_process_names", return_value=[]),
         patch(
-            "src.uninstall.UninstallManager.execute_uninstall",
+            "src.uninstall.manager.UninstallManager.execute_uninstall",
             return_value={"package_removed": True, "removed_paths": []},
         ),
         patch("src.ui.navigator.Navigator.wait_for_return", return_value=False),
@@ -152,18 +168,20 @@ def test_run_uninstall_closes_the_whole_selection_before_removing_any():
     apps = [_ui_app("DNF"), _ui_app("DNF")]
 
     with (
-        patch("src.uninstall.UninstallManager.run_full_scan", return_value=apps),
+        patch("src.uninstall.manager.UninstallManager.run_full_scan", return_value=apps),
         patch("src.ui.screens.uninstall.UninstallSelector.run", return_value=[0, 1]),
         patch("src.ui.screens.uninstall.UninstallPreviewSelector.run", return_value=True),
-        patch("src.uninstall.UninstallManager.find_residue_paths", return_value=[]),
-        patch("src.uninstall.UninstallManager._candidate_process_names", return_value=["test"]),
-        patch("src.uninstall.running_process_comms", return_value={"test": [4242]}),
+        patch("src.uninstall.manager.UninstallManager.find_residue_paths", return_value=[]),
         patch(
-            "src.uninstall.UninstallManager.terminate_apps",
+            "src.uninstall.manager.UninstallManager._candidate_process_names", return_value=["test"]
+        ),
+        patch("src.uninstall.manager.running_process_comms", return_value={"test": [4242]}),
+        patch(
+            "src.uninstall.manager.UninstallManager.terminate_apps",
             side_effect=lambda targets: order.append(f"terminate:{len(targets)}"),
         ),
         patch(
-            "src.uninstall.UninstallManager.execute_uninstall",
+            "src.uninstall.manager.UninstallManager.execute_uninstall",
             side_effect=lambda app, paths: (
                 order.append("remove") or {"package_removed": True, "removed_paths": []}
             ),
@@ -190,12 +208,14 @@ def test_terminate_apps_waits_once_for_the_whole_selection(mock_sleep):
     ]
 
     with (
-        patch("src.uninstall.running_process_comms", side_effect=tables),
+        patch("src.uninstall.manager.running_process_comms", side_effect=tables),
         patch(
-            "src.uninstall.UninstallManager._candidate_process_names",
+            "src.uninstall.manager.UninstallManager._candidate_process_names",
             side_effect=[["editor", "editor"], ["player"]],
         ),
-        patch("src.uninstall.system.run_command", return_value=MagicMock(ok=True)) as mock_run_cmd,
+        patch(
+            "src.uninstall.manager.system.run_command", return_value=MagicMock(ok=True)
+        ) as mock_run_cmd,
     ):
         mgr.terminate_apps(targets)
 
@@ -214,9 +234,14 @@ def test_terminate_apps_does_not_wait_for_a_kill_it_never_sent(mock_sleep):
     """SIGTERM was enough, so there is nothing to give the kernel time to reap."""
     mgr = UninstallManager()
     with (
-        patch("src.uninstall.running_process_comms", side_effect=[{"editor": [11]}, {}]),
-        patch("src.uninstall.UninstallManager._candidate_process_names", return_value=["editor"]),
-        patch("src.uninstall.system.run_command", return_value=MagicMock(ok=True)) as mock_run_cmd,
+        patch("src.uninstall.manager.running_process_comms", side_effect=[{"editor": [11]}, {}]),
+        patch(
+            "src.uninstall.manager.UninstallManager._candidate_process_names",
+            return_value=["editor"],
+        ),
+        patch(
+            "src.uninstall.manager.system.run_command", return_value=MagicMock(ok=True)
+        ) as mock_run_cmd,
     ):
         mgr.terminate_apps([(_ui_app("DNF"), [], True)])
 
@@ -230,9 +255,12 @@ def test_terminate_apps_does_not_wait_when_nothing_is_running(mock_sleep):
     """This is what makes the per-app kill step free once terminate_apps has run."""
     mgr = UninstallManager()
     with (
-        patch("src.uninstall.running_process_comms", return_value={"unrelated": [1]}),
-        patch("src.uninstall.UninstallManager._candidate_process_names", return_value=["editor"]),
-        patch("src.uninstall.system.run_command") as mock_run_cmd,
+        patch("src.uninstall.manager.running_process_comms", return_value={"unrelated": [1]}),
+        patch(
+            "src.uninstall.manager.UninstallManager._candidate_process_names",
+            return_value=["editor"],
+        ),
+        patch("src.uninstall.manager.system.run_command") as mock_run_cmd,
     ):
         mgr.terminate_apps([(_ui_app("DNF"), [], False)])
 
@@ -252,10 +280,10 @@ def test_run_uninstall_execute_and_exit():
         }
     ]
     with (
-        patch("src.uninstall.UninstallManager.run_full_scan", return_value=mock_apps),
+        patch("src.uninstall.manager.UninstallManager.run_full_scan", return_value=mock_apps),
         patch("src.ui.screens.uninstall.UninstallSelector.run", return_value=[0]),
         patch("src.ui.screens.uninstall.UninstallPreviewSelector.run", return_value=True),
-        patch("src.uninstall.UninstallManager.execute_uninstall") as mock_exec,
+        patch("src.uninstall.manager.UninstallManager.execute_uninstall") as mock_exec,
         patch("src.ui.navigator.Navigator.wait_for_return", return_value=False),
         patch("src.core.system.ensure_sudo_session", return_value=True),
         patch("subprocess.run") as mock_run,
@@ -287,12 +315,12 @@ def test_run_uninstall_cancel():
 
     with (
         patch(
-            "src.uninstall.UninstallManager.run_full_scan",
+            "src.uninstall.manager.UninstallManager.run_full_scan",
             side_effect=mock_scan_side_effect,
         ),
         patch("src.ui.screens.uninstall.UninstallSelector.run", return_value=[0]),
         patch("src.ui.screens.uninstall.UninstallPreviewSelector.run", return_value=False),
-        patch("src.uninstall.UninstallManager.execute_uninstall") as mock_exec,
+        patch("src.uninstall.manager.UninstallManager.execute_uninstall") as mock_exec,
         patch("src.ui.navigator.Navigator.wait_for_return", return_value=False),
         patch("subprocess.run") as mock_run,
     ):
@@ -331,11 +359,11 @@ def test_run_uninstall_starts_over_when_the_preview_is_cancelled():
         return []  # second visit: ESC out of the list
 
     with (
-        patch("src.uninstall.UninstallManager.run_full_scan", return_value=mock_apps),
+        patch("src.uninstall.manager.UninstallManager.run_full_scan", return_value=mock_apps),
         patch("src.ui.screens.uninstall.UninstallSelector.run", fake_run),
         patch("src.ui.screens.uninstall.UninstallPreviewSelector.run", return_value=False),
-        patch("src.uninstall.UninstallManager.find_residue_paths", return_value=[]),
-        patch("src.uninstall.UninstallManager.execute_uninstall") as mock_exec,
+        patch("src.uninstall.manager.UninstallManager.find_residue_paths", return_value=[]),
+        patch("src.uninstall.manager.UninstallManager.execute_uninstall") as mock_exec,
     ):
         run_uninstall()
 
@@ -365,7 +393,7 @@ def test_find_residue_paths(test_env):
 
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.uninstall.safe_remove", return_value=(True, "OK")),
+        patch("src.uninstall.manager.safe_remove", return_value=(True, "OK")),
     ):
         paths = mgr.find_residue_paths("myapp", "MyApp")
         assert any("myapp" in str(p).lower() for p in paths)
@@ -387,7 +415,9 @@ def test_residue_shared_indexes_are_scanned_once(test_env):
         with (
             patch("pathlib.Path.rglob", side_effect=AssertionError("rescanned icons")),
             patch("pathlib.Path.glob", side_effect=AssertionError("rescanned services")),
-            patch("src.uninstall.os.scandir", side_effect=AssertionError("rescanned roots")),
+            patch(
+                "src.uninstall.manager.os.scandir", side_effect=AssertionError("rescanned roots")
+            ),
         ):
             paths = mgr.find_residue_paths("com.example.myapp", "MyApp", pre_scanned_entries=index)
 
@@ -532,7 +562,7 @@ def test_find_residue_paths_ignores_generic_short_tail_tokens(test_env):
 
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.uninstall.safe_remove", return_value=(True, "OK")),
+        patch("src.uninstall.manager.safe_remove", return_value=(True, "OK")),
     ):
         assert mgr.find_residue_paths("org.example.go", "Example Go") == []
         assert mgr.find_residue_paths("org.example.code", "Example Code") == []
@@ -549,7 +579,7 @@ def test_find_residue_paths_allows_specific_prefix_and_substring(test_env):
 
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.uninstall.safe_remove", return_value=(True, "OK")),
+        patch("src.uninstall.manager.safe_remove", return_value=(True, "OK")),
     ):
         telegram_paths = mgr.find_residue_paths("org.telegram.desktop", "Telegram")
         myapp_paths = mgr.find_residue_paths("com.example.myapp", "MyApp")
@@ -568,7 +598,7 @@ def test_find_residue_paths_skips_official_only_apps(test_env):
 
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.uninstall.safe_remove", return_value=(True, "OK")),
+        patch("src.uninstall.manager.safe_remove", return_value=(True, "OK")),
     ):
         assert mgr.find_residue_paths("tailscale", "Tailscale VPN") == []
         assert mgr.find_residue_paths("org.fcitx.Fcitx5", "Fcitx5") == []
@@ -721,7 +751,7 @@ def test_run_full_scan_keeps_user_libreoffice_apps(mock_run, mock_which):
     ]
 
 
-@patch("src.uninstall.system.run_command")
+@patch("src.uninstall.discovery.system.run_command")
 @patch("shutil.which")
 def test_run_full_scan_apt(mock_which, mock_run_cmd):
     mock_which.side_effect = lambda x: "/usr/bin/dpkg-query" if x == "dpkg-query" else None
@@ -749,7 +779,7 @@ def test_run_full_scan_apt(mock_which, mock_run_cmd):
     ]
 
 
-@patch("src.uninstall.system.run_command")
+@patch("src.uninstall.manager.system.run_command")
 @patch("shutil.which")
 def test_apt_scan_skips_packages_whose_files_are_gone(mock_which, mock_run_cmd):
     """`dpkg -r` without purge leaves an "rc" row keeping its old Installed-Size.
@@ -785,7 +815,7 @@ def test_apt_scan_skips_packages_whose_files_are_gone(mock_which, mock_run_cmd):
     ]
 
 
-@patch("src.uninstall.system.run_command")
+@patch("src.uninstall.discovery.system.run_command")
 @patch("shutil.which")
 def test_apt_scan_trusts_dpkg_over_the_hardcoded_name_lists(mock_which, mock_run_cmd):
     """deb records its own answer to "may this be removed" (D6).
@@ -816,7 +846,7 @@ def test_apt_scan_trusts_dpkg_over_the_hardcoded_name_lists(mock_which, mock_run
     assert sorted(app["id"] for app in apps) == ["nvidia-dkms-535", "ordinary-app"]
 
 
-@patch("src.uninstall.system.run_command")
+@patch("src.uninstall.manager.system.run_command")
 @patch("shutil.which")
 def test_run_full_scan_pacman(mock_which, mock_run_cmd):
     mock_which.side_effect = lambda x: "/usr/bin/pacman" if x == "pacman" else None
@@ -847,7 +877,7 @@ def test_run_full_scan_pacman(mock_which, mock_run_cmd):
     ]
 
 
-@patch("src.uninstall.system.run_command")
+@patch("src.uninstall.discovery.system.run_command")
 @patch("shutil.which")
 def test_every_scanned_command_asks_for_the_c_locale(mock_which, mock_run_cmd):
     """Each of these replies gets parsed, and every one of them is translatable.
@@ -891,10 +921,10 @@ def test_pre_scan_drops_a_batch_whose_rpm_reply_is_a_line_short(mock_which, tmp_
         return MagicMock(ok=True, stdout="".join(f"pkg{i}\n" for i in range(len(queried) - 1)))
 
     with (
-        patch("src.uninstall.system.run_command", side_effect=one_answer_short),
+        patch("src.uninstall.discovery.system.run_command", side_effect=one_answer_short),
         patch("pathlib.Path.home", return_value=tmp_path),
     ):
-        packages, names = UninstallManager()._pre_scan_package_desktop_names()
+        packages, names = _pre_scan_package_desktop_names()
 
     assert packages == set()
     assert names == {}
@@ -913,10 +943,10 @@ def test_pre_scan_maps_display_names_when_the_rpm_reply_lines_up(mock_which, tmp
         return MagicMock(ok=True, stdout="".join(f"pkg-{Path(p).stem}\n" for p in queried))
 
     with (
-        patch("src.uninstall.system.run_command", side_effect=one_answer_each),
+        patch("src.uninstall.discovery.system.run_command", side_effect=one_answer_each),
         patch("pathlib.Path.home", return_value=tmp_path),
     ):
-        packages, names = UninstallManager()._pre_scan_package_desktop_names()
+        packages, names = _pre_scan_package_desktop_names()
 
     assert "pkg-kept" in packages
     assert names["pkg-kept"] == "Kept"
@@ -938,10 +968,10 @@ def test_pre_scan_never_queries_a_dangling_desktop_symlink(mock_which, tmp_path)
         return MagicMock(ok=True, stdout="")
 
     with (
-        patch("src.uninstall.system.run_command", side_effect=record),
+        patch("src.uninstall.discovery.system.run_command", side_effect=record),
         patch("pathlib.Path.home", return_value=tmp_path),
     ):
-        UninstallManager()._pre_scan_package_desktop_names()
+        _pre_scan_package_desktop_names()
 
     assert str(apps_dir / "real.desktop") in queried
     assert str(apps_dir / "ghost.desktop") not in queried
@@ -985,10 +1015,10 @@ def test_pre_scan_keeps_user_entries_when_the_system_dir_cannot_be_read(
         return MagicMock(ok=True, stdout="".join(f"pkg-{Path(p).stem}\n" for p in queried))
 
     with (
-        patch("src.uninstall.system.run_command", side_effect=one_answer_each),
+        patch("src.uninstall.discovery.system.run_command", side_effect=one_answer_each),
         patch("pathlib.Path.home", return_value=tmp_path),
     ):
-        packages, names = UninstallManager()._pre_scan_package_desktop_names()
+        packages, names = _pre_scan_package_desktop_names()
 
     assert failed == ["*.desktop"]
     assert packages == {"pkg-kept"}
@@ -998,10 +1028,10 @@ def test_pre_scan_keeps_user_entries_when_the_system_dir_cannot_be_read(
 def test_pre_scan_resolves_each_tool_once_and_skips_an_empty_deb_database(tmp_path, monkeypatch):
     """PATH is searched once per tool, not once per batch, and a box that merely
     has dpkg's tools installed never pays for their query (P3)."""
-    monkeypatch.setattr("src.uninstall.RPM_QUERY_BATCH_SIZE", 1)
+    monkeypatch.setattr("src.uninstall.discovery.RPM_QUERY_BATCH_SIZE", 1)
     # Installing dpkg on a non-deb distro leaves the status database empty, so
     # every `dpkg-query -S` can only answer "no path found".
-    monkeypatch.setattr("src.uninstall._DPKG_STATUS_FILE", tmp_path / "dpkg-status")
+    monkeypatch.setattr("src.uninstall.discovery._DPKG_STATUS_FILE", tmp_path / "dpkg-status")
     (tmp_path / "dpkg-status").write_text("")
     apps_dir = tmp_path / ".local/share/applications"
     apps_dir.mkdir(parents=True)
@@ -1015,13 +1045,13 @@ def test_pre_scan_resolves_each_tool_once_and_skips_an_empty_deb_database(tmp_pa
         return f"/usr/bin/{name}" if name in ("rpm", "dpkg-query") else None
 
     with (
-        patch("src.uninstall.shutil.which", side_effect=which),
+        patch("src.uninstall.discovery.shutil.which", side_effect=which),
         patch("pathlib.Path.home", return_value=tmp_path),
         patch(
-            "src.uninstall.system.run_command", return_value=MagicMock(ok=True, stdout="")
+            "src.uninstall.discovery.system.run_command", return_value=MagicMock(ok=True, stdout="")
         ) as mock_run_cmd,
     ):
-        UninstallManager()._pre_scan_package_desktop_names()
+        _pre_scan_package_desktop_names()
 
     assert looked_up.count("rpm") == 1
     assert looked_up.count("dpkg-query") == 1
@@ -1038,7 +1068,7 @@ def test_pre_scan_queries_dpkg_even_when_rpm_is_also_installed(tmp_path, monkeyp
     """The tools are additive: a deb box with rpm installed (for alien, or to
     inspect an .rpm) must still have its .desktop owners looked up, or every APT
     package falls back to the ">100 MB" guess and drops out of the list."""
-    monkeypatch.setattr("src.uninstall._DPKG_STATUS_FILE", tmp_path / "dpkg-status")
+    monkeypatch.setattr("src.uninstall.discovery._DPKG_STATUS_FILE", tmp_path / "dpkg-status")
     (tmp_path / "dpkg-status").write_text("Package: bash\nStatus: install ok installed\n")
     apps_dir = tmp_path / ".local/share/applications"
     apps_dir.mkdir(parents=True)
@@ -1051,13 +1081,15 @@ def test_pre_scan_queries_dpkg_even_when_rpm_is_also_installed(tmp_path, monkeyp
 
     with (
         patch(
-            "src.uninstall.shutil.which",
+            "src.uninstall.discovery.shutil.which",
             side_effect=lambda n: f"/usr/bin/{n}" if n in ("rpm", "dpkg-query") else None,
         ),
         patch("pathlib.Path.home", return_value=tmp_path),
-        patch("src.uninstall.system.run_command", side_effect=run_command) as mock_run_cmd,
+        patch(
+            "src.uninstall.discovery.system.run_command", side_effect=run_command
+        ) as mock_run_cmd,
     ):
-        packages, names = UninstallManager()._pre_scan_package_desktop_names()
+        packages, names = _pre_scan_package_desktop_names()
 
     tools_run = {call.args[0][0] for call in mock_run_cmd.call_args_list}
     assert tools_run == {"rpm", "dpkg-query"}
@@ -1091,7 +1123,7 @@ def test_run_full_scan_flatpaks(mock_run, mock_which):
     assert myapp["flatpak_scope"] == "system"
 
 
-@patch("src.uninstall.system.run_command")
+@patch("src.uninstall.discovery.system.run_command")
 @patch("shutil.which")
 def test_run_full_scan_snaps(mock_which, mock_run_cmd):
     mock_which.side_effect = lambda x: "/usr/bin/snap" if x == "snap" else None
@@ -1131,7 +1163,7 @@ def test_execute_uninstall_flatpak(mock_run, mock_run_cmd, test_env):
 
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.uninstall.safe_remove", return_value=(True, "OK")),
+        patch("src.uninstall.manager.safe_remove", return_value=(True, "OK")),
     ):
         details = mgr.execute_uninstall(app, [])
 
@@ -1164,7 +1196,7 @@ def test_execute_uninstall_flatpak_system_scope_takes_sudo(mock_run, mock_run_cm
 
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.uninstall.safe_remove", return_value=(True, "OK")),
+        patch("src.uninstall.manager.safe_remove", return_value=(True, "OK")),
     ):
         mgr.execute_uninstall(app, [])
 
@@ -1196,7 +1228,7 @@ def test_execute_uninstall_flatpak_user_scope_asks_for_no_password(
 
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.uninstall.safe_remove", return_value=(True, "OK")),
+        patch("src.uninstall.manager.safe_remove", return_value=(True, "OK")),
     ):
         mgr.execute_uninstall(app, [])
 
@@ -1227,7 +1259,7 @@ def test_execute_uninstall_keeps_data_when_the_package_removal_fails(
 
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.uninstall.safe_remove") as mock_remove,
+        patch("src.uninstall.manager.safe_remove") as mock_remove,
     ):
         details = mgr.execute_uninstall(app, [residue])
 
@@ -1259,8 +1291,8 @@ def test_sandbox_app_data_goes_to_the_trash_even_with_trash_disabled(
 
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.uninstall.get_use_trash", return_value=False),
-        patch("src.uninstall.safe_remove", return_value=(True, "OK")) as mock_remove,
+        patch("src.uninstall.manager.get_use_trash", return_value=False),
+        patch("src.uninstall.manager.safe_remove", return_value=(True, "OK")) as mock_remove,
     ):
         mgr.execute_uninstall(app, [sandbox, snap_data, cache])
 
@@ -1281,7 +1313,7 @@ def test_execute_uninstall_snap(mock_run_cmd, test_env):
 
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.uninstall.safe_remove", return_value=(True, "OK")),
+        patch("src.uninstall.manager.safe_remove", return_value=(True, "OK")),
     ):
         details = mgr.execute_uninstall(app, [])
 
@@ -1313,8 +1345,8 @@ def test_execute_uninstall_dnf(mock_run, mock_run_cmd, test_env):
     with (
         patch("shutil.which", side_effect=lambda x: "/usr/bin/dnf" if x == "dnf" else None),
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.uninstall.safe_remove", return_value=(True, "OK")),
-        patch("src.uninstall.running_process_comms", return_value={"heavy-app": [4242]}),
+        patch("src.uninstall.manager.safe_remove", return_value=(True, "OK")),
+        patch("src.uninstall.manager.running_process_comms", return_value={"heavy-app": [4242]}),
     ):
         # Pass a dummy path to ensure safe_remove logic is at least executed
         dummy_path = test_env / ".config/heavy-app"
@@ -1351,7 +1383,7 @@ def test_execute_uninstall_apt(mock_run_cmd, test_env):
 
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.uninstall.safe_remove", return_value=(True, "OK")),
+        patch("src.uninstall.manager.safe_remove", return_value=(True, "OK")),
     ):
         details = mgr.execute_uninstall(app, [])
 
@@ -1383,7 +1415,7 @@ def test_execute_uninstall_pacman(mock_run_cmd, test_env):
 
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.uninstall.safe_remove", return_value=(True, "OK")),
+        patch("src.uninstall.manager.safe_remove", return_value=(True, "OK")),
     ):
         details = mgr.execute_uninstall(app, [])
 
@@ -1408,16 +1440,15 @@ def test_execute_uninstall_pacman(mock_run_cmd, test_env):
 def test_rpm_scan_labels_suse_packages_zypper(os_id, id_like, expected_type):
     """An rpm distro is not necessarily a dnf distro: openSUSE and SLES ship
     zypper and no dnf, so a "DNF" label sent their removals nowhere (O5)."""
-    mgr = UninstallManager()
     with (
         patch("shutil.which", side_effect=lambda x: "/usr/bin/rpm" if x == "rpm" else None),
         patch("src.core.system.get_os_info", return_value=(os_id, id_like)),
         patch(
-            "src.uninstall.system.run_command",
+            "src.uninstall.discovery.system.run_command",
             return_value=MagicMock(ok=True, stdout="heavy-app\t150000000\t1700000000\n"),
         ),
     ):
-        apps = mgr._scan_rpm_packages(set(), {})
+        apps = _scan_rpm_packages(set(), {})
 
     assert [app["type"] for app in apps] == [expected_type]
 
@@ -1434,7 +1465,7 @@ def test_execute_uninstall_zypper(mock_run_cmd, test_env):
 
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.uninstall.safe_remove", return_value=(True, "OK")),
+        patch("src.uninstall.manager.safe_remove", return_value=(True, "OK")),
     ):
         details = mgr.execute_uninstall(app, [])
 
@@ -1511,7 +1542,7 @@ def test_find_residue_paths_never_targets_xdg_user_dirs(test_env):
 
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.uninstall.safe_remove", return_value=(True, "OK")),
+        patch("src.uninstall.manager.safe_remove", return_value=(True, "OK")),
     ):
         music_paths = mgr.find_residue_paths("org.gnome.Music", "Music")
         videos_paths = mgr.find_residue_paths("org.gnome.Totem", "Videos")
@@ -1535,7 +1566,7 @@ def test_uninstall_cannot_delete_xdg_user_data_dir(test_env):
 
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.uninstall.safe_remove", return_value=(True, "OK")),
+        patch("src.uninstall.manager.safe_remove", return_value=(True, "OK")),
     ):
         ok_dir, reason = safe_remove(music, use_trash=False, allow_app_data_removal=True)
         ok_file, _ = safe_remove(song, use_trash=False, allow_app_data_removal=True)
@@ -1625,12 +1656,12 @@ def test_run_uninstall_failed_package_not_counted(capsys):
         }
     ]
     with (
-        patch("src.uninstall.UninstallManager.run_full_scan", return_value=mock_apps),
+        patch("src.uninstall.manager.UninstallManager.run_full_scan", return_value=mock_apps),
         patch("src.ui.screens.uninstall.UninstallSelector.run", return_value=[0]),
         patch("src.ui.screens.uninstall.UninstallPreviewSelector.run", return_value=True),
-        patch("src.uninstall.UninstallManager.find_residue_paths", return_value=[]),
+        patch("src.uninstall.manager.UninstallManager.find_residue_paths", return_value=[]),
         patch(
-            "src.uninstall.UninstallManager.execute_uninstall",
+            "src.uninstall.manager.UninstallManager.execute_uninstall",
             return_value={"package_removed": False, "removed_paths": []},
         ),
         patch("src.core.system.ensure_sudo_session", return_value=True),
@@ -1666,12 +1697,12 @@ def test_run_uninstall_does_not_autoremove_the_whole_machine(capsys):
         }
     ]
     with (
-        patch("src.uninstall.UninstallManager.run_full_scan", return_value=mock_apps),
+        patch("src.uninstall.manager.UninstallManager.run_full_scan", return_value=mock_apps),
         patch("src.ui.screens.uninstall.UninstallSelector.run", return_value=[0]),
         patch("src.ui.screens.uninstall.UninstallPreviewSelector.run", return_value=True),
-        patch("src.uninstall.UninstallManager.find_residue_paths", return_value=[]),
+        patch("src.uninstall.manager.UninstallManager.find_residue_paths", return_value=[]),
         patch(
-            "src.uninstall.UninstallManager.execute_uninstall",
+            "src.uninstall.manager.UninstallManager.execute_uninstall",
             return_value={"package_removed": True, "removed_paths": []},
         ),
         patch("src.core.system.ensure_sudo_session", return_value=True),
@@ -1704,7 +1735,7 @@ def test_find_residue_paths_skips_visible_home_workspace(test_env):
 
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.uninstall.safe_remove", return_value=(True, "OK")),
+        patch("src.uninstall.manager.safe_remove", return_value=(True, "OK")),
     ):
         paths = mgr.find_residue_paths("com.example.notes", "Notes")
 
@@ -1725,7 +1756,7 @@ def test_execute_uninstall_residue_goes_to_trash(test_env):
         patch("src.core.system.run_command", return_value=MagicMock(ok=True, returncode=0)),
         patch("subprocess.run", return_value=MagicMock(returncode=1)),
         patch(
-            "src.uninstall.safe_remove", return_value=(True, "Moved to trash")
+            "src.uninstall.manager.safe_remove", return_value=(True, "Moved to trash")
         ) as mock_safe_remove,
     ):
         mgr.execute_uninstall(app, [residue])
@@ -1739,48 +1770,46 @@ def test_cjk_font_bundles_are_never_offered_for_removal():
     """One 100 MB+ font package with no .desktop file used to fall through to the
     "anything this big is a user app" rule, and removing it turns every CJK glyph
     on the desktop into a box (D5)."""
-    mgr = UninstallManager()
     for pkg in (
         "fonts-noto-cjk",  # deb
         "google-noto-sans-cjk-fonts",  # Fedora
         "noto-fonts-cjk",  # Arch
         "fonts-droid-fallback",
     ):
-        assert mgr._is_system_component(pkg, pkg), pkg
+        assert _is_system_component(pkg, pkg), pkg
     # Font *applications* are ordinary user apps: neither name has a whole
     # "fonts" segment.
     for pkg in ("fontforge", "font-manager", "fontbase"):
-        assert not mgr._is_system_component(pkg, pkg), pkg
+        assert not _is_system_component(pkg, pkg), pkg
 
 
 def test_dpkg_install_time_prefers_the_arch_qualified_list(tmp_path, monkeypatch):
     """More than half of /var/lib/dpkg/info on a stock ubuntu:24.04 is named
     `pkg:arch.list`; missing that name loses the timestamp the "recently
     installed first" ordering depends on (D2)."""
-    monkeypatch.setattr("src.uninstall._DPKG_INFO_DIR", tmp_path)
-    mgr = UninstallManager()
+    monkeypatch.setattr("src.uninstall.discovery._DPKG_INFO_DIR", tmp_path)
 
     qualified = tmp_path / "libacl1:amd64.list"
     qualified.write_text("/usr/lib\n")
     os.utime(qualified, (1_700_000_000, 1_700_000_000))
-    assert mgr._dpkg_install_time("libacl1:amd64", "libacl1") == 1_700_000_000
+    assert _dpkg_install_time("libacl1:amd64", "libacl1") == 1_700_000_000
 
     plain = tmp_path / "firefox.list"
     plain.write_text("/usr/bin/firefox\n")
     os.utime(plain, (1_600_000_000, 1_600_000_000))
-    assert mgr._dpkg_install_time("firefox", "firefox") == 1_600_000_000
+    assert _dpkg_install_time("firefox", "firefox") == 1_600_000_000
 
-    assert mgr._dpkg_install_time("not-installed:amd64", "not-installed") == 0
+    assert _dpkg_install_time("not-installed:amd64", "not-installed") == 0
 
 
-@patch("src.uninstall.shutil.which")
-@patch("src.uninstall.system.run_command")
+@patch("src.uninstall.discovery.shutil.which")
+@patch("src.uninstall.discovery.system.run_command")
 def test_apt_scan_dates_a_multi_arch_package_from_its_qualified_list(
     mock_run_cmd, mock_which, tmp_path, monkeypatch
 ):
     """The scan has to hand dpkg-query's own name to the lookup before the stripped
     one, or a Multi-Arch package sorts as if it had never been installed (D2)."""
-    monkeypatch.setattr("src.uninstall._DPKG_INFO_DIR", tmp_path)
+    monkeypatch.setattr("src.uninstall.discovery._DPKG_INFO_DIR", tmp_path)
     list_file = tmp_path / "firefox:amd64.list"
     list_file.write_text("/usr/bin/firefox\n")
     os.utime(list_file, (1_700_000_000, 1_700_000_000))
@@ -1790,7 +1819,7 @@ def test_apt_scan_dates_a_multi_arch_package_from_its_qualified_list(
         ok=True, stdout="ii \tfirefox:amd64\tno\toptional\t204800\n"
     )
 
-    apps = UninstallManager()._scan_apt_packages({"firefox"}, {})
+    apps = _scan_apt_packages({"firefox"}, {})
 
     assert [(app["id"], app["install_time"]) for app in apps] == [("firefox", 1_700_000_000)]
 
@@ -1798,26 +1827,25 @@ def test_apt_scan_dates_a_multi_arch_package_from_its_qualified_list(
 def test_pre_scan_reads_every_owner_of_a_shared_desktop_path(tmp_path, monkeypatch):
     """dpkg-query -S puts all owners of a path on one comma-separated line and an
     owner may carry its own :arch, so the path is what follows the LAST ": " (D4)."""
-    monkeypatch.setattr("src.uninstall._DPKG_STATUS_FILE", tmp_path / "dpkg-status")
+    monkeypatch.setattr("src.uninstall.discovery._DPKG_STATUS_FILE", tmp_path / "dpkg-status")
     (tmp_path / "dpkg-status").write_text("Package: bash\n")
     apps_dir = tmp_path / ".local/share/applications"
     apps_dir.mkdir(parents=True)
     desktop = apps_dir / "shared.desktop"
     desktop.write_text("[Desktop Entry]\nName=Shared App\nExec=shared\n")
 
-    mgr = UninstallManager()
     with (
         patch(
-            "src.uninstall.shutil.which",
+            "src.uninstall.discovery.shutil.which",
             side_effect=lambda n: "/usr/bin/dpkg-query" if n == "dpkg-query" else None,
         ),
         patch("pathlib.Path.home", return_value=tmp_path),
         patch(
-            "src.uninstall.system.run_command",
+            "src.uninstall.discovery.system.run_command",
             return_value=MagicMock(ok=True, stdout=f"procps, libc6:amd64, bash: {desktop}\n"),
         ),
     ):
-        packages, names = mgr._pre_scan_package_desktop_names()
+        packages, names = _pre_scan_package_desktop_names()
 
     assert packages == {"procps", "libc6", "bash"}
     assert names == {"procps": "Shared App", "libc6": "Shared App", "bash": "Shared App"}
@@ -1828,9 +1856,9 @@ def test_uninstall_helpers_and_cache_state(test_env, monkeypatch):
     assert mgr._name_matches("firefox-profile", "firefox")
     assert not mgr._name_matches("app-data", "app")
     assert mgr._requires_official_only_uninstall("org.example.vpn", "VPN")
-    assert mgr._is_system_component("libfoo", "libfoo")
-    assert mgr._strip_package_arch("foo:amd64") == "foo"
-    record = mgr._app_record("id", "Name", 10, "10 B", AppType.CLI)
+    assert _is_system_component("libfoo", "libfoo")
+    assert strip_package_arch("foo:amd64") == "foo"
+    record = _app_record("id", "Name", 10, "10 B", AppType.CLI)
     # The word, not the member: a record is the plain dict it has always been, so
     # `type` reads the same whether the app came from a scan or from a test.
     assert record["type"] == "CLI"
@@ -1847,19 +1875,21 @@ def test_uninstall_helpers_and_cache_state(test_env, monkeypatch):
 
 
 def test_scan_package_managers_handles_missing_tools_and_bad_output():
-    mgr = UninstallManager()
-    with patch("src.uninstall.shutil.which", return_value=None):
-        assert mgr._scan_rpm_packages(set(), {}) == []
-        assert mgr._scan_apt_packages(set(), {}) == []
-        assert mgr._scan_pacman_packages(set(), {}) == []
-        assert mgr._scan_flatpak_apps() == []
-        assert mgr._scan_snap_apps({}) == []
-        assert mgr._scan_npm_global_packages() == []
+    with patch("src.uninstall.discovery.shutil.which", return_value=None):
+        assert _scan_rpm_packages(set(), {}) == []
+        assert _scan_apt_packages(set(), {}) == []
+        assert _scan_pacman_packages(set(), {}) == []
+        assert _scan_flatpak_apps() == []
+        assert _scan_snap_apps({}) == []
+        assert _scan_npm_global_packages() == []
     with (
-        patch("src.uninstall.shutil.which", return_value="/usr/bin/rpm"),
-        patch("src.uninstall.system.run_command", return_value=MagicMock(ok=True, stdout="bad\n")),
+        patch("src.uninstall.discovery.shutil.which", return_value="/usr/bin/rpm"),
+        patch(
+            "src.uninstall.discovery.system.run_command",
+            return_value=MagicMock(ok=True, stdout="bad\n"),
+        ),
     ):
-        assert mgr._scan_rpm_packages(set(), {}) == []
+        assert _scan_rpm_packages(set(), {}) == []
 
 
 def test_a_scanner_asks_no_question_of_a_database_that_holds_nothing(monkeypatch, tmp_path):
@@ -1871,20 +1901,19 @@ def test_a_scanner_asks_no_question_of_a_database_that_holds_nothing(monkeypatch
     this question before its `dpkg-query -S` batches; now the two -qa/-W scanners
     ask it too, on both sides.
     """
-    mgr = UninstallManager()
     empty_status = tmp_path / "dpkg-status"
     empty_status.write_text("")
     empty_rpm_db = tmp_path / "rpmdb"
     empty_rpm_db.mkdir()
-    monkeypatch.setattr("src.uninstall._DPKG_STATUS_FILE", empty_status)
-    monkeypatch.setattr("src.uninstall._RPM_DB_DIR", empty_rpm_db)
+    monkeypatch.setattr("src.uninstall.discovery._DPKG_STATUS_FILE", empty_status)
+    monkeypatch.setattr("src.uninstall.discovery._RPM_DB_DIR", empty_rpm_db)
 
     with (
-        patch("src.uninstall.shutil.which", side_effect=lambda tool: f"/usr/bin/{tool}"),
-        patch("src.uninstall.system.run_command") as run_command,
+        patch("src.uninstall.discovery.shutil.which", side_effect=lambda tool: f"/usr/bin/{tool}"),
+        patch("src.uninstall.discovery.system.run_command") as run_command,
     ):
-        assert mgr._scan_apt_packages(set(), {}) == []
-        assert mgr._scan_rpm_packages(set(), {}) == []
+        assert _scan_apt_packages(set(), {}) == []
+        assert _scan_rpm_packages(set(), {}) == []
         # Not "returned nothing": never ran.
         assert run_command.call_args_list == []
 
@@ -1892,7 +1921,7 @@ def test_a_scanner_asks_no_question_of_a_database_that_holds_nothing(monkeypatch
     # not an error to report -- both are just "no rpm packages here".
     (empty_rpm_db / "Packages").write_bytes(b"")
     assert _has_rpm_database() is False
-    monkeypatch.setattr("src.uninstall._RPM_DB_DIR", tmp_path / "absent")
+    monkeypatch.setattr("src.uninstall.discovery._RPM_DB_DIR", tmp_path / "absent")
     assert _has_rpm_database() is False
 
 
@@ -1911,23 +1940,51 @@ def test_a_populated_database_is_worth_asking(package_databases):
     assert _has_rpm_database() is True
 
 
-def test_run_full_scan_cache_and_failed_worker(monkeypatch):
+def test_run_full_scan_cache(monkeypatch):
+    """The second call inside the freshness window re-reads the cache instead of
+    re-scanning, and hands out a copy so an edit by one caller cannot reach it."""
     mgr = UninstallManager()
-    monkeypatch.setattr(mgr, "_current_scan_cache_key", lambda: ("key",))
-    monkeypatch.setattr(mgr, "_pre_scan_package_desktop_names", lambda: (set(), {}))
+    # On the class, not on `mgr`: has_fresh_scan_cache is a classmethod and
+    # computes the key itself, so an instance-level patch left the stored key
+    # comparing unequal to the live one and the cache never hit.
+    monkeypatch.setattr(
+        UninstallManager, "_current_scan_cache_key", classmethod(lambda cls: ("key",))
+    )
     monkeypatch.setattr(mgr, "_pre_scan_search_roots", lambda: {})
     monkeypatch.setattr(mgr, "_calculate_app_sizes_and_residues", lambda apps, roots: None)
+    discovered = [{"id": "x", "install_time": 1, "size_bytes": 1}]
+    with patch(
+        "src.uninstall.manager.discover_installed_apps", return_value=discovered
+    ) as discover:
+        assert len(mgr.run_full_scan(use_cache=True)) == 1
+        assert len(mgr.run_full_scan(use_cache=True)) == 1
+    assert discover.call_count == 1
+
+
+def test_discovery_keeps_the_other_sources_when_one_scanner_raises(monkeypatch):
+    """One package manager's tool misbehaving costs its own list, not the scan.
+
+    Seven scanners run in parallel and each shells out; a tool that segfaults or
+    prints something unparseable used to be able to empty the whole app list.
+    """
     monkeypatch.setattr(
-        mgr, "_scan_rpm_packages", lambda *_: [{"id": "x", "install_time": 1, "size_bytes": 1}]
+        "src.uninstall.discovery._pre_scan_package_desktop_names", lambda: (set(), {})
     )
-    monkeypatch.setattr(mgr, "_scan_apt_packages", lambda *_: [])
-    monkeypatch.setattr(mgr, "_scan_pacman_packages", lambda *_: [])
-    monkeypatch.setattr(mgr, "_scan_flatpak_apps", lambda: [])
-    monkeypatch.setattr(mgr, "_scan_snap_apps", lambda *_: [])
-    monkeypatch.setattr(mgr, "_scan_npm_global_packages", lambda: [])
-    monkeypatch.setattr(mgr, "_scan_standalone_cli_apps", lambda: [])
-    assert len(mgr.run_full_scan(use_cache=True)) == 1
-    assert len(mgr.run_full_scan(use_cache=True)) == 1
+
+    def explode(*_args):
+        raise RuntimeError("rpm died")
+
+    monkeypatch.setattr("src.uninstall.discovery._scan_rpm_packages", explode)
+    for name in ("_scan_apt_packages", "_scan_pacman_packages", "_scan_snap_apps"):
+        monkeypatch.setattr(f"src.uninstall.discovery.{name}", lambda *_: [])
+    monkeypatch.setattr("src.uninstall.discovery._scan_flatpak_apps", lambda: [])
+    monkeypatch.setattr("src.uninstall.discovery._scan_npm_global_packages", lambda: [])
+    monkeypatch.setattr(
+        "src.uninstall.discovery._scan_standalone_cli_apps",
+        lambda: [{"id": "tool", "install_time": 1, "size_bytes": 1}],
+    )
+
+    assert [app["id"] for app in discover_installed_apps()] == ["tool"]
 
 
 def test_build_removal_targets_reuses_the_scan_index(monkeypatch):
@@ -1936,20 +1993,11 @@ def test_build_removal_targets_reuses_the_scan_index(monkeypatch):
     mgr = UninstallManager()
     index = {Path("/nonexistent-root"): object()}
     monkeypatch.setattr(mgr, "_current_scan_cache_key", lambda: ("key",))
-    monkeypatch.setattr(mgr, "_pre_scan_package_desktop_names", lambda: (set(), {}))
     monkeypatch.setattr(mgr, "_pre_scan_search_roots", lambda: index)
     monkeypatch.setattr(mgr, "_calculate_app_sizes_and_residues", lambda apps, roots: None)
-    for name in (
-        "_scan_rpm_packages",
-        "_scan_apt_packages",
-        "_scan_pacman_packages",
-        "_scan_snap_apps",
-    ):
-        monkeypatch.setattr(mgr, name, lambda *_: [])
-    for name in ("_scan_flatpak_apps", "_scan_npm_global_packages", "_scan_standalone_cli_apps"):
-        monkeypatch.setattr(mgr, name, lambda: [])
 
-    mgr.run_full_scan()
+    with patch("src.uninstall.manager.discover_installed_apps", return_value=[]):
+        mgr.run_full_scan()
     assert mgr._pre_scanned_entries is index
 
     seen: list[object] = []
@@ -1981,7 +2029,7 @@ def _collateral(app_type: str, stdout: str, app_id: str = "vlc"):
     """Run one collateral query against a canned reply, returning (names, argv, env)."""
     mgr = UninstallManager()
     with patch(
-        "src.uninstall.system.run_command", return_value=MagicMock(stdout=stdout)
+        "src.uninstall.manager.system.run_command", return_value=MagicMock(stdout=stdout)
     ) as mock_run_cmd:
         names = mgr._collateral_packages({"id": app_id, "type": app_type})
     if not mock_run_cmd.call_args_list:
@@ -2028,13 +2076,17 @@ def test_collateral_packages_previews_the_apt_transaction_that_will_run():
     mgr = UninstallManager()
     app = {"id": "vlc", "name": "VLC", "type": "APT", "size_bytes": 0}
 
-    with patch("src.uninstall.system.run_command", return_value=MagicMock(stdout="")) as query:
+    with patch(
+        "src.uninstall.manager.system.run_command", return_value=MagicMock(stdout="")
+    ) as query:
         mgr._collateral_packages(app)
     with (
-        patch("src.uninstall.system.run_command", return_value=MagicMock(ok=True)) as removal,
-        patch("src.uninstall.record_deletion_audit"),
-        patch("src.uninstall.record_history_session"),
-        patch("src.uninstall.running_process_comms", return_value=set()),
+        patch(
+            "src.uninstall.manager.system.run_command", return_value=MagicMock(ok=True)
+        ) as removal,
+        patch("src.uninstall.manager.record_deletion_audit"),
+        patch("src.uninstall.manager.record_history_session"),
+        patch("src.uninstall.manager.running_process_comms", return_value=set()),
     ):
         mgr.execute_uninstall(app, [])
 
@@ -2102,7 +2154,7 @@ def test_collateral_packages_survives_a_query_that_fails():
     raising; the preview then says nothing, exactly as it did before (O4)."""
     mgr = UninstallManager()
     with patch(
-        "src.uninstall.system.run_command",
+        "src.uninstall.manager.system.run_command",
         return_value=MagicMock(returncode=127, stdout="", ok=False),
     ):
         assert mgr._collateral_packages({"id": "vlc", "type": "DNF"}) == []
@@ -2143,14 +2195,16 @@ def test_build_targets_and_execute_cli_npm_and_systemd(test_env):
     with (
         patch.object(mgr, "find_residue_paths", return_value=[]),
         patch.object(mgr, "_candidate_process_names", return_value=["tool"]),
-        patch("src.uninstall.system.run_command", return_value=MagicMock(ok=False)),
+        patch("src.uninstall.manager.system.run_command", return_value=MagicMock(ok=False)),
     ):
         assert mgr.build_removal_targets([app])[0][2] is False
     with (
-        patch("src.uninstall.system.run_command", return_value=MagicMock(ok=True, stdout="")),
-        patch("src.uninstall.record_deletion_audit"),
-        patch("src.uninstall.record_history_session"),
-        patch("src.uninstall.safe_remove", return_value=(True, "ok")),
+        patch(
+            "src.uninstall.manager.system.run_command", return_value=MagicMock(ok=True, stdout="")
+        ),
+        patch("src.uninstall.manager.record_deletion_audit"),
+        patch("src.uninstall.manager.record_history_session"),
+        patch("src.uninstall.manager.safe_remove", return_value=(True, "ok")),
     ):
         result = mgr.execute_uninstall(app, [])
     assert result["package_removed"] is True
@@ -2160,9 +2214,9 @@ def test_build_targets_and_execute_cli_npm_and_systemd(test_env):
     service.write_text("[Service]\nExecStart=/missing/app\n")
     app2 = {"id": "app", "name": "app", "type": "DNF", "size_bytes": 1}
     with (
-        patch("src.uninstall.system.run_command", return_value=MagicMock(ok=True)),
-        patch("src.uninstall.shutil.which", return_value="/usr/bin/systemctl"),
-        patch("src.uninstall.safe_remove", return_value=(True, "ok")),
+        patch("src.uninstall.manager.system.run_command", return_value=MagicMock(ok=True)),
+        patch("src.uninstall.manager.shutil.which", return_value="/usr/bin/systemctl"),
+        patch("src.uninstall.manager.safe_remove", return_value=(True, "ok")),
     ):
         result = mgr.execute_uninstall(app2, [service])
     assert result["removed_paths"]
@@ -2185,12 +2239,12 @@ def test_npm_scope_dir_goes_when_the_uninstall_leaves_it_empty(test_env):
 
     with (
         patch(
-            "src.uninstall.system.run_command",
+            "src.uninstall.manager.system.run_command",
             return_value=MagicMock(ok=True, stdout=f"{node_modules}\n"),
         ),
         patch.object(mgr, "_candidate_process_names", return_value=[]),
-        patch("src.uninstall.record_deletion_audit"),
-        patch("src.uninstall.record_history_session"),
+        patch("src.uninstall.manager.record_deletion_audit"),
+        patch("src.uninstall.manager.record_history_session"),
     ):
         assert mgr.execute_uninstall(app, [])["package_removed"] is True
 
@@ -2209,7 +2263,7 @@ def test_npm_scope_dir_stays_when_another_package_still_lives_in_it(test_env):
     sibling.mkdir(parents=True)
 
     with patch(
-        "src.uninstall.system.run_command",
+        "src.uninstall.manager.system.run_command",
         return_value=MagicMock(ok=True, stdout=f"{node_modules}\n"),
     ):
         mgr._prune_empty_npm_scope_dir("@scope/tool")
@@ -2242,11 +2296,11 @@ def test_run_uninstall_reports_apps_already_removed_before_a_ctrl_c(capsys):
     ]
 
     with (
-        patch("src.uninstall.UninstallManager.run_full_scan", return_value=mock_apps),
+        patch("src.uninstall.manager.UninstallManager.run_full_scan", return_value=mock_apps),
         patch("src.ui.screens.uninstall.UninstallSelector.run", return_value=[0, 1]),
         patch("src.ui.screens.uninstall.UninstallPreviewSelector.run", return_value=True),
-        patch("src.uninstall.UninstallManager.find_residue_paths", return_value=[]),
-        patch("src.uninstall.UninstallManager.execute_uninstall", side_effect=results),
+        patch("src.uninstall.manager.UninstallManager.find_residue_paths", return_value=[]),
+        patch("src.uninstall.manager.UninstallManager.execute_uninstall", side_effect=results),
         patch("src.core.system.ensure_sudo_session", return_value=True),
         patch("src.ui.screens.uninstall.ScanCache.clear") as clear_cache,
         patch("src.ui.screens.uninstall.play_delete") as play,

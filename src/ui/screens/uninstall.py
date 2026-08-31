@@ -34,7 +34,7 @@ from ...core.scan_cache import ScanCache
 from ...core.sound import play_delete
 from ...core.spinner import threaded_spinner
 from ...core.text import plural, sanitize_for_display
-from ...uninstall import UninstallManager
+from ...uninstall.manager import UninstallManager
 from ..navigator import (
     Navigator,
     UninstallPreviewSelector,
