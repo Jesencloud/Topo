@@ -17,6 +17,13 @@ VERSION_FILE = Path(__file__).parent.parent.parent / "VERSION"
 # a Version, so `topo update` refuses to compare instead of guessing.
 UNKNOWN_VERSION = "unknown"
 
+# The comment `topo link` writes above the PATH export it appends to a shell rc
+# file, and the line `topo remove` looks for to take that block back out again.
+# One spelling in one place: the two commands used to write and match their own
+# copies, so a reworded marker would have left every existing installation's PATH
+# entry behind forever, with `topo remove` reporting it as removed.
+TOPO_RC_MARKER = "# Added by topo"
+
 
 def read_topo_version(version_file: Path | None = None) -> str | None:
     """The version of this topo copy, or None when VERSION cannot be read.
@@ -27,10 +34,19 @@ def read_topo_version(version_file: Path | None = None) -> str | None:
     is only passed by doctor, which reports on the tree at get_install_root()
     rather than on this module's own; the two are the same directory (pinned by
     tests/test_single_sources.py).
+
+    Bytes rather than read_text(): this runs at import time, so a VERSION file
+    whose bytes are not UTF-8 -- a botched write, a truncated download, a tree
+    unpacked with the wrong tool -- used to raise UnicodeDecodeError before main()
+    existed to catch anything, and *every* topo command ended in a traceback. A
+    file that does not decode is a file that cannot be read, which this function
+    already has one answer for, so it joins missing, empty and whitespace-only.
+    Not errors="replace": the value goes on to be compared against a release tag,
+    and "1.2.\\ufffd" is a wrong version rather than an absent one.
     """
     try:
-        version = (version_file or VERSION_FILE).read_text(encoding="utf-8").strip()
-    except OSError:
+        version = (version_file or VERSION_FILE).read_bytes().decode("utf-8").strip()
+    except (OSError, UnicodeDecodeError):
         return None
     return version or None
 

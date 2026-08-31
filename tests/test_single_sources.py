@@ -46,6 +46,13 @@ def test_read_topo_version_reports_anything_unusable_as_none(tmp_path):
     assert read_topo_version(empty) is None
     empty.write_text("\n \n")
     assert read_topo_version(empty) is None
+    # And a VERSION file that does not decode. This runs at import time, so a
+    # strict decode here did not break one command -- it broke every command,
+    # before main() existed to catch anything. "replace" would be worse than
+    # None: "1.2.�" is a wrong version rather than an absent one, and the
+    # updater compares it against release tags.
+    empty.write_bytes(b"1.2.\xff\n")
+    assert read_topo_version(empty) is None
 
 
 def test_unknown_version_cannot_be_mistaken_for_a_version():
@@ -193,6 +200,85 @@ def test_no_subprocess_call_decodes_child_output_strictly():
     reintroduce the same crash somewhere new.
     """
     assert _capturing_text_subprocess_calls() == []
+
+
+def _text_read_mode(call: ast.Call) -> str | None:
+    """The mode string of a text read this call performs, or None if it is not one.
+
+    ``os.open`` is not one: it returns a descriptor, decodes nothing, and its
+    second positional argument is a flag mask rather than a mode string. Every
+    other ``x.open()`` in src/ is ``Path.open``, whose mode is the first
+    argument -- builtins' ``open`` puts it second.
+    """
+    func = call.func
+    if isinstance(func, ast.Attribute):
+        if func.attr == "read_text":
+            return "r"
+        if func.attr != "open" or (isinstance(func.value, ast.Name) and func.value.id == "os"):
+            return None
+        mode_node = call.args[0] if call.args else None
+    elif isinstance(func, ast.Name) and func.id == "open":
+        mode_node = call.args[1] if len(call.args) > 1 else None
+    else:
+        return None
+    for keyword in call.keywords:
+        if keyword.arg == "mode":
+            mode_node = keyword.value
+    if mode_node is None:
+        return "r"
+    if isinstance(mode_node, ast.Constant) and isinstance(mode_node.value, str):
+        return mode_node.value
+    # A computed mode cannot be classified, so it counts as a read: an unreadable
+    # guard has to fail towards asking for the keyword, not towards silence.
+    return "?"
+
+
+def _strictly_decoding_file_reads() -> list[tuple[str, int]]:
+    """Every read in src/ that would decode file bytes with the strict default."""
+    offenders = []
+    root = Path(__file__).parents[1] / "src"
+    for path in sorted(root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            mode = _text_read_mode(node)
+            if mode is None or "b" in mode:
+                continue
+            # "w", "a" and "x" open a stream nothing is decoded out of. "r+" and
+            # "w+" can be read from, so they stay in scope.
+            if mode != "?" and not ({"r", "+"} & set(mode)):
+                continue
+            if not any(keyword.arg == "errors" for keyword in node.keywords):
+                offenders.append((str(path.relative_to(root)), node.lineno))
+    return offenders
+
+
+def test_no_file_read_decodes_its_bytes_strictly():
+    """Text reads in src/ name an error policy; the strict default is never used.
+
+    Almost nothing topo reads is guaranteed UTF-8. Paths are arbitrary byte
+    strings, /proc/swaps and /proc/net/dev quote them back, sysfs labels and
+    /etc/os-release come from tables the board vendor wrote, and ~/.bashrc
+    belongs to a user who may have carried it over from a pre-UTF-8 locale. A
+    strict decode raises UnicodeDecodeError, which is a ValueError: the
+    `except OSError` that every one of these reads is already wrapped in does
+    not catch it, and main() only handles KeyboardInterrupt. That is how one
+    GBK comment in a .bashrc used to crash `topo remove` *after* it had deleted
+    the install directory, the whitelist and the deletion history.
+
+    ``encoding=`` alone does not satisfy this and is not meant to: it names the
+    codec, not what to do with a byte the codec rejects.
+
+    Scope is reads only. A write encodes text topo itself produced, so there is
+    nothing to be lenient about, and `errors=` on a write would hide a bug
+    rather than a hostile byte. Which policy a read wants is still the call
+    site's to make: "replace" where the text is only displayed or matched
+    against ASCII, "ignore" where it is a tag file, and bytes-with-no-decode
+    where the file is rewritten afterwards (remove.py's rc-file edit) -- those
+    read_bytes() calls are outside this guard because they never decode at all.
+    """
+    assert _strictly_decoding_file_reads() == []
 
 
 # The tools whose transaction database a SIGKILL can leave needing manual repair.

@@ -88,7 +88,12 @@ def get_os_info():
     id_like = ""
     try:
         if os.path.exists("/etc/os-release"):
-            with open("/etc/os-release") as f:
+            # NAME, PRETTY_NAME and friends are vendor-authored strings, and this
+            # file is read by is_os_family() on the way into nearly every command.
+            # Strict decoding would make one mis-encoded byte from a firmware
+            # vendor or a hand-edited derivative crash all of topo, and
+            # UnicodeDecodeError is a ValueError that the except below misses.
+            with open("/etc/os-release", errors="replace") as f:
                 for line in f:
                     if line.startswith("ID="):
                         os_id = line.strip().split("=")[1].strip('"').lower()

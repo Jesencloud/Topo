@@ -644,7 +644,11 @@ class UninstallManager:
                                 comm_path = Path(f"/proc/{pid_clean}/comm")
                                 if comm_path.exists():
                                     with contextlib.suppress(OSError):
-                                        comm_name = comm_path.read_text().strip()
+                                        # prctl() lets a process name itself with
+                                        # any 15 bytes; suppress(OSError) does not
+                                        # catch the UnicodeDecodeError a strict
+                                        # decode would raise on them.
+                                        comm_name = comm_path.read_text(errors="replace").strip()
                                         if comm_name:
                                             names.add(comm_name)
                     except (OSError, subprocess.SubprocessError):

@@ -1,3 +1,5 @@
+import os
+import stat
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -232,18 +234,98 @@ def test_launcher_helpers_handle_invalid_and_package_links(test_env):
 
 
 def test_strip_path_lines_handles_read_write_errors(test_env):
+    """An unreadable or unwritable rc file is reported as "not changed".
+
+    Patched at read_bytes and os.replace, which is what the bytes-based rewrite
+    actually calls. The names had to follow the implementation: the test used to
+    patch read_text/write_text, and once those were gone the patches applied to
+    nothing, the real rewrite ran, and the assertions failed.
+    """
     bashrc = test_env / ".bashrc"
     bashrc.write_text("# Added by topo\nexport PATH=x\n")
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch.object(Path, "read_text", side_effect=OSError),
+        patch.object(Path, "read_bytes", side_effect=OSError),
     ):
         assert _strip_topo_path_lines() is False
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch.object(Path, "write_text", side_effect=OSError),
+        patch("src.manage.remove.os.replace", side_effect=OSError),
     ):
         assert _strip_topo_path_lines() is False
+    # The failed write left nothing behind: no .bashrc.topo-tmp-* beside it.
+    assert [p.name for p in test_env.glob(".*topo-tmp*")] == []
+    assert bashrc.read_bytes() == b"# Added by topo\nexport PATH=x\n"
+
+
+def test_strip_path_lines_keeps_non_utf8_rc_bytes_exactly(test_env):
+    """A GBK comment in .bashrc survives the edit byte for byte.
+
+    This is the crash R6 was: read_text() decoded the rc file strictly, and one
+    non-UTF-8 byte raised UnicodeDecodeError -- a ValueError, past the
+    `except OSError` -- after the caller had already deleted the install
+    directory, the whitelist and the deletion history. errors="replace" would
+    have traded the traceback for U+FFFD written into the user's shell config,
+    so the file is read and written as bytes and only the ASCII marker block is
+    matched.
+    """
+    bashrc = test_env / ".bashrc"
+    comment = "# 中文注释\n".encode("gbk")
+    bashrc.write_bytes(comment + b'# Added by topo\nexport PATH="$HOME/.topo:$PATH"\nalias l=ls\n')
+
+    with patch("pathlib.Path.home", return_value=test_env):
+        assert _strip_topo_path_lines() is True
+
+    after = bashrc.read_bytes()
+    assert after == comment + b"alias l=ls\n"
+    assert b"\xef\xbf\xbd" not in after  # no U+FFFD substituted into the file
+
+
+def test_strip_path_lines_rewrites_through_a_dotfile_manager_symlink(test_env):
+    """~/.bashrc pointing into a stow/chezmoi repo stays a link to that repo."""
+    repo = test_env / "dotfiles"
+    repo.mkdir()
+    real = repo / "bashrc"
+    real.write_text("# Added by topo\nexport PATH=x\nexport EDITOR=vim\n")
+    bashrc = test_env / ".bashrc"
+    bashrc.symlink_to(real)
+
+    with patch("pathlib.Path.home", return_value=test_env):
+        assert _strip_topo_path_lines() is True
+
+    assert bashrc.is_symlink()
+    assert bashrc.readlink() == real
+    assert real.read_text() == "export EDITOR=vim\n"
+
+
+def test_strip_path_lines_preserves_rc_file_mode(test_env):
+    """A deliberately private .bashrc does not come back world-readable.
+
+    Two modes, because the implementation preserves the mode in two steps and one
+    of them is invisible under a permissive umask. 0600 pins the mode passed to
+    os.open (the scratch file is created private, never briefly world-readable
+    while it holds the whole rc file); 0644 under umask 0o077 pins the os.chmod
+    that follows, since O_CREAT's mode is masked and would otherwise land on
+    0600 and stay there.
+    """
+    bashrc = test_env / ".bashrc"
+    body = "# Added by topo\nexport PATH=x\nexport EDITOR=vim\n"
+
+    bashrc.write_text(body)
+    bashrc.chmod(0o600)
+    with patch("pathlib.Path.home", return_value=test_env):
+        assert _strip_topo_path_lines() is True
+    assert stat.S_IMODE(bashrc.stat().st_mode) == 0o600
+
+    bashrc.write_text(body)
+    bashrc.chmod(0o644)
+    previous_umask = os.umask(0o077)
+    try:
+        with patch("pathlib.Path.home", return_value=test_env):
+            assert _strip_topo_path_lines() is True
+    finally:
+        os.umask(previous_umask)
+    assert stat.S_IMODE(bashrc.stat().st_mode) == 0o644
 
 
 def test_package_residue_removes_matching_entries_and_path(test_env, monkeypatch):

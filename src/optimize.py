@@ -608,9 +608,14 @@ def _swap_is_zram_backed() -> bool:
     Reading /proc/swaps rather than shelling out to swapon(8): it is the table
     swapon itself reports, and this runs in a pool worker where a subprocess per
     task adds up.
+
+    ``errors="replace"`` because the first column is a path: a swapfile whose
+    name is not valid UTF-8 is legal, and a strict decode would raise
+    UnicodeDecodeError -- a ValueError, which the ``except OSError`` below does
+    not catch -- out of a pool worker instead of answering the question.
     """
     try:
-        table = _SWAPS_TABLE.read_text().splitlines()
+        table = _SWAPS_TABLE.read_text(errors="replace").splitlines()
     except OSError:
         # Nothing proves the reset is reversible, so call it unsafe -- the same
         # bias as _points_at_transient_mount: on unreadable input, keep what is.
@@ -637,7 +642,7 @@ def _swap_is_active() -> bool:
     worse outcome here than staying quiet.
     """
     try:
-        table = _SWAPS_TABLE.read_text().splitlines()
+        table = _SWAPS_TABLE.read_text(errors="replace").splitlines()
     except OSError:
         return True
     if not table:
@@ -660,7 +665,7 @@ def run_swap_management(dry_run=False):
 
     try:
         mem = {}
-        with open("/proc/meminfo") as f:
+        with open("/proc/meminfo", errors="replace") as f:
             for line in f:
                 parts = line.split(":")
                 if len(parts) == 2:

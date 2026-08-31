@@ -278,7 +278,13 @@ def running_process_comms() -> dict[str, list[int]]:
             # namespace entry can refuse it; either way it is simply not running
             # as far as the caller is concerned.
             with contextlib.suppress(OSError, ValueError):
-                comm = (proc / "comm").read_text().strip()
+                # A process name is 15 bytes of whatever the process asked for,
+                # not text: prctl() takes any bytes it is given. The suppress
+                # above does catch the strict decode's UnicodeDecodeError, so this
+                # never crashed -- it dropped the PID instead, which meant a
+                # process whose comm was not UTF-8 did not count as running at all
+                # in the check `topo uninstall` makes before removing an app.
+                comm = (proc / "comm").read_text(errors="replace").strip()
                 if comm:
                     running.setdefault(comm, []).append(int(proc.name))
     return running

@@ -89,7 +89,13 @@ class SingleInstanceLock:
                 f"Inspect {self.lock_file} — a symlink there is rejected on purpose.",
             )
         try:
-            self._file_obj = open(fd, "r+", closefd=True)
+            # "r+" so the file is not truncated before the lock is held, but this
+            # handle is only ever seek'd, truncated and written -- nothing reads
+            # through it, so no decoding happens here. The encoding and errors are
+            # named anyway to satisfy the repository-wide structural check in
+            # tests/test_single_sources.py, which deliberately has no exemption
+            # list: one keyword costs less than a list of blessed call sites.
+            self._file_obj = open(fd, "r+", encoding="utf-8", errors="replace", closefd=True)
         except OSError as err:
             with contextlib.suppress(OSError):
                 os.close(fd)

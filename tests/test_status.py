@@ -961,7 +961,7 @@ def test_cpu_temp_fallback_thermal_and_invalid_hwmon():
             return [Path("/sys/class/thermal/thermal_zone0")]
         return []
 
-    def read(self):
+    def read(self, *args, **kwargs):
         return "x86_pkg_temp\n" if str(self).endswith("/type") else "65000\n"
 
     with (

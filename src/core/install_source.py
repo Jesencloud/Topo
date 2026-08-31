@@ -40,7 +40,10 @@ def get_install_source() -> str:
     """
     marker = get_install_root() / INSTALL_SOURCE_MARKER
     try:
-        value = marker.read_text().strip().lower()
+        # The marker is written by the packaging scripts, but it sits in a
+        # user-writable tree: a mangled byte must make this fall back to
+        # SCRIPT_INSTALL, not raise UnicodeDecodeError past `except OSError`.
+        value = marker.read_text(errors="replace").strip().lower()
     except OSError:
         return SCRIPT_INSTALL
     if value == PACKAGE_INSTALL:

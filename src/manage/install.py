@@ -10,6 +10,7 @@ from ..core.constants import (
     OK,
     PURPLE,
     RESET,
+    TOPO_RC_MARKER,
     WARN,
     YELLOW,
 )
@@ -84,12 +85,31 @@ def run_install_link(silent=False):
             if not config.exists():
                 continue
             try:
-                content = config.read_text()
+                # errors="replace" is enough *here*, unlike the matching read in
+                # remove.py: nothing decoded is ever written back, so a byte the
+                # codec cannot handle can only hide the export line from the
+                # containment test below -- never end up in the file as U+FFFD.
+                # Strict decoding used to raise UnicodeDecodeError on any rc file
+                # with a GBK or Latin-1 comment in it, and that is a ValueError,
+                # which `except OSError` does not catch: `topo link` ended in a
+                # traceback on a machine carried over from a pre-UTF-8 locale.
+                content = config.read_text(errors="replace")
                 if export_line in content:
                     configured = True
                     continue
-                with open(config, "a") as f:
-                    f.write(f"\n# Added by topo\n{export_line}\n")
+                # Appended rather than rewritten, so the bytes already in the file
+                # are never decoded and re-encoded.
+                #
+                # surrogateescape on the way out because export_line carries an
+                # installation path: TOPO_LINK_DIR (and $HOME) reach Python
+                # already decoded with surrogateescape, so a directory whose name
+                # is not valid UTF-8 arrives as lone surrogates. Encoding those
+                # strictly raises UnicodeEncodeError -- a ValueError, so the
+                # `except OSError` below misses it exactly the way it missed the
+                # decode -- while surrogateescape writes the path's original bytes
+                # back, which is what bash needs to find the directory again.
+                with open(config, "a", encoding="utf-8", errors="surrogateescape") as f:
+                    f.write(f"\n{TOPO_RC_MARKER}\n{export_line}\n")
                 if not silent:
                     print(f"  {OK} Added to {GRAY}{config.name}{RESET}")
                 added = True

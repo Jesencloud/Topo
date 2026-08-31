@@ -147,7 +147,7 @@ def _download_file(url: str, destination: Path, timeout: int = 60, attempts: int
 
 
 def _expected_sha256(sha256sums_path: Path, asset_name: str) -> str | None:
-    for line in sha256sums_path.read_text().splitlines():
+    for line in sha256sums_path.read_text(errors="replace").splitlines():
         parts = line.strip().split(maxsplit=1)
         if len(parts) != 2:
             continue

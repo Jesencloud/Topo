@@ -337,6 +337,53 @@ def test_run_install_link_fixes_path_even_when_silent(monkeypatch, tmp_path, tes
     assert capsys.readouterr().out == ""
 
 
+def test_run_install_link_appends_to_a_non_utf8_rc_file(monkeypatch, tmp_path, test_env):
+    """A GBK .bashrc gets the PATH block appended and keeps its own bytes.
+
+    `topo link` used to read the file with a strict decode, so one non-UTF-8
+    comment raised UnicodeDecodeError -- a ValueError, past the `except OSError`
+    -- and `topo link` died without configuring anything. The read is only
+    looking for an ASCII export line, so errors="replace" is enough here; the
+    bytes already in the file are never rewritten, because the block is appended
+    rather than the whole file replaced.
+    """
+    target_dir = tmp_path / "bin"
+    monkeypatch.setenv("TOPO_LINK_DIR", str(target_dir))
+    monkeypatch.setenv("PATH", "/usr/bin")
+    bashrc = test_env / ".bashrc"
+    original = "# 中文注释\n".encode("gbk")
+    bashrc.write_bytes(original)
+
+    assert run_install_link(silent=True) is True
+
+    after = bashrc.read_bytes()
+    assert after.startswith(original)
+    assert b"# Added by topo" in after
+    assert f'export PATH="{target_dir}:$PATH"'.encode() in after
+
+
+def test_run_install_link_writes_a_non_utf8_link_dir_verbatim(monkeypatch, tmp_path, test_env):
+    """A TOPO_LINK_DIR whose name is not UTF-8 lands in .bashrc as its own bytes.
+
+    The export line embeds an installation path, and TOPO_LINK_DIR reaches Python
+    already decoded with surrogateescape, so a directory named with a stray 0xff
+    arrives as a lone surrogate. Encoding that strictly raises UnicodeEncodeError
+    -- a ValueError, missed by `except OSError` just as the decode was -- so the
+    append writes with surrogateescape and bash gets the bytes back unchanged.
+    """
+    target_dir = tmp_path / os.fsdecode(b"b\xffn")
+    monkeypatch.setenv("TOPO_LINK_DIR", str(target_dir))
+    monkeypatch.setenv("PATH", "/usr/bin")
+    bashrc = test_env / ".bashrc"
+    bashrc.write_text("# existing config\n")
+
+    assert run_install_link(silent=True) is True
+
+    after = bashrc.read_bytes()
+    assert b"# Added by topo" in after
+    assert os.fsencode(f'export PATH="{target_dir}:$PATH"') in after
+
+
 def test_run_install_link_does_not_duplicate_path_entry(monkeypatch, tmp_path, test_env):
     target_dir = tmp_path / "bin"
     monkeypatch.setenv("TOPO_LINK_DIR", str(target_dir))

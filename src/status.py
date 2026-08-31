@@ -90,7 +90,7 @@ def get_temp_color(temp_c: float | None) -> str:
 def get_mem_info():
     """Read RAM info from /proc/meminfo."""
     try:
-        with open("/proc/meminfo") as f:
+        with open("/proc/meminfo", errors="replace") as f:
             lines = f.readlines()
             total = 0
             available = 0
@@ -108,7 +108,7 @@ def get_mem_info():
 
 def get_uptime():
     try:
-        with open("/proc/uptime") as f:
+        with open("/proc/uptime", errors="replace") as f:
             uptime_seconds = float(f.readline().split()[0])
     except (OSError, ValueError, IndexError):
         return "Unknown"
@@ -180,7 +180,10 @@ def get_disk_rows() -> list[tuple[str, int, int]]:
 def _read_sysfs(path: Path) -> str:
     """Return a stripped sysfs value, or "" when it cannot be read."""
     try:
-        return path.read_text().strip()
+        # hwmon names, thermal zone types and temperature labels come from ACPI
+        # and DMI tables the board vendor wrote, so they are not reliably UTF-8;
+        # they are only ever displayed, which is what errors="replace" is for.
+        return path.read_text(errors="replace").strip()
     except OSError:
         return ""
 
@@ -277,7 +280,7 @@ def get_network_traffic():
         "dummy",
     )
     try:
-        with open("/proc/net/dev") as f:
+        with open("/proc/net/dev", errors="replace") as f:
             lines = f.readlines()[2:]  # Skip headers
             eligible = {}
             physical = {}
@@ -321,7 +324,7 @@ def get_network_traffic():
 def _get_default_route_interface(route_path: Path = DEFAULT_ROUTE_PATH) -> str | None:
     """Return the interface used by the default IPv4 route without network I/O."""
     try:
-        with route_path.open() as f:
+        with route_path.open(errors="replace") as f:
             routes = f.readlines()[1:]
     except OSError:
         return None
@@ -599,7 +602,7 @@ def get_gpu_info() -> str | None:
                 util = None
                 if util_path.exists():
                     try:
-                        util_value = int(util_path.read_text().strip())
+                        util_value = int(util_path.read_text(errors="replace").strip())
                         if 0 <= util_value <= 100:
                             util = util_value
                     except (OSError, ValueError):
