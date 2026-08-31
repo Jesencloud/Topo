@@ -18,12 +18,18 @@ from ..core.paths import get_link_target_dir
 
 
 def run_install_link(silent=False):
-    """Creates a symbolic link for the topo launcher in a PATH-friendly bin dir."""
+    """Creates a symbolic link for the topo launcher in a PATH-friendly bin dir.
+
+    Three steps, each its own function below: make the directory, put the link in
+    it, then make sure the shell can find it. Any of the first two failing stops
+    the install -- a link in a directory that could not be created, or a PATH
+    entry pointing at a link that was never made, would both report success for a
+    `topo` command that does not run.
+    """
 
     if not silent:
         print(f"\n{PURPLE}{MARK_SECTION} Setting up system-wide 'topo' command...{RESET}")
 
-    # 1. Paths
     repo_root = Path(__file__).parent.parent.parent
     source_script = repo_root / "topo"
     target_dir = get_link_target_dir()
@@ -34,20 +40,45 @@ def run_install_link(silent=False):
             print(f"  {FAIL} Error: Could not find launcher script at {source_script}")
         return False
 
-    # 2. Ensure target dir exists
-    if not target_dir.exists():
-        try:
-            target_dir.mkdir(parents=True, exist_ok=True)
-            if not silent:
-                disp_dir = str(target_dir).replace(str(Path.home()), "~")
-                print(f"  {OK} {GRAY}Created directory {BOLD}{disp_dir}{RESET}")
-        except OSError as e:
-            if not silent:
-                print(f"  {FAIL} Error creating directory {target_dir}: {e}")
-            return False
+    if not _ensure_link_dir_exists(target_dir, silent):
+        return False
 
-    # 3. Create/Update link atomically (temp symlink + os.replace), so an
-    #    interrupted update never leaves the 'topo' command missing.
+    if not _link_launcher_atomically(source_script, target_link, silent):
+        return False
+
+    usable_now = _ensure_link_dir_on_path(target_dir, silent)
+
+    if not silent and usable_now:
+        print(
+            f"  {OK} {GRAY}System setup complete. '{BOLD}topo{RESET}{GRAY}' is ready to use!{RESET}"
+        )
+
+    return True
+
+
+def _ensure_link_dir_exists(target_dir: Path, silent: bool) -> bool:
+    """Create the bin directory the link goes in, if it is not already there."""
+    if target_dir.exists():
+        return True
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        if not silent:
+            disp_dir = str(target_dir).replace(str(Path.home()), "~")
+            print(f"  {OK} {GRAY}Created directory {BOLD}{disp_dir}{RESET}")
+    except OSError as e:
+        if not silent:
+            print(f"  {FAIL} Error creating directory {target_dir}: {e}")
+        return False
+    return True
+
+
+def _link_launcher_atomically(source_script: Path, target_link: Path, silent: bool) -> bool:
+    """Point the `topo` command at this tree's launcher, via a temp symlink + os.replace.
+
+    Atomically, so an interrupted update never leaves the `topo` command missing:
+    the replace either has the old link or the new one, never neither. A plain
+    unlink-then-symlink has a window in between where the command does not exist.
+    """
     try:
         tmp_link = target_link.with_name(f".{target_link.name}.topo-tmp")
         if tmp_link.exists() or tmp_link.is_symlink():
@@ -62,8 +93,21 @@ def run_install_link(silent=False):
             print(f"  {FAIL} Error creating symbolic link: {e}")
             print(f"  {GRAY}You can still run topo directly with: {BOLD}{source_script}{RESET}")
         return False
+    return True
 
-    # 4. Path check (PATH auto-fix runs even in silent mode)
+
+def _ensure_link_dir_on_path(target_dir: Path, silent: bool) -> bool:
+    """Make the link's directory reachable as a command; True when it already is.
+
+    The auto-fix runs even in silent mode -- `topo install` calls this with
+    silent=True, and a PATH entry it declined to add is a `topo` command the user
+    cannot type. What silent suppresses is the reporting, not the repair.
+
+    Returns whether the shell can find the command, now or after the user reloads
+    their rc file: in PATH already, or an export line that is now in one of their
+    shell configs. False means every write failed and the caller must not claim
+    the install is ready to use.
+    """
     path_env = os.environ.get("PATH", "")
     in_path = str(target_dir) in path_env.split(os.pathsep)
     added = False
@@ -130,9 +174,4 @@ def run_install_link(silent=False):
                 print(" Add this line to your .bashrc or .zshrc:")
                 print(f" {GRAY}{export_line}{RESET}")
 
-    if not silent and (in_path or configured):
-        print(
-            f"  {OK} {GRAY}System setup complete. '{BOLD}topo{RESET}{GRAY}' is ready to use!{RESET}"
-        )
-
-    return True
+    return in_path or configured

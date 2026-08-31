@@ -46,6 +46,29 @@ from .ui.tui import (
 DRY_RUN_HELP = "Preview changes without deleting"
 INTERRUPTED_MESSAGE = "🚫 Process interrupted by user."
 
+# Commands requiring single-instance concurrency lock. `None` is the bare `topo`
+# with no command, which opens the menu and from there can run any of them.
+#
+# update and remove belong here even though they delete nothing under the user's
+# home: their blast radius is the installation itself. update hands ~/.topo to
+# install.sh, which replaces the whole directory, and remove deletes it with
+# allow_self_removal=True -- both while a concurrent `topo clean` may still be
+# importing modules out of it. That makes them more destructive than the five
+# commands the lock was originally written for, not less.
+#
+# Module level, not a local inside _main: an ALL-CAPS name in this repo means a
+# module-level constant or one out of core/constants.py, and a fixed set rebuilt
+# on every call was only ever a local by accident.
+LOCK_REQUIRED_COMMANDS = {
+    "clean",
+    "uninstall",
+    "optimize",
+    "analyze",
+    "update",
+    "remove",
+    None,
+}
+
 MAIN_HELP = """
 Quick Start:
   topo                     Open the interactive TUI
@@ -437,25 +460,6 @@ def _main() -> bool:
             file=sys.stderr,
         )
         return False
-
-    # Commands requiring single-instance concurrency lock.
-    #
-    # update and remove belong here even though they delete nothing under the
-    # user's home: their blast radius is the installation itself. update hands
-    # ~/.topo to install.sh, which replaces the whole directory, and remove
-    # deletes it with allow_self_removal=True -- both while a concurrent
-    # `topo clean` may still be importing modules out of it. That makes them
-    # more destructive than the five commands the lock was originally written
-    # for, not less.
-    LOCK_REQUIRED_COMMANDS = {
-        "clean",
-        "uninstall",
-        "optimize",
-        "analyze",
-        "update",
-        "remove",
-        None,
-    }
 
     if args.command in LOCK_REQUIRED_COMMANDS:
         try:

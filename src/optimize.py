@@ -830,11 +830,11 @@ def _points_at_transient_mount(link: Path) -> bool:
 def run_broken_symlink_cleanup(dry_run=False):
     """Remove broken symlinks in common user directories."""
     broken = []
-    for d in _broken_symlink_search_dirs():
-        if not d.exists():
+    for search_dir in _broken_symlink_search_dirs():
+        if not search_dir.exists():
             continue
         try:
-            for item in d.iterdir():
+            for item in search_dir.iterdir():
                 if item.is_symlink() and not item.exists():
                     if _points_at_transient_mount(item):
                         continue

@@ -290,7 +290,6 @@ def get_network_traffic():
                     continue
                 iface = parts[0].rstrip(":")
 
-                # 1. Skip virtual prefixes
                 if iface == "lo" or iface.startswith(virtual_prefixes):
                     continue
 
@@ -685,7 +684,6 @@ def get_system_health_assessment(
     """
     issues: list[tuple[str, str]] = []
 
-    # 1. Critical & Warning Checks
     if disk_percent >= 90.0:
         issues.append((_CRITICAL, f"Disk space low ({disk_percent:.0f}%)"))
     elif disk_percent >= 80.0:
@@ -733,8 +731,23 @@ def show_status():
     # holds up only the rest of the report instead of all of it. Two of them fork
     # (nvidia-smi, ps) and can stall for seconds on a wedged driver or a process
     # in uninterruptible sleep; the header was already on screen while every
-    # probe ran, so that time used to read as a hang.
-    # 1. Overview & Compute (Uptime, CPU, GPU, Fans)
+    # probe ran, so that time used to read as a hang. The sections below keep
+    # that property -- each one prints as it probes, rather than collecting
+    # figures for a caller to print later.
+    temp_val, load_percent = _show_compute_rows()
+    mem_percent, disk_percent = _show_memory_and_storage_rows()
+    bat_health = _show_battery_and_network_rows()
+    _show_workload_row()
+    _show_verdict_row(temp_val, load_percent, mem_percent, disk_percent, bat_health)
+
+
+def _show_compute_rows() -> tuple[float | None, float | None]:
+    """Uptime, CPU temperature and load, GPU, fans.
+
+    Hands back the two figures the verdict needs from this group: the CPU
+    temperature in °C and the load as a percentage, each None when the machine
+    would not say.
+    """
     uptime = get_uptime()
     uptime_str = f"{uptime} (since boot)" if uptime != "Unknown" else uptime
     print(_status_row("⏱️", "Uptime:", uptime_str))
@@ -756,7 +769,15 @@ def show_status():
     if fans:
         print(_status_row("❄️", "Fan Speed:", fans))
 
-    # 2. Memory & Storage (RAM, Disk)
+    return temp_val, load_percent
+
+
+def _show_memory_and_storage_rows() -> tuple[float, float]:
+    """RAM, then one row per filesystem.
+
+    Hands back the two percentages the verdict needs: memory used, and the
+    fullest filesystem.
+    """
     used_mem_str, total_mem_str, mem_percent = get_mem_info()
     mem_bar = draw_bar(mem_percent, width=20)
     mem_color = get_color_for_percent(mem_percent)
@@ -790,7 +811,16 @@ def show_status():
             )
         )
 
-    # 3. Hardware & Network (Battery, Network)
+    return mem_percent, disk_percent
+
+
+def _show_battery_and_network_rows() -> float | None:
+    """Battery, then network throughput and address.
+
+    Hands back the pack's health as a percentage, or None on a machine with no
+    battery or a pack that would not answer -- neither of which is a battery at
+    0%, so neither prints a row.
+    """
     battery_data = get_battery_info()
     bat_health: float | None = None
     if battery_data:
@@ -817,12 +847,29 @@ def show_status():
     local_ip = get_ip_info()
     print(_status_row("🖧", "Network:", f"↓ {rx} / ↑ {tx} | {local_ip}"))
 
-    # 4. Workload (Top Processes)
+    return bat_health
+
+
+def _show_workload_row() -> None:
+    """The heaviest processes, when `ps` named any."""
     top_procs = get_top_processes()
     if top_procs:
         print(_status_row("🔝", "Top Processes:", ", ".join(top_procs)))
 
-    # 5. Overall Assessment Verdict
+
+def _show_verdict_row(
+    temp_val: float | None,
+    load_percent: float | None,
+    mem_percent: float,
+    disk_percent: float,
+    bat_health: float | None,
+) -> None:
+    """The one-line verdict, from the figures the rows above already printed.
+
+    Last, and the only row that reads no probe of its own: everything it judges
+    was measured for a row further up, so the verdict cannot disagree with the
+    report above it.
+    """
     icon, color, verdict = get_system_health_assessment(
         temp_val, load_percent, mem_percent, disk_percent, bat_health
     )

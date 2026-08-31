@@ -90,6 +90,59 @@ def test_run_doctor_uses_temporary_size_probe_with_short_timeout(tmp_path):
     )
 
 
+def test_run_doctor_probes_the_engine_it_reported(tmp_path, capsys):
+    """One resolution of the engine, shared by the two sections that need it.
+
+    The Rust Engine section names an executable and the size probe under File
+    System Utilities runs one. Each used to call get_core_binary() for itself,
+    which is invisible only while the two answers agree -- mid-update, or with a
+    stale copy earlier on PATH, the report would name one engine and prove a
+    different one works. get_core_binary is handed a second, equally valid
+    engine here, so a second resolution shows up as a probe of a binary the
+    report never mentioned.
+    """
+    install_root = tmp_path / "install"
+    install_root.mkdir()
+    (install_root / "VERSION").write_text("1.2.3\n")
+    home = tmp_path / "home"
+    (home / ".config" / "topo").mkdir(parents=True)
+
+    engines = []
+    for name in ("topo-core-reported", "topo-core-second-answer"):
+        engine = tmp_path / name
+        engine.write_text("#!/bin/sh\n")
+        engine.chmod(0o755)
+        engines.append(engine)
+    engine_paths = {str(engine) for engine in engines}
+    probed = []
+
+    def fake_run_command(args, capture=True, timeout=300):
+        if args and args[0] in engine_paths:
+            probed.append(args[0])
+            if len(args) == 1:
+                return _command_result(args, returncode=1, stderr="Usage: topo-core <path>")
+            return _command_result(args, stdout='{"total_size_bytes": 5}')
+
+        return _command_result(args, returncode=1)
+
+    with (
+        patch("src.manage.doctor.get_install_root", return_value=install_root),
+        patch("src.manage.doctor.get_install_source", return_value="script"),
+        patch("src.manage.doctor.get_core_binary", side_effect=engines) as resolve_engine,
+        patch("src.manage.doctor.shutil.which", return_value=None),
+        patch("src.manage.doctor.Path.home", return_value=home),
+        patch("src.manage.doctor.run_command", side_effect=fake_run_command),
+    ):
+        assert doctor.run_doctor() is True
+
+    assert resolve_engine.call_count == 1
+    output = capsys.readouterr().out
+    assert f"Executable: {engines[0]}" in output
+    # Both engine runs -- the "does it respond" call and the size probe -- went to
+    # the executable the report named.
+    assert probed == [str(engines[0]), str(engines[0])]
+
+
 def _report_with_no_tools_installed(tmp_path, manager):
     """run_doctor() on a broken-engine box where nothing optional is installed."""
     install_root = tmp_path / "install"

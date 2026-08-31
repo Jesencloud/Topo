@@ -144,26 +144,7 @@ def _check_rust_size_probe(engine: Path | None) -> tuple[bool | None, str]:
     return True, "OK"
 
 
-def run_doctor() -> bool:
-    """Print the diagnostic report; False when a hard problem was found.
-
-    "Hard" is deliberately narrow. Only what breaks topo itself counts: an
-    unreadable VERSION (broken install tree), a missing or non-responding Rust
-    engine, and a failing size probe. Optional tooling is not a failure --
-    `apt-get` is *supposed* to be absent on Fedora, `trash-put` on a headless
-    box, and a sudo password prompt is the normal case. A doctor that exited
-    non-zero for those would be as useless to a script as one that always
-    exited 0.
-
-    curl and gpg are the one grey area: without them `topo update` cannot work,
-    but everything else can, and a package install never updates itself. They
-    get a ⚠ with the consequence spelled out, not a failure.
-    """
-    failures: list[str] = []
-
-    print(f"\n{BOLD}{PURPLE}🩺 Topo Diagnostic Report{RESET}\n")
-
-    # 1. System Environment
+def _report_system_environment() -> None:
     print(f"{BOLD}{BLUE}System Environment{RESET}")
     print(f"  OS ID:         {CYAN}{get_os_id()}{RESET}")
     print(f"  Architecture:  {CYAN}{platform.machine()}{RESET}")
@@ -171,8 +152,10 @@ def run_doctor() -> bool:
     print(f"  Invoking User: {CYAN}{get_invoking_user()}{RESET}")
     print()
 
-    # 2. Topo Installation
+
+def _report_topo_installation() -> list[str]:
     print(f"{BOLD}{BLUE}Topo Installation{RESET}")
+    failures: list[str] = []
     install_root = get_install_root()
     # Read from the tree this report calls the install root, through the same
     # reader core.constants uses, so doctor and `topo --version` cannot disagree.
@@ -183,10 +166,12 @@ def run_doctor() -> bool:
     print(f"  Source:        {CYAN}{get_install_source()}{RESET}")
     print(f"  Install Root:  {CYAN}{install_root}{RESET}")
     print()
+    return failures
 
-    # 3. Rust Engine
+
+def _report_rust_engine(engine: Path | None) -> list[str]:
     print(f"{BOLD}{BLUE}Rust Engine{RESET}")
-    engine = get_core_binary()
+    failures: list[str] = []
     if engine and engine.exists():
         print(f"  {OK} Executable: {CYAN}{engine}{RESET}")
         engine_ok, engine_detail = _check_rust_engine_response(engine)
@@ -199,18 +184,21 @@ def run_doctor() -> bool:
         failures.append("Rust engine missing")
         print(f"  {FAIL} Executable: {RED}Not found{RESET} at {engine}")
     print()
+    return failures
 
-    # 4. Update Prerequisites
+
+def _report_update_prerequisites() -> None:
     print(f"{BOLD}{BLUE}Update Prerequisites{RESET}")
     for tool, consequence in UPDATE_PREREQUISITES:
         _print_tool_row(tool, missing_note=consequence)
     print()
 
-    # 5. Package Managers
+
+def _report_package_managers() -> None:
     print(f"{BOLD}{BLUE}Package Managers & Tools{RESET}")
     manager = detect_package_manager()
     if manager is None:
-        supported = ", ".join(m.label for m in PACKAGE_MANAGERS)
+        supported = ", ".join(known.label for known in PACKAGE_MANAGERS)
         print(f"  {NA} No supported package manager detected ({supported})")
     else:
         print(f"  {OK} {'Detected':<10} {CYAN}{manager.label}{RESET}")
@@ -224,8 +212,10 @@ def run_doctor() -> bool:
         _print_tool_row(tool)
     print()
 
-    # 6. File System & Trash
+
+def _report_filesystem_utilities(engine: Path | None) -> list[str]:
     print(f"{BOLD}{BLUE}File System Utilities{RESET}")
+    failures: list[str] = []
     _print_tool_row("gio", ["version"])
     _print_tool_row("trash-put")
 
@@ -238,8 +228,10 @@ def run_doctor() -> bool:
         failures.append("Rust size probe failed")
         print(f"  {FAIL} Rust Fast Size Calculation: {RED}Failed{RESET} ({size_detail})")
     print()
+    return failures
 
-    # 7. Sudo Access
+
+def _report_permissions() -> None:
     print(f"{BOLD}{BLUE}Permissions{RESET}")
     has_sudo_session = run_command(
         ["sudo", "-n", "true"], capture=True, timeout=DOCTOR_COMMAND_TIMEOUT
@@ -255,6 +247,43 @@ def run_doctor() -> bool:
     else:
         print(f"  {NA} Config Dir:  {GRAY}{config_dir}{RESET} (Missing)")
     print()
+
+
+def run_doctor() -> bool:
+    """Print the diagnostic report; False when a hard problem was found.
+
+    "Hard" is deliberately narrow. Only what breaks topo itself counts: an
+    unreadable VERSION (broken install tree), a missing or non-responding Rust
+    engine, and a failing size probe. Optional tooling is not a failure --
+    `apt-get` is *supposed* to be absent on Fedora, `trash-put` on a headless
+    box, and a sudo password prompt is the normal case. A doctor that exited
+    non-zero for those would be as useless to a script as one that always
+    exited 0.
+
+    curl and gpg are the one grey area: without them `topo update` cannot work,
+    but everything else can, and a package install never updates itself. They
+    get a ⚠ with the consequence spelled out, not a failure.
+
+    The report is the sections below in this order, each printing its own
+    heading; the three that can find a hard problem hand their failures back,
+    and this function owns the verdict. Those headings used to be numbered
+    comments above blocks of the same body, one per `print()` that said the same
+    words -- `# 5. Package Managers` over a heading reading "Package Managers &
+    Tools", which is the version that had already drifted.
+    """
+    print(f"\n{BOLD}{PURPLE}🩺 Topo Diagnostic Report{RESET}\n")
+
+    _report_system_environment()
+    failures = _report_topo_installation()
+    # Resolved once, here, because two sections need it: the engine's own section
+    # and the size probe under File System Utilities. Asking twice would let one
+    # section report an engine the other did not use.
+    engine = get_core_binary()
+    failures += _report_rust_engine(engine)
+    _report_update_prerequisites()
+    _report_package_managers()
+    failures += _report_filesystem_utilities(engine)
+    _report_permissions()
 
     if failures:
         print(f"{BOLD}{RED}Diagnostic complete: {plural(len(failures), 'problem')} found.{RESET}")

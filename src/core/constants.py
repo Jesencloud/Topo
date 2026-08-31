@@ -377,7 +377,16 @@ CLEAN_BACKUP_AGE_DAYS = 7
 SECONDS_PER_HOUR = 3600
 SECONDS_PER_DAY = 86400
 
-# Batch processing
+# How many .desktop paths go into one ownership query. All three package managers
+# share this one number: `_pre_scan_package_desktop_names` asks rpm, dpkg-query
+# and pacman the same question about the same list, one batch at a time, and each
+# of them takes every path as a command-line argument -- so the batch size is what
+# keeps those command lines under the kernel's argv limit.
+#
+# It is named after rpm rather than being neutral because rpm is the one a bad
+# size costs the most: rpm answers positionally, so a reply that does not line up
+# with the questions makes the whole batch unusable, while dpkg-query and pacman
+# echo each path back in its own line.
 RPM_QUERY_BATCH_SIZE = 500
 
 # SQLite progress handler callback interval (virtual-machine instructions)

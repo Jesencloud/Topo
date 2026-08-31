@@ -6,9 +6,10 @@ import subprocess
 import time
 from array import array
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any, TypedDict
 
@@ -260,6 +261,36 @@ class _ResidueEntryIndex:
             if len(target) >= 5:
                 candidate_ids.update(self.gram_buckets[self._gram_bucket(target[:5])])
         return [self.entries[index] for index in sorted(candidate_ids)]
+
+
+class _ResiduePathSet:
+    """The residue paths found for one app, in discovery order, without duplicates.
+
+    Every step of :meth:`UninstallManager.find_residue_paths` adds through here,
+    so there is one answer to "have we already got this?" instead of eight. The
+    eight steps used to each write the invariant out by hand --
+    ``if ... and str(p) not in seen: paths.append(p); seen.add(str(p))`` -- which
+    is two statements that have to stay in step across 176 lines, and a step that
+    forgot the second one would have listed a path twice in the removal preview.
+
+    Keyed on ``str(path)`` because that is what the hand-written pairs compared,
+    and every step builds its paths from ``Path.home()``, so two steps that reach
+    the same file produce the same string. (``Path`` hashes by its parts and would
+    dedup these just as well; the string keeps the old behaviour exactly.)
+    """
+
+    def __init__(self) -> None:
+        self._paths: list[Path] = []
+        self._seen: set[str] = set()
+
+    def add(self, path: Path) -> None:
+        key = str(path)
+        if key not in self._seen:
+            self._seen.add(key)
+            self._paths.append(path)
+
+    def as_list(self) -> list[Path]:
+        return list(self._paths)
 
 
 class UninstallManager:
@@ -650,14 +681,14 @@ class UninstallManager:
                 names.add(app_id.rsplit(".", 1)[-1].lower())
 
         # Generic token splitting: e.g. "google-chrome-stable" -> "chrome", "linuxqq" -> "qq"
-        for raw in (app_id, app_name):
-            if not raw or " " in raw:
+        for source_name in (app_id, app_name):
+            if not source_name or " " in source_name:
                 continue
-            lower_raw = raw.lower()
+            lowered = source_name.lower()
             for prefix in ("linux", "org.", "com.", "net.", "io.", "io.github."):
-                if lower_raw.startswith(prefix) and len(lower_raw) > len(prefix) + 2:
-                    names.add(lower_raw[len(prefix) :])
-            for part in lower_raw.replace("_", "-").split("-"):
+                if lowered.startswith(prefix) and len(lowered) > len(prefix) + 2:
+                    names.add(lowered[len(prefix) :])
+            for part in lowered.replace("_", "-").split("-"):
                 if len(part) >= 3 and part not in (
                     "stable",
                     "beta",
@@ -676,12 +707,12 @@ class UninstallManager:
             Path("/var/lib/flatpak/exports/share/applications"),
             Path.home() / ".local/share/flatpak/exports/share/applications",
         ]
-        targets = {t for t in (app_id.lower(), app_name.lower()) if t}
-        for ddir in desktop_dirs:
-            if not ddir.is_dir():
+        targets = {name for name in (app_id.lower(), app_name.lower()) if name}
+        for desktop_dir in desktop_dirs:
+            if not desktop_dir.is_dir():
                 continue
             with contextlib.suppress(OSError):
-                for entry in ddir.glob("*.desktop"):
+                for entry in desktop_dir.glob("*.desktop"):
                     # Everything collected here ends up as an argument to `pkill -9`,
                     # so the match has to be as strict as the one guarding residue
                     # deletion: a bare substring test would let a two-letter id like
@@ -692,20 +723,24 @@ class UninstallManager:
                     stem = entry.stem.lower()
                     # Reverse-DNS entries carry the app's own name last:
                     # org.gnome.Music.desktop for org.gnome.Music.
-                    haystacks = {stem, stem.rsplit(".", 1)[-1]}
+                    entry_names = {stem, stem.rsplit(".", 1)[-1]}
                     if stem in targets or any(
-                        self._name_matches(h, t) for h in haystacks for t in targets
+                        self._name_matches(entry_name, target)
+                        for entry_name in entry_names
+                        for target in targets
                     ):
                         names.update(get_desktop_exec_names(entry))
 
         # Dynamic fuser / lsof inspection on app residue paths
         if paths:
-            for p in paths:
-                if p.exists():
+            for residue_path in paths:
+                if residue_path.exists():
                     try:
-                        res = system.run_command(["fuser", str(p)], capture=True, timeout=3)
-                        stdout_text = str(res.stdout or "")
-                        if res.ok and stdout_text.strip():
+                        fuser = system.run_command(
+                            ["fuser", str(residue_path)], capture=True, timeout=3
+                        )
+                        stdout_text = str(fuser.stdout or "")
+                        if fuser.ok and stdout_text.strip():
                             # fuser outputs PIDs like '1234m'; extract pure numeric PIDs
                             for pid_clean in re.findall(r"\b\d+\b", stdout_text):
                                 comm_path = Path(f"/proc/{pid_clean}/comm")
@@ -721,7 +756,7 @@ class UninstallManager:
                     except (OSError, subprocess.SubprocessError):
                         pass
 
-        return [n for n in names if n]
+        return [name for name in names if name]
 
     def _installed_desktop_files(self) -> list[Path]:
         """Every readable .desktop entry the system and the user have installed.
@@ -745,7 +780,9 @@ class UninstallManager:
             # package name already collected from them.
             with contextlib.suppress(OSError):
                 if directory.exists():
-                    desktop_files.extend(e for e in directory.glob("*.desktop") if e.exists())
+                    desktop_files.extend(
+                        entry for entry in directory.glob("*.desktop") if entry.exists()
+                    )
         return desktop_files
 
     def _rpm_desktop_owners(self, batch: list[Path]) -> list[tuple[str, Path]]:
@@ -756,21 +793,21 @@ class UninstallManager:
         line up with the questions. Losing a few display names beats attaching
         them to the wrong package, so a mismatched batch is dropped whole.
         """
-        res = system.run_command(
-            ["rpm", "-qf", "--queryformat", "%{NAME}\n"] + [str(f) for f in batch],
+        result = system.run_command(
+            ["rpm", "-qf", "--queryformat", "%{NAME}\n"] + [str(path) for path in batch],
             capture=True,
             timeout=60,
             env=system.C_LOCALE_ENV,
         )
-        lines = res.stdout.splitlines()
+        lines = result.stdout.splitlines()
         if len(lines) != len(batch):
             return []
         owners: list[tuple[str, Path]] = []
-        for df_path, line in zip(batch, lines, strict=True):
-            pkg = line.strip()
+        for desktop_file, line in zip(batch, lines, strict=True):
+            package = line.strip()
             # C_LOCALE_ENV above keeps this marker in English.
-            if pkg and not pkg.startswith("file "):
-                owners.append((pkg, df_path))
+            if package and not package.startswith("file "):
+                owners.append((package, desktop_file))
         return owners
 
     def _dpkg_desktop_owners(self, batch: list[Path]) -> list[tuple[str, Path]]:
@@ -783,21 +820,21 @@ class UninstallManager:
         not exist. One path can therefore come back with several owners, and all
         of them get the entry's display name.
         """
-        res = system.run_command(
-            ["dpkg-query", "-S", *[str(f) for f in batch]],
+        result = system.run_command(
+            ["dpkg-query", "-S", *[str(path) for path in batch]],
             capture=True,
             env=system.C_LOCALE_ENV,
         )
         owners: list[tuple[str, Path]] = []
-        for line in res.stdout.splitlines():
-            owner_str, sep, path_str = line.rpartition(": ")
-            if not sep:
+        for line in result.stdout.splitlines():
+            owners_field, separator, path_field = line.rpartition(": ")
+            if not separator:
                 continue
-            df_path = Path(path_str.strip())
-            for owner in owner_str.split(", "):
-                pkg = self._strip_package_arch(owner.strip())
-                if pkg:
-                    owners.append((pkg, df_path))
+            desktop_file = Path(path_field.strip())
+            for owner in owners_field.split(", "):
+                package = self._strip_package_arch(owner.strip())
+                if package:
+                    owners.append((package, desktop_file))
         return owners
 
     def _pacman_desktop_owners(self, batch: list[Path]) -> list[tuple[str, Path]]:
@@ -806,19 +843,19 @@ class UninstallManager:
         " is owned by " sits in pacman's gettext catalog, so the split below only
         holds under a C locale.
         """
-        res = system.run_command(
-            ["pacman", "-Qo", *[str(f) for f in batch]],
+        result = system.run_command(
+            ["pacman", "-Qo", *[str(path) for path in batch]],
             capture=True,
             env=system.C_LOCALE_ENV,
         )
         owners: list[tuple[str, Path]] = []
-        for line in res.stdout.splitlines():
+        for line in result.stdout.splitlines():
             if " is owned by " not in line:
                 continue
-            df_str, owned_str = line.split(" is owned by ", 1)
-            owned = owned_str.split()
-            if owned:
-                owners.append((owned[0], Path(df_str.strip())))
+            queried_path, owner_field = line.split(" is owned by ", 1)
+            owner_words = owner_field.split()
+            if owner_words:
+                owners.append((owner_words[0], Path(queried_path.strip())))
         return owners
 
     def _pre_scan_package_desktop_names(self) -> tuple[set[str], dict[str, str]]:
@@ -858,19 +895,19 @@ class UninstallManager:
         # The three tools disagree about output format, not about the question,
         # so each one only parses its own reply into (package, .desktop file)
         # pairs and the bookkeeping below is written once.
-        for i in range(0, len(desktop_files), RPM_QUERY_BATCH_SIZE):
-            batch = desktop_files[i : i + RPM_QUERY_BATCH_SIZE]
+        for batch_start in range(0, len(desktop_files), RPM_QUERY_BATCH_SIZE):
+            batch = desktop_files[batch_start : batch_start + RPM_QUERY_BATCH_SIZE]
             for query in queries:
-                for pkg, df_path in query(batch):
-                    user_app_packages.add(pkg)
+                for package, desktop_file in query(batch):
+                    user_app_packages.add(package)
                     # A display name is worth a file read only for a package that
                     # has none yet. exists() is also what keeps a path a tool
                     # echoed back from reaching open(): a NUL byte in it raises
                     # ValueError, which get_desktop_name does not catch.
-                    if pkg not in package_desktop_names and df_path.exists():
-                        dname = get_desktop_name(df_path)
-                        if dname:
-                            package_desktop_names[pkg] = dname
+                    if package not in package_desktop_names and desktop_file.exists():
+                        display_name = get_desktop_name(desktop_file)
+                        if display_name:
+                            package_desktop_names[package] = display_name
         return user_app_packages, package_desktop_names
 
     def _scan_rpm_packages(
@@ -1331,18 +1368,15 @@ class UninstallManager:
         return apps
 
     def _pre_scan_search_roots(self) -> dict[Path, _ResidueEntryIndex]:
-        """Scan shared roots once and build reusable residue-candidate indexes."""
+        """Scan shared roots once and build reusable residue-candidate indexes.
+
+        The roots are the ones find_residue_paths() searches, taken from the same
+        two helpers it takes them from, so neither side can grow a root the other
+        does not know about.
+        """
         home_path = Path.home()
-        search_roots = [
-            home_path / ".config",
-            home_path / ".local/share",
-            home_path / ".local/state",
-            home_path / ".cache",
-            home_path / ".var/app",
-            home_path / "snap",
-        ]
         pre_scanned_entries: dict[Path, _ResidueEntryIndex] = {}
-        for root in search_roots:
+        for root in self._residue_search_roots(home_path):
             if root.exists():
                 try:
                     entries: list[tuple[str, Path]] = []
@@ -1352,10 +1386,7 @@ class UninstallManager:
                     pre_scanned_entries[root] = _ResidueEntryIndex.build(entries)
                 except OSError:
                     pass
-        for icon_root in (
-            home_path / ".local/share/icons",
-            home_path / ".local/share/pixmaps",
-        ):
+        for icon_root in self._residue_icon_roots(home_path):
             if not icon_root.exists():
                 continue
             entries = []
@@ -1455,16 +1486,48 @@ class UninstallManager:
         app_name: str,
         pre_scanned_entries: dict[Path, _ResidueEntryIndex] | None = None,
     ) -> list[Path]:
-        """Finds all data/config/cache paths associated with an app."""
+        """Every per-user path that belongs to one app: config, cache, data, launcher.
+
+        This list is what the removal screen previews and what
+        ``_remove_residue_paths`` then deletes, so each step below is deliberately
+        narrow: see :meth:`_name_matches` for what "named after the app" is allowed
+        to mean, and :meth:`_add_home_root_hidden_dirs` for why a visible folder in
+        the home directory is never a candidate.
+
+        Two things about the order. Every step adds through one
+        :class:`_ResiduePathSet`, so the order they run in is the order the preview
+        lists paths in. And ``_add_home_dot_dirs`` runs against the name variants
+        *before* the launcher keywords widen them: moving the keyword step above it
+        would let a ``~/.<Exec name>`` directory be found too, which is a change in
+        what gets deleted rather than a reordering, and is left alone here.
+        """
         if self._requires_official_only_uninstall(app_id, app_name):
             return []
 
-        paths = []
         home_path = Path.home()
-        seen = set()
+        found = _ResiduePathSet()
+        targets = self._residue_name_targets(app_id, app_name)
+        self._add_home_dot_dirs(found, home_path, targets)
+        targets |= self._desktop_launcher_keywords(app_id, home_path)
+        self._add_app_data_dirs(found, home_path, targets, pre_scanned_entries)
+        self._add_launcher_and_icons(found, app_id, home_path, targets, pre_scanned_entries)
+        self._add_systemd_user_services(found, home_path, targets, pre_scanned_entries)
+        self._add_hardcoded_wine_prefix(found, app_name, home_path)
+        self._add_home_root_hidden_dirs(found, app_name, home_path, pre_scanned_entries)
+        return found.as_list()
 
-        # 1. Standard XDG, Flatpak & Snap paths
-        search_roots = [
+    @staticmethod
+    def _residue_search_roots(home_path: Path) -> list[Path]:
+        """The per-user roots an app may keep a directory of its own in.
+
+        The XDG trio plus ~/.cache, and the two sandbox roots that hand an app a
+        directory named after its id (~/.var/app for Flatpak, ~/snap for Snap).
+        Read by both the pre-scan that indexes these roots and the search that
+        consumes the index, which is why it is one list: a root indexed but not
+        searched costs a scan for nothing, and a root searched but not indexed
+        silently falls back to scanning per app.
+        """
+        return [
             home_path / ".config",
             home_path / ".local/share",
             home_path / ".local/state",
@@ -1473,158 +1536,262 @@ class UninstallManager:
             home_path / "snap",  # Snap
         ]
 
-        # 2. Common variants of the name
+    @staticmethod
+    def _residue_icon_roots(home_path: Path) -> list[Path]:
+        """Where a user-installed app drops its icons. Shared with the pre-scan."""
+        return [
+            home_path / ".local/share/icons",
+            home_path / ".local/share/pixmaps",
+        ]
+
+    @staticmethod
+    def _residue_name_targets(app_id: str, app_name: str) -> set[str]:
+        """The names a directory belonging to this app could plausibly be spelled with.
+
+        An id is often not what the app is called on disk: the last segment of a
+        Flatpak id (``org.gnome.Music`` -> ``music``) and the parts of an npm scope
+        (``@scope/pkg``) both name the same app, and a ``-``/``_`` suffix is
+        frequently absent from the directory (``code-insiders`` -> ``code``). The
+        suffix-stripped prefix is only kept when it is at least three characters
+        and not one of the generic tokens, because a target like ``data`` would go
+        on to match unrelated directories -- :meth:`_name_matches` rejects those
+        tokens as well, so this is the first of two gates rather than the only one.
+        """
         targets = {app_id.lower(), app_name.lower()}
         if "." in app_id:
             targets.add(app_id.split(".")[-1].lower())
         if "/" in app_id:
-            parts = [p.strip("@").lower() for p in app_id.split("/") if p.strip("@")]
-            targets.update(parts)
-        for t in list(targets):
-            for sep in ("-", "_"):
-                if sep in t:
-                    prefix = t.rsplit(sep, 1)[0]
+            targets.update(part.strip("@").lower() for part in app_id.split("/") if part.strip("@"))
+        for target in list(targets):
+            for separator in ("-", "_"):
+                if separator in target:
+                    prefix = target.rsplit(separator, 1)[0]
                     if len(prefix) >= 3 and prefix not in UninstallManager._GENERIC_TOKENS:
                         targets.add(prefix)
+        return targets
 
-        # Check direct home hidden directories (e.g. ~/.claude, ~/.kimi, ~/.codex, ~/.grok, ~/.cloudbase)
-        for t in list(targets):
-            if len(t) >= 3:
-                dot_dir = home_path / f".{t}"
-                if dot_dir.is_dir() and str(dot_dir) not in seen:
-                    paths.append(dot_dir)
-                    seen.add(str(dot_dir))
+    def _desktop_launcher_keywords(self, app_id: str, home_path: Path) -> set[str]:
+        """Extra name targets taken from the app's own .desktop file.
 
-        # 3. .desktop file keywords
-        desktop_paths = [
+        The Exec and Icon fields are the one place that records what an app calls
+        itself on disk, which is regularly neither its package id nor its display
+        name. Both launcher locations are read: a package installs into
+        /usr/share/applications, a user or a Flatpak override into ~/.local.
+        """
+        keywords: set[str] = set()
+        for desktop_file in (
             Path(f"/usr/share/applications/{app_id}.desktop"),
             home_path / f".local/share/applications/{app_id}.desktop",
-        ]
-        for dp in desktop_paths:
-            if dp.exists():
-                targets.update(self._get_app_keywords(dp))
+        ):
+            if desktop_file.exists():
+                keywords.update(self._get_app_keywords(desktop_file))
+        return keywords
 
-        # 4. Search using pre-scanned index or fast scandir
-        for root in search_roots:
+    @staticmethod
+    def _add_home_dot_dirs(found: _ResiduePathSet, home_path: Path, targets: set[str]) -> None:
+        """``~/.<name>`` directories, which no root below covers.
+
+        A tool that predates XDG keeps its state straight in the home directory:
+        ~/.claude, ~/.kimi, ~/.codex, ~/.grok, ~/.cloudbase. Matched exactly, not
+        fuzzily -- :meth:`_add_home_root_hidden_dirs` is the fuzzy pass over the
+        same directory, and it carries the guards that a fuzzy match at the home
+        root needs.
+        """
+        for target in targets:
+            if len(target) >= 3:
+                dot_dir = home_path / f".{target}"
+                if dot_dir.is_dir():
+                    found.add(dot_dir)
+
+    @staticmethod
+    def _residue_candidates(
+        index: _ResidueEntryIndex | None,
+        targets: set[str],
+        list_entries: Callable[[], list[tuple[str, Path]]],
+    ) -> list[tuple[str, Path]]:
+        """The ``(lowercased name, path)`` pairs worth matching in one root.
+
+        ``run_full_scan`` scans the shared roots once and hands every app the
+        resulting index; a single ``topo uninstall <app>`` has no index and lists
+        the root here instead. Both arms return a list, and every pair either arm
+        returns is still put through :meth:`_name_matches`, so an index can only
+        narrow the work, never decide the answer.
+
+        One shape for all three indexed roots. They used to be written three
+        different ways -- two ended in ``for ... in indexed_x or []`` and the third
+        did not -- and since neither fallback could produce None, the two ``or []``
+        were dead code that made the third site look like the one with the bug.
+        """
+        if index is not None:
+            return index.candidates(targets)
+        return list_entries()
+
+    @staticmethod
+    def _scandir_entries(root: Path, *, hidden_dirs_only: bool = False) -> list[tuple[str, Path]]:
+        """One directory's entries as ``(lowercased name, path)``, best effort.
+
+        Whatever was read before an OSError is kept rather than discarded: the
+        result is a list of deletion candidates, every one of which is matched and
+        filtered afterwards, so a root that goes unreadable half way through
+        (a directory removed by something else while topo scans it) costs the
+        entries behind the failure and nothing more.
+        """
+        entries: list[tuple[str, Path]] = []
+        with contextlib.suppress(OSError), os.scandir(root) as scan:
+            for entry in scan:
+                if hidden_dirs_only and not (
+                    entry.name.startswith(".") and entry.is_dir(follow_symlinks=False)
+                ):
+                    continue
+                entries.append((entry.name.lower(), Path(entry.path)))
+        return entries
+
+    @staticmethod
+    def _named_entries(paths: Iterable[Path]) -> list[tuple[str, Path]]:
+        """A listing's results as ``(lowercased name, path)``, best effort.
+
+        Same partial-result contract as :meth:`_scandir_entries`.
+        """
+        entries: list[tuple[str, Path]] = []
+        with contextlib.suppress(OSError):
+            for path in paths:
+                entries.append((path.name.lower(), path))
+        return entries
+
+    @classmethod
+    def _icon_file_entries(cls, icon_root: Path) -> list[tuple[str, Path]]:
+        """Every file under one icon root, at any depth: icons sit in theme/size subdirs.
+
+        A method rather than an expression at the call site so that the walk starts
+        only when there is no index to answer from -- the leading iterable of a
+        generator expression is evaluated where it is written, which would have
+        called rglob() even on the indexed path.
+        """
+        return cls._named_entries(icon for icon in icon_root.rglob("*") if icon.is_file())
+
+    @classmethod
+    def _service_file_entries(cls, service_root: Path) -> list[tuple[str, Path]]:
+        """The unit files in ~/.config/systemd/user; flat, so not recursive."""
+        return cls._named_entries(service_root.glob("*.service"))
+
+    def _add_app_data_dirs(
+        self,
+        found: _ResiduePathSet,
+        home_path: Path,
+        targets: set[str],
+        pre_scanned_entries: dict[Path, _ResidueEntryIndex] | None,
+    ) -> None:
+        """Directories named after the app in the XDG and sandbox roots."""
+        for root in self._residue_search_roots(home_path):
             if not root.exists():
                 continue
-            if pre_scanned_entries and root in pre_scanned_entries:
-                indexed_entries = pre_scanned_entries[root].candidates(targets)
-                for entry_lower, p in indexed_entries:
-                    if (
-                        any(self._name_matches(entry_lower, t) for t in targets)
-                        and str(p) not in seen
-                    ):
-                        paths.append(p)
-                        seen.add(str(p))
-            else:
-                try:
-                    with os.scandir(root) as it:
-                        for entry in it:
-                            entry_lower = entry.name.lower()
-                            for t in targets:
-                                if self._name_matches(entry_lower, t):
-                                    p = Path(entry.path)
-                                    if str(p) not in seen:
-                                        paths.append(p)
-                                        seen.add(str(p))
-                except OSError:
-                    pass
+            index = pre_scanned_entries.get(root) if pre_scanned_entries else None
+            for entry_lower, entry_path in self._residue_candidates(
+                index, targets, partial(self._scandir_entries, root)
+            ):
+                if any(self._name_matches(entry_lower, target) for target in targets):
+                    found.add(entry_path)
 
-        # 5. Local Desktop Launchers & Icons
+    def _add_launcher_and_icons(
+        self,
+        found: _ResiduePathSet,
+        app_id: str,
+        home_path: Path,
+        targets: set[str],
+        pre_scanned_entries: dict[Path, _ResidueEntryIndex] | None,
+    ) -> None:
+        """The app's user-level .desktop launcher, and icon files named after it.
+
+        Left behind, these are what keeps a removed app in the application grid
+        with its icon intact.
+        """
         local_desktop = home_path / ".local/share/applications" / f"{app_id}.desktop"
-        if local_desktop.exists() and str(local_desktop) not in seen:
-            paths.append(local_desktop)
-            seen.add(str(local_desktop))
+        if local_desktop.exists():
+            found.add(local_desktop)
 
-        icon_roots = [
-            home_path / ".local/share/icons",
-            home_path / ".local/share/pixmaps",
-        ]
-        for icon_root in icon_roots:
+        for icon_root in self._residue_icon_roots(home_path):
             if not icon_root.exists():
                 continue
-            icon_index = pre_scanned_entries.get(icon_root) if pre_scanned_entries else None
-            if icon_index is None:
-                indexed_icons = []
-                with contextlib.suppress(OSError):
-                    indexed_icons = [
-                        (icon.name.lower(), icon) for icon in icon_root.rglob("*") if icon.is_file()
-                    ]
-            else:
-                indexed_icons = icon_index.candidates(targets)
-            for file_lower, icon_file in indexed_icons or []:
-                if (
-                    any(self._name_matches(file_lower, t) for t in targets)
-                    and str(icon_file) not in seen
-                ):
-                    paths.append(icon_file)
-                    seen.add(str(icon_file))
+            index = pre_scanned_entries.get(icon_root) if pre_scanned_entries else None
+            for file_lower, icon_file in self._residue_candidates(
+                index, targets, partial(self._icon_file_entries, icon_root)
+            ):
+                if any(self._name_matches(file_lower, target) for target in targets):
+                    found.add(icon_file)
 
-        # 6. Systemd User Services (~/.config/systemd/user/)
-        systemd_user_dir = home_path / ".config/systemd/user"
-        if systemd_user_dir.exists():
-            service_index = (
-                pre_scanned_entries.get(systemd_user_dir) if pre_scanned_entries else None
-            )
-            if service_index is None:
-                indexed_services = []
-                with contextlib.suppress(OSError):
-                    indexed_services = [
-                        (service.name.lower(), service)
-                        for service in systemd_user_dir.glob("*.service")
-                    ]
-            else:
-                indexed_services = service_index.candidates(targets)
-            for file_lower, service_file in indexed_services or []:
-                if (
-                    any(self._name_matches(file_lower, t) for t in targets)
-                    and str(service_file) not in seen
-                ):
-                    paths.append(service_file)
-                    seen.add(str(service_file))
+    def _add_systemd_user_services(
+        self,
+        found: _ResiduePathSet,
+        home_path: Path,
+        targets: set[str],
+        pre_scanned_entries: dict[Path, _ResidueEntryIndex] | None,
+    ) -> None:
+        """User units named after the app, which would otherwise keep starting it."""
+        service_root = home_path / ".config/systemd/user"
+        if not service_root.exists():
+            return
+        index = pre_scanned_entries.get(service_root) if pre_scanned_entries else None
+        for file_lower, service_file in self._residue_candidates(
+            index, targets, partial(self._service_file_entries, service_root)
+        ):
+            if any(self._name_matches(file_lower, target) for target in targets):
+                found.add(service_file)
 
-        # 7. Wine prefix check (optional, if wechat/etc)
+    @staticmethod
+    def _add_hardcoded_wine_prefix(found: _ResiduePathSet, app_name: str, home_path: Path) -> None:
+        """WeChat's Wine prefix -- the one path here that is written out, not derived.
+
+        Every other step matches names the app itself supplies (its id, its display
+        name, its launcher's Exec and Icon fields) against what is on disk.
+        ``~/.xwechat`` is none of those names: the prefix is created by the vendor's
+        own launcher under a name of its choosing, so the only reason topo knows to
+        look there is that it is spelled out here.
+
+        Exactly one app is spelled out, and this method's name says so. The comment
+        it replaced read "Wine prefix check (optional, if wechat/etc)", and the
+        "etc" was never true -- no second app was ever handled and there is no
+        general Wine-prefix mechanism here to extend. Adding one would mean
+        deciding how to find a prefix from a name, which is the problem this line
+        exists because nobody solved.
+        """
         if "wechat" in app_name.lower():
-            wine_p = home_path / ".xwechat"
-            if wine_p.exists() and str(wine_p) not in seen:
-                paths.append(wine_p)
-                seen.add(str(wine_p))
+            wine_prefix = home_path / ".xwechat"
+            if wine_prefix.exists():
+                found.add(wine_prefix)
 
-        # 8. Deep Subdirectory Search (home-root residue).
-        # Only HIDDEN dot-directories at the home root (e.g. ~/.someapp) are
-        # considered here. Visible top-level home folders are user workspaces and
-        # data — ~/Projects, ~/IdeaProjects, ~/studio-projects, ~/notes-backup,
-        # ~/VirtualBox VMs — and must NEVER be matched as residue: a fuzzy name
-        # hit there would permanently delete the user's own files. XDG user-data
-        # dirs are excluded too (defence in depth; they are visible anyway).
-        if len(app_name) > 3:
-            protected_dir_names = {d.lower() for d in LINUX_USER_DATA_DIRS}
-            home_index = pre_scanned_entries.get(home_path) if pre_scanned_entries else None
-            if home_index is None:
-                try:
-                    with os.scandir(home_path) as it:
-                        indexed_home = [
-                            (entry.name.lower(), Path(entry.path))
-                            for entry in it
-                            if entry.is_dir(follow_symlinks=False) and entry.name.startswith(".")
-                        ]
-                except OSError:
-                    indexed_home = []
-            else:
-                indexed_home = home_index.candidates({app_name.lower()})
-            for entry_lower, entry_path in indexed_home:
-                if entry_lower in protected_dir_names:
-                    continue
-                if (
-                    self._name_matches(entry_lower, app_name.lower())
-                    and str(entry_path) not in seen
-                    and home_path in entry_path.parents
-                ):
-                    paths.append(entry_path)
-                    seen.add(str(entry_path))
+    def _add_home_root_hidden_dirs(
+        self,
+        found: _ResiduePathSet,
+        app_name: str,
+        home_path: Path,
+        pre_scanned_entries: dict[Path, _ResidueEntryIndex] | None,
+    ) -> None:
+        """Hidden directories at the home root whose name resembles the app's.
 
-        return paths
+        Only HIDDEN dot-directories at the home root (e.g. ~/.someapp) are
+        considered here. Visible top-level home folders are user workspaces and
+        data -- ~/Projects, ~/IdeaProjects, ~/studio-projects, ~/notes-backup,
+        ~/VirtualBox VMs -- and must NEVER be matched as residue: a fuzzy name
+        hit there would permanently delete the user's own files. XDG user-data
+        dirs are excluded too (defence in depth; they are visible anyway), and a
+        name of three characters or fewer does not get a fuzzy pass at all.
+        """
+        if len(app_name) <= 3:
+            return
+        protected_dir_names = {data_dir.lower() for data_dir in LINUX_USER_DATA_DIRS}
+        index = pre_scanned_entries.get(home_path) if pre_scanned_entries else None
+        for entry_lower, entry_path in self._residue_candidates(
+            index,
+            {app_name.lower()},
+            partial(self._scandir_entries, home_path, hidden_dirs_only=True),
+        ):
+            if entry_lower in protected_dir_names:
+                continue
+            if (
+                self._name_matches(entry_lower, app_name.lower())
+                and home_path in entry_path.parents
+            ):
+                found.add(entry_path)
 
     def _collateral_packages(self, app: AppRecord) -> list[str]:
         """Which other installed packages this app's removal will take with it.
@@ -1699,8 +1866,8 @@ class UninstallManager:
         # so a failed or half-finished reply comes out as an empty list. rpm exits
         # 1 with "no package requires X" on stdout when there are none, which is
         # why the return code is not consulted.
-        res = system.run_command(argv, capture=True, timeout=30, env=env)
-        return self._parse_collateral(res.stdout, app_id, app_type)
+        simulated = system.run_command(argv, capture=True, timeout=30, env=env)
+        return self._parse_collateral(simulated.stdout, app_id, app_type)
 
     @staticmethod
     def _parse_collateral(stdout: str, app_id: str, app_type: str) -> list[str]:
@@ -1893,7 +2060,7 @@ class UninstallManager:
         lines of package manager detail.
 
         Returns a CommandResult even where nothing is spawned (CLI, unsupported),
-        because the caller's only question is res.ok.
+        because the caller's only question is whether the removal succeeded.
         """
         if app["type"] == AppType.FLATPAK:
             # The scope is not what makes the app findable -- `flatpak
@@ -1922,23 +2089,23 @@ class UninstallManager:
             )
 
         if app["type"] == AppType.NPM:
-            res = system.run_command(
+            result = system.run_command(
                 ["npm", "uninstall", "-g", app["id"]], capture=True, timeout=60
             )
             self._prune_empty_npm_scope_dir(app["id"])
-            return res
+            return result
 
         if app["type"] == AppType.CLI:
             # Remove standalone binary & install directory
-            home_p = Path.home()
+            home_path = Path.home()
             cli_targets = [
-                home_p / ".local/bin" / app["id"],
-                home_p / ".local/share" / app["id"],
-                home_p / f".{app['id']}",
+                home_path / ".local/bin" / app["id"],
+                home_path / ".local/share" / app["id"],
+                home_path / f".{app['id']}",
             ]
-            for ct in cli_targets:
-                if ct.exists():
-                    safe_remove(ct, use_trash=get_use_trash(), allow_app_data_removal=True)
+            for cli_target in cli_targets:
+                if cli_target.exists():
+                    safe_remove(cli_target, use_trash=get_use_trash(), allow_app_data_removal=True)
             return system.CommandResult(
                 args=["cli_uninstall"], returncode=0, stdout="CLI uninstalled"
             )
@@ -2016,10 +2183,10 @@ class UninstallManager:
         if "/" not in package_id:
             return
         scope = package_id.split("/")[0]
-        res_root = system.run_command(["npm", "root", "-g"], capture=True, timeout=5)
-        if not (res_root.ok and res_root.stdout.strip()):
+        npm_root = system.run_command(["npm", "root", "-g"], capture=True, timeout=5)
+        if not (npm_root.ok and npm_root.stdout.strip()):
             return
-        scope_dir = Path(res_root.stdout.strip()) / scope
+        scope_dir = Path(npm_root.stdout.strip()) / scope
         if not scope_dir.is_dir():
             return
         with contextlib.suppress(OSError):
@@ -2042,18 +2209,19 @@ class UninstallManager:
         removed_details: list[tuple[bool, str]] = []
         removed_systemd_service = False
         use_trash = get_use_trash()
-        for p in paths:
+        for residue_path in paths:
             success, _ = safe_remove(
-                p,
-                use_trash=use_trash or _is_sandbox_app_data(p),
+                residue_path,
+                use_trash=use_trash or _is_sandbox_app_data(residue_path),
                 allow_app_data_removal=True,
             )
-            if success and str(p).endswith(".service") and ".config/systemd/user" in str(p):
+            path_text = str(residue_path)
+            if success and path_text.endswith(".service") and ".config/systemd/user" in path_text:
                 removed_systemd_service = True
             try:
-                removed_details.append((success, str(p.relative_to(Path.home()))))
+                removed_details.append((success, str(residue_path.relative_to(Path.home()))))
             except ValueError:
-                removed_details.append((success, str(p)))
+                removed_details.append((success, path_text))
 
         if removed_systemd_service and shutil.which("systemctl"):
             system.run_command(["systemctl", "--user", "daemon-reload"], capture=True, timeout=10)
@@ -2061,7 +2229,13 @@ class UninstallManager:
         return removed_details
 
     def execute_uninstall(self, app: AppRecord, paths: list[Path]):
-        """Terminates app and removes all files."""
+        """Close one app's processes, remove its package, then remove its residue.
+
+        In that order, and the last step only if the one before it succeeded. Each
+        step is a call whose own name says what it does; what this method owns is
+        the bookkeeping around them -- one audit event for the package removal, one
+        history session that only reaches "ended" on the successful return.
+        """
         app_name = str(app.get("name") or app.get("id") or "unknown")
         session_command = f"uninstall {app_name}"
         record_history_session(session_command, "started")
@@ -2076,18 +2250,13 @@ class UninstallManager:
         session_status = "interrupted"
 
         try:
-            # 1. Graceful kill (SIGTERM -> wait -> SIGKILL).
             self._terminate_app_processes(app, paths)
 
-            # 2. Binary uninstall
-            res = self._remove_package(app)
-            package_status = "removed" if res.ok else "failed"
+            removal = self._remove_package(app)
+            package_status = "removed" if removal.ok else "failed"
             record_deletion_audit(app["id"], package_mode, package_status, package_size)
             package_event_recorded = True
 
-            # 3. Path removal: explicit uninstall may remove app-owned data,
-            # but hard-protected credentials/system paths remain blocked.
-            #
             # Nothing is deleted while the app is still installed. The removal
             # above fails for reasons that have nothing to do with the data --
             # no polkit agent for a system-wide Flatpak, a lock held by another

@@ -378,15 +378,15 @@ def clean_orphaned_remnants(dry_run=False, max_age_days=60):
         Path.home() / ".local/share/flatpak/exports/share/applications",
         Path("/var/lib/snapd/desktop/applications"),
     ]
-    for d_dir in desktop_dirs:
-        if not d_dir.exists():
+    for desktop_dir in desktop_dirs:
+        if not desktop_dir.exists():
             continue
         try:
-            for d in d_dir.glob("*.desktop"):
-                exec_cmd = get_desktop_exec_command(d)
+            for desktop_file in desktop_dir.glob("*.desktop"):
+                exec_cmd = get_desktop_exec_command(desktop_file)
                 if not exec_cmd:
                     continue
-                stem = d.stem.lower()
+                stem = desktop_file.stem.lower()
                 desktop_links[stem] = exec_cmd
                 # The lookup below is keyed on the cache folder's name, which a
                 # packaged entry's stem never equals: snapd generates
@@ -665,32 +665,43 @@ register_app_cleaner(clean_steam_shader_cache)
 register_app_cleaner(clean_ide_caches)
 
 
+def _run_registered_cleaners(dry_run: bool) -> tuple[int, int, int]:
+    """Every registered sub-cleaner, run in registration order and totalled.
+
+    A cleaner returns either two values or three. The third is how many
+    categories it reported; a two-value cleaner counts as one category when it
+    removed anything and none when it removed nothing, which is what the
+    registry's older cleaners relied on before the third value existed.
+    """
+    total_size = 0
+    total_items = 0
+    total_categories = 0
+    for cleaner in AppCleanerRegistry.cleaners:
+        result = cleaner(dry_run=dry_run)
+        size, items = result[0], result[1]
+        categories = result[2] if len(result) >= 3 else (1 if items > 0 else 0)
+
+        total_size += size
+        total_items += items
+        total_categories += categories
+    return total_size, total_items, total_categories
+
+
 def clean_apps_deep(
     dry_run: bool = False, detected_apps: dict[str, dict[str, Any]] | None = None
 ) -> tuple[int, int, int]:
     """Deep cleanup for installed apps, browsers, IDEs, Flatpak/Snap, games, and XDG remnants."""
-    total_size = 0
-    total_items = 0
-    total_categories = 0
-
     if detected_apps is None:
         detected_apps = proactive_app_detection()
 
-    # 1. Clean desktop applications caches
-    s, i = clean_desktop_apps_caches(detected_apps=detected_apps, dry_run=dry_run)
-    total_size += s
-    total_items += i
-    if i > 0:
-        total_categories += 1
+    total_size, total_items = clean_desktop_apps_caches(
+        detected_apps=detected_apps, dry_run=dry_run
+    )
+    total_categories = 1 if total_items > 0 else 0
 
-    # 2. Run all registered sub-cleaners in the pipeline
-    for cleaner in AppCleanerRegistry.cleaners:
-        result = cleaner(dry_run=dry_run)
-        s, i = result[0], result[1]
-        c = result[2] if len(result) >= 3 else (1 if i > 0 else 0)
-
-        total_size += s
-        total_items += i
-        total_categories += c
+    pipeline_size, pipeline_items, pipeline_categories = _run_registered_cleaners(dry_run)
+    total_size += pipeline_size
+    total_items += pipeline_items
+    total_categories += pipeline_categories
 
     return total_size, total_items, total_categories
