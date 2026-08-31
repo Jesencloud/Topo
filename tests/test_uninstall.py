@@ -2116,6 +2116,55 @@ def test_build_targets_and_execute_cli_npm_and_systemd(test_env):
     assert result["removed_paths"]
 
 
+def test_npm_scope_dir_goes_when_the_uninstall_leaves_it_empty(test_env):
+    """`npm uninstall -g @scope/tool` takes the package and leaves node_modules/@scope.
+
+    Nothing else ever cleans that directory: the next scan finds a scope with no
+    package under it. Driven through execute_uninstall rather than the helper, so
+    the NPM branch is still the thing that asks for the cleanup -- the existing
+    tests reach that branch but stub `npm root -g` to an empty stdout, which
+    returns before the rmdir.
+    """
+    mgr = UninstallManager()
+    node_modules = test_env / "lib/node_modules"
+    scope_dir = node_modules / "@scope"
+    scope_dir.mkdir(parents=True)
+    app = {"id": "@scope/tool", "name": "tool", "type": "NPM", "size_bytes": 10}
+
+    with (
+        patch(
+            "src.uninstall.system.run_command",
+            return_value=MagicMock(ok=True, stdout=f"{node_modules}\n"),
+        ),
+        patch.object(mgr, "_candidate_process_names", return_value=[]),
+        patch("src.uninstall.record_deletion_audit"),
+        patch("src.uninstall.record_history_session"),
+    ):
+        assert mgr.execute_uninstall(app, [])["package_removed"] is True
+
+    assert not scope_dir.exists()
+
+
+def test_npm_scope_dir_stays_when_another_package_still_lives_in_it(test_env):
+    """One scope holds many packages, and only this one was uninstalled.
+
+    This is the half worth guarding: dropping the emptiness check would delete a
+    sibling package's files, which npm has no record of and no way to restore.
+    """
+    mgr = UninstallManager()
+    node_modules = test_env / "lib/node_modules"
+    sibling = node_modules / "@scope/other"
+    sibling.mkdir(parents=True)
+
+    with patch(
+        "src.uninstall.system.run_command",
+        return_value=MagicMock(ok=True, stdout=f"{node_modules}\n"),
+    ):
+        mgr._prune_empty_npm_scope_dir("@scope/tool")
+
+    assert sibling.exists()
+
+
 def test_run_uninstall_reports_apps_already_removed_before_a_ctrl_c(capsys):
     """Ctrl-C mid-selection still says which apps are gone (I2).
 

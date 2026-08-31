@@ -1804,6 +1804,219 @@ class UninstallManager:
         """
         return app.get("type") == "Flatpak" and cls._flatpak_scope(app) == "system"
 
+    def _terminate_app_processes(self, app: AppRecord, paths: list[Path]) -> None:
+        """Close one app's processes, the step that has to precede its removal.
+
+        terminate_apps applies the same policy to a whole selection and has
+        normally already run by the time this does, which is what makes this
+        cheap rather than redundant: the /proc pass finds nothing left and
+        _terminate_process_patterns returns without waiting out a grace period.
+
+        The two are near-twins on purpose. This one runs `flatpak kill` before
+        taking the /proc snapshot and the batch one after, so an app that flatpak
+        has already stopped costs a pkill and a 1.5 s wait there and nothing
+        here. Merging them means choosing one of those two behaviours for both
+        callers -- a decision to make deliberately, not while moving code.
+        """
+        # Use real executable names (id + .desktop Exec), never the localized
+        # display name.
+        all_process_names = self._candidate_process_names(app, paths)
+        if app["type"] == "Flatpak":
+            with contextlib.suppress(OSError, subprocess.SubprocessError):
+                system.run_command(["flatpak", "kill", app["id"]], capture=True, timeout=20)
+
+        # Patterns go through comm_pattern so a long executable name still
+        # matches -- and still gets signalled. Which of them are actually
+        # running is one /proc read for all of them; when terminate_apps has
+        # already closed the selection this list comes back empty and the grace
+        # periods are skipped entirely.
+        running = running_process_comms()
+        processes_to_kill: list[str] = []
+        for proc in all_process_names:
+            pattern = comm_pattern(proc)
+            if pattern in running and pattern not in processes_to_kill:
+                processes_to_kill.append(pattern)
+
+        self._terminate_process_patterns(processes_to_kill)
+
+    def _remove_package(self, app: AppRecord) -> system.CommandResult:
+        """Run the one removal command this app's package manager needs.
+
+        Eight package types plus an explicit refusal, and the branches are long
+        because of the flags in them rather than the calls: apt-get instead of
+        apt, zypper's --clean-deps, the Flatpak scope. Kept out of
+        execute_uninstall so that its own subject -- the audit and history
+        bookkeeping wrapped around this one call -- is not read through a hundred
+        lines of package manager detail.
+
+        Returns a CommandResult even where nothing is spawned (CLI, unsupported),
+        because the caller's only question is res.ok.
+        """
+        if app["type"] == "Flatpak":
+            # The scope is not what makes the app findable -- `flatpak
+            # uninstall` searches both installations to resolve a ref -- it
+            # decides which copy goes when the same ref is installed in
+            # both, and it names the installation the sudo decision was
+            # made for.
+            scope = self._flatpak_scope(app)
+            flatpak_cmd = ["flatpak", "uninstall"]
+            if scope:
+                flatpak_cmd.append(f"--{scope}")
+            flatpak_cmd += ["-y", app["id"]]
+            return system.run_command(
+                flatpak_cmd,
+                use_sudo=self.flatpak_removal_needs_sudo(app),
+                capture=True,
+                timeout=system.PACKAGE_TRANSACTION_TIMEOUT,
+            )
+
+        if app["type"] == "Snap":
+            return system.run_command(
+                ["snap", "remove", "--purge", app["id"]],
+                use_sudo=True,
+                capture=True,
+                timeout=system.PACKAGE_TRANSACTION_TIMEOUT,
+            )
+
+        if app["type"] == "NPM":
+            res = system.run_command(
+                ["npm", "uninstall", "-g", app["id"]], capture=True, timeout=60
+            )
+            self._prune_empty_npm_scope_dir(app["id"])
+            return res
+
+        if app["type"] == "CLI":
+            # Remove standalone binary & install directory
+            home_p = Path.home()
+            cli_targets = [
+                home_p / ".local/bin" / app["id"],
+                home_p / ".local/share" / app["id"],
+                home_p / f".{app['id']}",
+            ]
+            for ct in cli_targets:
+                if ct.exists():
+                    safe_remove(ct, use_trash=get_use_trash(), allow_app_data_removal=True)
+            return system.CommandResult(
+                args=["cli_uninstall"], returncode=0, stdout="CLI uninstalled"
+            )
+
+        if app["type"] == "APT":
+            # apt-get, not apt: apt prints "WARNING: apt does not have a stable
+            # CLI interface" when its output is captured, and the rest of the
+            # repository already standardises on apt-get.
+            #
+            # --autoremove for the same reason the zypper branch passes
+            # --clean-deps, and with exactly the flags _collateral_packages()
+            # simulated: the orphans this removal creates go with it, and they
+            # are the ones the preview listed. The screen used to follow the
+            # whole selection with a single system-wide `apt-get autoremove
+            # --purge -y` instead, one transaction that took every unused
+            # auto-installed package on the box -- none of them previewed, and
+            # not only the ones this app had pulled in.
+            return system.run_command(
+                ["apt-get", "purge", "--autoremove", "-y", app["id"]],
+                use_sudo=True,
+                capture=True,
+                env=system.APT_NONINTERACTIVE_ENV,
+                timeout=system.PACKAGE_TRANSACTION_TIMEOUT,
+            )
+
+        if app["type"] == "Pacman":
+            return system.run_command(
+                ["pacman", "-Rns", "--noconfirm", app["id"]],
+                use_sudo=True,
+                capture=True,
+                timeout=system.PACKAGE_TRANSACTION_TIMEOUT,
+            )
+
+        if app["type"] == "Zypper":
+            return system.run_command(
+                # --clean-deps for the same reason the apt branch above passes
+                # --autoremove: dnf drops the dependencies nothing needs any
+                # more by default and pacman is asked to with -Rns, while
+                # zypper keeps them unless told, which would leave openSUSE the
+                # one family where uninstalling quietly leaves orphans on disk.
+                ["zypper", "--non-interactive", "remove", "--clean-deps", app["id"]],
+                use_sudo=True,
+                capture=True,
+                env=system.C_LOCALE_ENV,
+                timeout=system.PACKAGE_TRANSACTION_TIMEOUT,
+            )
+
+        if app["type"] == "DNF":
+            dnf_cmd = resolve_admin_tool(DNF)
+            return system.run_command(
+                [dnf_cmd, "remove", "-y", app["id"]],
+                use_sudo=True,
+                capture=True,
+                timeout=system.PACKAGE_TRANSACTION_TIMEOUT,
+            )
+
+        # Named explicitly rather than fallen through to: the old else ran
+        # `dnf remove` for anything it did not recognise, which on a
+        # zypper or an unlabelled entry meant a removal that could not
+        # work. Failing says so; guessing a package manager does not.
+        return system.CommandResult(
+            args=["unsupported"],
+            returncode=1,
+            error=f"unsupported package type: {app['type']}",
+        )
+
+    def _prune_empty_npm_scope_dir(self, package_id: str) -> None:
+        """Remove the @scope directory an npm uninstall leaves behind empty.
+
+        `npm uninstall -g @cloudbase/cli` takes the package and leaves
+        node_modules/@cloudbase, which nothing else will ever clean. Only removed
+        when it is genuinely empty, so a second package under the same scope
+        keeps it.
+        """
+        if "/" not in package_id:
+            return
+        scope = package_id.split("/")[0]
+        res_root = system.run_command(["npm", "root", "-g"], capture=True, timeout=5)
+        if not (res_root.ok and res_root.stdout.strip()):
+            return
+        scope_dir = Path(res_root.stdout.strip()) / scope
+        if not scope_dir.is_dir():
+            return
+        with contextlib.suppress(OSError):
+            if not any(scope_dir.iterdir()):
+                scope_dir.rmdir()
+
+    def _remove_residue_paths(self, paths: list[Path]) -> list[tuple[bool, str]]:
+        """Delete an app's leftover data, reporting what happened to each path.
+
+        Residue removal is recoverable (trash) rather than a permanent wipe:
+        residue discovery is heuristic, so a mis-matched user directory must be
+        undoable. config.json's use_trash=false is the one way to ask for an
+        unrecoverable wipe instead. allow_app_data_removal still lets app-owned
+        data go, while hard-protected paths (whitelist, credentials, system, XDG
+        user-data dirs) stay blocked.
+
+        Only ever called once the package itself is gone -- see the caller for
+        why a failed removal leaves the data where it is.
+        """
+        removed_details: list[tuple[bool, str]] = []
+        removed_systemd_service = False
+        use_trash = get_use_trash()
+        for p in paths:
+            success, _ = safe_remove(
+                p,
+                use_trash=use_trash or _is_sandbox_app_data(p),
+                allow_app_data_removal=True,
+            )
+            if success and str(p).endswith(".service") and ".config/systemd/user" in str(p):
+                removed_systemd_service = True
+            try:
+                removed_details.append((success, str(p.relative_to(Path.home()))))
+            except ValueError:
+                removed_details.append((success, str(p)))
+
+        if removed_systemd_service and shutil.which("systemctl"):
+            system.run_command(["systemctl", "--user", "daemon-reload"], capture=True, timeout=10)
+
+        return removed_details
+
     def execute_uninstall(self, app: AppRecord, paths: list[Path]):
         """Terminates app and removes all files."""
         app_name = str(app.get("name") or app.get("id") or "unknown")
@@ -1820,146 +2033,18 @@ class UninstallManager:
         session_status = "interrupted"
 
         try:
-            # 1. Graceful Kill (SIGTERM -> Wait -> SIGKILL). Use real executable
-            # names (id + .desktop Exec), never the localized display name.
-            all_process_names = self._candidate_process_names(app, paths)
-            if app["type"] == "Flatpak":
-                with contextlib.suppress(OSError, subprocess.SubprocessError):
-                    system.run_command(["flatpak", "kill", app["id"]], capture=True, timeout=20)
-
-            # Patterns go through comm_pattern so a long executable name still
-            # matches -- and still gets signalled. Which of them are actually
-            # running is one /proc read for all of them; when terminate_apps has
-            # already closed the selection this list comes back empty and the
-            # grace periods are skipped entirely.
-            running = running_process_comms()
-            processes_to_kill: list[str] = []
-            for proc in all_process_names:
-                pattern = comm_pattern(proc)
-                if pattern in running and pattern not in processes_to_kill:
-                    processes_to_kill.append(pattern)
-
-            self._terminate_process_patterns(processes_to_kill)
+            # 1. Graceful kill (SIGTERM -> wait -> SIGKILL).
+            self._terminate_app_processes(app, paths)
 
             # 2. Binary uninstall
-            if app["type"] == "Flatpak":
-                # The scope is not what makes the app findable -- `flatpak
-                # uninstall` searches both installations to resolve a ref -- it
-                # decides which copy goes when the same ref is installed in
-                # both, and it names the installation the sudo decision was
-                # made for.
-                scope = self._flatpak_scope(app)
-                flatpak_cmd = ["flatpak", "uninstall"]
-                if scope:
-                    flatpak_cmd.append(f"--{scope}")
-                flatpak_cmd += ["-y", app["id"]]
-                res = system.run_command(
-                    flatpak_cmd,
-                    use_sudo=self.flatpak_removal_needs_sudo(app),
-                    capture=True,
-                    timeout=system.PACKAGE_TRANSACTION_TIMEOUT,
-                )
-            elif app["type"] == "Snap":
-                res = system.run_command(
-                    ["snap", "remove", "--purge", app["id"]],
-                    use_sudo=True,
-                    capture=True,
-                    timeout=system.PACKAGE_TRANSACTION_TIMEOUT,
-                )
-            elif app["type"] == "NPM":
-                res = system.run_command(
-                    ["npm", "uninstall", "-g", app["id"]], capture=True, timeout=60
-                )
-                # Clean empty scoped directory in global node_modules (e.g. ~/.npm-global/lib/node_modules/@cloudbase)
-                if "/" in app["id"]:
-                    scope = app["id"].split("/")[0]
-                    res_root = system.run_command(["npm", "root", "-g"], capture=True, timeout=5)
-                    if res_root.ok and res_root.stdout.strip():
-                        scope_dir = Path(res_root.stdout.strip()) / scope
-                        if scope_dir.is_dir():
-                            with contextlib.suppress(OSError):
-                                if not any(scope_dir.iterdir()):
-                                    scope_dir.rmdir()
-            elif app["type"] == "CLI":
-                # Remove standalone binary & install directory
-                home_p = Path.home()
-                cli_targets = [
-                    home_p / ".local/bin" / app["id"],
-                    home_p / ".local/share" / app["id"],
-                    home_p / f".{app['id']}",
-                ]
-                for ct in cli_targets:
-                    if ct.exists():
-                        safe_remove(ct, use_trash=get_use_trash(), allow_app_data_removal=True)
-                res = system.CommandResult(
-                    args=["cli_uninstall"], returncode=0, stdout="CLI uninstalled"
-                )
-            elif app["type"] == "APT":
-                # apt-get, not apt: apt prints "WARNING: apt does not have a stable
-                # CLI interface" when its output is captured, and the rest of the
-                # repository already standardises on apt-get.
-                #
-                # --autoremove for the same reason the zypper branch passes
-                # --clean-deps, and with exactly the flags _collateral_packages()
-                # simulated: the orphans this removal creates go with it, and they
-                # are the ones the preview listed. The screen used to follow the
-                # whole selection with a single system-wide `apt-get autoremove
-                # --purge -y` instead, one transaction that took every unused
-                # auto-installed package on the box -- none of them previewed, and
-                # not only the ones this app had pulled in.
-                res = system.run_command(
-                    ["apt-get", "purge", "--autoremove", "-y", app["id"]],
-                    use_sudo=True,
-                    capture=True,
-                    env=system.APT_NONINTERACTIVE_ENV,
-                    timeout=system.PACKAGE_TRANSACTION_TIMEOUT,
-                )
-            elif app["type"] == "Pacman":
-                res = system.run_command(
-                    ["pacman", "-Rns", "--noconfirm", app["id"]],
-                    use_sudo=True,
-                    capture=True,
-                    timeout=system.PACKAGE_TRANSACTION_TIMEOUT,
-                )
-            elif app["type"] == "Zypper":
-                res = system.run_command(
-                    # --clean-deps for the same reason the apt branch above passes
-                    # --autoremove: dnf drops the dependencies nothing needs any
-                    # more by default and pacman is asked to with -Rns, while
-                    # zypper keeps them unless told, which would leave openSUSE the
-                    # one family where uninstalling quietly leaves orphans on disk.
-                    ["zypper", "--non-interactive", "remove", "--clean-deps", app["id"]],
-                    use_sudo=True,
-                    capture=True,
-                    env=system.C_LOCALE_ENV,
-                    timeout=system.PACKAGE_TRANSACTION_TIMEOUT,
-                )
-            elif app["type"] == "DNF":
-                dnf_cmd = resolve_admin_tool(DNF)
-                res = system.run_command(
-                    [dnf_cmd, "remove", "-y", app["id"]],
-                    use_sudo=True,
-                    capture=True,
-                    timeout=system.PACKAGE_TRANSACTION_TIMEOUT,
-                )
-            else:
-                # Named explicitly rather than fallen through to: the old else ran
-                # `dnf remove` for anything it did not recognise, which on a
-                # zypper or an unlabelled entry meant a removal that could not
-                # work. Failing says so; guessing a package manager does not.
-                res = system.CommandResult(
-                    args=["unsupported"],
-                    returncode=1,
-                    error=f"unsupported package type: {app['type']}",
-                )
+            res = self._remove_package(app)
             package_status = "removed" if res.ok else "failed"
             record_deletion_audit(app["id"], package_mode, package_status, package_size)
             package_event_recorded = True
 
             # 3. Path removal: explicit uninstall may remove app-owned data,
             # but hard-protected credentials/system paths remain blocked.
-            removed_details = []
-            removed_systemd_service = False
+            #
             # Nothing is deleted while the app is still installed. The removal
             # above fails for reasons that have nothing to do with the data --
             # no polkit agent for a system-wide Flatpak, a lock held by another
@@ -1969,32 +2054,9 @@ class UninstallManager:
             # forgotten everything, and a retry cannot bring it back. Leaving
             # the paths alone makes the failure retryable.
             data_left_in_place = bool(paths) and package_status != "removed"
-            # Residue removal is recoverable (trash) rather than a permanent
-            # wipe: residue discovery is heuristic, so a mis-matched user
-            # directory must be undoable. config.json's use_trash=false is the
-            # one way to ask for an unrecoverable wipe instead.
-            # allow_app_data_removal still lets app-owned data go, while
-            # hard-protected paths (whitelist, credentials, system, XDG
-            # user-data dirs) stay blocked.
-            use_trash = get_use_trash()
+            removed_details: list[tuple[bool, str]] = []
             if package_status == "removed":
-                for p in paths:
-                    success, _ = safe_remove(
-                        p,
-                        use_trash=use_trash or _is_sandbox_app_data(p),
-                        allow_app_data_removal=True,
-                    )
-                    if success and str(p).endswith(".service") and ".config/systemd/user" in str(p):
-                        removed_systemd_service = True
-                    try:
-                        removed_details.append((success, str(p.relative_to(Path.home()))))
-                    except ValueError:
-                        removed_details.append((success, str(p)))
-
-            if removed_systemd_service and shutil.which("systemctl"):
-                system.run_command(
-                    ["systemctl", "--user", "daemon-reload"], capture=True, timeout=10
-                )
+                removed_details = self._remove_residue_paths(paths)
 
             session_status = "ended"
             return {
