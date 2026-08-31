@@ -33,6 +33,22 @@ ignore_names = [
     "exc_tb",
     "exc_type",
     "exc_val",
+    # TypedDict keys, from the app records in uninstall.py. A key is declared as
+    # an annotation in the class body and read as a string subscript
+    # (app["install_dir"]), and vulture cannot connect the two -- so it calls the
+    # declaration a dead variable. The other keys of those same records escape
+    # only by coincidence, because some local variable elsewhere happens to share
+    # the name; these four are the ones with no such twin, not a group that is
+    # special in any other way.
+    #
+    # "id" is the blunt one: it would now also hide a genuinely dead variable
+    # named id anywhere in src/. Nothing defines one, and a plain variable named
+    # id shadows a builtin, which is a defect of its own that ruff would have
+    # something to say about.
+    "collateral_packages",
+    "flatpak_scope",
+    "id",
+    "install_dir",
 ]
 
 [tool.ruff]

@@ -9,7 +9,7 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 from .core import system
 from .core.config import get_use_trash
@@ -110,6 +110,65 @@ def _is_sandbox_app_data(path: Path) -> bool:
     return path.parent in (home / ".var/app", home / "snap")
 
 
+class _ScannedApp(TypedDict):
+    """What every one of the seven scanners produces, by way of ``_app_record``.
+
+    Required, because that factory is the only way a record is born and it fills
+    all six: ``id`` is what the package manager is asked to remove, ``name`` is
+    what the user reads (display text picked up from the environment -- a
+    ``.desktop`` ``Name=`` field, a filename, an npm package name -- so it is
+    untrusted), ``type`` names the manager that owns it, ``size_bytes`` and
+    ``size_str`` are the same number for sorting and for display, and
+    ``install_time`` is 0 when nothing could be read rather than absent.
+    """
+
+    id: str
+    name: str
+    size_bytes: int
+    size_str: str
+    type: str
+    install_time: int
+
+
+class AppRecord(_ScannedApp, total=False):
+    """A scanned app, plus the three fields later stages attach to some of them.
+
+    These three were the argument for typing the record at all. They exist on a
+    subset of the apps -- ``flatpak_scope`` only on Flatpaks whose scope column
+    was not empty, ``install_dir`` only on standalone CLI tools,
+    ``collateral_packages`` only on apps that reached the removal preview -- and
+    before this class the only thing that said so was whether a call site reached
+    for ``app["x"]`` or ``app.get("x")``. Those two spellings were split across
+    the same keys (``app["id"]`` at 16 sites, ``app.get("id")`` at four), so the
+    distinction they were supposedly drawing was not one a reader could trust.
+
+    Split in two classes rather than written with ``NotRequired`` because the
+    supported floor is Python 3.10, where that spelling does not exist yet;
+    per-class ``total`` is how PEP 589 says the same thing.
+    """
+
+    flatpak_scope: str
+    install_dir: Path
+    collateral_packages: list[str]
+
+
+class _DiscoveredTool(TypedDict):
+    """One standalone CLI tool found on disk, before it is sized into a record.
+
+    Two loops in ``_scan_standalone_cli_apps`` build these -- one over
+    ``~/.local/bin``, one over the dotted directories in ``$HOME`` -- and a third
+    loop reads them back. Untyped, all four fields had to be re-declared on the
+    way out: two ``str()`` calls that could not convert anything, because the
+    writer twenty lines up had put a ``str`` there, and two annotations
+    (``bin_path: Path = tool["binary"]``) that only told the reader the same.
+    """
+
+    id: str
+    name: str
+    binary: Path
+    install_dir: Path
+
+
 @dataclass(frozen=True, eq=False)
 class _ResidueEntryIndex:
     """One scanned root plus compact lookup tables for residue candidates.
@@ -201,7 +260,7 @@ class _ResidueEntryIndex:
 
 class UninstallManager:
     _SCAN_CACHE_TTL_SECONDS = 30
-    _scan_cache_apps: list[dict[str, Any]] | None = None
+    _scan_cache_apps: list[AppRecord] | None = None
     _scan_cache_time = 0.0
     _scan_cache_key: tuple[Any, ...] | None = None
 
@@ -401,7 +460,7 @@ class UninstallManager:
     )
 
     def __init__(self):
-        self.apps: list[dict[str, Any]] = []
+        self.apps: list[AppRecord] = []
         # The residue index run_full_scan built, kept so the preview can reuse it.
         # Only ever valid inside the process that built it: _ResidueEntryIndex
         # buckets grams with the per-process-randomized str.__hash__.
@@ -543,7 +602,7 @@ class UninstallManager:
         size_str: str,
         app_type: str,
         install_time: int = 0,
-    ) -> dict[str, Any]:
+    ) -> AppRecord:
         return {
             "id": app_id,
             "name": name,
@@ -562,7 +621,7 @@ class UninstallManager:
         return list(keywords)
 
     def _candidate_process_names(
-        self, app: dict[str, Any], paths: list[Path] | None = None
+        self, app: AppRecord, paths: list[Path] | None = None
     ) -> list[str]:
         """Plausible process (comm) names to terminate before removing an app.
 
@@ -773,7 +832,7 @@ class UninstallManager:
 
     def _scan_rpm_packages(
         self, user_app_packages: set[str], package_desktop_names: dict[str, str]
-    ) -> list[dict[str, Any]]:
+    ) -> list[AppRecord]:
         if not shutil.which("rpm") or not _has_rpm_database():
             return []
         # openSUSE and SLES are rpm distros without dnf, so labelling everything
@@ -821,7 +880,7 @@ class UninstallManager:
 
     def _scan_apt_packages(
         self, user_app_packages: set[str], package_desktop_names: dict[str, str]
-    ) -> list[dict[str, Any]]:
+    ) -> list[AppRecord]:
         if not shutil.which("dpkg-query") or not _has_deb_database():
             return []
         apps = []
@@ -873,7 +932,7 @@ class UninstallManager:
 
     def _scan_pacman_packages(
         self, user_app_packages: set[str], package_desktop_names: dict[str, str]
-    ) -> list[dict[str, Any]]:
+    ) -> list[AppRecord]:
         if not shutil.which("pacman"):
             return []
         apps = []
@@ -913,7 +972,7 @@ class UninstallManager:
             pass
         return apps
 
-    def _scan_flatpak_apps(self) -> list[dict[str, Any]]:
+    def _scan_flatpak_apps(self) -> list[AppRecord]:
         if not shutil.which("flatpak"):
             return []
         apps = []
@@ -969,7 +1028,7 @@ class UninstallManager:
             pass
         return apps
 
-    def _scan_snap_apps(self, package_desktop_names: dict[str, str]) -> list[dict[str, Any]]:
+    def _scan_snap_apps(self, package_desktop_names: dict[str, str]) -> list[AppRecord]:
         if not shutil.which("snap"):
             return []
         apps = []
@@ -1034,7 +1093,7 @@ class UninstallManager:
             pass
         return apps
 
-    def _scan_npm_global_packages(self) -> list[dict[str, Any]]:
+    def _scan_npm_global_packages(self) -> list[AppRecord]:
         if not shutil.which("npm"):
             return []
         apps = []
@@ -1098,9 +1157,9 @@ class UninstallManager:
             pass
         return apps
 
-    def _scan_standalone_cli_apps(self) -> list[dict[str, Any]]:
+    def _scan_standalone_cli_apps(self) -> list[AppRecord]:
         home = Path.home()
-        discovered_standalone: list[dict[str, Any]] = []
+        discovered_standalone: list[_DiscoveredTool] = []
         skip_cli_names = {
             "pip",
             "python",
@@ -1193,12 +1252,12 @@ class UninstallManager:
         except OSError:
             pass
 
-        apps = []
+        apps: list[AppRecord] = []
         for tool in discovered_standalone:
-            tool_id = str(tool["id"])
-            tool_name = str(tool["name"])
-            bin_path: Path = tool["binary"]
-            inst_dir: Path = tool["install_dir"]
+            tool_id = tool["id"]
+            tool_name = tool["name"]
+            bin_path = tool["binary"]
+            inst_dir = tool["install_dir"]
 
             size_bytes = 0
             install_time = 0
@@ -1281,11 +1340,11 @@ class UninstallManager:
         return pre_scanned_entries
 
     def _calculate_app_sizes_and_residues(
-        self, apps: list[dict[str, Any]], pre_scanned_entries: dict[Path, _ResidueEntryIndex]
+        self, apps: list[AppRecord], pre_scanned_entries: dict[Path, _ResidueEntryIndex]
     ) -> None:
         """Calculates total app sizes including user data and cache residues in parallel."""
 
-        def _process_single_app(app: dict[str, Any]):
+        def _process_single_app(app: AppRecord):
             residue_paths = self.find_residue_paths(
                 app["id"], app["name"], pre_scanned_entries=pre_scanned_entries
             )
@@ -1305,7 +1364,7 @@ class UninstallManager:
         with ThreadPoolExecutor(max_workers=8) as executor:
             list(executor.map(_process_single_app, apps))
 
-    def run_full_scan(self, *, use_cache: bool = False) -> list[dict[str, Any]]:
+    def run_full_scan(self, *, use_cache: bool = False) -> list[AppRecord]:
         """Scans for user-facing applications across Linux package managers in parallel."""
         cache_key = self._current_scan_cache_key()
         if use_cache and self.has_fresh_scan_cache():
@@ -1524,7 +1583,7 @@ class UninstallManager:
 
         return paths
 
-    def _collateral_packages(self, app: dict[str, Any]) -> list[str]:
+    def _collateral_packages(self, app: AppRecord) -> list[str]:
         """Which other installed packages this app's removal will take with it.
 
         `apt-get purge`, `dnf remove`, `pacman -Rns` and `zypper remove` all pull
@@ -1625,8 +1684,8 @@ class UninstallManager:
         return names
 
     def build_removal_targets(
-        self, apps: list[dict[str, Any]]
-    ) -> list[tuple[dict[str, Any], list[Path], bool]]:
+        self, apps: list[AppRecord]
+    ) -> list[tuple[AppRecord, list[Path], bool]]:
         """Resolve residue paths and running state for each app about to be removed.
 
         Both answers cost real work -- residue discovery walks the filesystem and
@@ -1697,7 +1756,7 @@ class UninstallManager:
         if killed:
             time.sleep(SIGKILL_GRACE_SECONDS)
 
-    def terminate_apps(self, targets: list[tuple[dict[str, Any], list[Path], bool]]) -> None:
+    def terminate_apps(self, targets: list[tuple[AppRecord, list[Path], bool]]) -> None:
         """Close every selected app's processes before the removals start.
 
         execute_uninstall still does this for its own app, so this method is an
@@ -1721,7 +1780,7 @@ class UninstallManager:
         self._terminate_process_patterns(patterns)
 
     @staticmethod
-    def _flatpak_scope(app: dict[str, Any]) -> str:
+    def _flatpak_scope(app: AppRecord) -> str:
         """Which installation this Flatpak lives in, or "" when the scan could not tell.
 
         `flatpak list --columns=installation` prints "system", "user", or the id
@@ -1733,7 +1792,7 @@ class UninstallManager:
         return scope if scope in ("system", "user") else ""
 
     @classmethod
-    def flatpak_removal_needs_sudo(cls, app: dict[str, Any]) -> bool:
+    def flatpak_removal_needs_sudo(cls, app: AppRecord) -> bool:
         """Whether removing this Flatpak has to be root's work.
 
         A system-wide installation lives under /var/lib/flatpak, which the
@@ -1745,7 +1804,7 @@ class UninstallManager:
         """
         return app.get("type") == "Flatpak" and cls._flatpak_scope(app) == "system"
 
-    def execute_uninstall(self, app: dict[str, Any], paths: list[Path]):
+    def execute_uninstall(self, app: AppRecord, paths: list[Path]):
         """Terminates app and removes all files."""
         app_name = str(app.get("name") or app.get("id") or "unknown")
         session_command = f"uninstall {app_name}"
