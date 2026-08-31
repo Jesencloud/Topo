@@ -11,6 +11,7 @@ import os
 import shutil
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -238,9 +239,31 @@ def _open_in_file_manager(path: Path) -> str:
     return _open_path(target)
 
 
+@dataclass(frozen=True)
+class _ViewState:
+    """One entry on the navigation stack: the view a drill-down left behind.
+
+    This used to be a bare dict under a comment listing its keys, and the comment
+    listed four of the six: the cursor and page were added later -- so that coming
+    back from a child directory lands where it left rather than at the top -- and
+    the only thing documenting them was the ``.get(key, 0)`` they were read with,
+    which advertised a default that the single push site guarantees is never used.
+
+    Six named fields cannot drift that way. Building one is a type error until
+    every field is supplied, and reading a field that does not exist is a type
+    error rather than a silent 0.
+    """
+
+    target: Path | None
+    results: list[dict[str, Any]]
+    data: dict[str, Any] | None
+    total_size: int
+    selected_index: int
+    current_page: int
+
+
 def run_deep_analysis(target_path: Path | None = None):
-    # State Stack stores: {"target": Path, "results": [], "data": {}, "total_size": int}
-    state_stack: list[dict[str, Any]] = []
+    state_stack: list[_ViewState] = []
 
     # Current active state
     current_target: Path | None = normalize_scan_path(target_path) if target_path else None
@@ -298,12 +321,12 @@ def run_deep_analysis(target_path: Path | None = None):
                 action_notice = _fail_notice(ENGINE_SCAN_FAILED_NOTICE)
                 if state_stack:
                     prev = state_stack.pop()
-                    current_target = prev["target"]
-                    results = prev["results"]
-                    data = prev["data"]
-                    total_scan_size = prev["total_size"]
-                    selected_index = prev.get("selected_index", 0)
-                    current_page = prev.get("current_page", 0)
+                    current_target = prev.target
+                    results = prev.results
+                    data = prev.data
+                    total_scan_size = prev.total_size
+                    selected_index = prev.selected_index
+                    current_page = prev.current_page
                     needs_scan = False
                     continue
                 else:
@@ -477,12 +500,12 @@ def run_deep_analysis(target_path: Path | None = None):
         elif action == "BACK":
             if state_stack:
                 prev = state_stack.pop()
-                current_target = prev["target"]
-                results = prev["results"]
-                data = prev["data"]
-                total_scan_size = prev["total_size"]
-                selected_index = prev.get("selected_index", 0)
-                current_page = prev.get("current_page", 0)
+                current_target = prev.target
+                results = prev.results
+                data = prev.data
+                total_scan_size = prev.total_size
+                selected_index = prev.selected_index
+                current_page = prev.current_page
                 # Recalculate parent percentages to reflect any deletions done in child
                 for r in results:
                     # Each row keeps the total it was measured against: in the
@@ -522,14 +545,14 @@ def run_deep_analysis(target_path: Path | None = None):
                     continue
 
                 state_stack.append(
-                    {
-                        "target": current_target,
-                        "results": results,
-                        "data": data,
-                        "total_size": total_scan_size,
-                        "selected_index": selected_index,
-                        "current_page": current_page,
-                    }
+                    _ViewState(
+                        target=current_target,
+                        results=results,
+                        data=data,
+                        total_size=total_scan_size,
+                        selected_index=selected_index,
+                        current_page=current_page,
+                    )
                 )
                 current_target = item["path"]
                 selected_index = 0

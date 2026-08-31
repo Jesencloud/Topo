@@ -639,6 +639,61 @@ def test_regular_directory_uses_rust_size_view(mock_single, mock_selector, test_
 
 
 @patch("src.ui.screens.analyze.AnalyzeSelector")
+@patch("src.ui.screens.analyze._get_rust_scan_data_with_spinner")
+def test_going_back_restores_the_parent_cursor_and_page(mock_single, mock_selector, test_env):
+    """Returning from a child directory lands on the row it was entered from.
+
+    The cursor and page are two of the six fields the navigation stack carries,
+    and they were the two that nothing documented: the comment above the stack
+    listed the other four, and they were read back with a ``.get(key, 0)`` whose
+    default would have quietly sent the cursor to the top of the list. This is the
+    only test that drills in and comes back out, so it is the only thing that
+    would notice.
+    """
+    ScanCache.clear()
+    parent = test_env / "A"
+    child = parent / "B"
+    child.mkdir(parents=True)
+    (child / "inner.txt").write_bytes(b"x")
+    # The rows come from mock_single below, so what these files hold is irrelevant
+    # -- they only have to exist for the walk to find them.
+    (parent / "c.txt").write_bytes(b"x")
+    (parent / "d.txt").write_bytes(b"x")
+    # B is the smallest, so it sorts last and the cursor that enters it is at 2 --
+    # a position a lost restore would visibly reset.
+    mock_single.side_effect = [
+        {"total_size_bytes": 1000, "subdirs": {"c.txt": 700, "d.txt": 200, "B": 100}},
+        {"total_size_bytes": 100, "subdirs": {"inner.txt": 100}},
+    ]
+
+    selector = mock_selector.return_value
+    seen: list[tuple[int, int]] = []
+
+    def fake_run():
+        # What the loop handed this view before running it: the parent's first
+        # visit, the child, then the parent again.
+        seen.append((selector.selected_index, selector.current_page))
+        if len(seen) == 1:
+            selector.selected_index = 2
+            selector.current_page = 1
+            return ("DRILL_DOWN", 2)
+        if len(seen) == 2:
+            return ("BACK", None)
+        return ("QUIT", None)
+
+    selector.run.side_effect = fake_run
+
+    run_deep_analysis(parent)
+
+    assert [item["name"] for item in mock_selector.call_args_list[0].args[1]] == [
+        "c.txt",
+        "d.txt",
+        "B",
+    ]
+    assert seen == [(0, 0), (0, 0), (2, 1)]
+
+
+@patch("src.ui.screens.analyze.AnalyzeSelector")
 @patch("src.ui.screens.analyze.FAST_EXPLORE_ENTRY_LIMIT", 1)
 @patch("src.ui.screens.analyze._get_rust_scan_data_with_spinner")
 @patch("src.ui.screens.analyze.build_analysis_entry")
