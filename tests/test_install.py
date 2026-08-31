@@ -95,6 +95,95 @@ def _run_installer_block(pattern: str, prelude: str, expr: str, env: dict, count
     return result.stdout
 
 
+CURL_RETRY_BLOCK = r"^CURL_RETRY_OPTS=\(.*?^fi$"
+
+
+def _curl_retry_opts(tmp_path: Path, *, knows_retry_all_errors: bool) -> list[str]:
+    """The flags install.sh settles on, against a curl that does or does not
+    accept --retry-all-errors."""
+    bin_dir = tmp_path / "curlbin"
+    bin_dir.mkdir(exist_ok=True)
+    stub = bin_dir / "curl"
+    # Exit 2 with no output is what real curl does for an option it does not
+    # know: `curl: option --retry-all-errors: is unknown`.
+    stub.write_text(
+        "#!/bin/sh\n"
+        + (
+            ""
+            if knows_retry_all_errors
+            else 'case " $* " in *" --retry-all-errors "*) exit 2;; esac\n'
+        )
+        + "exit 0\n"
+    )
+    stub.chmod(0o755)
+
+    return _run_installer_block(
+        CURL_RETRY_BLOCK,
+        prelude="",
+        expr='printf "%s\\n" "${CURL_RETRY_OPTS[@]}"',
+        env={"HOME": str(tmp_path), "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"},
+    ).split()
+
+
+def test_installer_adds_retry_all_errors_when_curl_supports_it(tmp_path):
+    """A TLS handshake the peer cuts off must be retried, not reported as fatal.
+
+    curl's own --retry covers only what it calls transient -- timeouts, 408,
+    429, 5xx -- plus ECONNREFUSED from --retry-connrefused. `curl: (35) TLS
+    connect error: ... unexpected eof while reading` is in none of those sets,
+    so an install behind a TLS-inspecting middlebox aborted on the first
+    attempt while asking for three retries.
+    """
+    assert _curl_retry_opts(tmp_path, knows_retry_all_errors=True) == [
+        "--connect-timeout",
+        "10",
+        "--retry",
+        "3",
+        "--retry-delay",
+        "2",
+        "--retry-connrefused",
+        "--retry-all-errors",
+    ]
+
+
+def test_installer_omits_retry_all_errors_on_a_curl_too_old_for_it(tmp_path):
+    # --retry-all-errors is curl 7.71+; RHEL 8 ships 7.61, where passing it
+    # exits 2 before a single byte is fetched. Losing the extra retries there is
+    # the point of probing -- turning a working install into an unknown-option
+    # error is not.
+    flags = _curl_retry_opts(tmp_path, knows_retry_all_errors=False)
+
+    assert "--retry-all-errors" not in flags
+    assert flags == [
+        "--connect-timeout",
+        "10",
+        "--retry",
+        "3",
+        "--retry-delay",
+        "2",
+        "--retry-connrefused",
+    ]
+
+
+def test_every_release_download_carries_the_shared_retry_flags():
+    """One retry policy for all five signed-release downloads.
+
+    The flags used to be spelled out at each call site, so a sixth download --
+    or a fix applied to four of the five -- would silently differ from the rest.
+    Scoped to lines naming $RELEASE_URL rather than every curl in the file, so
+    there is no exemption list to keep honest: the one other curl resolves the
+    latest tag, has a python3 fallback when it fails, and downloads nothing.
+    """
+    downloads = [
+        line.strip()
+        for line in (REPO_ROOT / "install.sh").read_text().splitlines()
+        if line.lstrip().startswith("curl ") and "$RELEASE_URL" in line
+    ]
+
+    assert len(downloads) == 5, downloads
+    assert [line for line in downloads if '"${CURL_RETRY_OPTS[@]}"' not in line] == []
+
+
 def _installer_function(name: str) -> str:
     """One named shell function of install.sh, verbatim."""
     script = (REPO_ROOT / "install.sh").read_text()

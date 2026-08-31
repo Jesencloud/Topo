@@ -308,6 +308,34 @@ else
     RELEASE_URL="https://github.com/Jesencloud/Topo/releases/download/${TARGET_REF}"
 fi
 
+# Every release download below shares these flags, spelled once so the probe
+# underneath cannot end up covering some of the five and missing others.
+#
+# `--retry` does not do what it looks like it does: curl retries only what it
+# considers transient -- timeouts, 408, 429, 5xx -- and `--retry-connrefused`
+# adds exactly ECONNREFUSED. A TLS handshake the peer cuts off mid-way
+# (curl 35, "unexpected eof while reading": a middlebox, a TLS-inspecting
+# proxy, or a bad minute at the CDN) is not in that set, so the download was
+# reported as a hard failure on the first attempt and the install aborted with
+# `--retry 3` never having retried anything. That abort is the most likely one
+# on a filtered link, and re-running the installer usually just works -- which
+# is the definition of what a retry should have handled.
+#
+# Safe with `-o` despite the man page's warning about redirected output: curl
+# truncates a file it opened itself back to the starting offset before it
+# retries, so a retried body cannot be appended to the remains of a failed one.
+# The warning is about `>` redirection, where curl cannot seek. The real cost is
+# that a genuine 404 is retried too, so asking for a release tag that does not
+# exist now takes about six seconds longer to say so.
+CURL_RETRY_OPTS=(--connect-timeout 10 --retry 3 --retry-delay 2 --retry-connrefused)
+# Asked of curl rather than worked out from `curl --version`: `--retry-all-errors`
+# is 7.71+, RHEL 8 ships 7.61, and passing an option curl does not know exits 2 --
+# a working install would turn into an unknown-option error. Comparing version
+# numbers would also be wrong on distro builds that backported the flag.
+if curl --retry-all-errors --version >/dev/null 2>&1; then
+    CURL_RETRY_OPTS+=(--retry-all-errors)
+fi
+
 VERIFY_DIR=""
 SUMS_FILE=""
 cleanup_verify_dir() {
@@ -335,11 +363,11 @@ require_release_manifest() {
     fi
     VERIFY_DIR=$(mktemp -d)
     start_action "↓" "Downloading and verifying GPG release manifest"
-    curl -fsSL --connect-timeout 10 --retry 3 --retry-delay 2 --retry-connrefused "$RELEASE_URL/SHA256SUMS" -o "$VERIFY_DIR/SHA256SUMS" ||
+    curl -fsSL "${CURL_RETRY_OPTS[@]}" "$RELEASE_URL/SHA256SUMS" -o "$VERIFY_DIR/SHA256SUMS" ||
         abort_verification "Could not download the SHA256SUMS manifest."
-    curl -fsSL --connect-timeout 10 --retry 3 --retry-delay 2 --retry-connrefused "$RELEASE_URL/SHA256SUMS.asc" -o "$VERIFY_DIR/SHA256SUMS.asc" ||
+    curl -fsSL "${CURL_RETRY_OPTS[@]}" "$RELEASE_URL/SHA256SUMS.asc" -o "$VERIFY_DIR/SHA256SUMS.asc" ||
         abort_verification "Could not download the SHA256SUMS signature."
-    curl -fsSL --connect-timeout 10 --retry 3 --retry-delay 2 --retry-connrefused "$RELEASE_URL/topo-release-public.asc" -o "$VERIFY_DIR/key.asc" ||
+    curl -fsSL "${CURL_RETRY_OPTS[@]}" "$RELEASE_URL/topo-release-public.asc" -o "$VERIFY_DIR/key.asc" ||
         abort_verification "Could not download the Topo release public key."
     mkdir -p "$VERIFY_DIR/gnupg"
     chmod 700 "$VERIFY_DIR/gnupg"
@@ -450,7 +478,7 @@ if [ "$TARGET_REF" = "main" ]; then
     abort_verification "The moving main branch has no signed source archive; install a release tag."
 fi
 start_action "↓" "Downloading signed source archive (${TARGET_REF})"
-curl -fsSL --connect-timeout 10 --retry 3 --retry-delay 2 --retry-connrefused "$RELEASE_URL/topo-src.tar.gz" -o "$SRC_ARCHIVE" ||
+curl -fsSL "${CURL_RETRY_OPTS[@]}" "$RELEASE_URL/topo-src.tar.gz" -o "$SRC_ARCHIVE" ||
     abort_verification "Could not download the signed Topo source archive."
 verify_release_file "$SRC_ARCHIVE" "topo-src.tar.gz"
 STAGED_INSTALL=$(mktemp -d "$HOME/.topo.install.XXXXXX")
@@ -480,7 +508,7 @@ fetch_engine_binary() {
     require_release_manifest
     local staged="$VERIFY_DIR/$bin_name"
     start_action "↓" "Fetching ${bin_name} engine"
-    curl -fsSL --connect-timeout 10 --retry 3 --retry-delay 2 --retry-connrefused "$RELEASE_URL/$bin_name" -o "$staged" ||
+    curl -fsSL "${CURL_RETRY_OPTS[@]}" "$RELEASE_URL/$bin_name" -o "$staged" ||
         abort_verification "Could not download the ${bin_name} engine."
     verify_release_file "$staged" "$bin_name"
     chmod +x "$staged"
