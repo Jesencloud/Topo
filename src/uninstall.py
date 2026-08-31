@@ -6,6 +6,7 @@ import subprocess
 import time
 from array import array
 from collections import defaultdict
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -715,119 +716,154 @@ class UninstallManager:
 
         return [n for n in names if n]
 
+    def _installed_desktop_files(self) -> list[Path]:
+        """Every readable .desktop entry the system and the user have installed.
+
+        Existence is re-checked after the glob: glob() still yields a dangling
+        symlink, and rpm reports an unreadable path on stderr instead of stdout
+        -- that drops a line from the batch and shifts every later name onto the
+        wrong package. Dropping the unreadable entries here keeps the reply one
+        line per queried path.
+        """
+        desktop_files: list[Path] = []
+        for directory in (
+            Path("/usr/share/applications"),
+            Path.home() / ".local/share/applications",
+        ):
+            # An unreadable directory costs its own entries and nobody else's.
+            # pathlib swallows a PermissionError while walking, but on the
+            # supported floor it lets every other OSError through, and this
+            # suppress used to sit around the whole function: one directory
+            # failing threw away the other one's files too, along with every
+            # package name already collected from them.
+            with contextlib.suppress(OSError):
+                if directory.exists():
+                    desktop_files.extend(e for e in directory.glob("*.desktop") if e.exists())
+        return desktop_files
+
+    def _rpm_desktop_owners(self, batch: list[Path]) -> list[tuple[str, Path]]:
+        """Ask rpm which package owns each of these .desktop files.
+
+        rpm answers positionally and prints its "not owned by any package" notice
+        on stdout, so a reply of the wrong length means the answers no longer
+        line up with the questions. Losing a few display names beats attaching
+        them to the wrong package, so a mismatched batch is dropped whole.
+        """
+        res = system.run_command(
+            ["rpm", "-qf", "--queryformat", "%{NAME}\n"] + [str(f) for f in batch],
+            capture=True,
+            timeout=60,
+            env=system.C_LOCALE_ENV,
+        )
+        lines = res.stdout.splitlines()
+        if len(lines) != len(batch):
+            return []
+        owners: list[tuple[str, Path]] = []
+        for df_path, line in zip(batch, lines, strict=True):
+            pkg = line.strip()
+            # C_LOCALE_ENV above keeps this marker in English.
+            if pkg and not pkg.startswith("file "):
+                owners.append((pkg, df_path))
+        return owners
+
+    def _dpkg_desktop_owners(self, batch: list[Path]) -> list[tuple[str, Path]]:
+        """Ask dpkg which packages own each of these .desktop files.
+
+        Every owner of a path shares one comma-separated line ("procps,
+        libc6:amd64, bash: /usr/share/doc") and an owner may carry its own :arch,
+        so the path is what follows the LAST ": " -- splitting on the first colon
+        cuts libc6:amd64 in half and turns the rest into a package name that does
+        not exist. One path can therefore come back with several owners, and all
+        of them get the entry's display name.
+        """
+        res = system.run_command(
+            ["dpkg-query", "-S", *[str(f) for f in batch]],
+            capture=True,
+            env=system.C_LOCALE_ENV,
+        )
+        owners: list[tuple[str, Path]] = []
+        for line in res.stdout.splitlines():
+            owner_str, sep, path_str = line.rpartition(": ")
+            if not sep:
+                continue
+            df_path = Path(path_str.strip())
+            for owner in owner_str.split(", "):
+                pkg = self._strip_package_arch(owner.strip())
+                if pkg:
+                    owners.append((pkg, df_path))
+        return owners
+
+    def _pacman_desktop_owners(self, batch: list[Path]) -> list[tuple[str, Path]]:
+        """Ask pacman which package owns each of these .desktop files.
+
+        " is owned by " sits in pacman's gettext catalog, so the split below only
+        holds under a C locale.
+        """
+        res = system.run_command(
+            ["pacman", "-Qo", *[str(f) for f in batch]],
+            capture=True,
+            env=system.C_LOCALE_ENV,
+        )
+        owners: list[tuple[str, Path]] = []
+        for line in res.stdout.splitlines():
+            if " is owned by " not in line:
+                continue
+            df_str, owned_str = line.split(" is owned by ", 1)
+            owned = owned_str.split()
+            if owned:
+                owners.append((owned[0], Path(df_str.strip())))
+        return owners
+
     def _pre_scan_package_desktop_names(self) -> tuple[set[str], dict[str, str]]:
-        """Pre-scans native packages that provide desktop files and maps display names."""
+        """Pre-scans native packages that provide desktop files and maps display names.
+
+        There is no blanket try/except around this any more. The old one wrapped
+        all 108 lines in `except (OSError, subprocess.SubprocessError,
+        ValueError): pass`, which said "any distro tool may be absent or answer
+        oddly" but could not actually catch that: system.run_command turns every
+        OSError and SubprocessError of its own into a CommandResult with
+        returncode 127, so no tool call in here has ever raised. What it did
+        catch was the glob, now handled per directory where it happens, and what
+        it stood ready to catch was any exception a future line grew -- silently,
+        and by throwing away the whole pre-scan rather than the one answer.
+        """
         user_app_packages: set[str] = set()
         package_desktop_names: dict[str, str] = {}
-        try:
-            desktop_dirs = [
-                "/usr/share/applications",
-                str(Path.home() / ".local/share/applications"),
-            ]
-            # glob() still yields a dangling symlink, and rpm reports an unreadable
-            # path on stderr instead of stdout -- that drops a line from the batch
-            # and shifts every later name onto the wrong package. Dropping the
-            # unreadable entries here keeps the reply one line per queried path.
-            desktop_files: list[Path] = []
-            for d in desktop_dirs:
-                p = Path(d)
-                if p.exists():
-                    desktop_files.extend(e for e in p.glob("*.desktop") if e.exists())
+        desktop_files = self._installed_desktop_files()
+        if not desktop_files:
+            return user_app_packages, package_desktop_names
 
-            if desktop_files:
-                batch_size = RPM_QUERY_BATCH_SIZE
-                str_desktop_files = [str(f) for f in desktop_files]
-                # One PATH search per tool, not one per batch: a desktop with a few
-                # thousand .desktop files splits into many batches, and the answer
-                # cannot change while the loop runs. The tools stay additive --
-                # a deb box with rpm installed for `alien` must still reach the
-                # dpkg branch, or every APT app falls out of the list -- so the
-                # box that merely has the *tools* of another distro is excluded by
-                # asking whether the database behind them holds anything.
-                has_rpm = bool(shutil.which("rpm")) and _has_rpm_database()
-                has_dpkg_query = bool(shutil.which("dpkg-query")) and _has_deb_database()
-                has_pacman = bool(shutil.which("pacman"))
-                for i in range(0, len(str_desktop_files), batch_size):
-                    batch_str = str_desktop_files[i : i + batch_size]
-                    batch_paths = desktop_files[i : i + batch_size]
-                    if has_rpm:
-                        res = system.run_command(
-                            ["rpm", "-qf", "--queryformat", "%{NAME}\n"] + batch_str,
-                            capture=True,
-                            timeout=60,
-                            env=system.C_LOCALE_ENV,
-                        )
-                        lines = res.stdout.splitlines()
-                        # rpm answers positionally and prints its "not owned by any
-                        # package" notice on stdout, so a reply of the wrong length
-                        # means the answers no longer line up with the questions.
-                        # Losing a few display names beats attaching them to the
-                        # wrong package.
-                        if len(lines) == len(batch_paths):
-                            for df_path, line in zip(batch_paths, lines, strict=True):
-                                line_str = line.strip()
-                                # C_LOCALE_ENV above keeps this marker in English.
-                                if line_str and not line_str.startswith("file "):
-                                    pkg = line_str
-                                    user_app_packages.add(pkg)
-                                    if pkg not in package_desktop_names:
-                                        dname = get_desktop_name(df_path)
-                                        if dname:
-                                            package_desktop_names[pkg] = dname
-                    if has_dpkg_query:
-                        res = system.run_command(
-                            ["dpkg-query", "-S", *batch_str],
-                            capture=True,
-                            env=system.C_LOCALE_ENV,
-                        )
-                        for line in res.stdout.splitlines():
-                            # Every owner of a path shares one comma-separated line
-                            # ("procps, libc6:amd64, bash: /usr/share/doc") and an
-                            # owner may carry its own :arch, so the path is what
-                            # follows the LAST ": " -- splitting on the first colon
-                            # cuts libc6:amd64 in half and turns the rest into a
-                            # package name that does not exist.
-                            owner_str, sep, path_str = line.rpartition(": ")
-                            if not sep:
-                                continue
-                            owners = [
-                                pkg
-                                for pkg in (
-                                    self._strip_package_arch(owner.strip())
-                                    for owner in owner_str.split(", ")
-                                )
-                                if pkg
-                            ]
-                            user_app_packages.update(owners)
-                            if any(pkg not in package_desktop_names for pkg in owners):
-                                df_path = Path(path_str.strip())
-                                dname = get_desktop_name(df_path) if df_path.exists() else ""
-                                if dname:
-                                    for pkg in owners:
-                                        package_desktop_names.setdefault(pkg, dname)
-                    if has_pacman:
-                        # " is owned by " sits in pacman's gettext catalog, so the
-                        # split below only holds under a C locale.
-                        res = system.run_command(
-                            ["pacman", "-Qo", *batch_str],
-                            capture=True,
-                            env=system.C_LOCALE_ENV,
-                        )
-                        for line in res.stdout.splitlines():
-                            if " is owned by " in line:
-                                df_str, owned_str = line.split(" is owned by ", 1)
-                                owned = owned_str.split()
-                                if owned:
-                                    pkg = owned[0]
-                                    user_app_packages.add(pkg)
-                                    if pkg not in package_desktop_names:
-                                        df_path = Path(df_str.strip())
-                                        if df_path.exists():
-                                            dname = get_desktop_name(df_path)
-                                            if dname:
-                                                package_desktop_names[pkg] = dname
-        except (OSError, subprocess.SubprocessError, ValueError):
-            pass
+        # One PATH search per tool, not one per batch: a desktop with a few
+        # thousand .desktop files splits into many batches, and the answer
+        # cannot change while the loop runs. The tools stay additive --
+        # a deb box with rpm installed for `alien` must still reach the
+        # dpkg branch, or every APT app falls out of the list -- so the
+        # box that merely has the *tools* of another distro is excluded by
+        # asking whether the database behind them holds anything.
+        queries: list[Callable[[list[Path]], list[tuple[str, Path]]]] = []
+        if shutil.which("rpm") and _has_rpm_database():
+            queries.append(self._rpm_desktop_owners)
+        if shutil.which("dpkg-query") and _has_deb_database():
+            queries.append(self._dpkg_desktop_owners)
+        if shutil.which("pacman"):
+            queries.append(self._pacman_desktop_owners)
+
+        # The three tools disagree about output format, not about the question,
+        # so each one only parses its own reply into (package, .desktop file)
+        # pairs and the bookkeeping below is written once.
+        for i in range(0, len(desktop_files), RPM_QUERY_BATCH_SIZE):
+            batch = desktop_files[i : i + RPM_QUERY_BATCH_SIZE]
+            for query in queries:
+                for pkg, df_path in query(batch):
+                    user_app_packages.add(pkg)
+                    # A display name is worth a file read only for a package that
+                    # has none yet. exists() is also what keeps a path a tool
+                    # echoed back from reaching open(): a NUL byte in it raises
+                    # ValueError, which get_desktop_name does not catch.
+                    if pkg not in package_desktop_names and df_path.exists():
+                        dname = get_desktop_name(df_path)
+                        if dname:
+                            package_desktop_names[pkg] = dname
         return user_app_packages, package_desktop_names
 
     def _scan_rpm_packages(

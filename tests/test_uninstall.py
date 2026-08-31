@@ -946,6 +946,54 @@ def test_pre_scan_never_queries_a_dangling_desktop_symlink(mock_which, tmp_path)
     assert str(apps_dir / "ghost.desktop") not in queried
 
 
+@patch("shutil.which")
+def test_pre_scan_keeps_user_entries_when_the_system_dir_cannot_be_read(
+    mock_which, tmp_path, monkeypatch
+):
+    """An unreadable directory costs its own entries, not the whole pre-scan.
+
+    pathlib swallows a PermissionError while walking a directory but lets every
+    other OSError through, and the suppress used to sit around all 108 lines: a
+    stale mount under /usr/share/applications took the user's own entries down
+    with it, plus every package name already collected.
+    """
+    mock_which.side_effect = lambda x: "/usr/bin/rpm" if x == "rpm" else None
+    apps_dir = tmp_path / ".local/share/applications"
+    apps_dir.mkdir(parents=True)
+    (apps_dir / "kept.desktop").write_text("[Desktop Entry]\nName=Kept\n")
+
+    real_exists, real_glob = Path.exists, Path.glob
+    failed: list[str] = []
+
+    def exists(self, **kwargs):
+        # Pin the system directory as present so the failure below is reached on
+        # any box, not only the ones that ship it.
+        return True if str(self) == "/usr/share/applications" else real_exists(self, **kwargs)
+
+    def glob(self, pattern, **kwargs):
+        if str(self) == "/usr/share/applications":
+            failed.append(pattern)
+            raise OSError(5, "Input/output error")
+        return real_glob(self, pattern, **kwargs)
+
+    monkeypatch.setattr(Path, "exists", exists)
+    monkeypatch.setattr(Path, "glob", glob)
+
+    def one_answer_each(args, **kwargs):
+        queried = [a for a in args if a.endswith(".desktop")]
+        return MagicMock(ok=True, stdout="".join(f"pkg-{Path(p).stem}\n" for p in queried))
+
+    with (
+        patch("src.uninstall.system.run_command", side_effect=one_answer_each),
+        patch("pathlib.Path.home", return_value=tmp_path),
+    ):
+        packages, names = UninstallManager()._pre_scan_package_desktop_names()
+
+    assert failed == ["*.desktop"]
+    assert packages == {"pkg-kept"}
+    assert names == {"pkg-kept": "Kept"}
+
+
 def test_pre_scan_resolves_each_tool_once_and_skips_an_empty_deb_database(tmp_path, monkeypatch):
     """PATH is searched once per tool, not once per batch, and a box that merely
     has dpkg's tools installed never pays for their query (P3)."""
