@@ -28,6 +28,7 @@ Two lookups, because there are genuinely two questions:
 import shutil
 from dataclasses import dataclass
 
+from .constants import AppType
 from .system import get_os_id, is_os_family
 
 
@@ -38,8 +39,10 @@ class PackageManager:
     key: str
     # Also the app_type uninstall stores on every package it finds, and the word
     # clean prints ("Cleaned APT cache"). One label, so a rename cannot make the
-    # scanner and the remover disagree about what to call the same package.
-    label: str
+    # scanner and the remover disagree about what to call the same package -- and
+    # an AppType rather than a str, so the four rows here and uninstall's own
+    # dispatch spell it from the same definition.
+    label: AppType
     os_ids: frozenset[str]
     # ID_LIKE tokens, for the derivatives nobody enumerates.
     families: tuple[str, ...]
@@ -61,7 +64,7 @@ class PackageManager:
 
 APT = PackageManager(
     key="apt",
-    label="APT",
+    label=AppType.APT,
     os_ids=frozenset({"debian", "ubuntu", "linuxmint", "pop", "elementary", "zorin", "kali"}),
     families=("debian",),
     query_tool="dpkg-query",
@@ -76,7 +79,7 @@ APT = PackageManager(
 
 DNF = PackageManager(
     key="dnf",
-    label="DNF",
+    label=AppType.DNF,
     os_ids=frozenset({"fedora", "rhel", "centos", "rocky", "almalinux", "ol", "amzn"}),
     families=("fedora", "rhel"),
     query_tool="rpm",
@@ -101,7 +104,7 @@ DNF = PackageManager(
 
 ZYPPER = PackageManager(
     key="zypper",
-    label="Zypper",
+    label=AppType.ZYPPER,
     os_ids=frozenset({"opensuse", "opensuse-leap", "opensuse-tumbleweed", "sles"}),
     families=("suse",),
     query_tool="rpm",
@@ -118,7 +121,7 @@ ZYPPER = PackageManager(
 
 PACMAN = PackageManager(
     key="pacman",
-    label="Pacman",
+    label=AppType.PACMAN,
     os_ids=frozenset({"arch", "manjaro", "endeavouros"}),
     families=("arch",),
     query_tool="pacman",

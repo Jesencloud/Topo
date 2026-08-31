@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src.core.constants import AppType
 from src.core.history import parse_deletion_history
 from src.core.system import APT_NONINTERACTIVE_ENV, C_LOCALE_ENV, PACKAGE_TRANSACTION_TIMEOUT
 from src.ui.screens.uninstall import run_uninstall
@@ -1829,8 +1830,11 @@ def test_uninstall_helpers_and_cache_state(test_env, monkeypatch):
     assert mgr._requires_official_only_uninstall("org.example.vpn", "VPN")
     assert mgr._is_system_component("libfoo", "libfoo")
     assert mgr._strip_package_arch("foo:amd64") == "foo"
-    record = mgr._app_record("id", "Name", 10, "10 B", "CLI")
+    record = mgr._app_record("id", "Name", 10, "10 B", AppType.CLI)
+    # The word, not the member: a record is the plain dict it has always been, so
+    # `type` reads the same whether the app came from a scan or from a test.
     assert record["type"] == "CLI"
+    assert type(record["type"]) is str
     assert mgr.has_fresh_scan_cache() is False
     mgr.__class__._scan_cache_apps = [record]
     mgr.__class__._scan_cache_key = mgr._current_scan_cache_key()

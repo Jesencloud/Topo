@@ -16,6 +16,7 @@ from .core import system
 from .core.config import get_use_trash
 from .core.constants import (
     RPM_QUERY_BATCH_SIZE,
+    AppType,
 )
 from .core.desktop_entry import get_desktop_exec_names, get_desktop_icon, get_desktop_name
 from .core.file_ops import (
@@ -118,7 +119,9 @@ class _ScannedApp(TypedDict):
     all six: ``id`` is what the package manager is asked to remove, ``name`` is
     what the user reads (display text picked up from the environment -- a
     ``.desktop`` ``Name=`` field, a filename, an npm package name -- so it is
-    untrusted), ``type`` names the manager that owns it, ``size_bytes`` and
+    untrusted), ``type`` is one of the ``AppType`` words and names the manager
+    that owns it -- held as the plain string it spells, so a record from a scan
+    and a record built by hand are the same shape -- ``size_bytes`` and
     ``size_str`` are the same number for sorting and for display, and
     ``install_time`` is 0 when nothing could be read rather than absent.
     """
@@ -601,7 +604,7 @@ class UninstallManager:
         name: str,
         size_bytes: int,
         size_str: str,
-        app_type: str,
+        app_type: AppType,
         install_time: int = 0,
     ) -> AppRecord:
         return {
@@ -609,7 +612,11 @@ class UninstallManager:
             "name": name,
             "size_bytes": size_bytes,
             "size_str": size_str,
-            "type": app_type,
+            # The word, not the member: a record is a plain dict, and the tests
+            # build theirs by hand, so ``type`` reads the same whichever it came
+            # from. The annotation above is where the spelling is checked -- mypy
+            # rejects a ninth package type invented at a call site.
+            "type": app_type.value,
             "install_time": install_time,
         }
 
@@ -958,7 +965,7 @@ class UninstallManager:
                                 display_name,
                                 size_bytes,
                                 bytes_to_human(size_bytes),
-                                "APT",
+                                AppType.APT,
                                 install_time,
                             )
                         )
@@ -996,7 +1003,7 @@ class UninstallManager:
                                     display_name,
                                     size_bytes,
                                     bytes_to_human(size_bytes),
-                                    "Pacman",
+                                    AppType.PACMAN,
                                 )
                             )
                         package = {}
@@ -1055,7 +1062,7 @@ class UninstallManager:
 
                         size_bytes = parse_size_to_bytes(size_str)
                         record = self._app_record(
-                            app_id, app_name, size_bytes, size_str, "Flatpak", install_time
+                            app_id, app_name, size_bytes, size_str, AppType.FLATPAK, install_time
                         )
                         if scope:
                             record["flatpak_scope"] = scope
@@ -1122,7 +1129,7 @@ class UninstallManager:
                     display_name = package_desktop_names.get(app_id, app_id)
                     apps.append(
                         self._app_record(
-                            app_id, display_name, size_bytes, size_str, "Snap", install_time
+                            app_id, display_name, size_bytes, size_str, AppType.SNAP, install_time
                         )
                     )
         except (OSError, subprocess.SubprocessError):
@@ -1183,7 +1190,7 @@ class UninstallManager:
                                     clean_name,
                                     size_bytes,
                                     size_str,
-                                    "NPM",
+                                    AppType.NPM,
                                     install_time,
                                 )
                             )
@@ -1315,7 +1322,7 @@ class UninstallManager:
                 tool_name,
                 size_bytes,
                 size_str,
-                "CLI",
+                AppType.CLI,
                 install_time,
             )
             record["install_dir"] = inst_dir
@@ -1646,7 +1653,7 @@ class UninstallManager:
         app_type = str(app.get("type") or "")
         if not app_id:
             return []
-        if app_type == "APT":
+        if app_type == AppType.APT:
             # -s simulates without root; the whole transaction is narrated, and
             # the removal lines are the interesting ones.
             #
@@ -1659,13 +1666,13 @@ class UninstallManager:
             # cowsay` narrates eight.
             argv = ["apt-get", "purge", "--autoremove", "-s", app_id]
             env = system.APT_NONINTERACTIVE_ENV
-        elif app_type == "Pacman":
+        elif app_type == AppType.PACMAN:
             # --print-format implies --print, and --print is what makes pacman
             # skip the database lock it would otherwise need root for. %n asks
             # for bare names, so nothing here goes through a message catalog.
             argv = ["pacman", "-Rns", "--print-format", "%n", app_id]
             env = system.C_LOCALE_ENV
-        elif app_type == "DNF":
+        elif app_type == AppType.DNF:
             dnf_cmd = resolve_admin_tool(DNF)
             # -C keeps it off the network: the installed set is all we ask about.
             argv = [
@@ -1679,7 +1686,7 @@ class UninstallManager:
                 "%{name}\n",
             ]
             env = system.C_LOCALE_ENV
-        elif app_type == "Zypper":
+        elif app_type == AppType.ZYPPER:
             # zypper has no unprivileged dry-run, and rpm is on every zypper box.
             argv = ["rpm", "-q", "--whatrequires", app_id, "--qf", "%{NAME}\n"]
             env = system.C_LOCALE_ENV
@@ -1701,7 +1708,7 @@ class UninstallManager:
         names: list[str] = []
         for line in stdout.splitlines():
             entry = line.strip()
-            if app_type == "APT":
+            if app_type == AppType.APT:
                 # "Remv firefox [1:2snap1-0ubuntu2]", among Inst/Conf lines and
                 # apt's own prose.
                 fields = entry.split()
@@ -1804,7 +1811,7 @@ class UninstallManager:
         running = running_process_comms()
         patterns: list[str] = []
         for app, paths, _ in targets:
-            if app.get("type") == "Flatpak":
+            if app.get("type") == AppType.FLATPAK:
                 with contextlib.suppress(OSError, subprocess.SubprocessError):
                     system.run_command(
                         ["flatpak", "kill", str(app["id"])], capture=True, timeout=20
@@ -1838,7 +1845,7 @@ class UninstallManager:
         enters raw mode, and execute_uninstall calls it to build the command, so
         the authorization and the command that needs it cannot disagree.
         """
-        return app.get("type") == "Flatpak" and cls._flatpak_scope(app) == "system"
+        return app.get("type") == AppType.FLATPAK and cls._flatpak_scope(app) == "system"
 
     def _terminate_app_processes(self, app: AppRecord, paths: list[Path]) -> None:
         """Close one app's processes, the step that has to precede its removal.
@@ -1857,7 +1864,7 @@ class UninstallManager:
         # Use real executable names (id + .desktop Exec), never the localized
         # display name.
         all_process_names = self._candidate_process_names(app, paths)
-        if app["type"] == "Flatpak":
+        if app["type"] == AppType.FLATPAK:
             with contextlib.suppress(OSError, subprocess.SubprocessError):
                 system.run_command(["flatpak", "kill", app["id"]], capture=True, timeout=20)
 
@@ -1888,7 +1895,7 @@ class UninstallManager:
         Returns a CommandResult even where nothing is spawned (CLI, unsupported),
         because the caller's only question is res.ok.
         """
-        if app["type"] == "Flatpak":
+        if app["type"] == AppType.FLATPAK:
             # The scope is not what makes the app findable -- `flatpak
             # uninstall` searches both installations to resolve a ref -- it
             # decides which copy goes when the same ref is installed in
@@ -1906,7 +1913,7 @@ class UninstallManager:
                 timeout=system.PACKAGE_TRANSACTION_TIMEOUT,
             )
 
-        if app["type"] == "Snap":
+        if app["type"] == AppType.SNAP:
             return system.run_command(
                 ["snap", "remove", "--purge", app["id"]],
                 use_sudo=True,
@@ -1914,14 +1921,14 @@ class UninstallManager:
                 timeout=system.PACKAGE_TRANSACTION_TIMEOUT,
             )
 
-        if app["type"] == "NPM":
+        if app["type"] == AppType.NPM:
             res = system.run_command(
                 ["npm", "uninstall", "-g", app["id"]], capture=True, timeout=60
             )
             self._prune_empty_npm_scope_dir(app["id"])
             return res
 
-        if app["type"] == "CLI":
+        if app["type"] == AppType.CLI:
             # Remove standalone binary & install directory
             home_p = Path.home()
             cli_targets = [
@@ -1936,7 +1943,7 @@ class UninstallManager:
                 args=["cli_uninstall"], returncode=0, stdout="CLI uninstalled"
             )
 
-        if app["type"] == "APT":
+        if app["type"] == AppType.APT:
             # apt-get, not apt: apt prints "WARNING: apt does not have a stable
             # CLI interface" when its output is captured, and the rest of the
             # repository already standardises on apt-get.
@@ -1957,7 +1964,7 @@ class UninstallManager:
                 timeout=system.PACKAGE_TRANSACTION_TIMEOUT,
             )
 
-        if app["type"] == "Pacman":
+        if app["type"] == AppType.PACMAN:
             return system.run_command(
                 ["pacman", "-Rns", "--noconfirm", app["id"]],
                 use_sudo=True,
@@ -1965,7 +1972,7 @@ class UninstallManager:
                 timeout=system.PACKAGE_TRANSACTION_TIMEOUT,
             )
 
-        if app["type"] == "Zypper":
+        if app["type"] == AppType.ZYPPER:
             return system.run_command(
                 # --clean-deps for the same reason the apt branch above passes
                 # --autoremove: dnf drops the dependencies nothing needs any
@@ -1979,7 +1986,7 @@ class UninstallManager:
                 timeout=system.PACKAGE_TRANSACTION_TIMEOUT,
             )
 
-        if app["type"] == "DNF":
+        if app["type"] == AppType.DNF:
             dnf_cmd = resolve_admin_tool(DNF)
             return system.run_command(
                 [dnf_cmd, "remove", "-y", app["id"]],

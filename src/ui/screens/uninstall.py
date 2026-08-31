@@ -27,6 +27,7 @@ from ...core.constants import (
     SUMMARY_RULE_WIDTH,
     THEME_TITLE,
     WHITE,
+    AppType,
 )
 from ...core.file_ops import bytes_to_human
 from ...core.scan_cache import ScanCache
@@ -53,7 +54,9 @@ SCREEN_TITLE = "Uninstall Apps"
 # installation needs nothing, while a system-wide one lives under
 # /var/lib/flatpak and is root's to remove -- UninstallManager decides that per
 # app, and the same call builds the command, so the two cannot disagree.
-NEEDS_SUDO_TYPES = frozenset({"APT", "DNF", "Pacman", "Snap", "Zypper"})
+NEEDS_SUDO_TYPES = frozenset(
+    {AppType.APT, AppType.DNF, AppType.PACMAN, AppType.SNAP, AppType.ZYPPER}
+)
 
 
 def _print_removal_report(

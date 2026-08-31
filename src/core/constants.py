@@ -1,5 +1,6 @@
 import os
 import sys
+from enum import Enum
 from pathlib import Path
 
 from .paths import get_config_dir
@@ -381,3 +382,37 @@ RPM_QUERY_BATCH_SIZE = 500
 
 # SQLite progress handler callback interval (virtual-machine instructions)
 SQLITE_PROGRESS_INTERVAL = 10000
+
+
+class AppType(str, Enum):
+    """Where `topo uninstall` found an application, and therefore what removes it.
+
+    These eight words used to be written out as bare strings at 31 sites -- 22 in
+    uninstall.py, five in the removal screen, four in the distro matrix -- with no
+    definition anywhere: the scanners stamped one onto every record they built, the
+    removal dispatched on it eleven times, and the screen kept its own frozenset of
+    the five that need root. A misspelling was not an error, only a package that
+    quietly reached the "unsupported package type" branch, and adding a ninth
+    manager meant finding all 31 by memory.
+
+    A ``str`` subclass, so a member stays interchangeable with the word it spells:
+    ``AppType.FLATPAK == "Flatpak"`` and the two hash alike, which is what lets a
+    record built by hand -- every test does -- go on being compared against these
+    members. ``enum.StrEnum`` says exactly this, but it arrived in 3.11 and the
+    supported floor is 3.10 (install.sh), so the mixin is spelled out; ``__str__``
+    is the half of StrEnum that matters here, because a plain ``str, Enum`` member
+    renders as "AppType.APT" in an f-string from 3.11 on, and these words are
+    printed ("Cleaned APT cache").
+    """
+
+    FLATPAK = "Flatpak"
+    SNAP = "Snap"
+    NPM = "NPM"
+    CLI = "CLI"
+    APT = "APT"
+    DNF = "DNF"
+    ZYPPER = "Zypper"
+    PACMAN = "Pacman"
+
+    def __str__(self) -> str:
+        return self.value

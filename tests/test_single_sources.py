@@ -18,6 +18,7 @@ from src.core.constants import (
     SECONDS_PER_HOUR,
     TOPO_VERSION,
     UNKNOWN_VERSION,
+    AppType,
     read_topo_version,
 )
 from src.core.file_ops import get_deletion_log_path
@@ -485,3 +486,47 @@ def test_hours_and_days_are_spelled_with_their_constants_outside_the_definition(
     assert _durations_written_as_literals() == []
     assert SECONDS_PER_HOUR == 60 * 60
     assert SECONDS_PER_DAY == 24 * SECONDS_PER_HOUR
+
+
+def _app_types_written_as_literals() -> list[tuple[str, int, str]]:
+    """Every "Flatpak"/"Snap"/... string in src/ outside the module that names them."""
+    root = Path(__file__).parents[1] / "src"
+    defining_module = root / "core" / "constants.py"
+    named = {app_type.value for app_type in AppType}
+    return [
+        (str(path.relative_to(root)), node.lineno, node.value)
+        for path in sorted(root.rglob("*.py"))
+        if path != defining_module
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value in named
+    ]
+
+
+def test_app_types_are_spelled_with_the_enum_outside_its_definition():
+    """AppType holds the eight words a scanned app can be labelled with; nothing else may.
+
+    These had no definition at all: 31 bare strings, 22 of them in uninstall.py --
+    eleven being the `app["type"] == "Flatpak"` comparisons the removal dispatches
+    on -- five in a frozenset in the removal screen listing the types that need
+    root, and four in the rows of the distro matrix. Nothing objected to a
+    misspelling -- a package labelled "Flatpack" simply fell through to the
+    "unsupported package type" branch at removal time -- and a ninth package
+    manager meant finding all 31 from memory.
+
+    Structural, like the guard above, because there is nothing behavioural to
+    catch: AppType is a str subclass, so every one of those literals still compares
+    equal to the member that replaced it, and putting the bare strings back passes
+    the rest of the suite. Only the source can tell a definition from a copy.
+
+    Scoped to whole-string equality, which is why the prose in package_manager.py
+    that mentions "DNF" inside a sentence is not a hit, and why the lowercase
+    manager keys ("apt", "dnf") are not either -- those answer a different question
+    and have their own definition in the matrix.
+    """
+    assert _app_types_written_as_literals() == []
+    # The four the distro matrix drives hold the members themselves, not equal
+    # copies of the words: PackageManager.label is typed AppType precisely so the
+    # row and the dispatch cannot drift into two spellings of one manager. This
+    # asks for the type rather than the value because a plain "APT" would satisfy
+    # every comparison and every set operation a str subclass takes part in.
+    assert all(isinstance(manager.label, AppType) for manager in PACKAGE_MANAGERS)
