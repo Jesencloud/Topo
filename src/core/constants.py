@@ -141,6 +141,18 @@ MARK_NOTE = "●"  # an aside about the line, or the run, above
 # its content reads as a broken box rather than a tidy one.
 SUMMARY_RULE_WIDTH = 70
 
+# How wide a name column in the TUI is ever allowed to get. Four sites in
+# ui/navigator.py wrote 35 by hand -- the analyze and top-files "Selected ... to
+# Remove" lists, the uninstall table, and the uninstall list's own selection
+# summary -- so widening one of them meant guessing whether the other three were
+# the same intent. They are: every one of them is a name column that the rest of
+# its row is measured around.
+#
+# 35 is also exactly what makes two of those columns fit an 80-column terminal:
+# each entry spends five cells on its "   • " prefix, and 2 * (5 + 35) = 80,
+# which is the width at which the selection summary switches to two columns.
+NAME_COLUMN_MAX_WIDTH = 35
+
 # One place to retune the dimmed-text color. WHITE / GRAY / GRAY_NB all resolve
 # to this; see the comment in _init_colors() for why they stay three names.
 _NEUTRAL_GRAY = "\033[38;5;244m"
@@ -354,7 +366,14 @@ CLEAN_TEMP_AGE_DAYS = 3
 # inside it, short enough to still be worth reclaiming.
 CLEAN_BACKUP_AGE_DAYS = 7
 
-# Time conversion
+# The one spelling of an hour and of a day in seconds. Four sites wrote 86400 by
+# hand while SECONDS_PER_DAY was sitting here being imported by a fifth, and 3600
+# was written out at all four of its call sites, so a guard in
+# tests/test_single_sources.py now fails on either literal anywhere but these two
+# lines. Only these two: minutes are not here because 60 also means "sixty
+# seconds" as a subprocess timeout in a dozen places, and a name that has to be
+# right for both meanings is worth less than the digits.
+SECONDS_PER_HOUR = 3600
 SECONDS_PER_DAY = 86400
 
 # Batch processing

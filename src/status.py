@@ -7,7 +7,7 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
-from .core.constants import GREEN, PURPLE, RED, RESET, WHITE, YELLOW
+from .core.constants import GREEN, PURPLE, RED, RESET, SECONDS_PER_HOUR, WHITE, YELLOW
 from .core.file_ops import bytes_to_human
 from .core.render import draw_bar, format_percent, get_color_for_percent
 from .core.system import run_command
@@ -113,13 +113,13 @@ def get_uptime():
     except (OSError, ValueError, IndexError):
         return "Unknown"
 
-    hours = int(uptime_seconds // 3600)
+    hours = int(uptime_seconds // SECONDS_PER_HOUR)
     if hours >= 24:
         # Past a day the minutes carry no information and the hour count stops
         # being readable -- a NAS up for three months printed "2160h 5m". Same
         # units uptime(1) switches to.
         return f"{hours // 24}d {hours % 24}h"
-    return f"{hours}h {int((uptime_seconds % 3600) // 60)}m"
+    return f"{hours}h {int((uptime_seconds % SECONDS_PER_HOUR) // 60)}m"
 
 
 def get_cpu_load_summary() -> tuple[float | None, str]:

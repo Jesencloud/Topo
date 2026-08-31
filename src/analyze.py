@@ -16,6 +16,7 @@ from .core.constants import (
     MAGENTA,
     MARK_PROMPT,
     RESET,
+    SECONDS_PER_DAY,
     WARN,
 )
 from .core.engine import get_rust_scan_data, get_rust_tree_data, normalize_scan_path
@@ -191,7 +192,7 @@ def get_age_hint(path: Path) -> str:
     """Returns a rough age hint like >90d, >6mo, >1y based on mtime."""
     try:
         mtime = path.stat().st_mtime
-        days = (time.time() - mtime) / 86400
+        days = (time.time() - mtime) / SECONDS_PER_DAY
         if days < 30:
             return ""
         if days > 365:
@@ -245,7 +246,7 @@ def build_linux_insights(home: Path) -> list[dict[str, Any]]:
 def get_old_items_info(dir_path: Path, days_threshold: int = 90) -> list[dict[str, Any]]:
     """Returns a list of items in a directory older than X days."""
     old_items = []
-    cutoff = time.time() - (days_threshold * 86400)
+    cutoff = time.time() - (days_threshold * SECONDS_PER_DAY)
     # One scan of the parent already holds every direct child's size, and the
     # root view has just walked Home, so this is normally a cache hit costing no
     # subprocess at all. Sizing each row on its own forked the engine once per

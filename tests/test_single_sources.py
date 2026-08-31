@@ -14,6 +14,8 @@ from src.core import constants
 from src.core.config import get_config_file
 from src.core.constants import (
     DETECTED_APPS_FILE,
+    SECONDS_PER_DAY,
+    SECONDS_PER_HOUR,
     TOPO_VERSION,
     UNKNOWN_VERSION,
     read_topo_version,
@@ -437,3 +439,49 @@ def test_no_package_transaction_runs_on_a_deadline():
     # and every call site above is non-interactive by construction, so there is
     # nothing for a deadline to rescue the user from.
     assert PACKAGE_TRANSACTION_TIMEOUT is None
+
+
+def _durations_written_as_literals() -> list[tuple[str, int, int]]:
+    """Every 3600 or 86400 in src/ outside the module that names them."""
+    root = Path(__file__).parents[1] / "src"
+    defining_module = root / "core" / "constants.py"
+    named = {SECONDS_PER_HOUR, SECONDS_PER_DAY}
+    return [
+        (str(path.relative_to(root)), node.lineno, node.value)
+        for path in sorted(root.rglob("*.py"))
+        if path != defining_module
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, int)
+        and not isinstance(node.value, bool)
+        and node.value in named
+    ]
+
+
+def test_hours_and_days_are_spelled_with_their_constants_outside_the_definition():
+    """SECONDS_PER_HOUR and SECONDS_PER_DAY are the names; nothing else may spell the numbers.
+
+    SECONDS_PER_DAY was already here, and already used -- by exactly one caller.
+    The other four sites wrote 86400 by hand: two age calculations in analyze.py
+    and two rungs of navigator.py's "3h ago / 2d ago" ladder. That is the failure
+    this guard covers: not a missing constant, but a constant that exists, is
+    imported somewhere, and gets bypassed anyway, because a literal is one
+    keystroke shorter than an import and nothing objects. SECONDS_PER_HOUR joined
+    it rather than being added bare, for the same reason: 3600 had four call sites
+    of its own -- the same ladder and status.py's uptime line -- and a new name
+    with none of them converted would have been born already bypassed.
+
+    Structural rather than behavioural, because there is no behaviour to test: a
+    name and its number are the same value, so substituting the digits back passes
+    every other test in the suite. Only the source can tell them apart.
+
+    No exemption list: core/constants.py is out of scope because it is where the
+    names are bound, and that is the one place the digits have to appear. Scoped to
+    these two rather than every duration in the tree -- 60 is also a subprocess
+    timeout in a dozen places, and navigator.py's month and year are 30 and 365
+    days written as multiples of SECONDS_PER_DAY, which is what a reader needs and
+    is nothing for this guard to check.
+    """
+    assert _durations_written_as_literals() == []
+    assert SECONDS_PER_HOUR == 60 * 60
+    assert SECONDS_PER_DAY == 24 * SECONDS_PER_HOUR

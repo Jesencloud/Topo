@@ -21,8 +21,11 @@ from ..core.constants import (
     HIGHLIGHT,
     MARK_PROMPT,
     MARK_SECTION,
+    NAME_COLUMN_MAX_WIDTH,
     PURPLE,
     RESET,
+    SECONDS_PER_DAY,
+    SECONDS_PER_HOUR,
     THEME_TITLE,
     WARN,
     WHITE,
@@ -348,6 +351,42 @@ def icon_gap(icon: str) -> str:
 # its gap -- the prefix every paginated row shares. The continuation marker is
 # indented to it so the ellipsis sits directly beneath the numbers.
 _ROW_NUMBER_INDENT = " " * 4
+
+# What a paginated uninstall row spends on everything that is not the name. The
+# row-number field is not in here: each list sizes it for itself (num_w), so
+# render() adds it separately.
+#
+#   chrome  the prefix up to the number -- _ROW_NUMBER_INDENT's four cells --
+#           plus the "." that follows the number and its trailing space
+#   size    the two spaces before the size, plus its right-aligned field
+#   time    the " | " separator, plus the widest label _format_time_ago can
+#           return ("Yesterday", nine cells)
+#
+# They are layered in that order, so the three responsive budgets are chrome,
+# chrome+size and chrome+size+time -- which is what the 6, 20 and 32 that used to
+# be subtracted there actually were.
+#
+# _SIZE_FIELD_WIDTH is the field the row is formatted with, not just the width it
+# is budgeted at: render() interpolates it into the f-string, so the budget cannot
+# disagree with what is drawn.
+_ROW_CHROME_WIDTH = len(_ROW_NUMBER_INDENT) + 2
+_SIZE_FIELD_WIDTH = 12
+_SIZE_COLUMN_WIDTH = 2 + _SIZE_FIELD_WIDTH
+_TIME_COLUMN_WIDTH = len(" | ") + len("Yesterday")
+
+# The "   • " every entry in a "Selected ... to Remove" list starts with. Lists
+# that draw an icon spend that much again on it: _ICON_SLOT cells for the glyph
+# plus the single space icon_gap() normalises it to.
+_BULLET_PREFIX_WIDTH = len("   • ")
+_BULLET_ICON_PREFIX_WIDTH = _BULLET_PREFIX_WIDTH + _ICON_SLOT + 1
+
+# The two rungs of _format_time_ago's ladder that are display roundings rather
+# than units: every month is 30 days and every year is 365, because the function
+# only ever renders "3mo ago" and has no date to be exact about. Named because
+# each one is used twice -- once as the threshold that selects a rung, once as
+# the divisor for the rung above it -- and the pair has to stay the same number.
+_DISPLAY_MONTH = 30 * SECONDS_PER_DAY
+_DISPLAY_YEAR = 365 * SECONDS_PER_DAY
 
 
 def _continuation_marker(page_end: int, total: int) -> str:
@@ -952,7 +991,9 @@ class AnalyzeSelector(_PagedSelector):
                 for idx in pair:
                     item = self.items[idx]
                     icon = item.get("icon", DIRECTORY_ICON)
-                    name_padded = pad_and_truncate(sanitize_for_display(item["name"]), 35)
+                    name_padded = pad_and_truncate(
+                        sanitize_for_display(item["name"]), NAME_COLUMN_MAX_WIDTH
+                    )
                     line += f"   {THEME_TITLE}•{RESET} {icon}{icon_gap(icon)}{name_padded}"
                 buf.append(line + "\033[K\n")
 
@@ -1122,17 +1163,17 @@ class UninstallSelector(_PagedSelector):
         if timestamp == 0:
             return "Unknown"
         diff = time.time() - timestamp
-        if diff < 3600:
+        if diff < SECONDS_PER_HOUR:
             return "Just now"
-        if diff < 86400:
-            return f"{int(diff / 3600)}h ago"
-        if diff < 172800:
+        if diff < SECONDS_PER_DAY:
+            return f"{int(diff / SECONDS_PER_HOUR)}h ago"
+        if diff < 2 * SECONDS_PER_DAY:
             return "Yesterday"
-        if diff < 2592000:
-            return f"{int(diff / 86400)}d ago"
-        if diff < 31536000:
-            return f"{int(diff / 2592000)}mo ago"
-        return f"{int(diff / 31536000)}y ago"
+        if diff < _DISPLAY_MONTH:
+            return f"{int(diff / SECONDS_PER_DAY)}d ago"
+        if diff < _DISPLAY_YEAR:
+            return f"{int(diff / _DISPLAY_MONTH)}mo ago"
+        return f"{int(diff / _DISPLAY_YEAR)}y ago"
 
     def render(self):
         buf = ["\033[H"]
@@ -1172,6 +1213,7 @@ class UninstallSelector(_PagedSelector):
             # three-digit row would push the name column a cell to the right.
             # Two is the floor, which is the width every list had before.
             num_w = max(2, len(str(total_len)))
+            chrome_width = _ROW_CHROME_WIDTH + num_w
             for i in range(start, end):
                 item = self.items[i]
                 is_hover = i == self.selected_index
@@ -1190,19 +1232,26 @@ class UninstallSelector(_PagedSelector):
                 install_time = self._format_time_ago(item["install_time"])
                 # Responsive columns: preserve the actionable name first, then
                 # add size and time only when the terminal has room for them.
-                # The budgets subtract num_w because the number column is the one
-                # fixed-width part that can change size between lists.
+                # Each budget is the one above it plus the column it adds, and
+                # chrome_width already carries the number field, which is the one
+                # piece of chrome that can change size between lists.
                 if terminal_width >= 60:
-                    name_width = max(8, min(35, terminal_width - 32 - num_w))
+                    name_width = max(
+                        8,
+                        min(
+                            NAME_COLUMN_MAX_WIDTH,
+                            terminal_width - chrome_width - _SIZE_COLUMN_WIDTH - _TIME_COLUMN_WIDTH,
+                        ),
+                    )
                     details = (
-                        f"  {name_style}{item['size_str']:>12}{RESET} | "
+                        f"  {name_style}{item['size_str']:>{_SIZE_FIELD_WIDTH}}{RESET} | "
                         f"{time_style}{install_time}{RESET}"
                     )
                 elif terminal_width >= 42:
-                    name_width = max(8, terminal_width - 20 - num_w)
-                    details = f"  {name_style}{item['size_str']:>12}{RESET}"
+                    name_width = max(8, terminal_width - chrome_width - _SIZE_COLUMN_WIDTH)
+                    details = f"  {name_style}{item['size_str']:>{_SIZE_FIELD_WIDTH}}{RESET}"
                 else:
-                    name_width = max(4, terminal_width - 6 - num_w)
+                    name_width = max(4, terminal_width - chrome_width)
                     details = ""
                 name_padded = pad_and_truncate(clean_name, name_width)
                 if is_hover:
@@ -1237,8 +1286,19 @@ class UninstallSelector(_PagedSelector):
             )
             selected_names = [i["name"] for i in self.items if i["id"] in self.selected_items]
             selected_columns = 2 if terminal_width >= 80 else 1
+            # Two columns already fit: 2 * (_BULLET_PREFIX_WIDTH +
+            # NAME_COLUMN_MAX_WIDTH) is 80, the width this branch is taken at, so
+            # it needs no clamp. One column takes whatever is left past the bullet
+            # prefix. The extra two cells are slack at the right edge: nothing
+            # drawn accounts for them, so they stay a bare margin rather than
+            # acquire a name they cannot justify.
             selected_name_width = (
-                35 if selected_columns == 2 else max(4, min(35, terminal_width - 7))
+                NAME_COLUMN_MAX_WIDTH
+                if selected_columns == 2
+                else max(
+                    4,
+                    min(NAME_COLUMN_MAX_WIDTH, terminal_width - _BULLET_PREFIX_WIDTH - 2),
+                )
             )
             for i in range(0, len(selected_names), selected_columns):
                 pair = selected_names[i : i + selected_columns]
@@ -1477,12 +1537,18 @@ class TopFilesSelector:
             buf.append(
                 f"\n {THEME_TITLE}{MARK_SECTION} Selected Large Files to Remove:{RESET}\033[K\n"
             )
-            # Two entries a line, each costing three spaces, the bullet and its
-            # space, and the three cells icon_gap normalises every icon to.
-            # Derived from the terminal rather than fixed so the pair does not
-            # run off the right edge on a narrow window.
+            # Two entries a line, each costing the bullet prefix and the icon
+            # column icon_gap normalises every glyph to. Derived from the terminal
+            # rather than fixed so the pair does not run off the right edge on a
+            # narrow window.
             terminal_width = max(20, shutil.get_terminal_size(fallback=(80, 24)).columns)
-            name_width = max(8, min(35, (terminal_width - 2 * 8) // 2))
+            name_width = max(
+                8,
+                min(
+                    NAME_COLUMN_MAX_WIDTH,
+                    (terminal_width - 2 * _BULLET_ICON_PREFIX_WIDTH) // 2,
+                ),
+            )
             selected_indices = sorted(list(self.selected_items))
             for i in range(0, len(selected_indices), 2):
                 pair = selected_indices[i : i + 2]

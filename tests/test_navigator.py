@@ -12,8 +12,10 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
+from src.core.constants import SECONDS_PER_DAY, SECONDS_PER_HOUR
 from src.core.text import display_width
 from src.ui.navigator import (
+    _TIME_COLUMN_WIDTH,
     ANSI_CSI_RE,
     AnalyzeSelector,
     ConfirmSelector,
@@ -835,6 +837,39 @@ def test_uninstall_hint_uses_gray():
     header_hint = next(line for line in output.splitlines() if "Select apps to uninstall" in line)
     assert "<GREEN>" not in header_hint
     assert header_hint.lstrip().startswith("<GRAY>")
+
+
+def test_no_install_time_label_outgrows_the_column_budgeted_for_it():
+    """The widest label _format_time_ago returns is Yesterday, and the row is sized for it.
+
+    _TIME_COLUMN_WIDTH is " | " plus that label, so a rung that returned anything
+    longer would push the widest rows past the terminal edge -- and a row that
+    wraps smears every absolutely-positioned line below it. Adding a rung, or
+    widening a suffix, is exactly the kind of change that would do it silently:
+    the sizes still add up, the row just no longer fits.
+
+    The offsets walk both sides of every threshold, plus the oldest timestamp that
+    can physically appear (1, one second after the epoch, since 0 means "unknown").
+    """
+    selector = UninstallSelector("t", _uninstall_items()[:1])
+    thresholds = (
+        SECONDS_PER_HOUR,
+        SECONDS_PER_DAY,
+        2 * SECONDS_PER_DAY,
+        30 * SECONDS_PER_DAY,
+        365 * SECONDS_PER_DAY,
+    )
+    now = time.time()
+    labels = [selector._format_time_ago(0), selector._format_time_ago(1)]
+    labels += [
+        selector._format_time_ago(now - (threshold + delta))
+        for threshold in thresholds
+        for delta in (-1, 0, 1)
+    ]
+
+    assert "Yesterday" in labels
+    widest = max(labels, key=display_width)
+    assert display_width(widest) == _TIME_COLUMN_WIDTH - display_width(" | ")
 
 
 def test_uninstall_rows_reflow_as_terminal_narrows():
