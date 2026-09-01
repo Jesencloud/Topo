@@ -11,7 +11,7 @@ import os
 import shutil
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -239,304 +239,413 @@ def _open_in_file_manager(path: Path) -> str:
     return _open_path(target)
 
 
-@dataclass(frozen=True)
-class _ViewState:
-    """One entry on the navigation stack: the view a drill-down left behind.
+@dataclass
+class _View:
+    """The view on screen: what is being looked at, and where the cursor is in it.
 
-    This used to be a bare dict under a comment listing its keys, and the comment
-    listed four of the six: the cursor and page were added later -- so that coming
-    back from a child directory lands where it left rather than at the top -- and
-    the only thing documenting them was the ``.get(key, 0)`` they were read with,
-    which advertised a default that the single push site guarantees is never used.
+    Six fields rather than six locals, because they only ever move as a unit.
+    Drilling into a directory pushes a copy onto the navigation stack and edits
+    the original, so coming back is one rebinding instead of six assignments that
+    could restore five fields and forget the sixth. The cursor and page live here
+    for exactly that reason: they were added later, so that returning from a child
+    lands where it left rather than at the top, and the version before this one
+    read them back off the stack with a ``.get(key, 0)`` whose default advertised
+    a case the single push site guarantees cannot happen.
 
-    Six named fields cannot drift that way. Building one is a type error until
-    every field is supplied, and reading a field that does not exist is a type
-    error rather than a silent 0.
+    A snapshot shares ``results`` and ``data`` rather than copying them. The
+    parent's rows are the same dicts it recalculates percentages on when the
+    child returns, and copying a scan of /usr just to push it would buy nothing.
     """
 
     target: Path | None
-    results: list[dict[str, Any]]
-    data: dict[str, Any] | None
-    total_size: int
-    selected_index: int
-    current_page: int
+    results: list[dict[str, Any]] = field(default_factory=list)
+    data: dict[str, Any] | None = None
+    total_size: int = 0
+    selected_index: int = 0
+    current_page: int = 0
+
+    def snapshot(self) -> "_View":
+        """The copy that waits on the navigation stack while a child view is open."""
+        return replace(self)
+
+
+def _acquire_view_data(
+    current_target: Path | None,
+    target_to_scan: Path,
+    scan_reason: str,
+    target_label: str,
+    view_title: str,
+) -> dict[str, Any] | None:
+    """Read this target's contents, trying up to three sources in turn.
+
+    A sub-view asks the preview pass first, which answers only when the
+    directory really is too wide to size child by child, and otherwise hands the
+    target to a full Rust scan. The root view reads the shared cache before it
+    scans anything, so returning to the main menu and opening Analyze again in
+    the same process costs nothing.
+
+    Whichever route was taken, an empty result gets one last try as a plain
+    direct listing: that arm is what covers the engine being absent or refusing
+    a directory outright. Coming back empty from here means nothing could read
+    the target at all, which is the caller's cue to back out of the view.
+    """
+    if current_target is not None:
+        data = _fast_explore_with_spinner(
+            target_to_scan,
+            "refresh" if scan_reason == "refresh" else "explore",
+            target_label,
+            view_title,
+            only_when_wide=True,
+        )
+        if data is None:
+            data = _get_rust_scan_data_with_spinner(
+                target_to_scan, scan_reason, target_label, view_title
+            )
+    else:
+        cached = ScanCache.get(target_to_scan)
+        if cached is not None:
+            # Cache hit: load instantly without painting the scan screen,
+            # so the view doesn't blank/flash and shift vertically.
+            data = cached
+        else:
+            data = _scan_with_spinner(
+                lambda: get_rust_tree_data(target_to_scan),
+                scan_reason,
+                target_label,
+                view_title,
+            )
+    return data or get_fast_explore_data(target_to_scan)
+
+
+def _view_row(
+    name: str, path: Path, size: int, color: str, icon: str, **extra: Any
+) -> dict[str, Any]:
+    """One row of the root view.
+
+    Its share is measured against the filesystem the row lives on rather than
+    against the view's total: /usr and Home are often different mounts, and the
+    row carries the base it was measured with so that a later recalculation --
+    coming back from a child directory -- cannot reuse the wrong one.
+    """
+    base = filesystem_used_bytes(path)
+    return {
+        "name": name,
+        "path": path,
+        "size": size,
+        "percent": percent_of(size, base),
+        "percent_base": base,
+        "color": color,
+        "icon": icon,
+        "age_hint": get_age_hint(path),
+        **extra,
+    }
+
+
+def _root_category_rows(
+    targets: list[dict[str, Any]], home: Path, home_size: int, scan_sizes: dict[Any, int]
+) -> list[dict[str, Any]]:
+    """The standard places, skipping any this system does not have.
+
+    Home's size is the scan the view already paid for; the others come from the
+    concurrent scan the caller ran for exactly that reason.
+    """
+    return [
+        _view_row(
+            t["name"],
+            t["path"],
+            home_size if t["path"] == home else scan_sizes.get(t["path"], 0),
+            t["color"],
+            DIRECTORY_ICON,
+        )
+        for t in targets
+        if t["path"].exists()
+    ]
+
+
+def _insight_rows(
+    insights: list[dict[str, Any]], scan_sizes: dict[Any, int]
+) -> list[dict[str, Any]]:
+    """The insight rows worth drawing: the ones that exist and are big enough.
+
+    A smart view is sized by the same age filter that supplies its file list,
+    everything else by the concurrent scan. The size threshold is what keeps the
+    root view short -- an insight that turned up a few megabytes is not what this
+    screen is for -- and each insight may raise its own.
+    """
+    rows: list[dict[str, Any]] = []
+    for ins in insights:
+        p = ins["path"]
+        if not p.exists():
+            continue
+        smart_items: list[dict[str, Any]] = []
+        if ins.get("is_smart"):
+            # For smart views, we pre-calculate filtered items
+            smart_items = get_old_items_info(p)
+            size = sum(item["size"] for item in smart_items)
+        else:
+            size = scan_sizes.get(p, 0)
+
+        if size > ins.get("min_display_bytes", 10 * 1024 * 1024):
+            rows.append(
+                _view_row(
+                    ins["name"],
+                    p,
+                    size,
+                    YELLOW,
+                    ins.get("icon", "👀"),
+                    is_smart=ins.get("is_smart"),
+                    smart_items=smart_items,
+                )
+            )
+    return rows
+
+
+def _root_view_results(
+    data: dict[str, Any], target_to_scan: Path, home_size: int, view_title: str
+) -> tuple[list[dict[str, Any]], int]:
+    """The root view's rows, and the total they are drawn against.
+
+    That total is the filesystem's used bytes rather than the sum of the rows:
+    the categories overlap each other and every insight sits inside one of them,
+    so adding them up would describe a disk nobody has.
+    """
+    total_used = shutil.disk_usage("/").used or 1
+    home = Path.home()
+    targets: list[dict[str, Any]] = [
+        {"name": "Home", "path": home, "color": CYAN},
+        {
+            "name": "Applications",
+            "path": Path("/usr/share/applications"),
+            "color": MAGENTA,
+        },
+        {"name": "System", "path": Path("/usr"), "color": BLUE},
+    ]
+    insights: list[dict[str, Any]] = build_linux_insights(home)
+
+    # Collect every path that needs a Rust scan and run them concurrently.
+    # Home is already scanned (home_size); smart views use a Python
+    # age-filter instead of a full scan.
+    rust_paths = [
+        t["path"]
+        for t in targets
+        if t["path"].exists() and t["path"] != home and str(t["path"]) != "/"
+    ]
+    rust_paths += [
+        ins["path"] for ins in insights if ins["path"].exists() and not ins.get("is_smart")
+    ]
+    scan_sizes = (
+        _scan_with_spinner(
+            lambda: parallel_scan_sizes(rust_paths), "insights", "Linux insights", view_title
+        )
+        or {}
+    )
+
+    # A large secondary tree such as /usr can exceed the LRU entry
+    # limit by itself and evict Home even though Home was just scanned.
+    # Keep the root result hot so returning to the main menu and opening
+    # Analyze again in the same process does not repeat the full scan.
+    if not data.get("is_fast_explore"):
+        ScanCache.set(target_to_scan, data)
+
+    rows = _root_category_rows(targets, home, home_size, scan_sizes)
+    rows += _insight_rows(insights, scan_sizes)
+    return rows, total_used
+
+
+def _child_view_results(
+    current_target: Path, data: dict[str, Any], total_size: int
+) -> list[dict[str, Any]]:
+    """One directory's entries, drawn as shares of that directory.
+
+    A real scan is ranked first and built second: every row costs ~10 syscalls of
+    cache and age metadata, and only the ones that survive the cut are ever
+    drawn. Ranking needs nothing but the sizes the scan already returned, so this
+    is also the order the view is drawn in -- there is no second sort afterwards.
+
+    Preview data is a listing rather than a measurement, so it is kept whole and
+    sorted by name with directories first: ordering entries whose size was never
+    computed by that size would rank them by an answer nobody has.
+    """
+    total_path_size = total_size or 1
+    subdir_map = data.get("subdirs", {})
+    entry_meta = data.get("entry_meta", {})
+    is_fast_explore = data.get("is_fast_explore", False)
+    if is_fast_explore:
+        ranked = list(subdir_map.items())
+    else:
+        ranked = sorted(subdir_map.items(), key=lambda item: item[1], reverse=True)[
+            :ANALYZE_RESULT_LIMIT
+        ]
+    rows: list[dict[str, Any]] = []
+    for name, size in ranked:
+        full_path = current_target / name
+        meta = entry_meta.get(name, {})
+        if is_fast_explore and meta:
+            is_dir = meta.get("is_dir", False)
+            size_known = meta.get("size_known", True)
+            rows.append(
+                {
+                    "name": name,
+                    "path": full_path,
+                    "size": size,
+                    "percent": percent_of(size, total_path_size) if size_known else 0.0,
+                    "percent_base": total_path_size,
+                    "icon": icon_for_entry(name, is_dir=is_dir),
+                    "size_known": size_known,
+                    "sort_group": 0 if is_dir else 1,
+                }
+            )
+        else:
+            rows.append(build_analysis_entry(name, full_path, size, total_path_size))
+    if is_fast_explore:
+        rows.sort(key=lambda x: (x.get("sort_group", 1), x["name"].lower()))
+    return rows
+
+
+def _delete_selection(paths: list[Path], current_target: Path | None) -> tuple[str, bool]:
+    """Delete a chosen batch, returning its notice and whether to rescan.
+
+    Both call sites -- a row selection and a smart view's file list -- need the
+    same three things in the same order, and the last is the easy one to forget:
+    a batch that deleted nothing must not trigger a rescan, or declining the
+    admin prompt would rebuild the whole view for no reason.
+    """
+    outcome = delete_and_refresh_cache(
+        paths, current_target, ask_permanent=_confirm_permanent_delete
+    )
+    return _delete_notice(outcome), bool(outcome)
+
+
+# Suffixes that make a file something to be unpacked rather than opened.
+ARCHIVE_SUFFIXES = frozenset(
+    {".zip", ".tar", ".gz", ".xz", ".bz2", ".7z", ".rar", ".deb", ".rpm", ".apk"}
+)
+
+
+def _open_file_notice(path: Path) -> str:
+    """Open one file, or reveal it in its folder when opening it would run it.
+
+    Archives go to the file manager because unpacking is what the desktop would
+    do with them and that is not what a row on this screen is asking for; the
+    other two arms are the safety ones -- handing an executable, or a .desktop
+    entry that can launch arbitrary actions, to xdg-open is a launch.
+    """
+    is_archive = path.suffix.lower() in ARCHIVE_SUFFIXES
+    is_exec = os.access(path, os.X_OK)
+    is_launchable = path.suffix.lower() == ".desktop"
+    if is_archive or is_exec or is_launchable:
+        return _open_in_file_manager(path)
+    return _open_path(path, timeout=10)
 
 
 def run_deep_analysis(target_path: Path | None = None):
-    state_stack: list[_ViewState] = []
+    """Browse disk usage from one directory, drilling in and back out again.
 
-    # Current active state
-    current_target: Path | None = normalize_scan_path(target_path) if target_path else None
-    results: list[dict[str, Any]] = []
-    data: dict[str, Any] | None = None
-    total_scan_size = 0
+    One turn of the loop is one frame: rebuild the rows if something invalidated
+    them, draw them, read one key, act on it. Everything a frame is *about* lives
+    in ``view`` and moves as a unit; what stays out of it is what the next turn
+    has to do -- rescan or not, under which label, and the one notice the last
+    keypress earned.
+
+    Drilling in pushes a copy of the view and edits the original, so every way
+    back out is the same pop: the BACK key, and a child directory that turned out
+    to be unreadable.
+    """
+    state_stack: list[_View] = []
+    view = _View(target=normalize_scan_path(target_path) if target_path else None)
+    # What the next turn of the loop has to do, which is the part that is not the
+    # view: whether the rows have to be rebuilt, what to call that while it runs,
+    # and the one notice this frame owes the user for the last keypress.
     needs_scan = True
     scan_reason = "scan"
-    selected_index = 0
-    current_page = 0
     action_notice = ""
 
     while True:
-        target_to_scan = current_target or normalize_scan_path(Path.home())
-        view_title = " Analyze Disk" if current_target is None else f" Exploring: {current_target}"
+        target_to_scan = view.target or normalize_scan_path(Path.home())
+        view_title = " Analyze Disk" if view.target is None else f" Exploring: {view.target}"
 
         if needs_scan:
-            target_label = target_to_scan.name if current_target else "Home"
-            if current_target is not None:
-                # One pass decides between preview mode and a full scan: the
-                # listing comes back only when the directory really is too wide
-                # to size child by child.
-                data = _fast_explore_with_spinner(
-                    target_to_scan,
-                    "refresh" if scan_reason == "refresh" else "explore",
-                    target_label,
-                    view_title,
-                    only_when_wide=True,
-                )
-                if data is None:
-                    data = _get_rust_scan_data_with_spinner(
-                        target_to_scan, scan_reason, target_label, view_title
-                    )
-            else:
-                cached = ScanCache.get(target_to_scan)
-                if cached is not None:
-                    # Cache hit: load instantly without painting the scan screen,
-                    # so the view doesn't blank/flash and shift vertically.
-                    data = cached
-                else:
-                    data = _scan_with_spinner(
-                        lambda path=target_to_scan: get_rust_tree_data(path),
-                        scan_reason,
-                        target_label,
-                        view_title,
-                    )
-            if not data:
-                data = get_fast_explore_data(target_to_scan)
-            if not data:
+            target_label = target_to_scan.name if view.target else "Home"
+            view.data = _acquire_view_data(
+                view.target, target_to_scan, scan_reason, target_label, view_title
+            )
+            if not view.data:
                 # A bare print here was overwritten by the next frame, so the
                 # 1.5 s sleep was the only thing that made it readable at all --
                 # and when there was nowhere to go back to, the screen closed
                 # with no explanation. Going back carries the reason in the
                 # notice; leaving waits for a keypress instead of a timer.
                 action_notice = _fail_notice(ENGINE_SCAN_FAILED_NOTICE)
-                if state_stack:
-                    prev = state_stack.pop()
-                    current_target = prev.target
-                    results = prev.results
-                    data = prev.data
-                    total_scan_size = prev.total_size
-                    selected_index = prev.selected_index
-                    current_page = prev.current_page
-                    needs_scan = False
-                    continue
-                else:
+                if not state_stack:
                     print(f"\n   {action_notice}")
                     Navigator.wait_for_return()
                     break
+                view = state_stack.pop()
+                needs_scan = False
+                continue
 
-            total_scan_size = data.get("total_size_bytes", 0)
-            results = []
-
-            if current_target is None:
-                # Root View: Standard Categories
-                total_used = shutil.disk_usage("/").used or 1
-                targets: list[dict[str, Any]] = [
-                    {"name": "Home", "path": Path.home(), "color": CYAN},
-                    {
-                        "name": "Applications",
-                        "path": Path("/usr/share/applications"),
-                        "color": MAGENTA,
-                    },
-                    {"name": "System", "path": Path("/usr"), "color": BLUE},
-                ]
-
-                # --- LINUX INSIGHTS: Detect hidden space killers ---
-                home = Path.home()
-                insights: list[dict[str, Any]] = build_linux_insights(home)
-
-                # Collect every path that needs a Rust scan and run them concurrently.
-                # Home is already scanned (total_scan_size); smart views use a Python
-                # age-filter instead of a full scan.
-                rust_paths = [
-                    t["path"]
-                    for t in targets
-                    if t["path"].exists() and t["path"] != home and str(t["path"]) != "/"
-                ]
-                rust_paths += [
-                    ins["path"]
-                    for ins in insights
-                    if ins["path"].exists() and not ins.get("is_smart")
-                ]
-                scan_sizes = (
-                    _scan_with_spinner(
-                        lambda paths=rust_paths: parallel_scan_sizes(paths),
-                        "insights",
-                        "Linux insights",
-                        view_title,
-                    )
-                    or {}
+            view.total_size = view.data.get("total_size_bytes", 0)
+            if view.target is None:
+                view.results, view.total_size = _root_view_results(
+                    view.data, target_to_scan, view.total_size, view_title
                 )
-
-                # A large secondary tree such as /usr can exceed the LRU entry
-                # limit by itself and evict Home even though Home was just scanned.
-                # Keep the root result hot so returning to the main menu and opening
-                # Analyze again in the same process does not repeat the full scan.
-                if not data.get("is_fast_explore"):
-                    ScanCache.set(target_to_scan, data)
-
-                for t in targets:
-                    if t["path"].exists():
-                        if t["path"] == home:
-                            size = total_scan_size
-                        else:
-                            size = scan_sizes.get(t["path"], 0)
-                        base = filesystem_used_bytes(t["path"])
-                        results.append(
-                            {
-                                "name": t["name"],
-                                "path": t["path"],
-                                "size": size,
-                                "percent": percent_of(size, base),
-                                "percent_base": base,
-                                "color": t["color"],
-                                "icon": DIRECTORY_ICON,
-                                "age_hint": get_age_hint(t["path"]),
-                            }
-                        )
-
-                for ins in insights:
-                    p = ins["path"]
-                    if p.exists():
-                        smart_items = []
-                        if ins.get("is_smart"):
-                            # For smart views, we pre-calculate filtered items
-                            smart_items = get_old_items_info(p)
-                            size = sum(item["size"] for item in smart_items)
-                        else:
-                            size = scan_sizes.get(p, 0)
-
-                        min_display_bytes = ins.get("min_display_bytes", 10 * 1024 * 1024)
-                        if size > min_display_bytes:  # Only show large entries to keep Root clean
-                            base = filesystem_used_bytes(p)
-                            results.append(
-                                {
-                                    "name": ins["name"],
-                                    "path": p,
-                                    "size": size,
-                                    "percent": percent_of(size, base),
-                                    "percent_base": base,
-                                    "color": YELLOW,
-                                    "icon": ins.get("icon", "👀"),
-                                    "age_hint": get_age_hint(p),
-                                    "is_smart": ins.get("is_smart"),
-                                    "smart_items": smart_items,
-                                }
-                            )
-
-                # Ensure total_scan_size matches the disk usage baseline for root view
-                total_scan_size = total_used
             else:
-                total_path_size = total_scan_size or 1
-                subdir_map = data.get("subdirs", {})
-                entry_meta = data.get("entry_meta", {})
-                is_fast_explore = data.get("is_fast_explore", False)
-                if is_fast_explore:
-                    ranked = list(subdir_map.items())
-                else:
-                    # Rank first, build rows second: every row costs ~10 syscalls
-                    # of cache/age metadata, and only the 50 that survive the cut
-                    # are ever drawn. Ordering needs nothing but the sizes the
-                    # scan already returned, so this is also the size order the
-                    # view is drawn in -- no second sort afterwards.
-                    ranked = sorted(subdir_map.items(), key=lambda item: item[1], reverse=True)[
-                        :ANALYZE_RESULT_LIMIT
-                    ]
-                for name, size in ranked:
-                    full_path = current_target / name
-                    meta = entry_meta.get(name, {})
-                    if is_fast_explore and meta:
-                        is_dir = meta.get("is_dir", False)
-                        size_known = meta.get("size_known", True)
-                        entry = {
-                            "name": name,
-                            "path": full_path,
-                            "size": size,
-                            "percent": percent_of(size, total_path_size) if size_known else 0.0,
-                            "percent_base": total_path_size,
-                            "icon": icon_for_entry(name, is_dir=is_dir),
-                            "size_known": size_known,
-                            "sort_group": 0 if is_dir else 1,
-                        }
-                    else:
-                        entry = build_analysis_entry(name, full_path, size, total_path_size)
-                    results.append(entry)
-                if is_fast_explore:
-                    results.sort(key=lambda x: (x.get("sort_group", 1), x["name"].lower()))
+                view.results = _child_view_results(view.target, view.data, view.total_size)
             needs_scan = False
             scan_reason = "scan"
 
         selector = AnalyzeSelector(
             view_title,
-            results,
-            can_select=(current_target is not None),
-            notice=action_notice or _explore_notice(data),
-            sort_mode="name" if data and data.get("is_fast_explore") else "size",
+            view.results,
+            can_select=(view.target is not None),
+            notice=action_notice or _explore_notice(view.data),
+            sort_mode="name" if view.data and view.data.get("is_fast_explore") else "size",
         )
         # A notice raised by the last keypress is shown once and then drops away,
         # so it cannot outlive the action that caused it.
         action_notice = ""
         # Restore the cursor/page belonging to this view.  Parent views keep
         # these values on the navigation stack while a child directory is open.
-        selector.selected_index = min(selected_index, max(0, len(results) - 1))
-        selector.current_page = current_page
+        selector.selected_index = min(view.selected_index, max(0, len(view.results) - 1))
+        selector.current_page = view.current_page
         action, idx = selector.run()
         if isinstance(selector.selected_index, int):
-            selected_index = selector.selected_index
+            view.selected_index = selector.selected_index
         if isinstance(selector.current_page, int):
-            current_page = selector.current_page
+            view.current_page = selector.current_page
 
         if action == "QUIT":
             break
         elif action == "BACK":
-            if state_stack:
-                prev = state_stack.pop()
-                current_target = prev.target
-                results = prev.results
-                data = prev.data
-                total_scan_size = prev.total_size
-                selected_index = prev.selected_index
-                current_page = prev.current_page
-                # Recalculate parent percentages to reflect any deletions done in child
-                for r in results:
-                    # Each row keeps the total it was measured against: in the
-                    # root view that is the filesystem the row lives on, which is
-                    # not the parent total.
-                    base = r.get("percent_base") or total_scan_size
-                    if base > 0:
-                        r["percent"] = percent_of(r["size"], base)
-                needs_scan = False
-            else:
+            if not state_stack:
                 break
+            view = state_stack.pop()
+            # Recalculate parent percentages to reflect any deletions done in child
+            for r in view.results:
+                # Each row keeps the total it was measured against: in the
+                # root view that is the filesystem the row lives on, which is
+                # not the parent total.
+                base = r.get("percent_base") or view.total_size
+                if base > 0:
+                    r["percent"] = percent_of(r["size"], base)
+            needs_scan = False
         elif action == "REFRESH":
             ScanCache.discard(target_to_scan)
             needs_scan = True
             scan_reason = "refresh"
         elif action == "OPEN":
-            path = results[idx]["path"]
+            path = view.results[idx]["path"]
             action_notice = _open_in_file_manager(path)
         elif action == "DRILL_DOWN":
-            item = results[idx]
+            item = view.results[idx]
             if item.get("is_smart"):
                 # For smart views, show a file list of the filtered items
                 top_selector = TopFilesSelector(f"Smart View: {item['name']}", item["smart_items"])
                 selected_idxs = top_selector.run()
                 if selected_idxs:
                     paths = [item["smart_items"][s_idx]["path"] for s_idx in selected_idxs]
-                    outcome = delete_and_refresh_cache(
-                        paths, current_target, ask_permanent=_confirm_permanent_delete
-                    )
-                    action_notice = _delete_notice(outcome)
-                    if outcome:
+                    action_notice, deleted = _delete_selection(paths, view.target)
+                    if deleted:
                         needs_scan = True
                         scan_reason = "refresh"
             elif item["path"].is_dir():
@@ -544,58 +653,22 @@ def run_deep_analysis(target_path: Path | None = None):
                 if str(item["path"]) == "/":
                     continue
 
-                state_stack.append(
-                    _ViewState(
-                        target=current_target,
-                        results=results,
-                        data=data,
-                        total_size=total_scan_size,
-                        selected_index=selected_index,
-                        current_page=current_page,
-                    )
-                )
-                current_target = item["path"]
-                selected_index = 0
-                current_page = 0
+                state_stack.append(view.snapshot())
+                view.target = item["path"]
+                view.selected_index = 0
+                view.current_page = 0
                 needs_scan = True
                 scan_reason = "scan"
             elif item["path"].is_file():
-                p = item["path"]
-                archive_exts = {
-                    ".zip",
-                    ".tar",
-                    ".gz",
-                    ".xz",
-                    ".bz2",
-                    ".7z",
-                    ".rar",
-                    ".deb",
-                    ".rpm",
-                    ".apk",
-                }
-                is_archive = p.suffix.lower() in archive_exts
-                is_exec = os.access(p, os.X_OK)
-                # .desktop entries can launch arbitrary actions through xdg-open,
-                # so treat them like executables and reveal the parent instead.
-                is_launchable = p.suffix.lower() == ".desktop"
-
-                if is_archive or is_exec or is_launchable:
-                    # Open parent directory instead for safety
-                    action_notice = _open_in_file_manager(p)
-                else:
-                    action_notice = _open_path(p, timeout=10)
+                action_notice = _open_file_notice(item["path"])
         elif action == "DELETE_BATCH":
-            selected_idxs = idx  # action was DELETE_BATCH, idx contains the list
-            paths = [results[s_idx]["path"] for s_idx in selected_idxs]
-            outcome = delete_and_refresh_cache(
-                paths, current_target, ask_permanent=_confirm_permanent_delete
-            )
-            action_notice = _delete_notice(outcome)
-            if outcome:
+            # idx carries the ticked rows for a batch action, not one row.
+            paths = [view.results[s_idx]["path"] for s_idx in idx]
+            action_notice, deleted = _delete_selection(paths, view.target)
+            if deleted:
                 needs_scan = True
                 scan_reason = "refresh"
         elif action == "OPEN_BATCH":
-            selected_idxs = idx
-            for s_idx in selected_idxs:
-                p = results[s_idx]["path"]
+            for s_idx in idx:
+                p = view.results[s_idx]["path"]
                 action_notice = _open_in_file_manager(p) or action_notice

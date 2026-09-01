@@ -13,21 +13,18 @@ from .core.constants import (
     CLEAR_SCREEN,
     FAIL,
     GRAY,
-    INFO,
-    OK,
     RESET,
-    THEME_TITLE,
     TOPO_VERSION,
     WARN,
     setup_color_mode,
 )
 from .core.history import show_history
 from .core.lock import LockUnavailable, SingleInstanceLock
-from .core.whitelist import add_to_whitelist, remove_from_whitelist
 from .manage.doctor import run_doctor
 from .manage.install import run_install_link
 from .manage.remove import run_remove
 from .manage.update import run_update
+from .manage.whitelist import run_whitelist
 from .optimize import optimize_system
 from .status import show_status
 from .ui.navigator import Navigator
@@ -380,46 +377,16 @@ def _main() -> bool:
 
     # Whitelist Management CLI
     if args.command == "whitelist":
+        # The checks stay here because they are argparse's to make: wl_parser
+        # knows the usage line to print with them and exits 2, the status a
+        # misused CLI owes its caller. What the command then *does* is
+        # manage.whitelist's, the same way every other subcommand's work is one
+        # call out of this function.
         if args.action in ("add", "remove") and not args.path:
             wl_parser.error(f"{args.action} requires PATH")
         if args.action == "list" and args.path:
             wl_parser.error("list does not accept PATH")
-
-        if args.action == "add":
-            # A duplicate is not a failure: adding a path that is already
-            # protected leaves the system in the state the caller asked for, so
-            # `topo whitelist add` is safe to run unconditionally in a script.
-            # A write that did not happen *is* one, and used to be reported with
-            # that same "already whitelisted" line and an exit status of 0 --
-            # so a full disk or a corrupt whitelist looked exactly like success.
-            result = add_to_whitelist(args.path)
-            if result == "changed":
-                print(f"{OK} Added to whitelist: {args.path}")
-            elif result == "unchanged":
-                print(f"{INFO} Path already whitelisted: {args.path}")
-            else:
-                print(f"{FAIL} Could not update the whitelist: {args.path}")
-                return False
-        elif args.action == "remove":
-            result = remove_from_whitelist(args.path)
-            if result == "changed":
-                print(f"{OK} Removed from whitelist: {args.path}")
-            elif result == "unchanged":
-                print(f"{FAIL} Path not found in whitelist: {args.path}")
-                return False
-            else:
-                print(f"{FAIL} Could not update the whitelist: {args.path}")
-                return False
-        elif args.action == "list":
-            from .core.whitelist import get_whitelist
-
-            w = get_whitelist()
-            print(f"{THEME_TITLE}🛡️  Current Whitelist:{RESET}")
-            if not w:
-                print("   (Empty)")
-            for p in w:
-                print(f"   - {p}")
-        return True
+        return run_whitelist(args.action, args.path)
 
     # Commands that cannot work without a terminal.
     #

@@ -435,7 +435,7 @@ def test_whitelist_cli_success_duplicate_remove_failure_and_list(capsys):
         with (
             patch("sys.argv", argv),
             patch("src.main.terminal_state.install_signal_handlers"),
-            patch(f"src.main.{function}", return_value=result) as mocked,
+            patch(f"src.manage.whitelist.{function}", return_value=result) as mocked,
         ):
             topo_main.main()
         mocked.assert_called_once_with("/tmp/x")
@@ -453,7 +453,7 @@ def test_whitelist_cli_success_duplicate_remove_failure_and_list(capsys):
         with (
             patch("sys.argv", ["topo", "whitelist", action, "/tmp/x"]),
             patch("src.main.terminal_state.install_signal_handlers"),
-            patch(f"src.main.{function}", return_value=result),
+            patch(f"src.manage.whitelist.{function}", return_value=result),
             pytest.raises(SystemExit) as exc,
         ):
             topo_main.main()
@@ -461,7 +461,7 @@ def test_whitelist_cli_success_duplicate_remove_failure_and_list(capsys):
     with (
         patch("sys.argv", ["topo", "whitelist"]),
         patch("src.main.terminal_state.install_signal_handlers"),
-        patch("src.core.whitelist.get_whitelist", return_value=[]),
+        patch("src.manage.whitelist.get_whitelist", return_value=[]),
     ):
         topo_main.main()
     assert "(Empty)" in capsys.readouterr().out
