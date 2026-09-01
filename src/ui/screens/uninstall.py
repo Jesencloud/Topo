@@ -1,8 +1,9 @@
 """The uninstall screen: pick applications, preview the damage, then remove them.
 
-The scanning, residue discovery and removal all belong to UninstallManager in
-the top-level uninstall module; this module only sequences them around the
-selectors and reports what happened.
+The scan and the preview belong to UninstallManager in the top-level uninstall
+module, which composes the finding halves (``discovery``, ``residue``); the
+removal itself belongs to that module's ``removal`` half. This module only
+sequences them around the selectors and reports what happened.
 """
 
 import sys
@@ -34,6 +35,7 @@ from ...core.scan_cache import ScanCache
 from ...core.sound import play_delete
 from ...core.spinner import threaded_spinner
 from ...core.text import plural, sanitize_for_display
+from ...uninstall import processes, removal
 from ...uninstall.manager import UninstallManager
 from ..navigator import (
     Navigator,
@@ -52,8 +54,9 @@ SCREEN_TITLE = "Uninstall Apps"
 # prefix and standalone CLI binaries under ~/.local are removed as the invoking
 # user. Flatpak is not a fixed answer and so is not listed here: a user
 # installation needs nothing, while a system-wide one lives under
-# /var/lib/flatpak and is root's to remove -- UninstallManager decides that per
-# app, and the same call builds the command, so the two cannot disagree.
+# /var/lib/flatpak and is root's to remove -- removal.flatpak_removal_needs_sudo
+# decides that per app, and the removal builds its command from the same answer,
+# so the two cannot disagree.
 NEEDS_SUDO_TYPES = frozenset(
     {AppType.APT, AppType.DNF, AppType.PACMAN, AppType.SNAP, AppType.ZYPPER}
 )
@@ -153,7 +156,7 @@ def run_uninstall():
             continue
 
         needs_sudo = any(
-            app["type"] in NEEDS_SUDO_TYPES or UninstallManager.flatpak_removal_needs_sudo(app)
+            app["type"] in NEEDS_SUDO_TYPES or removal.flatpak_removal_needs_sudo(app)
             for app, _, _ in all_targets
         )
         # Ensure sudo session (require password) outside raw mode so sudo can own input.
@@ -203,14 +206,14 @@ def run_uninstall():
                 # inside the loop below charged it to every app in turn.
                 if any(is_running for _, _, is_running in all_targets):
                     current_status[0] = "Closing running applications..."
-                    manager.terminate_apps(all_targets)
+                    processes.terminate_apps(all_targets)
 
                 for app, paths, _ in all_targets:
                     # `name` comes from a .desktop Name= field, so it is untrusted; these
                     # lists feed the summary lines only, never a filesystem operation.
                     safe_app_name = sanitize_for_display(str(app["name"]))
                     current_status[0] = f"Removing {BOLD}{safe_app_name}{RESET}..."
-                    result = manager.execute_uninstall(app, paths)
+                    result = removal.execute_uninstall(app, paths)
                     package_removed = bool(result.get("package_removed"))
                     paths_removed = any(ok for ok, _ in result.get("removed_paths", []))
                     if package_removed or paths_removed:

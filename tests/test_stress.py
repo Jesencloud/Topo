@@ -5,7 +5,7 @@ import pytest
 
 from src.core.engine import get_rust_tree_data
 from src.core.scan_cache import ScanCache
-from src.uninstall.manager import _ResidueEntryIndex
+from src.uninstall.residue import ResidueEntryIndex
 
 
 def test_stress_rust_engine_deep_directory_tree(tmp_path):
@@ -87,7 +87,7 @@ def test_stress_residue_index_massive_lookup(tmp_path):
     entries = [
         (f"com.example.app_{i:04d}_cache_residue", tmp_path / f"app_{i}") for i in range(5000)
     ]
-    index = _ResidueEntryIndex.build(entries)
+    index = ResidueEntryIndex.build(entries)
     assert index.is_indexed is True
 
     # Search for matching prefixes, exact matches, and non-matches

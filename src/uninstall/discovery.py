@@ -15,14 +15,15 @@ Split out of ``UninstallManager``, where these sat between residue discovery and
 process termination: reading how a residue path is found meant scrolling past
 eight package managers that have nothing to do with it. They shared no state
 with the rest of the class -- each one runs its own tool and builds its own
-records through ``_app_record`` -- so what is left behind in ``manager.py`` is
-the half that deletes things, and this is the half that only looks.
+records through ``_app_record`` -- so they came out first, and the rest of the
+class followed them into ``residue.py``, ``processes.py`` and ``removal.py``.
 
-Two helpers here are also read from ``manager.py``: :func:`app_text` and
-:func:`strip_package_arch`. Both are about reading a package's own words, which
-is what this module does; the classifier that consumes ``app_text`` on the other
-side (``_requires_official_only_uninstall``) decides whether an app may be
-removed at all, and that decision belongs with removal.
+Two helpers here are also read by the modules downstream: :func:`app_text` by
+``residue.py`` and :func:`strip_package_arch` by ``collateral.py``. Both are
+about reading a package's own words, which is what this module does; the
+classifier that consumes ``app_text`` on the other side
+(``_requires_official_only_uninstall``) decides whether an app's data may be
+touched at all, and that decision belongs next to the search it cancels.
 """
 
 import contextlib

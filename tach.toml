@@ -45,7 +45,14 @@ depends_on = ["src.core"]
 # src.ui itself: navigator.py stays a toolkit that cannot import a feature.
 [[modules]]
 path = "src.ui.screens"
-depends_on = ["src.core", "src.ui", "src.analyze", "src.uninstall"]
+depends_on = [
+    "src.core",
+    "src.ui",
+    "src.analyze",
+    "src.uninstall",
+    "src.uninstall.processes",
+    "src.uninstall.removal",
+]
 
 # The five main-menu features, one module each -- clean is a package only
 # because it cleans four different things. The split that decides where a
@@ -66,7 +73,14 @@ depends_on = ["src.core"]
 
 [[modules]]
 path = "src.uninstall"
-depends_on = ["src.core", "src.uninstall.discovery"]
+depends_on = [
+    "src.core",
+    "src.uninstall.collateral",
+    "src.uninstall.discovery",
+    "src.uninstall.names",
+    "src.uninstall.processes",
+    "src.uninstall.residue",
+]
 
 # Finding installed apps, split out of the uninstall manager. A nested module
 # rather than just another file in the package, because the direction has to
@@ -78,6 +92,61 @@ depends_on = ["src.core", "src.uninstall.discovery"]
 [[modules]]
 path = "src.uninstall.discovery"
 depends_on = ["src.core"]
+
+# "What else does this removal take with it", asked for the confirmation screen.
+# Nested for the same one-way reason as discovery: every query it runs is
+# read-only and unprivileged, so it must not grow an import of the half that
+# deletes. It reads strip_package_arch off discovery, never the reverse.
+[[modules]]
+path = "src.uninstall.collateral"
+depends_on = ["src.core", "src.uninstall.discovery"]
+
+# How strictly a name has to match before something is acted on -- the one rule
+# both halves that do damage consult, residue deletion and process termination.
+# Nested and dependency-free so it cannot acquire either half's concerns: it is
+# string policy, and anything that would need a Path or a subprocess here
+# belongs in the module that acts on the answer.
+[[modules]]
+path = "src.uninstall.names"
+depends_on = []
+
+# Which per-user paths belong to one app: ~/.config/<name>, a stale launcher, an
+# icon in every theme directory. Nested for the strongest version of the one-way
+# rule in this package -- the answers here are guesses derived from names, and the
+# guessing is only allowed to be generous because this module cannot delete, open,
+# or rename what it names. An import of removal.py from here, or of manager.py,
+# would end that; removal takes the list as an argument instead.
+[[modules]]
+path = "src.uninstall.residue"
+depends_on = [
+    "src.core",
+    "src.uninstall.discovery",
+    "src.uninstall.names",
+]
+
+# Closing an app's processes before its files go away. Nested for the same
+# one-way reason as the others: the removal paths call in this direction, and
+# nothing here may reach back for manager.py. ui.screens is allowed at it
+# directly because the screen closes the whole selection in one go before it
+# starts removing, which is what makes the SIGTERM grace period a single wait.
+[[modules]]
+path = "src.uninstall.processes"
+depends_on = ["src.core", "src.uninstall.discovery", "src.uninstall.names"]
+
+# The half that deletes: one app's processes, then its package, then its residue.
+# Nested so the arrow can only run one way, and here that is the point rather
+# than a precaution -- manager.py finds candidate directories heuristically, this
+# module deletes them, and an import back would let the deleting half start
+# calling the scan and re-deriving what to remove. It does not appear in
+# src.uninstall's depends_on above, because nothing in the finding half needs it:
+# the screen holds both, and composes them in that order.
+[[modules]]
+path = "src.uninstall.removal"
+depends_on = [
+    "src.core",
+    "src.uninstall.discovery",
+    "src.uninstall.processes",
+]
 
 [[modules]]
 path = "src.analyze"
