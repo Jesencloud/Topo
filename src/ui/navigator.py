@@ -380,6 +380,27 @@ _TIME_COLUMN_WIDTH = len(" | ") + len("Yesterday")
 _BULLET_PREFIX_WIDTH = len("   • ")
 _BULLET_ICON_PREFIX_WIDTH = _BULLET_PREFIX_WIDTH + _ICON_SLOT + 1
 
+
+def _paired_name_width() -> int:
+    """Name column for a "Selected ... to Remove" list that draws two entries a line.
+
+    Both such lists -- AnalyzeSelector's and TopFilesSelector's -- lay the pair out
+    identically, so they size it identically: half of what is left after each entry
+    has paid for its bullet prefix and its icon column, capped at the width a name
+    is worth reading at.
+
+    Derived from the terminal rather than fixed, because the cap alone does not
+    fit: 2 * (_BULLET_ICON_PREFIX_WIDTH + NAME_COLUMN_MAX_WIDTH) is 86, so at the
+    usual 80 columns the second name ran off the right edge -- and in this layout
+    the wrap that follows pushes the whole frame down. The floor of 8 can still
+    overflow below 32 columns, deliberately: a name truncated shorter than that
+    tells the reader nothing, so the narrowest windows get an overflowing line
+    instead of an unreadable one.
+    """
+    terminal_width = max(20, shutil.get_terminal_size(fallback=(80, 24)).columns)
+    return max(8, min(NAME_COLUMN_MAX_WIDTH, (terminal_width - 2 * _BULLET_ICON_PREFIX_WIDTH) // 2))
+
+
 # The two rungs of _format_time_ago's ladder that are display roundings rather
 # than units: every month is 30 days and every year is 365, because the function
 # only ever renders "3mo ago" and has no date to be exact about. Named because
@@ -985,6 +1006,7 @@ class AnalyzeSelector(_PagedSelector):
                 f"\n {THEME_TITLE}{MARK_SECTION} Selected Items to Remove:{RESET} {GREEN}Enter{RESET}: {WHITE}Delete{RESET}\033[K\n"
             )
             selected_indices = sorted(list(self.selected_items))
+            selected_name_w = _paired_name_width()
             for i in range(0, len(selected_indices), 2):
                 pair = selected_indices[i : i + 2]
                 line = ""
@@ -992,7 +1014,7 @@ class AnalyzeSelector(_PagedSelector):
                     item = self.items[idx]
                     icon = item.get("icon", DIRECTORY_ICON)
                     name_padded = pad_and_truncate(
-                        sanitize_for_display(item["name"]), NAME_COLUMN_MAX_WIDTH
+                        sanitize_for_display(item["name"]), selected_name_w
                     )
                     line += f"   {THEME_TITLE}•{RESET} {icon}{icon_gap(icon)}{name_padded}"
                 buf.append(line + "\033[K\n")
@@ -1538,17 +1560,8 @@ class TopFilesSelector:
                 f"\n {THEME_TITLE}{MARK_SECTION} Selected Large Files to Remove:{RESET}\033[K\n"
             )
             # Two entries a line, each costing the bullet prefix and the icon
-            # column icon_gap normalises every glyph to. Derived from the terminal
-            # rather than fixed so the pair does not run off the right edge on a
-            # narrow window.
-            terminal_width = max(20, shutil.get_terminal_size(fallback=(80, 24)).columns)
-            name_width = max(
-                8,
-                min(
-                    NAME_COLUMN_MAX_WIDTH,
-                    (terminal_width - 2 * _BULLET_ICON_PREFIX_WIDTH) // 2,
-                ),
-            )
+            # column icon_gap normalises every glyph to.
+            name_width = _paired_name_width()
             selected_indices = sorted(list(self.selected_items))
             for i in range(0, len(selected_indices), 2):
                 pair = selected_indices[i : i + 2]

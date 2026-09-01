@@ -745,6 +745,34 @@ def test_orphaned_remnants_removes_old_cache(test_env):
         assert clean_orphaned_remnants() == (20, 1)
 
 
+def test_orphaned_remnants_never_touches_desktop_infrastructure(test_env):
+    """A protected ~/.cache folder is skipped under the exact conditions that remove one.
+
+    The orphan heuristic is "old enough, and no .desktop file points at it", and
+    every name in PROTECTED_CACHE_DIRS satisfies both forever: pulseaudio and the
+    icon theme cache ship no launcher. So this asserts the list is consulted, not
+    that the age check works -- the sibling test above already runs the removing
+    path with the same setup and a name that is not on the list.
+    """
+    import os
+
+    protected = [test_env / ".cache" / name for name in ("pulse", "fontconfig", "gtk-3.0")]
+    old = time.time() - 100 * 86400
+    for path in protected:
+        path.mkdir(parents=True)
+        (path / "state.bin").write_bytes(b"0" * 64)
+        os.utime(path, (old, old))
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.clean.apps.shutil.which", return_value=None),
+        patch("src.clean.apps.get_size_fast", return_value=20),
+        patch("src.clean.apps.safe_remove", return_value=(True, "ok")) as mock_remove,
+    ):
+        assert clean_orphaned_remnants() == (0, 0)
+    mock_remove.assert_not_called()
+    assert all((path / "state.bin").exists() for path in protected)
+
+
 def test_snap_shader_ide_and_desktop_cleaners(test_env):
     snap_cache = test_env / "snap/app/common/.cache"
     snap_cache.mkdir(parents=True)

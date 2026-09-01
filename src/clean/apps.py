@@ -17,6 +17,7 @@ from ..core.constants import (
     GRAY,
     INFO,
     OK,
+    PROTECTED_CACHE_DIRS,
     RESET,
     SKIP,
 )
@@ -309,60 +310,6 @@ def clean_orphaned_remnants(dry_run=False, max_age_days=60):
     # so a wrong match has to be undoable. config.json's use_trash=false opts out.
     use_trash = get_use_trash()
 
-    # Core desktop and system infrastructure cache folders that must always be skipped
-    system_folders = {
-        # Audio & System Bus Infrastructure
-        "pulse",
-        "pipewire",
-        "wireplumber",
-        "alsa",
-        "dbus",
-        "dconf",
-        "gnome-session",
-        "systemd",
-        "trash",
-        "gvfs",
-        "nautilus",
-        "mime",
-        "journal",
-        # Desktop GUI Toolkit & Rendering (GNOME / KDE / GTK / Qt / XFCE)
-        "gtk-2.0",
-        "gtk-3.0",
-        "gtk-4.0",
-        "qt5",
-        "qt6",
-        "qtproject",
-        "QtProject",
-        "kde",
-        "xfce4",
-        "fontconfig",
-        "fonts",
-        "icons",
-        "themes",
-        "backgrounds",
-        "applications",
-        # CPU / GPU / Driver / Hardware Acceleration & Shaders
-        "mesa_shader_cache",
-        "mesa_shader_cache_db",
-        "nvidia",
-        "intel",
-        "intel_gpu",
-        "AMD",
-        "opencl",
-        "pocl",
-        "vulkan",
-        "gstreamer-1.0",
-        # Package Managers, Sandboxes & Input Methods
-        "flatpak",
-        "common",
-        "keyrings",
-        "ibus",
-        "fcitx",
-        "fcitx5",
-        "rime",
-        "uim",
-    }
-
     # Gather executable/link targets from all system and local .desktop files.
     # A missing directory here is not harmless: the cache folder of an app that
     # is still installed then looks orphaned and gets trashed. Snap keeps its
@@ -402,7 +349,7 @@ def clean_orphaned_remnants(dry_run=False, max_age_days=60):
 
     try:
         for item in cache_root.iterdir():
-            if not item.is_dir() or item.name.startswith(".") or item.name in system_folders:
+            if not item.is_dir() or item.name.startswith(".") or item.name in PROTECTED_CACHE_DIRS:
                 continue
             resolved_item = item.resolve()
             if (

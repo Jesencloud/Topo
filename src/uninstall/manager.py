@@ -96,12 +96,19 @@ class UninstallManager:
             residue_paths = residue.find_residue_paths(
                 app["id"], app["name"], pre_scanned_entries=pre_scanned_entries
             )
+            # Both sides are already Path -- install_dir by AppRecord's
+            # annotation, residue_paths by find_residue_paths' return type -- so
+            # only resolve() does any work here. It stays on both sides because
+            # it is what makes the comparison mean "the same directory": the
+            # install dir is chosen from ~/.local/share, ~/.config or ~/.<name>,
+            # any of which can be reached through a symlink that the residue scan
+            # names differently.
             inst_dir_val = app.get("install_dir")
-            target_inst_dir: Path | None = Path(inst_dir_val).resolve() if inst_dir_val else None
+            target_inst_dir: Path | None = inst_dir_val.resolve() if inst_dir_val else None
             filtered_residue_paths = [
                 p
                 for p in residue_paths
-                if target_inst_dir is None or Path(p).resolve() != target_inst_dir
+                if target_inst_dir is None or p.resolve() != target_inst_dir
             ]
 
             residue_size = sum(get_size_fast(p) for p in filtered_residue_paths)

@@ -78,6 +78,71 @@ DEV_CACHES = {
     "go": HOME / ".cache/go-build",
 }
 
+# Directories under ~/.cache that belong to the desktop and the system rather
+# than to any one app, and so can never be an "orphaned" app cache no matter
+# what the heuristic in clean.apps concludes. That cleaner decides a folder is
+# an orphan from the *absence* of a .desktop launcher, and nothing in this list
+# ever had one -- pulseaudio ships no launcher, and neither does the icon theme
+# cache -- so without this set they would all read as orphans on the first run.
+#
+# A frozenset because it is only ever asked whether a name is in it, and because
+# a module-level set that a caller could add to would be a cleaner quietly
+# teaching the next one to skip a folder.
+PROTECTED_CACHE_DIRS = frozenset(
+    {
+        # Audio & System Bus Infrastructure
+        "pulse",
+        "pipewire",
+        "wireplumber",
+        "alsa",
+        "dbus",
+        "dconf",
+        "gnome-session",
+        "systemd",
+        "trash",
+        "gvfs",
+        "nautilus",
+        "mime",
+        "journal",
+        # Desktop GUI Toolkit & Rendering (GNOME / KDE / GTK / Qt / XFCE)
+        "gtk-2.0",
+        "gtk-3.0",
+        "gtk-4.0",
+        "qt5",
+        "qt6",
+        "qtproject",
+        "QtProject",
+        "kde",
+        "xfce4",
+        "fontconfig",
+        "fonts",
+        "icons",
+        "themes",
+        "backgrounds",
+        "applications",
+        # CPU / GPU / Driver / Hardware Acceleration & Shaders
+        "mesa_shader_cache",
+        "mesa_shader_cache_db",
+        "nvidia",
+        "intel",
+        "intel_gpu",
+        "AMD",
+        "opencl",
+        "pocl",
+        "vulkan",
+        "gstreamer-1.0",
+        # Package Managers, Sandboxes & Input Methods
+        "flatpak",
+        "common",
+        "keyrings",
+        "ibus",
+        "fcitx",
+        "fcitx5",
+        "rime",
+        "uim",
+    }
+)
+
 
 # --- UI / ANSI Colors ---
 BLUE: str = ""

@@ -24,6 +24,7 @@ two halves, and the arrow runs scan -> remove, never back.
 import contextlib
 import shutil
 from pathlib import Path
+from typing import TypedDict
 
 from ..core import system
 from ..core.config import get_use_trash
@@ -33,6 +34,28 @@ from ..core.history import record_history_session
 from ..core.package_manager import DNF, resolve_admin_tool
 from . import processes
 from .discovery import AppRecord
+
+
+class UninstallOutcome(TypedDict):
+    """What :func:`execute_uninstall` answers with: the package, the paths, the data.
+
+    Declared for the same reason ``AppRecord`` is -- so a key name cannot be
+    misspelled and a branch cannot forget one -- and the guarantee runs in that
+    one direction. mypy checks the single ``return`` below against these three
+    keys; it says nothing about what a caller receives, because the screen also
+    receives this dict from tests that patch ``execute_uninstall`` with two of
+    the three keys. Those call sites keep reading through ``.get()``, which is
+    the honest spelling of "produced elsewhere".
+
+    ``removed_paths`` is one ``(succeeded, description)`` per path actually
+    attempted, so it is empty both when there was no residue and when the
+    package removal failed and the residue was deliberately left alone --
+    ``data_left_in_place`` is what tells those two apart.
+    """
+
+    package_removed: bool
+    removed_paths: list[tuple[bool, str]]
+    data_left_in_place: bool
 
 
 def _flatpak_scope(app: AppRecord) -> str:
@@ -258,7 +281,7 @@ def _remove_residue_paths(paths: list[Path]) -> list[tuple[bool, str]]:
     return removed_details
 
 
-def execute_uninstall(app: AppRecord, paths: list[Path]):
+def execute_uninstall(app: AppRecord, paths: list[Path]) -> UninstallOutcome:
     """Close one app's processes, remove its package, then remove its residue.
 
     In that order, and the last step only if the one before it succeeded. Each
