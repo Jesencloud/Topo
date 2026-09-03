@@ -91,6 +91,46 @@ def test_print_cleanup_summary_actual_cleanup_reports_free_space(capsys):
     assert "Free space now" in output
 
 
+def test_print_cleanup_summary_aligns_breakdown_item_counts(capsys):
+    with patch(
+        "src.clean.runner.shutil.disk_usage",
+        return_value=SimpleNamespace(free=10 * 1024**3),
+    ):
+        _print_cleanup_summary(
+            False,
+            1,
+            23,
+            [
+                ("System & Packages", 1, 1),
+                ("User Data & Trash", 1, 2),
+                ("Deep App Caches", 1, 18),
+            ],
+        )
+
+    breakdown = [line for line in capsys.readouterr().out.splitlines() if line.startswith("  •")]
+    assert [line[line.index("(") :] for line in breakdown] == [
+        "( 1 item )",
+        "( 2 items)",
+        "(18 items)",
+    ]
+    assert len({line.index(")") for line in breakdown}) == 1
+
+
+def test_print_cleanup_summary_reserves_count_column_for_single_digits(capsys):
+    with patch(
+        "src.clean.runner.shutil.disk_usage",
+        return_value=SimpleNamespace(free=10 * 1024**3),
+    ):
+        _print_cleanup_summary(False, 1, 3, [("Cache", 1, 1), ("Logs", 1, 2)])
+
+    breakdown = [line for line in capsys.readouterr().out.splitlines() if line.startswith("  •")]
+    assert [line[line.index("(") :] for line in breakdown] == [
+        "( 1 item )",
+        "( 2 items)",
+    ]
+    assert len({line.index(")") for line in breakdown}) == 1
+
+
 def test_run_clean_returns_false_when_sudo_authentication_fails():
     with (
         patch("src.clean.runner.proactive_app_detection", return_value={}),

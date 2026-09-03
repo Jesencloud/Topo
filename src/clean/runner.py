@@ -22,7 +22,6 @@ from ..core.constants import (
 from ..core.file_ops import bytes_to_human
 from ..core.history import record_history_session
 from ..core.scan_cache import ScanCache
-from ..core.text import plural
 from .apps import clean_apps_deep, proactive_app_detection
 from .dev import clean_developer_tools
 from .system import clean_system_data
@@ -93,10 +92,17 @@ def _print_cleanup_summary(
 
     if category_results:
         print(f"Breakdown:{RESET}")
+        # Reserve two cells for the count so single-digit summaries do not
+        # touch the opening parenthesis and multi-digit counts remain aligned.
+        count_width = max(2, max(len(str(items)) for _, _, items in category_results))
+        item_width = max(
+            count_width + 1 + len("item" if items == 1 else "items")
+            for _, _, items in category_results
+        )
         for name, size, items in category_results:
-            print(
-                f"  • {name:<25} {GREEN}{bytes_to_human(size):>10}{RESET} ({plural(items, 'item')})"
-            )
+            noun = "item" if items == 1 else "items"
+            item_summary = f"{items:>{count_width}} {noun}".ljust(item_width)
+            print(f"  • {name:<25} {GREEN}{bytes_to_human(size):>10}{RESET} ({item_summary})")
 
     size_label = "\nTotal space freed" if not dry_run else "\nTotal space that can be freed"
     if interrupted:
