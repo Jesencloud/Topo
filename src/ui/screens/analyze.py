@@ -47,8 +47,8 @@ from ...core.constants import (
     YELLOW,
 )
 from ...core.engine import get_rust_scan_data, get_rust_tree_data, normalize_scan_path
-from ...core.file_ops import bytes_to_human
 from ...core.file_types import DIRECTORY_ICON, icon_for_entry
+from ...core.render import bytes_to_human
 from ...core.scan_cache import ScanCache, ScanResult
 from ...core.spinner import DEFAULT_SPINNER_FRAMES
 from ...core.system import run_command

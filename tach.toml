@@ -58,8 +58,12 @@ depends_on = [
 # because it cleans four different things. The split that decides where a
 # command lives is what it acts on: these five work on the user's system, while
 # manage/ works on the topo installation itself, which is why doctor lives there
-# rather than beside them. core/ is the infrastructure all of them build on, so
-# it holds none of them.
+# rather than beside them. core/ is what all of them build on, and that is two
+# kinds of thing rather than one: the platform plumbing (paths, text,
+# subprocesses, formatting) and the deletion rules that more than one feature has
+# to agree on -- the whitelist, the cache tables, the file-type map. A rule lands
+# there because clean and analyze both ask it, and it therefore has to sit below
+# both; the commands themselves are the one thing core holds none of.
 #
 # Uninstall and Analyze are the two that drive a full-screen selector, so each
 # is a pair: the logic here, the screen under ui/screens/.

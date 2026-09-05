@@ -12,7 +12,6 @@ from src.core.file_ops import (
     _AUDIT_WARNINGS_EMITTED,
     CLEANED_PATHS,
     age_cutoff,
-    bytes_to_human,
     clean_path_by_age,
     get_deletion_log_path,
     get_size,
@@ -534,14 +533,6 @@ def test_get_size_error_handling():
         patch("os.scandir", side_effect=OSError),
     ):
         assert get_size(Path("/tmp")) == 0
-
-
-def test_bytes_to_human():
-    assert bytes_to_human(500) == "500 B"
-    assert bytes_to_human(1024) == "1.0 KiB"
-    assert bytes_to_human(1536 * 1024) == "1.5 MiB"
-    assert bytes_to_human(int(1.2 * 1024**3)) == "1.2 GiB"
-    assert bytes_to_human(5 * 1024**4) == "5.0 TiB"
 
 
 def test_parse_size_from_text():

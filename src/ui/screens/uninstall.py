@@ -30,7 +30,7 @@ from ...core.constants import (
     WHITE,
     AppType,
 )
-from ...core.file_ops import bytes_to_human
+from ...core.render import bytes_to_human
 from ...core.scan_cache import ScanCache
 from ...core.sound import play_delete
 from ...core.spinner import threaded_spinner

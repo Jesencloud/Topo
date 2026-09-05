@@ -19,8 +19,8 @@ from ..core.constants import (
     SUMMARY_RULE_WIDTH,
     THEME_TITLE,
 )
-from ..core.file_ops import bytes_to_human
 from ..core.history import record_history_session
+from ..core.render import bytes_to_human
 from ..core.scan_cache import ScanCache
 from .apps import clean_apps_deep, proactive_app_detection
 from .dev import clean_developer_tools
@@ -34,38 +34,41 @@ class CleanupTask:
     action: Callable[..., tuple[int, int, int]]
 
 
-class TaskRegistry:
-    """Registry and pipeline manager for clean operations."""
+def build_execution_groups(
+    detected_apps: dict[str, dict[str, Any]],
+) -> list[tuple[str, list[CleanupTask]]]:
+    """The four cleanup groups, in the order they run and print.
 
-    @staticmethod
-    def build_execution_groups(
-        detected_apps: dict[str, dict[str, Any]],
-    ) -> list[tuple[str, list[CleanupTask]]]:
-        return [
-            (
-                f"{THEME_TITLE}{MARK_SECTION} System & Package Manager{RESET}",
-                [CleanupTask("System & Packages", clean_system_data)],
-            ),
-            (
-                f"{THEME_TITLE}{MARK_SECTION} User Data Cleanup{RESET}",
-                [CleanupTask("User Data & Trash", clean_user_data)],
-            ),
-            (
-                f"{THEME_TITLE}{MARK_SECTION} Deep App Cleanup{RESET}",
-                [
-                    CleanupTask(
-                        "Deep App Caches",
-                        lambda dry_run=False: clean_apps_deep(
-                            dry_run=dry_run, detected_apps=detected_apps
-                        ),
-                    )
-                ],
-            ),
-            (
-                f"{THEME_TITLE}{MARK_SECTION} Developer Tools & AI Models{RESET}",
-                [CleanupTask("Developer Artifacts", clean_developer_tools)],
-            ),
-        ]
+    A group is a header paired with its tasks rather than a header printed ahead
+    of them, because run_clean prints the header only once the tasks under it
+    have written something: a group that found nothing to clean leaves no
+    heading behind.
+    """
+    return [
+        (
+            f"{THEME_TITLE}{MARK_SECTION} System & Package Manager{RESET}",
+            [CleanupTask("System & Packages", clean_system_data)],
+        ),
+        (
+            f"{THEME_TITLE}{MARK_SECTION} User Data Cleanup{RESET}",
+            [CleanupTask("User Data & Trash", clean_user_data)],
+        ),
+        (
+            f"{THEME_TITLE}{MARK_SECTION} Deep App Cleanup{RESET}",
+            [
+                CleanupTask(
+                    "Deep App Caches",
+                    lambda dry_run=False: clean_apps_deep(
+                        dry_run=dry_run, detected_apps=detected_apps
+                    ),
+                )
+            ],
+        ),
+        (
+            f"{THEME_TITLE}{MARK_SECTION} Developer Tools & AI Models{RESET}",
+            [CleanupTask("Developer Artifacts", clean_developer_tools)],
+        ),
+    ]
 
 
 def _print_cleanup_summary(
@@ -154,7 +157,7 @@ def run_clean(dry_run: bool = False) -> bool:
     total_size = 0
     total_items = 0
     category_results: list[tuple[str, int, int]] = []
-    execution_groups = TaskRegistry.build_execution_groups(detected_apps)
+    execution_groups = build_execution_groups(detected_apps)
 
     # Ctrl-C in the middle of a group used to throw away everything this run had
     # already deleted: the group's own `✓` lines were still sitting in `buf`, the

@@ -291,16 +291,6 @@ def running_process_comms() -> dict[str, list[int]]:
     return running
 
 
-def bytes_to_human(n_bytes: int) -> str:
-    """Converts bytes to human readable format using binary units."""
-    val = float(n_bytes)
-    for unit in ["B", "KiB", "MiB", "GiB", "TiB"]:
-        if val < 1024:
-            return f"{val:.1f} {unit}" if unit != "B" else f"{int(val)} {unit}"
-        val /= 1024
-    return f"{val:.1f} PiB"
-
-
 def has_valid_cachedir_tag(path: str | Path) -> bool:
     """Return True when a directory contains a valid CACHEDIR.TAG marker."""
     path = Path(path).expanduser()

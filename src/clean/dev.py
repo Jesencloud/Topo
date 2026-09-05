@@ -9,13 +9,13 @@ from ..core.constants import (
     SKIP,
 )
 from ..core.file_ops import (
-    bytes_to_human,
     clean_path_by_age,
     get_size_fast,
     register_cleaned_path,
     safe_remove,
 )
 from ..core.heavy_cache import get_ai_model_cleanup_defs, get_container_cache_def
+from ..core.render import bytes_to_human
 from ..core.system import run_command
 
 

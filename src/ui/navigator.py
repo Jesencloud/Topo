@@ -6,9 +6,11 @@ import sys
 import termios
 import time
 import tty
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from ..core import terminal_state
 from ..core.config import get_show_scrollbar
@@ -32,9 +34,8 @@ from ..core.constants import (
     WHITE,
     YELLOW,
 )
-from ..core.file_ops import bytes_to_human
 from ..core.file_types import DIRECTORY_ICON, icon_for_entry
-from ..core.render import draw_bar, format_percent, get_color_for_percent
+from ..core.render import bytes_to_human, draw_bar, format_percent, get_color_for_percent
 from ..core.sound import is_muted, play_click, toggle_mute
 from ..core.text import char_width, display_width, icon_gap, plural, sanitize_for_display
 
@@ -755,7 +756,12 @@ class _PagedSelector:
 
 
 class InteractiveMenu:
-    def __init__(self, title, options, show_banner=None):
+    def __init__(
+        self,
+        title: str,
+        options: list[tuple[str, str]],
+        show_banner: Callable[[], str] | None = None,
+    ) -> None:
         self.title = title
         self.options = options
         self.selected_index = 0
@@ -822,12 +828,18 @@ class InteractiveMenu:
 
 class AnalyzeSelector(_PagedSelector):
     def __init__(
-        self, title, items, show_banner=None, can_select=True, notice="", sort_mode="size"
-    ):
+        self,
+        title: str,
+        items: list[dict[str, Any]],
+        show_banner: Callable[[], str] | None = None,
+        can_select: bool = True,
+        notice: str = "",
+        sort_mode: str = "size",
+    ) -> None:
         self.title = title
         self.items = items
         self.selected_index = 0
-        self.selected_items = set()
+        self.selected_items: set[int] = set()
         self.sort_mode = sort_mode
         self.sort_reverse = sort_mode == "size"
         self.show_banner = show_banner
@@ -1116,7 +1128,14 @@ class UninstallSelector(_PagedSelector):
     # instead, which made the footer's arrow point the wrong way for that one key.
     _DESCENDING_BY_DEFAULT = frozenset({"size_bytes", "install_time"})
 
-    def __init__(self, title, items, focus_id=None):
+    # `items` is list[Any], not list[dict[str, Any]]: ui.screens hands over the
+    # list[AppRecord] the scan produced, list is invariant, and a TypedDict is not
+    # a dict[str, Any]. The three ways out are all closed -- this toolkit may not
+    # import the package that declares AppRecord (tach grants a feature import to
+    # ui.screens alone), a Sequence would not do because _sort_items() sorts in
+    # place, and re-declaring the row here would be the second copy of a type the
+    # feature already owns.
+    def __init__(self, title: str, items: list[Any], focus_id: str | None = None) -> None:
         self.title = title
         self.items = items
         # Keyed on app id, not row index: the sort keys reorder the rows under
@@ -1412,7 +1431,12 @@ class UninstallPreviewSelector:
     # "    ⚠ " -- the same indent the risky-path rows use.
     _COLLATERAL_INDENT = "    ⚠ "
 
-    def __init__(self, targets):
+    # One target per app: the record, the residue paths, and whether it is still
+    # running. Only the first slot has to be Any, for the reason
+    # UninstallSelector.__init__ gives -- a tuple is covariant, so naming the
+    # other two costs nothing and the annotation still accepts what ui.screens
+    # hands over.
+    def __init__(self, targets: list[tuple[Any, list[Path], bool]]) -> None:
         self.targets = targets
         self.app_count = len(targets)
         self.total_size = sum(int(app.get("size_bytes") or 0) for app, _paths, _running in targets)
@@ -1504,13 +1528,11 @@ class TopFilesSelector:
     # Analyze list this screen is entered from and "delete this file" here.
     NOTHING_SELECTED_NOTICE = "Nothing selected yet — press Space to tick the files to delete."
 
-    def __init__(self, title, items):
-        self.title, self.items, self.selected_index, self.selected_items = (
-            title,
-            items,
-            0,
-            set(),
-        )
+    def __init__(self, title: str, items: list[dict[str, Any]]) -> None:
+        self.title = title
+        self.items = items
+        self.selected_index = 0
+        self.selected_items: set[int] = set()
         self.notice = ""
         self.confirming_delete = False
         self.confirm_text = ""
@@ -1636,7 +1658,7 @@ class ConfirmSelector:
     _CHIP_SELECTED = "▸ {} ◂"
     _CHIP_PLAIN = "  {}  "
 
-    def __init__(self, message):
+    def __init__(self, message: str) -> None:
         self.message, self.selected_index = message, 1
 
     def _chip(self, label, selected):

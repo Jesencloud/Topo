@@ -29,7 +29,6 @@ from ..core.desktop_entry import get_desktop_exec_command
 from ..core.file_ops import (
     CLEANED_PATHS,
     age_cutoff,
-    bytes_to_human,
     clean_path_by_age,
     get_direct_child_sizes_fast,
     get_size_fast,
@@ -39,6 +38,7 @@ from ..core.file_ops import (
     safe_remove,
 )
 from ..core.json_store import read_json, write_json_atomic
+from ..core.render import bytes_to_human
 from ..core.system import C_LOCALE_ENV, PACKAGE_TRANSACTION_TIMEOUT, run_command
 from ..core.text import sanitize_for_display
 

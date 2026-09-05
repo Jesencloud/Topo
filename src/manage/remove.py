@@ -22,7 +22,7 @@ from ..core.constants import (
     TOPO_RC_MARKER,
     WARN,
 )
-from ..core.file_ops import bytes_to_human, get_size_fast, safe_remove
+from ..core.file_ops import get_size_fast, safe_remove
 from ..core.install_source import (
     PACKAGE_INSTALL,
     get_install_source,
@@ -30,6 +30,7 @@ from ..core.install_source import (
 )
 from ..core.lock import LOCK_FILE_PATH
 from ..core.paths import get_config_dir, get_launcher_candidates, get_state_dir
+from ..core.render import bytes_to_human
 
 
 class _RemoveItem(TypedDict, total=False):

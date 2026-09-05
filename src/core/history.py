@@ -4,10 +4,10 @@ from pathlib import Path
 from .constants import FAIL, GRAY, INFO, NA, OK, RESET, SKIP, THEME_TITLE, WARN
 from .file_ops import (
     audit_log_is_trusted,
-    bytes_to_human,
     get_deletion_log_path,
     record_deletion_audit,
 )
+from .render import bytes_to_human
 from .text import sanitize_for_display
 
 REMOVED_STATUSES = {"deleted", "removed"}

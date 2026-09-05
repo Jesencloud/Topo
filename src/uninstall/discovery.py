@@ -40,8 +40,9 @@ from ..core.constants import (
     AppType,
 )
 from ..core.desktop_entry import get_desktop_name
-from ..core.file_ops import bytes_to_human, get_size_fast, parse_size_to_bytes
+from ..core.file_ops import get_size_fast, parse_size_to_bytes
 from ..core.package_manager import get_rpm_family_manager
+from ..core.render import bytes_to_human
 
 # dpkg-query -W reports every entry the status database knows about, installed or
 # not, so the status pair and deb's own protection metadata have to come back with

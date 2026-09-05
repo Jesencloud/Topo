@@ -25,12 +25,12 @@ from typing import Any
 
 from ..core import system
 from ..core.file_ops import (
-    bytes_to_human,
     comm_pattern,
     get_size_fast,
     running_process_comms,
 )
 from ..core.package_manager import PACKAGE_QUERY_TOOLS
+from ..core.render import bytes_to_human
 from . import processes, residue
 from .collateral import collateral_packages
 from .discovery import AppRecord, discover_installed_apps

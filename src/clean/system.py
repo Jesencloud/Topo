@@ -5,7 +5,6 @@ from pathlib import Path
 
 from ..core.constants import OK, SKIP
 from ..core.file_ops import (
-    bytes_to_human,
     get_size_fast,
     journal_freed_bytes,
     parse_size_from_text,
@@ -15,6 +14,7 @@ from ..core.file_ops import (
 from ..core.heavy_cache import PACKAGE_MANAGER_CACHE_DEFS
 from ..core.lock import is_file_locked
 from ..core.package_manager import detect_package_manager, resolve_admin_tool
+from ..core.render import bytes_to_human
 from ..core.system import (
     APT_NONINTERACTIVE_ENV,
     C_LOCALE_ENV,

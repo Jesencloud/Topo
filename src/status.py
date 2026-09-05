@@ -8,8 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .core.constants import GREEN, PURPLE, RED, RESET, SECONDS_PER_HOUR, WHITE, YELLOW
-from .core.file_ops import bytes_to_human
-from .core.render import draw_bar, format_percent, get_color_for_percent
+from .core.render import bytes_to_human, draw_bar, format_percent, get_color_for_percent
 from .core.system import run_command
 from .core.text import display_width, icon_gap
 

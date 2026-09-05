@@ -5,7 +5,12 @@ from unittest.mock import patch
 
 import pytest
 
-from src.clean.runner import CleanupTask, TaskRegistry, _print_cleanup_summary, run_clean
+from src.clean.runner import (
+    CleanupTask,
+    _print_cleanup_summary,
+    build_execution_groups,
+    run_clean,
+)
 
 CLEAN_PACKAGE = Path(__file__).resolve().parent.parent / "src" / "clean"
 
@@ -45,7 +50,7 @@ def test_no_preview_line_wears_the_glyph_of_a_finished_delete():
 
 
 def test_build_execution_groups_contains_all_cleanup_categories():
-    groups = TaskRegistry.build_execution_groups({"demo": {}})
+    groups = build_execution_groups({"demo": {}})
 
     assert [header.split("➤ ", 1)[1].split("\x1b", 1)[0] for header, _ in groups] == [
         "System & Package Manager",
@@ -160,7 +165,7 @@ def test_run_clean_executes_tasks_records_history_and_clears_scan_cache(capsys):
     with (
         patch("src.clean.runner.proactive_app_detection", return_value={}),
         patch("src.clean.runner.system.authenticate_sudo_session", return_value=True),
-        patch("src.clean.runner.TaskRegistry.build_execution_groups", return_value=groups),
+        patch("src.clean.runner.build_execution_groups", return_value=groups),
         patch("src.clean.runner.record_history_session") as history,
         patch("src.clean.runner.ScanCache.clear") as clear_cache,
         patch(
@@ -204,7 +209,7 @@ def test_run_clean_reports_what_it_deleted_before_a_ctrl_c(capsys):
     with (
         patch("src.clean.runner.proactive_app_detection", return_value={}),
         patch("src.clean.runner.system.authenticate_sudo_session", return_value=True),
-        patch("src.clean.runner.TaskRegistry.build_execution_groups", return_value=groups),
+        patch("src.clean.runner.build_execution_groups", return_value=groups),
         patch("src.clean.runner.record_history_session") as history,
         patch("src.clean.runner.ScanCache.clear") as clear_cache,
         patch(
@@ -245,7 +250,7 @@ def test_run_clean_does_not_log_a_finish_when_the_run_was_killed(capsys):
     with (
         patch("src.clean.runner.proactive_app_detection", return_value={}),
         patch("src.clean.runner.system.authenticate_sudo_session", return_value=True),
-        patch("src.clean.runner.TaskRegistry.build_execution_groups", return_value=groups),
+        patch("src.clean.runner.build_execution_groups", return_value=groups),
         patch("src.clean.runner.record_history_session") as history,
         patch(
             "src.clean.runner.shutil.disk_usage",

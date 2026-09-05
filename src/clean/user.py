@@ -13,12 +13,12 @@ from ..core.constants import (
 )
 from ..core.file_ops import (
     age_cutoff,
-    bytes_to_human,
     clean_path_by_age,
     get_size_fast,
     is_reclaimable_entry_type,
     safe_remove,
 )
+from ..core.render import bytes_to_human
 from ..core.system import run_command
 
 

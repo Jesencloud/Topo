@@ -1,11 +1,12 @@
-"""Percentage rendering: progress bars, percent formatting, and level colors.
+"""Number formatting: byte sizes, percentages, progress bars, and level colors.
 
 These are pure formatting helpers -- they take a number and return a string.
-They live in core because two unrelated callers need the same bars: the status
-report draws them for `topo status`, and ui.navigator draws them in the Analyze
-rows. Keeping them here is what stopped the shared code from being reached for
-through ui.navigator, which put a `core -> ui` edge in the module graph and
-closed a cycle with the `ui -> core` edge every UI module already has.
+They live in core because unrelated callers need the same output: the status
+report draws the bars for `topo status` while ui.navigator draws them in the
+Analyze rows, and every feature that prints a size prints it through
+bytes_to_human. Keeping them here is what stopped the shared code from being
+reached for through ui.navigator, which put a `core -> ui` edge in the module
+graph and closed a cycle with the `ui -> core` edge every UI module already has.
 
 ui.navigator re-exports these names, so `navigator.draw_bar` keeps working.
 """
@@ -17,6 +18,16 @@ BAR_EMPTY = "▬"
 # Only when colors are off does the bar's *shape* have to carry the level:
 # identical glyphs would make 0% and 100% render as the same solid bar.
 BAR_EMPTY_NO_COLOR = "─"
+
+
+def bytes_to_human(n_bytes: int) -> str:
+    """Converts bytes to human readable format using binary units."""
+    val = float(n_bytes)
+    for unit in ["B", "KiB", "MiB", "GiB", "TiB"]:
+        if val < 1024:
+            return f"{val:.1f} {unit}" if unit != "B" else f"{int(val)} {unit}"
+        val /= 1024
+    return f"{val:.1f} PiB"
 
 
 def get_color_for_percent(percent):

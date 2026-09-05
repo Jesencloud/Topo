@@ -7,9 +7,10 @@ import sqlite3
 import sys
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any
+from typing import TypeVar
 
 from .core import system
 from .core.browser_paths import BROWSER_PROFILE_TARGETS
@@ -29,13 +30,13 @@ from .core.constants import (
 from .core.desktop_entry import get_desktop_exec_command
 from .core.file_ops import (
     TRASH_UNAVAILABLE_REASON,
-    bytes_to_human,
     comm_pattern,
     get_size,
     journal_freed_bytes,
     safe_remove,
 )
 from .core.lock import is_file_locked, is_sqlite_busy
+from .core.render import bytes_to_human
 from .core.spinner import threaded_spinner
 from .core.system import C_LOCALE_ENV, has_sudo, run_command
 from .core.text import plural
@@ -122,13 +123,21 @@ def opt_log(message, success=True, skipped=False):
         print(f"{CLEAR_LINE}  {icon} {msg}")
 
 
+# What every registered task promises, and the only thing they have in common:
+# one line for the report, or None when there was nothing to say. Bound to a
+# TypeVar rather than used bare on `register` so that a decorated task keeps its
+# own signature -- the type is here to check what enters the list, not to flatten
+# 23 functions into one shape.
+_OptimizationTask = TypeVar("_OptimizationTask", bound=Callable[..., str | None])
+
+
 class OptimizationRegistry:
     """Registry for automatic discovery of system optimization tasks."""
 
-    tasks: list[Any] = []
+    tasks: list[Callable[..., str | None]] = []
 
     @classmethod
-    def register(cls, func: Any) -> Any:
+    def register(cls, func: _OptimizationTask) -> _OptimizationTask:
         cls.tasks.append(func)
         return func
 
