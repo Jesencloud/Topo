@@ -54,6 +54,17 @@ ignore_names = [
     # function's own data_left_in_place); removed_paths is only ever read as
     # result.get("removed_paths"), which vulture does not see.
     "removed_paths",
+    # And once more for the scan records: core/scan_cache.ScanResult mirrors the
+    # Rust struct, analyze.FastExploreResult adds the preview keys, and the whole
+    # analyze chain reads them as data.get("..."). The coincidental twin covers
+    # path, file_count, subdirs, size_bytes, entry_meta and is_fast_explore, and
+    # _cache_estimated_bytes is spared by its underscore; these five are what is
+    # left over.
+    "preview_entry_limit",
+    "preview_sampled_entries",
+    "preview_truncated",
+    "top_files",
+    "total_size_bytes",
 ]
 
 [tool.ruff]

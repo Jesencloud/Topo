@@ -30,7 +30,7 @@ from .core.file_ops import (
 )
 from .core.file_types import icon_for_entry
 from .core.heavy_cache import get_analyze_cache_defs
-from .core.scan_cache import ScanCache
+from .core.scan_cache import ScanCache, ScanResult
 from .core.sound import play_delete
 from .core.system import run_command
 from .core.text import sanitize_for_display
@@ -47,9 +47,27 @@ ANALYZE_RESULT_LIMIT = 50
 FAST_EXPLORE_ENTRY_LIMIT = 500
 
 
+class FastExploreResult(ScanResult, total=False):
+    """What get_fast_explore_data returns: a listing rather than a measurement.
+
+    The scan shape plus the five keys that say so, because the Analyze view draws
+    either record with the same code -- ``is_fast_explore`` is the one the reading
+    side asks, and the one ScanCache.set refuses. What the two do not share is
+    depth: nothing here is recursive, so every folder size in ``subdirs`` is zero,
+    ``top_files`` is empty, and ``entry_meta`` says per entry which of those zeros
+    means "a directory nobody sized" rather than "an empty file".
+    """
+
+    entry_meta: dict[str, dict[str, bool]]
+    is_fast_explore: bool
+    preview_entry_limit: int
+    preview_sampled_entries: int
+    preview_truncated: bool
+
+
 def get_fast_explore_data(
     path: Path, entry_limit: int = FAST_EXPLORE_ENTRY_LIMIT, *, only_when_wide: bool = False
-) -> dict[str, Any] | None:
+) -> FastExploreResult | None:
     """Build a bounded direct-child listing without recursively scanning.
 
     Used only for very wide directories where calculating every direct child
@@ -104,7 +122,7 @@ def get_fast_explore_data(
         if size_known:
             total_size += size
 
-    data = {
+    data: FastExploreResult = {
         "path": str(path),
         "total_size_bytes": total_size,
         "file_count": file_count,

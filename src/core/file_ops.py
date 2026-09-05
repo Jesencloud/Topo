@@ -15,6 +15,7 @@ from .config import get_min_age_days
 from .constants import SECONDS_PER_DAY, WARN
 from .engine import get_core_binary, get_rust_scan_data
 from .paths import get_state_dir
+from .scan_cache import ScanResult
 from .system import run_command
 from .text import is_unsafe_display_char
 from .whitelist import (
@@ -357,7 +358,7 @@ def _coerce_non_negative_size(value: Any) -> int | None:
         return None
 
 
-def _get_fast_scan_data(path: Path) -> dict[str, Any] | None:
+def _get_fast_scan_data(path: Path) -> ScanResult | None:
     data = get_rust_scan_data(path)
     return data if isinstance(data, dict) else None
 

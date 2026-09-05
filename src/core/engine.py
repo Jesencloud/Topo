@@ -15,9 +15,8 @@ import functools
 import json
 import platform
 from pathlib import Path
-from typing import Any
 
-from .scan_cache import ScanCache
+from .scan_cache import ScanCache, ScanResult
 from .system import run_command
 
 # How long a single topo-core invocation may take before it is abandoned.
@@ -64,7 +63,7 @@ def normalize_scan_path(path: str | Path) -> Path:
         return raw.absolute()
 
 
-def get_rust_scan_data(path: Path, *, use_cache: bool = True) -> dict[str, Any] | None:
+def get_rust_scan_data(path: Path, *, use_cache: bool = True) -> ScanResult | None:
     """Calls the architecture-specific topo-core binary and returns parsed JSON."""
     binary = get_core_binary()
     if binary is None:
@@ -87,7 +86,7 @@ def get_rust_scan_data(path: Path, *, use_cache: bool = True) -> dict[str, Any] 
     return None
 
 
-def get_rust_tree_data(path: Path) -> dict[str, Any] | None:
+def get_rust_tree_data(path: Path) -> ScanResult | None:
     """Scan once and seed ScanCache for every significant descendant."""
     binary = get_core_binary()
     if binary is None:
@@ -107,12 +106,23 @@ def get_rust_tree_data(path: Path) -> dict[str, Any] | None:
         return None
     if not isinstance(tree, dict) or not isinstance(tree.get("."), dict):
         return None
-    root_data = None
+    root_data: ScanResult | None = None
     for relative, aggregate in tree.items():
         if not isinstance(aggregate, dict):
             continue
         node = path if relative == "." else path / relative
-        data_item = {"path": str(node), "top_files": [], **aggregate}
+        # A DirAgg carries no path of its own and omits top_files unless the node
+        # has any (only the root aggregate does), so those two are filled in here.
+        # The engine's own size estimate rides along because ScanCache prefers it
+        # to walking the record itself.
+        data_item: ScanResult = {
+            "path": str(node),
+            "total_size_bytes": aggregate.get("total_size_bytes", 0),
+            "file_count": aggregate.get("file_count", 0),
+            "top_files": aggregate.get("top_files", []),
+            "subdirs": aggregate.get("subdirs", {}),
+            "_cache_estimated_bytes": aggregate.get("_cache_estimated_bytes", 0),
+        }
         if relative == ".":
             root_data = data_item
             continue

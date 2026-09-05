@@ -102,6 +102,43 @@ def test_scan_cache_rejects_single_entry_over_memory_limit(monkeypatch, tmp_path
     assert ScanCache.get(directory) is None
 
 
+def test_scan_cache_refuses_a_fast_explore_listing(tmp_path):
+    """A preview listing must never be stored as if it were a scan.
+
+    The Analyze view used to guard its own re-pin with an ``if``; the check lives
+    in ``ScanCache.set`` so that no caller has to remember it.
+    """
+    directory = tmp_path / "previewed"
+    directory.mkdir()
+    listing = {"total_size_bytes": 42, "subdirs": {}, "top_files": [], "is_fast_explore": True}
+    ScanCache.clear()
+
+    ScanCache.set(directory, listing)
+
+    assert ScanCache.get(directory) is None
+    # The marker is what got it turned away, not anything else about the record.
+    ScanCache.set(directory, {k: v for k, v in listing.items() if k != "is_fast_explore"})
+    assert ScanCache.get(directory) is not None
+
+
+def test_scan_cache_keeps_the_real_scan_when_a_listing_is_offered(tmp_path):
+    """Refusing the listing must not evict what is already there.
+
+    A directory can be scanned first and previewed later. The measurement stays
+    the better answer for that key, so the refusal is a plain return rather than
+    the discard the oversized branch does.
+    """
+    directory = tmp_path / "scanned-then-previewed"
+    directory.mkdir()
+    scan = {"total_size_bytes": 4096, "subdirs": {}, "top_files": []}
+    ScanCache.clear()
+    ScanCache.set(directory, scan)
+
+    ScanCache.set(directory, {"total_size_bytes": 0, "subdirs": {}, "is_fast_explore": True})
+
+    assert ScanCache.get(directory) is scan
+
+
 def test_scan_cache_uses_rust_estimate_without_rewalking_data(tmp_path):
     directory = tmp_path / "hinted"
     directory.mkdir()

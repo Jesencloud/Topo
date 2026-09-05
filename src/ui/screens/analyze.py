@@ -10,16 +10,18 @@ without a full clear so drilling into a subdirectory never flashes.
 import os
 import shutil
 import time
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from ...analyze import (
     ANALYZE_RESULT_LIMIT,
     FAST_EXPLORE_ENTRY_LIMIT,
     SCAN_SPINNER_DELAY,
     DeleteOutcome,
+    FastExploreResult,
     build_analysis_entry,
     build_linux_insights,
     delete_and_refresh_cache,
@@ -47,7 +49,7 @@ from ...core.constants import (
 from ...core.engine import get_rust_scan_data, get_rust_tree_data, normalize_scan_path
 from ...core.file_ops import bytes_to_human
 from ...core.file_types import DIRECTORY_ICON, icon_for_entry
-from ...core.scan_cache import ScanCache
+from ...core.scan_cache import ScanCache, ScanResult
 from ...core.spinner import DEFAULT_SPINNER_FRAMES
 from ...core.system import run_command
 from ...core.text import plural
@@ -112,7 +114,7 @@ def _delete_notice(outcome: DeleteOutcome) -> str:
     return _fail_notice(outcome.first_problem)
 
 
-def _explore_notice(data: dict[str, Any] | None) -> str:
+def _explore_notice(data: ScanResult | None) -> str:
     if not data or not data.get("is_fast_explore"):
         return ""
     sampled = data.get("preview_sampled_entries", len(data.get("subdirs", {})))
@@ -150,9 +152,15 @@ def _render_scan_header(view_title: str) -> None:
     print(f"\033[H\033[K\n{PURPLE}{view_title}{RESET}{ERASE_BELOW}", flush=True)
 
 
+# What the worker handed to _scan_with_spinner came back with. A type variable
+# rather than one record type: the same helper runs a scan, a preview listing and
+# the concurrent sizing pass, and each caller keeps the type it asked for.
+T = TypeVar("T")
+
+
 def _scan_with_spinner(
-    worker, scan_reason: str, target_label: str, view_title: str
-) -> dict[str, Any] | None:
+    worker: Callable[[], T], scan_reason: str, target_label: str, view_title: str
+) -> T:
     """Run ``worker()`` in a background thread.
 
     If it finishes within ``SCAN_SPINNER_DELAY`` the scan screen is never
@@ -190,7 +198,7 @@ def _scan_with_spinner(
 
 def _get_rust_scan_data_with_spinner(
     path: Path, scan_reason: str, target_label: str, view_title: str
-) -> dict[str, Any] | None:
+) -> ScanResult | None:
     return _scan_with_spinner(
         lambda: get_rust_scan_data(path), scan_reason, target_label, view_title
     )
@@ -203,7 +211,7 @@ def _fast_explore_with_spinner(
     view_title: str,
     *,
     only_when_wide: bool = False,
-) -> dict[str, Any] | None:
+) -> FastExploreResult | None:
     return _scan_with_spinner(
         lambda: get_fast_explore_data(
             path, FAST_EXPLORE_ENTRY_LIMIT, only_when_wide=only_when_wide
@@ -259,7 +267,7 @@ class _View:
 
     target: Path | None
     results: list[dict[str, Any]] = field(default_factory=list)
-    data: dict[str, Any] | None = None
+    data: ScanResult | None = None
     total_size: int = 0
     selected_index: int = 0
     current_page: int = 0
@@ -275,7 +283,7 @@ def _acquire_view_data(
     scan_reason: str,
     target_label: str,
     view_title: str,
-) -> dict[str, Any] | None:
+) -> ScanResult | None:
     """Read this target's contents, trying up to three sources in turn.
 
     A sub-view asks the preview pass first, which answers only when the
@@ -289,6 +297,7 @@ def _acquire_view_data(
     a directory outright. Coming back empty from here means nothing could read
     the target at all, which is the caller's cue to back out of the view.
     """
+    data: ScanResult | None
     if current_target is not None:
         data = _fast_explore_with_spinner(
             target_to_scan,
@@ -401,7 +410,7 @@ def _insight_rows(
 
 
 def _root_view_results(
-    data: dict[str, Any], target_to_scan: Path, home_size: int, view_title: str
+    data: ScanResult, target_to_scan: Path, home_size: int, view_title: str
 ) -> tuple[list[dict[str, Any]], int]:
     """The root view's rows, and the total they are drawn against.
 
@@ -433,19 +442,16 @@ def _root_view_results(
     rust_paths += [
         ins["path"] for ins in insights if ins["path"].exists() and not ins.get("is_smart")
     ]
-    scan_sizes = (
-        _scan_with_spinner(
-            lambda: parallel_scan_sizes(rust_paths), "insights", "Linux insights", view_title
-        )
-        or {}
+    scan_sizes = _scan_with_spinner(
+        lambda: parallel_scan_sizes(rust_paths), "insights", "Linux insights", view_title
     )
 
     # A large secondary tree such as /usr can exceed the LRU entry
     # limit by itself and evict Home even though Home was just scanned.
     # Keep the root result hot so returning to the main menu and opening
     # Analyze again in the same process does not repeat the full scan.
-    if not data.get("is_fast_explore"):
-        ScanCache.set(target_to_scan, data)
+    # Unconditional: ScanCache.set turns a preview listing away itself.
+    ScanCache.set(target_to_scan, data)
 
     rows = _root_category_rows(targets, home, home_size, scan_sizes)
     rows += _insight_rows(insights, scan_sizes)
@@ -453,7 +459,7 @@ def _root_view_results(
 
 
 def _child_view_results(
-    current_target: Path, data: dict[str, Any], total_size: int
+    current_target: Path, data: Mapping[str, Any], total_size: int
 ) -> list[dict[str, Any]]:
     """One directory's entries, drawn as shares of that directory.
 
@@ -465,6 +471,10 @@ def _child_view_results(
     Preview data is a listing rather than a measurement, so it is kept whole and
     sorted by name with directories first: ordering entries whose size was never
     computed by that size would rank them by an answer nobody has.
+
+    Takes a plain mapping rather than a ScanResult because it is the one place
+    that draws either record and reads the keys only analyze.FastExploreResult
+    has -- every read here carries the default that covers the other kind.
     """
     total_path_size = total_size or 1
     subdir_map = data.get("subdirs", {})
