@@ -19,6 +19,7 @@ from ..core.constants import (
     GRAY,
     GREEN,
     HIGHLIGHT,
+    ICON_SLOT_WIDTH,
     MARK_PROMPT,
     MARK_SECTION,
     NAME_COLUMN_MAX_WIDTH,
@@ -35,7 +36,7 @@ from ..core.file_ops import bytes_to_human
 from ..core.file_types import DIRECTORY_ICON, icon_for_entry
 from ..core.render import draw_bar, format_percent, get_color_for_percent
 from ..core.sound import is_muted, play_click, toggle_mute
-from ..core.text import char_width, display_width, plural, sanitize_for_display
+from ..core.text import char_width, display_width, icon_gap, plural, sanitize_for_display
 
 ANSI_CSI_RE = re.compile("\x1b\\[[0-?]*[ -/]*[@-~]")
 SGR_MOUSE_RE = re.compile("\x1b\\[<(?P<button>\\d+);(?P<x>\\d+);(?P<y>\\d+)(?P<final>[mM])")
@@ -330,23 +331,6 @@ def pad_and_truncate(text, width):
     return res + " " * (width - curr_w - len(_ELLIPSIS))
 
 
-# Width of the column the row icons are drawn in. Two cells, because most of the
-# icons in use are East-Asian Wide; the folder icon (U+1F5C2 + U+FE0F) and the
-# other variation-selector ones measure one and need a cell of padding so the
-# names after them still line up.
-_ICON_SLOT = 2
-
-
-def icon_gap(icon: str) -> str:
-    """Spacing between a row icon and the text after it.
-
-    Pads the icon out to _ICON_SLOT cells and adds the single separating space,
-    replacing the hardcoded ``"  " if icon is the folder icon else " "`` special
-    case that only happened to be right for the two icons it was written for.
-    """
-    return " " * max(0, _ICON_SLOT - display_width(icon)) + " "
-
-
 # Where the row-number field starts, past the cursor, its gap, the bullet and
 # its gap -- the prefix every paginated row shares. The continuation marker is
 # indented to it so the ellipsis sits directly beneath the numbers.
@@ -375,10 +359,10 @@ _SIZE_COLUMN_WIDTH = 2 + _SIZE_FIELD_WIDTH
 _TIME_COLUMN_WIDTH = len(" | ") + len("Yesterday")
 
 # The "   • " every entry in a "Selected ... to Remove" list starts with. Lists
-# that draw an icon spend that much again on it: _ICON_SLOT cells for the glyph
-# plus the single space icon_gap() normalises it to.
+# that draw an icon spend that much again on it: ICON_SLOT_WIDTH cells for the
+# glyph plus the single space icon_gap() normalises it to.
 _BULLET_PREFIX_WIDTH = len("   • ")
-_BULLET_ICON_PREFIX_WIDTH = _BULLET_PREFIX_WIDTH + _ICON_SLOT + 1
+_BULLET_ICON_PREFIX_WIDTH = _BULLET_PREFIX_WIDTH + ICON_SLOT_WIDTH + 1
 
 
 def _paired_name_width() -> int:

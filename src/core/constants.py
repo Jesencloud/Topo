@@ -219,6 +219,16 @@ SUMMARY_RULE_WIDTH = 70
 # which is the width at which the selection summary switches to two columns.
 NAME_COLUMN_MAX_WIDTH = 35
 
+# Width of the column a row icon is drawn in. Two cells, because most of the
+# icons in use are East-Asian Wide and the ones carrying a variation selector
+# (U+23F1 + U+FE0F, the uptime row's) measure one, so they need a cell of padding
+# to line up with the rest -- see core.text.char_width for the measuring itself.
+#
+# Held here because two packages draw icon rows and used to write the 2 by hand:
+# the `topo status` report and the ui.navigator selectors. core.text.icon_gap()
+# is the one place that spends it.
+ICON_SLOT_WIDTH = 2
+
 # One place to retune the dimmed-text color. WHITE / GRAY / GRAY_NB all resolve
 # to this; see the comment in _init_colors() for why they stay three names.
 _NEUTRAL_GRAY = "\033[38;5;244m"

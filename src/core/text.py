@@ -1,6 +1,8 @@
 import re
 import unicodedata
 
+from .constants import ICON_SLOT_WIDTH
+
 # The single definition of "must never reach a terminal or a log line raw":
 # C0 / DEL / C1 (ANSI-CSI injection), the line/paragraph separators that
 # str.splitlines() breaks on, and the Unicode BiDi overrides & isolates behind
@@ -58,6 +60,17 @@ def char_width(char: str) -> int:
 def display_width(text: str) -> int:
     """Total terminal cells *text* occupies. Assumes ANSI escapes are stripped."""
     return sum(char_width(char) for char in text)
+
+
+def icon_gap(icon: str) -> str:
+    """Spacing between a row icon and the text after it.
+
+    Pads the icon out to ICON_SLOT_WIDTH cells and adds the single separating
+    space, replacing the hardcoded ``"  " if icon is the folder icon else " "``
+    special case that only happened to be right for the two icons it was written
+    for.
+    """
+    return " " * max(0, ICON_SLOT_WIDTH - display_width(icon)) + " "
 
 
 def plural(count: int, singular: str, plural: str | None = None) -> str:

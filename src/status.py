@@ -11,20 +11,13 @@ from .core.constants import GREEN, PURPLE, RED, RESET, SECONDS_PER_HOUR, WHITE, 
 from .core.file_ops import bytes_to_human
 from .core.render import draw_bar, format_percent, get_color_for_percent
 from .core.system import run_command
-from .core.text import display_width
+from .core.text import display_width, icon_gap
 
 DEFAULT_ROUTE_PATH = Path("/proc/net/route")
 SIOCGIFADDR = 0x8915
 
 _HWMON_ROOT = Path("/sys/class/hwmon")
 _THERMAL_ROOT = Path("/sys/class/thermal")
-
-# Every status row renders as "<icon><pad> <label><pad> <value>". Both pads are
-# measured rather than hand-typed: the icons are not all the same width (U+1F4DF
-# and friends take two cells, while U+23F1 / U+2699 are a narrow base plus
-# U+FE0F and take one), and the label field is sized to the longest label so all
-# values start in the same column no matter which rows a machine actually shows.
-_ICON_SLOT = 2
 
 # Every label the report can print, listed so the field is sized by measurement
 # rather than by whichever label someone remembered. "Overall Status:" is one
@@ -66,9 +59,15 @@ _BATTERY_HIGH_PERCENT = 50
 
 
 def _status_row(icon: str, label: str, value: str) -> str:
-    icon_pad = " " * max(0, _ICON_SLOT - display_width(icon))
+    """One report row: ``<icon><gap><label><pad> <value>``.
+
+    Both pads are measured rather than hand-typed: the icon gap is
+    core.text.icon_gap(), the same one the ui.navigator rows spend, and the label
+    field is sized to the longest label so every value starts in the same column
+    no matter which rows a machine actually shows.
+    """
     label_pad = " " * max(0, _LABEL_SLOT - display_width(label))
-    return f"{icon}{icon_pad} {label}{label_pad} {value}"
+    return f"{icon}{icon_gap(icon)}{label}{label_pad} {value}"
 
 
 def get_temp_color(temp_c: float | None) -> str:

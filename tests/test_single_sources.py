@@ -14,6 +14,7 @@ from src.core import constants
 from src.core.config import get_config_file
 from src.core.constants import (
     DETECTED_APPS_FILE,
+    ICON_SLOT_WIDTH,
     SECONDS_PER_DAY,
     SECONDS_PER_HOUR,
     TOPO_VERSION,
@@ -28,6 +29,7 @@ from src.core.lock import LOCK_FILE_PATH
 from src.core.package_manager import PACKAGE_MANAGERS
 from src.core.paths import get_config_dir, get_state_dir
 from src.core.system import PACKAGE_TRANSACTION_TIMEOUT
+from src.core.text import icon_gap
 from src.core.whitelist import get_whitelist_file
 from src.manage.update import _parse_version
 from src.ui.screens.uninstall import NEEDS_SUDO_TYPES
@@ -530,3 +532,60 @@ def test_app_types_are_spelled_with_the_enum_outside_its_definition():
     # asks for the type rather than the value because a plain "APT" would satisfy
     # every comparison and every set operation a str subclass takes part in.
     assert all(isinstance(manager.label, AppType) for manager in PACKAGE_MANAGERS)
+
+
+# The two functions that answer "how many cells does this glyph take". A hand-made
+# icon pad has to call one of them, because measuring is the whole point -- the
+# hardcoded spacing they replaced is what got the columns wrong in the first place.
+_WIDTH_MEASURES = {"display_width", "char_width"}
+
+
+def _icon_widths_measured_by_hand() -> list[tuple[str, int]]:
+    """Every place in src/ that measures an icon itself instead of calling icon_gap()."""
+    root = Path(__file__).parents[1] / "src"
+    defining_module = root / "core" / "text.py"
+    found = []
+    for path in sorted(root.rglob("*.py")):
+        if path == defining_module:
+            continue
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not isinstance(node, ast.Call) or _called_name(node) not in _WIDTH_MEASURES:
+                continue
+            measured = set()
+            for arg in [*node.args, *(kw.value for kw in node.keywords)]:
+                # Identifiers and attributes, plus the string constants inside the
+                # argument: a row icon usually arrives as a dict entry, and
+                # `display_width(item["icon"])` names it only in the subscript.
+                measured |= _string_constants(arg)
+                measured |= {
+                    inner.id if isinstance(inner, ast.Name) else inner.attr
+                    for inner in ast.walk(arg)
+                    if isinstance(inner, ast.Name | ast.Attribute)
+                }
+            if any("icon" in name.lower() for name in measured):
+                found.append((str(path.relative_to(root)), node.lineno))
+    return found
+
+
+def test_the_icon_column_is_padded_in_one_place():
+    """icon_gap() is the only thing that turns a row icon into spacing.
+
+    status.py and ui/navigator.py each carried their own `_ICON_SLOT = 2` and their
+    own `" " * max(0, _ICON_SLOT - display_width(icon))`, with a paragraph on both
+    sides explaining the same fact: most row icons are East-Asian Wide, the ones
+    carrying U+FE0F measure a single cell, so the column has to be padded by
+    measurement rather than by hand. The two were equal over all 14 icons in use,
+    which is what made it a copy rather than two rules.
+
+    Structural rather than behavioural, like the two guards above: a second copy
+    agrees with the first on the day it is written -- that is exactly why nothing
+    objected the first time -- so only the source can tell there are two of them.
+
+    Scoped to icons rather than to every pad. status.py's label field is measured
+    the same way and is deliberately its own: it is sized from _ROW_LABELS, which
+    is a fact about what that one report prints, not about how wide a glyph is.
+    """
+    assert _icon_widths_measured_by_hand() == []
+    assert ICON_SLOT_WIDTH == 2
+    assert icon_gap("\U0001f4ca") == " "  # two cells wide, so only the separator
+    assert icon_gap("\U0001f5c2" + chr(0xFE0F)) == "  "  # narrow base + VS16, so a pad cell too

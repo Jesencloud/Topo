@@ -6,9 +6,9 @@ from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 
+from src.core.constants import ICON_SLOT_WIDTH
 from src.core.text import display_width
 from src.status import (
-    _ICON_SLOT,
     _LABEL_SLOT,
     _ROW_LABELS,
     TEMP_ELEVATED_C,
@@ -69,7 +69,7 @@ def test_status_rows_share_one_value_column():
     them sat one column off from the other eight.
     """
     columns = {display_width(_status_row(icon, label, "")) for icon, label in STATUS_ROWS}
-    assert columns == {_ICON_SLOT + 1 + _LABEL_SLOT + 1}, columns
+    assert columns == {ICON_SLOT_WIDTH + 1 + _LABEL_SLOT + 1}, columns
 
 
 def test_the_label_field_is_sized_for_every_label_the_report_prints():
