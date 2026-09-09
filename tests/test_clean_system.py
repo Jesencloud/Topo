@@ -5,7 +5,6 @@ import pytest
 
 from src.clean import system
 from src.clean.system import (
-    DryRunReporter,
     clean_journal,
     clean_old_kernels,
     clean_orphaned_packages,
@@ -14,7 +13,6 @@ from src.clean.system import (
     clean_system_data,
     clean_zombies,
 )
-from src.core.constants import OK, SKIP
 from src.core.system import APT_NONINTERACTIVE_ENV, C_LOCALE_ENV, PACKAGE_TRANSACTION_TIMEOUT
 
 # `apt-get autoremove` as debian:stable-slim really narrates it. The Remv lines
@@ -762,17 +760,6 @@ def test_clean_package_manager_ubuntu_includes_snap_stats(mock_get_os_id, mock_r
     # apt cache (1 item / 1 cat) + one removed snap revision (1 item / 1 cat)
     assert i == 2
     assert c == 2
-
-
-def test_dry_run_reporter_empty_and_items_only(capsys):
-    assert DryRunReporter.report("nothing") == (0, 0, 0)
-    assert DryRunReporter.report("items", items_count=2, dry_run=True) == (0, 2, 1)
-    out = capsys.readouterr().out
-    assert "(2 items) would be cleaned" in out
-    # A preview is marked as untouched, not as done: the tense is not the only
-    # difference between this line and the real delete's.
-    assert f"  {SKIP} items" in out
-    assert OK not in out
 
 
 def test_snap_empty_and_malformed_output():

@@ -25,35 +25,6 @@ from ..core.text import plural
 from ..core.whitelist import is_system_cleanable_content
 
 
-class DryRunReporter:
-    """Helper to handle uniform output reporting across dry-run and actual execution modes."""
-
-    @staticmethod
-    def report(
-        action_name: str,
-        freed_bytes: int = 0,
-        items_count: int = 0,
-        dry_run: bool = False,
-    ) -> tuple[int, int, int]:
-        if freed_bytes == 0 and items_count == 0:
-            return 0, 0, 0
-
-        size_str = f" ({bytes_to_human(freed_bytes)})" if freed_bytes > 0 else ""
-        items_str = f" ({items_count} items)" if items_count > 0 and freed_bytes == 0 else ""
-
-        # A preview line must not wear the glyph a finished delete wears. `✓ ...
-        # would be cleaned` differed from `✓ Cleaned ...` by a verb tense alone,
-        # which survives neither a skim nor a paste with the colors stripped; `◎`
-        # says "it is there, this run left it alone" on its own. Every dry-run
-        # line in clean/ pairs SKIP with the conditional tense for that reason.
-        if dry_run:
-            print(f"  {SKIP} {action_name}{size_str}{items_str} would be cleaned")
-        else:
-            print(f"  {OK} Cleaned {action_name}{size_str}{items_str}")
-
-        return freed_bytes, items_count, 1
-
-
 def clean_snaps(dry_run: bool = False) -> tuple[int, int, int]:
     """Removes old revisions of snaps to save massive space on Ubuntu."""
     if not shutil.which("snap"):
