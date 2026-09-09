@@ -586,6 +586,22 @@ def test_get_size_error_handling():
         assert get_size(Path("/tmp")) == 0
 
 
+def test_get_size_survives_lstat_oserror(test_env):
+    """get_size must not leak an OSError from its is_symlink/lstat probe.
+
+    The symlink check runs before the exists()/stat() ones, and on some Python
+    versions lstat() goes through stat(follow_symlinks=False), so the same
+    error path that stat covers is reachable here. It returns 0 like the other
+    probes rather than raising.
+    """
+    probe = test_env / "probe"
+    probe.mkdir()
+    with patch("pathlib.Path.is_symlink", side_effect=OSError):
+        assert get_size(probe) == 0
+    with patch("pathlib.Path.is_symlink", side_effect=OSError):
+        assert get_size_fast(probe) == 0
+
+
 def test_parse_size_from_text():
     assert parse_size_from_text("freed 1.5 GB of space") == int(1.5 * 1024**3)
     assert parse_size_from_text("total 500 MB") == int(500 * 1024**2)

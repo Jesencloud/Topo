@@ -319,11 +319,11 @@ def get_size(path: str | Path) -> int:
     the run then does not perform.
     """
     p = Path(path)
-    if p.is_symlink():
-        try:
+    try:
+        if p.is_symlink():
             return p.lstat().st_size
-        except OSError:
-            return 0
+    except OSError:
+        return 0
     if not p.exists():
         return 0
     if p.is_file():
@@ -374,11 +374,14 @@ def get_size_fast(path: str | Path) -> int:
     the exact Python implementation.
     """
     p = Path(path)
-    if p.is_symlink():
-        # Same rule as get_size(): a symlink is sized as the link, not the target,
-        # because that is what a removal frees. The Rust engine would follow the
-        # link and report the whole target tree.
-        return get_size(p)
+    try:
+        if p.is_symlink():
+            # Same rule as get_size(): a symlink is sized as the link, not the target,
+            # because that is what a removal frees. The Rust engine would follow the
+            # link and report the whole target tree.
+            return get_size(p)
+    except OSError:
+        return 0
     if p.is_dir():
         data = _get_fast_scan_data(p)
         if data is not None:
