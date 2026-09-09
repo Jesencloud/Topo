@@ -32,6 +32,7 @@ from ..core.constants import AppType
 from ..core.file_ops import record_deletion_audit, safe_remove
 from ..core.history import record_history_session
 from ..core.package_manager import DNF, resolve_admin_tool
+from ..core.whitelist import is_irreplaceable_app_data
 from . import processes
 from .discovery import AppRecord
 
@@ -137,7 +138,11 @@ def _remove_package(app: AppRecord) -> system.CommandResult:
         ]
         for cli_target in cli_targets:
             if cli_target.exists():
-                safe_remove(cli_target, use_trash=get_use_trash(), allow_app_data_removal=True)
+                safe_remove(
+                    cli_target,
+                    use_trash=get_use_trash() or is_irreplaceable_app_data(cli_target),
+                    allow_app_data_removal=True,
+                )
         return system.CommandResult(args=["cli_uninstall"], returncode=0, stdout="CLI uninstalled")
 
     if app["type"] == AppType.APT:
@@ -264,7 +269,9 @@ def _remove_residue_paths(paths: list[Path]) -> list[tuple[bool, str]]:
     for residue_path in paths:
         success, _ = safe_remove(
             residue_path,
-            use_trash=use_trash or _is_sandbox_app_data(residue_path),
+            use_trash=use_trash
+            or _is_sandbox_app_data(residue_path)
+            or is_irreplaceable_app_data(residue_path),
             allow_app_data_removal=True,
         )
         path_text = str(residue_path)

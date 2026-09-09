@@ -310,11 +310,23 @@ def has_valid_cachedir_tag(path: str | Path) -> bool:
 
 
 def get_size(path: str | Path) -> int:
-    """Recursive size calculation in bytes (delegates directory walks to Rust engine when available)."""
+    """Recursive size calculation in bytes (delegates directory walks to Rust engine when available).
+
+    A top-level symlink is sized as the link itself, not as what it points at:
+    safe_remove() unlinks a symlink rather than following it, so the bytes that
+    a removal can actually free are the link's own. Counting the target's tree
+    would make a preview promise a deletion -- free a 10 GB directory -- that
+    the run then does not perform.
+    """
     p = Path(path)
+    if p.is_symlink():
+        try:
+            return p.lstat().st_size
+        except OSError:
+            return 0
     if not p.exists():
         return 0
-    if p.is_file() or p.is_symlink():
+    if p.is_file():
         try:
             return p.stat().st_size
         except OSError:
@@ -362,6 +374,11 @@ def get_size_fast(path: str | Path) -> int:
     the exact Python implementation.
     """
     p = Path(path)
+    if p.is_symlink():
+        # Same rule as get_size(): a symlink is sized as the link, not the target,
+        # because that is what a removal frees. The Rust engine would follow the
+        # link and report the whole target tree.
+        return get_size(p)
     if p.is_dir():
         data = _get_fast_scan_data(p)
         if data is not None:
@@ -475,8 +492,12 @@ def safe_remove(
         record_deletion_audit(raw_path, "permanent", "deleted", size_bytes)
         return True, "Permanently deleted"
     except OSError as e:
-        failed_mode = "permanent" if use_trash else mode
-        record_deletion_audit(raw_path, failed_mode, "failed", size_bytes)
+        # `mode` already reflects the branch: "trash" when we tried the trash and
+        # "permanent" when we tried a permanent delete. The old expression
+        # `"permanent" if use_trash else mode` collapsed every trash failure into
+        # "permanent", which is the opposite of what the audit line should say --
+        # a failed trash attempt leaves the data where it was, not wiped.
+        record_deletion_audit(raw_path, mode, "failed", size_bytes)
         return False, str(e)
 
 
@@ -607,9 +628,12 @@ def clean_path_by_age(path: str | Path, days: int, dry_run: bool = False) -> tup
                 else:
                     size = st.st_size
                 if dry_run:
-                    safe_remove(item, use_trash=False, dry_run=True, known_size_bytes=size)
-                    total_size += size
-                    items_count += 1
+                    # Count only what the real run would remove: a rejected path
+                    # is skipped in the non-dry branch, so promising it here makes
+                    # the preview overstate. The dry-run verdict is the same gate.
+                    if safe_remove(item, use_trash=False, dry_run=True, known_size_bytes=size)[0]:
+                        total_size += size
+                        items_count += 1
                 elif safe_remove(item, use_trash=False, known_size_bytes=size)[0]:
                     total_size += size
                     items_count += 1

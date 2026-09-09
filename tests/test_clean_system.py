@@ -10,7 +10,6 @@ from src.clean.system import (
     clean_old_kernels,
     clean_orphaned_packages,
     clean_package_manager,
-    clean_rotated_logs,
     clean_snaps,
     clean_system_data,
     clean_zombies,
@@ -1281,22 +1280,14 @@ def test_opensuse_cleans_its_package_cache_but_has_no_orphan_sweep():
         assert clean_orphaned_packages() == (0, 0, 0)
 
 
-def test_rotated_logs_and_system_aggregation(tmp_path, monkeypatch):
-    (tmp_path / "old.log.1").write_bytes(b"abc")
-    monkeypatch.setattr("src.clean.system.Path", lambda _: tmp_path)
-    with (
-        patch("src.clean.system.get_size_fast", return_value=3),
-        patch("src.clean.system.safe_remove", return_value=(True, 3)),
-    ):
-        assert clean_rotated_logs() == (3, 1, 1)
-    values = [(1, 2, 3)] * 6
+def test_system_aggregation(tmp_path, monkeypatch):
+    values = [(1, 2, 3)] * 5
     with patch.multiple(
         "src.clean.system",
         clean_package_manager=lambda _: values[0],
         clean_orphaned_packages=lambda _: values[0],
         clean_old_kernels=lambda _: values[0],
         clean_journal=lambda _: values[0],
-        clean_rotated_logs=lambda _: values[0],
         clean_zombies=lambda _: values[0],
     ):
-        assert clean_system_data(True) == (6, 12, 18)
+        assert clean_system_data(True) == (5, 10, 15)

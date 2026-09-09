@@ -557,3 +557,24 @@ def is_sensitive_linux_app_data(path: Path) -> bool:
 
     _, _, protected_paths = _compiled_home_protection_paths(str(home))
     return any(path == prot_path or prot_path in path.parents for prot_path in protected_paths)
+
+
+def is_irreplaceable_app_data(path: Path) -> bool:
+    """Whether a path holds app data with no source to regenerate from.
+
+    Browsers and mail clients keep bookmarks, saved logins and mail in a profile
+    directory; messaging apps keep chat archives; input methods keep a learned
+    dictionary. Residue removal may target one of these -- a profile name that
+    matches the heuristic, or an app's config directory removed alongside the
+    app -- and allow_app_data_removal would otherwise delete it permanently under
+    use_trash=false. The soft protection table (``LINUX_PROTECTED_HOME_PATHS``)
+    refuses these, but that tier is deliberately bypassed by the uninstall
+    branches; this is the recovery rule that survives the bypass.
+
+    The rule is a truth about the data, not a curated list: anything the soft
+    table already classifies as user data (``is_sensitive_linux_app_data``) and
+    that is not itself a cache directory (``is_cleanable_linux_app_data``) is
+    non-regenerable. A cache name under one of these roots stays wipeable, and
+    anything hard-protected never reaches here.
+    """
+    return is_sensitive_linux_app_data(path) and not is_cleanable_linux_app_data(path)

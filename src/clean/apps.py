@@ -147,9 +147,12 @@ def clean_app_generic(name, paths, process_names=None, dry_run=False):
             found = True
             if dry_run:
                 size = get_size_fast(path)
-                safe_remove(path, use_trash=False, dry_run=True, known_size_bytes=size)
-                total_freed += size
-                items_cleaned += 1
+                # Count only what validation would let through: the real run
+                # below skips a rejected path, so the preview must not promise
+                # it. safe_remove's dry-run verdict is what decides.
+                if safe_remove(path, use_trash=False, dry_run=True, known_size_bytes=size)[0]:
+                    total_freed += size
+                    items_cleaned += 1
                 continue
             try:
                 if path.is_dir():

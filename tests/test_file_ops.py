@@ -15,6 +15,7 @@ from src.core.file_ops import (
     clean_path_by_age,
     get_deletion_log_path,
     get_size,
+    get_size_fast,
     is_app_running,
     journal_freed_bytes,
     parse_size_from_text,
@@ -29,6 +30,7 @@ from src.core.whitelist import (
     add_to_whitelist,
     get_config_dir,
     get_hard_protection_reason,
+    is_irreplaceable_app_data,
     is_protected,
 )
 
@@ -186,6 +188,34 @@ def test_safe_remove_keeps_browser_profile_root_and_credentials(test_env):
     assert success is False
     assert "whitelisted" in message.lower()
     assert login_db.exists()
+
+
+def test_is_irreplaceable_app_data_marks_profiles_but_not_caches(test_env):
+    """The uninstall branches force trash on profile roots even under use_trash=false.
+
+    The rule is the predicate is_sensitive AND NOT is_cleanable: anything the
+    soft table classifies as user data is irreplaceable, but a cache directory
+    beside or inside it is still wipeable.
+    """
+    assert is_irreplaceable_app_data(test_env / ".mozilla") is True
+    assert is_irreplaceable_app_data(test_env / ".mozilla/firefox/abc.default") is True
+    assert is_irreplaceable_app_data(test_env / ".config/google-chrome/Default") is True
+    assert is_irreplaceable_app_data(test_env / ".thunderbird") is True
+    # Non-browser user data is irreplaceable too: chat archives and input-method
+    # dictionaries have no source to regenerate from.
+    assert is_irreplaceable_app_data(test_env / ".config/discord") is True
+    assert is_irreplaceable_app_data(test_env / ".local/share/TelegramDesktop") is True
+
+    # A cache directory is the exception: disposable, so covered by neither half.
+    assert is_irreplaceable_app_data(test_env / ".cache/mozilla") is False
+    assert is_irreplaceable_app_data(test_env / ".cache/google-chrome") is False
+    assert is_irreplaceable_app_data(test_env / ".mozilla/firefox/abc.default/cache2") is False
+
+    # Not in the soft protection table at all -- never user data by this rule.
+    assert is_irreplaceable_app_data(test_env / ".config/vlc") is False
+
+    # Outside the home directory there is nothing irreplaceable to force trash.
+    assert is_irreplaceable_app_data(Path("/var/cache")) is False
 
 
 def test_safe_remove_bypass_allows_app_data_cleanup(test_env):
@@ -513,6 +543,27 @@ def test_get_size_accurate(test_env):
     assert get_size(test_dir) == 1024
 
 
+def test_get_size_of_symlink_does_not_follow_it(test_env):
+    """A symlink is sized as the link, not as the tree it points at.
+
+    safe_remove() unlinks a top-level symlink rather than following it, so the
+    bytes a removal can free are the link's own. Sizing the target instead made
+    a preview promise a directory's worth of space that the run never freed.
+    """
+    target = test_env / "big"
+    target.mkdir()
+    (target / "payload").write_bytes(b"0" * 4096)
+
+    link = test_env / "link-to-big"
+    link.symlink_to(target)
+
+    assert get_size(target) == 4096
+    # The link itself, never the 4096 bytes behind it.
+    assert get_size(link) == link.lstat().st_size
+    assert get_size(link) < 4096
+    assert get_size_fast(link) == get_size(link)
+
+
 def test_get_size_error_handling():
     # Non-existent path
     assert get_size(Path("/tmp/this_should_never_exist_12345")) == 0
@@ -656,6 +707,31 @@ def test_safe_remove_edge_cases(test_env):
         success, msg = safe_remove(test_file, use_trash=False)
         assert success is False
         assert "mocked error" in msg
+
+
+def test_safe_remove_failure_mode_reflects_the_trash_branch(test_env, monkeypatch):
+    """An OSError inside the trash branch is audited as a trash failure, not permanent.
+
+    The mode recorded for a failed attempt must say what was attempted: a failed
+    trash move leaves the data in place and recoverable, and labeling it
+    "permanent" would have the audit log claim a permanent delete happened.
+    """
+    log_path = test_env / "state" / "topo" / "deletions.log"
+    monkeypatch.setenv("TOPO_DELETE_LOG", str(log_path))
+    test_file = test_env / "trash-fails-with-oserror.txt"
+    test_file.write_text("dummy")
+
+    with (
+        patch("src.core.file_ops._which_cached", return_value="/usr/bin/gio"),
+        patch("src.core.file_ops.run_command", side_effect=OSError("mocked gio failure")),
+    ):
+        success, msg = safe_remove(test_file, use_trash=True)
+        assert success is False
+        assert "mocked gio failure" in msg
+
+    lines = log_path.read_text().splitlines()
+    assert lines and lines[0].split("\t")[1] == "trash"
+    assert lines[0].split("\t")[3:] == ["failed", str(test_file)]
 
 
 def test_safe_remove_deletes_symlink_not_target(test_env):
@@ -844,6 +920,27 @@ def test_clean_path_by_age(test_env):
         size, items = clean_path_by_age(cache_dir, days=10)
         assert size == 0
         assert items == 0
+
+
+def test_clean_path_by_age_dry_run_counts_only_what_validation_lets_through(test_env):
+    """The preview must not promise a path the real run would reject.
+
+    `.config/wechat` is soft-protected (a message app's data), so the non-dry
+    branch skips it. The dry-run branch used to add its size without asking
+    validation -- counting through the same gate keeps the two branches from
+    disagreeing about what a run would actually remove.
+    """
+    wechat = test_env / ".config" / "wechat"
+    wechat.mkdir(parents=True)
+    payload = wechat / "history.db"
+    payload.write_text("data")
+    old_time = time.time() - 15 * 86400
+    os.utime(wechat, (old_time, old_time))
+    os.utime(payload, (old_time, old_time))
+
+    # Dry run: protected entry must be counted as nothing, not as would-be-freed.
+    size, items = clean_path_by_age(wechat, days=10, dry_run=True)
+    assert (size, items) == (0, 0)
 
 
 def test_clean_path_by_age_uses_single_stats_scan_for_old_directory(test_env):

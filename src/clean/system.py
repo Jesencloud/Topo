@@ -9,7 +9,6 @@ from ..core.file_ops import (
     journal_freed_bytes,
     parse_size_from_text,
     record_deletion_audit,
-    safe_remove,
 )
 from ..core.heavy_cache import PACKAGE_MANAGER_CACHE_DEFS
 from ..core.lock import is_file_locked
@@ -854,35 +853,6 @@ def clean_old_kernels(dry_run: bool = False) -> tuple[int, int, int]:
     return 0, 0, 0
 
 
-def clean_rotated_logs(dry_run: bool = False) -> tuple[int, int, int]:
-    """Remove rotated and compressed log files from /var/log."""
-    total_size = 0
-    total_items = 0
-    log_dir = Path("/var/log")
-    if not log_dir.exists():
-        return 0, 0, 0
-    rotated_suffixes = {".gz", ".xz", ".bz2", ".zst", ".old", ".1", ".2", ".3", ".4", ".5"}
-    try:
-        for item in log_dir.rglob("*"):
-            if not item.is_file():
-                continue
-            if item.suffix in rotated_suffixes:
-                size = get_size_fast(item)
-                if dry_run:
-                    total_size += size
-                    total_items += 1
-                else:
-                    if safe_remove(item, use_trash=False)[0]:
-                        total_size += size
-                        total_items += 1
-    except PermissionError:
-        pass
-
-    return DryRunReporter.report(
-        "Rotated log files", freed_bytes=total_size, items_count=total_items, dry_run=dry_run
-    )
-
-
 def clean_system_data(dry_run: bool = False) -> tuple[int, int, int]:
     """Combined system and package-manager cleanup.
 
@@ -905,7 +875,6 @@ def clean_system_data(dry_run: bool = False) -> tuple[int, int, int]:
         clean_old_kernels(dry_run),
         clean_orphaned_packages(dry_run),
         clean_journal(dry_run),
-        clean_rotated_logs(dry_run),
         clean_zombies(dry_run),
     ):
         total_size += s
