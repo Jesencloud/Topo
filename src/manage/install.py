@@ -28,7 +28,7 @@ def run_install_link(silent=False):
     """
 
     if not silent:
-        print(f"\n{PURPLE}{MARK_SECTION} Setting up system-wide 'topo' command...{RESET}")
+        print(f"\n{PURPLE}{MARK_SECTION} Setting up the 'topo' command...{RESET}")
 
     repo_root = Path(__file__).parent.parent.parent
     source_script = repo_root / "topo"

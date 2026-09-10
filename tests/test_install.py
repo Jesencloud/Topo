@@ -26,6 +26,14 @@ def test_install_script_fails_early_when_curl_is_missing(tmp_path):
     assert "python3 is required" not in result.stdout
 
 
+def test_installer_never_offers_a_privileged_launcher_into_a_user_install():
+    script = (REPO_ROOT / "install.sh").read_text()
+
+    assert 'sudo ln -sf "${INSTALL_DIR}/topo" /usr/local/bin/topo' not in script
+    assert "Would you like to link it to" not in script
+    assert "Or manually link it" not in script
+
+
 def _fake_python3(tmp_path: Path, version: tuple[int, int, int]) -> Path:
     """A python3 on PATH that reports `version` and is otherwise the real one.
 
@@ -93,6 +101,85 @@ def _run_installer_block(pattern: str, prelude: str, expr: str, env: dict, count
 
     assert result.returncode == 0, result.stdout + result.stderr
     return result.stdout
+
+
+def test_installer_removes_only_its_matching_legacy_system_launcher(tmp_path):
+    install_dir = tmp_path / ".topo"
+    install_dir.mkdir()
+    launcher = install_dir / "topo"
+    launcher.write_text("#!/usr/bin/env python3\n")
+    legacy = tmp_path / "usr-local-bin-topo"
+    legacy.symlink_to(launcher)
+    active = tmp_path / ".local/bin/topo"
+    fake_bin = tmp_path / "fakebin"
+    fake_bin.mkdir()
+    sudo_log = tmp_path / "sudo.log"
+    sudo = fake_bin / "sudo"
+    sudo.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{sudo_log}"\nexec "$@"\n')
+    sudo.chmod(0o755)
+
+    _run_installer_block(
+        r"^remove_legacy_system_launcher\(\) \{\n.*?^\}$",
+        prelude="MINIMAL=true",
+        expr=f'remove_legacy_system_launcher "{legacy}" "{active}" "{launcher}"',
+        env={"HOME": str(tmp_path), "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}"},
+    )
+
+    assert not legacy.exists() and not legacy.is_symlink()
+    sudo_args = sudo_log.read_text().split()
+    assert sudo_args[-3:] == ["sh", str(legacy), str(launcher)]
+    assert sudo_args[:2] == ["/bin/sh", "-c"]
+
+
+def test_launcher_snapshot_restores_an_unrelated_entry_after_failure(tmp_path):
+    launcher = tmp_path / "bin/topo"
+    launcher.parent.mkdir()
+    original = tmp_path / "package-topo"
+    original.write_text("package launcher\n")
+    launcher.symlink_to(original)
+    replacement = tmp_path / ".topo/topo"
+    replacement.parent.mkdir()
+    replacement.write_text("new launcher\n")
+
+    _run_installer_block(
+        r"^(?:snapshot_launcher|restore_launcher)\(\) \{\n.*?^\}$",
+        prelude='LAUNCHER_SNAPSHOT_DIR=""',
+        expr=(
+            f'snapshot_launcher "{launcher}"\n'
+            f'rm -f "{launcher}"\nln -s "{replacement}" "{launcher}"\n'
+            f'restore_launcher "{launcher}"'
+        ),
+        env={"HOME": str(tmp_path), "PATH": os.environ["PATH"]},
+        count=2,
+    )
+
+    assert launcher.is_symlink()
+    assert os.readlink(launcher) == str(original)
+
+
+def test_installer_preserves_an_unrelated_system_launcher(tmp_path):
+    install_dir = tmp_path / ".topo"
+    install_dir.mkdir()
+    (install_dir / "topo").write_text("#!/usr/bin/env python3\n")
+    unrelated_target = tmp_path / "package-topo"
+    unrelated_target.write_text("#!/bin/sh\n")
+    legacy = tmp_path / "usr-local-bin-topo"
+    legacy.symlink_to(unrelated_target)
+    sudo_log = tmp_path / "sudo.log"
+
+    _run_installer_block(
+        r"^remove_legacy_system_launcher\(\) \{\n.*?^\}$",
+        prelude="MINIMAL=true",
+        expr=(
+            f'remove_legacy_system_launcher "{legacy}" '
+            f'"{tmp_path / ".local/bin/topo"}" "{install_dir / "topo"}"'
+        ),
+        env={"HOME": str(tmp_path), "PATH": os.environ["PATH"]},
+    )
+
+    assert legacy.is_symlink()
+    assert legacy.resolve() == unrelated_target
+    assert not sudo_log.exists()
 
 
 CURL_RETRY_BLOCK = r"^CURL_RETRY_OPTS=\(.*?^fi$"
@@ -251,8 +338,8 @@ def test_install_script_removes_both_engines_on_an_architecture_without_one(tmp_
 
 
 VERSION_MATCH_HELPERS = (
-    r"^(?:resolve_link_target_dir|absolute_link_dir|engine_for_arch"
-    r"|installed_version_matches)\(\) \{\n.*?^\}$"
+    r"^(?:resolve_link_target_dir|absolute_link_dir|remove_legacy_system_launcher"
+    r"|finish_matching_install|engine_for_arch|installed_version_matches)\(\) \{\n.*?^\}$"
 )
 
 
@@ -293,7 +380,7 @@ def _installed_version_matches(env: dict, arch: str, tmp_path: Path) -> str:
         prelude="",
         expr="if installed_version_matches; then echo MATCH; else echo MISS; fi",
         env=env,
-        count=4,
+        count=6,
     ).strip()
 
 
@@ -318,6 +405,55 @@ def test_a_repeat_install_is_skipped_on_an_architecture_that_has_no_engine(tmp_p
     env = _complete_install(tmp_path, "1.1.2", engines=())
 
     assert _installed_version_matches(env, "riscv64", tmp_path) == "MATCH"
+
+
+def test_matching_install_still_removes_its_legacy_system_launcher(tmp_path):
+    env = _complete_install(tmp_path, "1.1.2", engines=())
+    launcher = tmp_path / ".topo/topo"
+    legacy = tmp_path / "usr-local-bin-topo"
+    legacy.symlink_to(launcher)
+    fake_bin = tmp_path / "sudobin"
+    fake_bin.mkdir()
+    sudo_log = tmp_path / "sudo.log"
+    sudo = fake_bin / "sudo"
+    sudo.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{sudo_log}"\nexec "$@"\n')
+    sudo.chmod(0o755)
+    env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
+
+    _run_installer_block(
+        VERSION_MATCH_HELPERS,
+        prelude="MINIMAL=true",
+        expr=f'finish_matching_install "{legacy}"',
+        env=env,
+        count=6,
+    )
+
+    assert not legacy.exists() and not legacy.is_symlink()
+    sudo_args = sudo_log.read_text().split()
+    assert sudo_args[-3:] == ["sh", str(legacy), str(launcher)]
+    assert sudo_args[:2] == ["/bin/sh", "-c"]
+
+
+def test_matching_install_preserves_an_aliased_active_system_launcher(tmp_path):
+    env = _complete_install(tmp_path, "1.1.2", engines=())
+    launcher = tmp_path / ".topo/topo"
+    system_dir = tmp_path / "usr/local/bin"
+    system_dir.mkdir(parents=True)
+    active = system_dir / "topo"
+    active.symlink_to(launcher)
+    env["TOPO_LINK_DIR"] = f"{system_dir}/../bin"
+    env["PATH"] = f"{env['TOPO_LINK_DIR']}{os.pathsep}{env['PATH']}"
+
+    _run_installer_block(
+        VERSION_MATCH_HELPERS,
+        prelude="MINIMAL=true",
+        expr=f'finish_matching_install "{active}"',
+        env=env,
+        count=6,
+    )
+
+    assert active.is_symlink()
+    assert active.resolve() == launcher
 
 
 def _run_installer_link_helpers(env, expr="resolve_link_target_dir"):
@@ -366,6 +502,55 @@ def test_install_script_matches_python_for_a_root_install(tmp_path, monkeypatch)
     env = {"HOME": str(tmp_path), "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}"}
 
     assert _run_installer_link_helpers(env) == str(get_link_target_dir()) == "/usr/local/bin"
+
+
+def test_root_install_rejects_a_user_owned_home(tmp_path):
+    fake_bin = tmp_path / "fakebin"
+    fake_bin.mkdir()
+    fake_id = fake_bin / "id"
+    fake_id.write_text("#!/bin/sh\necho 0\n")
+    fake_id.chmod(0o755)
+    home = tmp_path / "user-home"
+    home.mkdir()
+
+    result = subprocess.run(
+        [
+            "/bin/bash",
+            "-c",
+            _installer_function("root_install_path_is_trusted")
+            + f'\nroot_install_path_is_trusted "{home / ".topo"}"',
+        ],
+        env={"HOME": str(home), "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+
+
+def test_root_install_rejects_a_noncanonical_home(tmp_path):
+    fake_bin = tmp_path / "fakebin"
+    fake_bin.mkdir()
+    fake_id = fake_bin / "id"
+    fake_id.write_text("#!/bin/sh\necho 0\n")
+    fake_id.chmod(0o755)
+    home = f"{tmp_path}/missing/../user-home"
+
+    result = subprocess.run(
+        [
+            "/bin/bash",
+            "-c",
+            _installer_function("root_install_path_is_trusted")
+            + f'\nroot_install_path_is_trusted "{home}/.topo"',
+        ],
+        env={"HOME": home, "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
 
 
 def test_install_script_puts_a_relative_override_under_the_install_tree(tmp_path):

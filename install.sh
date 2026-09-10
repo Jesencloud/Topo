@@ -5,7 +5,6 @@ set -e
 # ANSI High-Contrast Professional Palette (Matching Topo Core)
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
     PURPLE='\033[1;95m'
-    CYAN='\033[1;36m'
     GREEN='\033[0;32m'
     YELLOW='\033[1;33m'
     EARTH="$YELLOW"
@@ -15,7 +14,6 @@ if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
     NC='\033[0m' # No Color
 else
     PURPLE=''
-    CYAN=''
     GREEN=''
     YELLOW=''
     EARTH=''
@@ -223,6 +221,112 @@ absolute_link_dir() {
     esac
 }
 
+# A root install creates a root-visible launcher, so its code tree cannot live
+# below a directory another account can replace. HOME normally resolves to
+# /root; reject preserved/supplied user homes, symlinks, and writable ancestors
+# instead of recreating the privilege boundary that the fallback removal closes.
+root_install_path_is_trusted() {
+    local install_path="$1"
+
+    if [ "$(id -u)" -ne 0 ]; then
+        return 0
+    fi
+    python3 - "$install_path" <<'PY'
+import os
+import stat
+import sys
+
+path = sys.argv[1]
+# Lexical normalization does not match kernel lookup when a symlink precedes
+# `..`. Refuse such spellings before inspecting components, then reject every
+# existing non-directory, non-root-owned, or writable ancestor with lstat().
+if not os.path.isabs(path) or os.path.normpath(path) != path:
+    sys.exit(1)
+while True:
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        sys.exit(1)
+    else:
+        if (
+            not stat.S_ISDIR(info.st_mode)
+            or info.st_uid != 0
+            or info.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+        ):
+            sys.exit(1)
+    parent = os.path.dirname(path)
+    if parent == path:
+        break
+    path = parent
+PY
+}
+
+# Old installers offered regular users a root-owned /usr/local/bin link back into
+# ~/.topo. Remove only that exact legacy link: never a package launcher, another
+# user's install, or the active launcher selected for an explicit root/custom
+# install. Failure is fatal so an upgrade cannot claim to have closed F1 while
+# leaving the unsafe root-visible entry in place.
+remove_legacy_system_launcher() {
+    local legacy_launcher="$1"
+    local active_launcher="$2"
+    local expected_launcher="$3"
+    local legacy_target expected_target canonical_legacy canonical_active raw_target
+    local canonical_legacy_dir canonical_active_dir
+
+    canonical_legacy_dir=$(readlink -m "$(dirname "$legacy_launcher")" 2>/dev/null || true)
+    canonical_active_dir=$(readlink -m "$(dirname "$active_launcher")" 2>/dev/null || true)
+    if [ -z "$canonical_legacy_dir" ] || [ -z "$canonical_active_dir" ]; then
+        return 0
+    fi
+    canonical_legacy="$canonical_legacy_dir/$(basename "$legacy_launcher")"
+    canonical_active="$canonical_active_dir/$(basename "$active_launcher")"
+    if [ "$(id -u)" -eq 0 ] || [ "$canonical_active" = "$canonical_legacy" ] || [ ! -L "$legacy_launcher" ]; then
+        return 0
+    fi
+    raw_target=$(readlink "$legacy_launcher" 2>/dev/null || true)
+    if [ "$raw_target" != "$expected_launcher" ]; then
+        return 0
+    fi
+    legacy_target=$(readlink -f "$legacy_launcher" 2>/dev/null || true)
+    expected_target=$(readlink -f "$expected_launcher" 2>/dev/null || true)
+    if [ -z "$legacy_target" ] || [ "$legacy_target" != "$expected_target" ]; then
+        return 0
+    fi
+    # Feed the expected raw payload to a root shell and re-check immediately
+    # before unlinking. This closes the password-prompt window where another
+    # privileged operation could replace the inspected link with a package file.
+    if ! sudo /bin/sh -c '
+        PATH=/usr/sbin:/usr/bin:/sbin:/bin
+        export PATH
+        candidate=$1
+        expected=$2
+        [ -L "$candidate" ] || exit 1
+        [ "$(/usr/bin/readlink "$candidate" 2>/dev/null || true)" = "$expected" ] || exit 1
+        /bin/rm -f -- "$candidate"
+    ' sh "$legacy_launcher" "$expected_launcher"; then
+        return 1
+    fi
+    if [ "$MINIMAL" = false ]; then
+        echo -e "  ${GREEN}✓${NC} ${GRAY}Removed unsafe legacy launcher ${BOLD}${legacy_launcher}${NC}"
+    fi
+}
+
+# Complete the no-download path as well as a full upgrade: resolving the active
+# launcher here keeps legacy cleanup from being skipped when the requested
+# release is already installed. Canonical HOME spelling keeps the old installer's
+# direct absolute symlink payload comparable across harmless trailing slashes.
+finish_matching_install() {
+    local legacy_launcher="$1"
+    local link_dir active_launcher expected_launcher
+
+    link_dir=$(resolve_link_target_dir) || return 1
+    active_launcher="$(absolute_link_dir "$link_dir")/topo"
+    expected_launcher="$(readlink -m "$HOME/.topo/topo")"
+    remove_legacy_system_launcher "$legacy_launcher" "$active_launcher" "$expected_launcher"
+}
+
 # The engine built for an architecture, or nothing when none is. One answer for
 # both callers -- the completeness check below and the provisioning in step 4 --
 # because they used to spell the same case statement twice and disagreeing about
@@ -289,7 +393,17 @@ installed_version_matches() {
     [ "$found_config" = true ]
 }
 
+if ! root_install_path_is_trusted "$HOME/.topo"; then
+    echo -e "  ${RED}✗ Error: a root install requires a root-owned, non-writable HOME path (found ${HOME}).${NC}" >&2
+    echo -e "  ${GRAY}Run the installer with root's normal HOME, or install as a regular user without sudo.${NC}" >&2
+    exit 1
+fi
+
 if installed_version_matches; then
+    if ! finish_matching_install "/usr/local/bin/topo"; then
+        echo -e "  ${RED}✗ Error: could not remove the unsafe legacy /usr/local/bin/topo launcher.${NC}" >&2
+        exit 1
+    fi
     if [ "$MINIMAL" = false ]; then
         echo -e "  ${GREEN}✓${NC} ${GRAY}Topo ${BOLD}v${TARGET_REF#v}${NC}${GRAY} is already installed; skipping download.${NC}"
     fi
@@ -417,7 +531,54 @@ STAGED_INSTALL=""
 BACKUP_INSTALL=""
 INSTALL_ACTIVATED=false
 LAUNCHER_PATH=""
+LAUNCHER_SNAPSHOT_DIR=""
 SHELL_CONFIG_SNAPSHOT_DIR=""
+
+snapshot_launcher() {
+    local launcher="$1"
+    local snapshot_parent="${TMPDIR:-/tmp}"
+
+    # A privileged install must not keep rollback state below a caller-controlled
+    # TMPDIR: another account could replace that directory before restoration.
+    if [ "$(id -u)" -eq 0 ]; then snapshot_parent=/tmp; fi
+    LAUNCHER_SNAPSHOT_DIR=$(mktemp -d "$snapshot_parent/topo-launcher.XXXXXX")
+    if [ -L "$launcher" ]; then
+        python3 - "$launcher" "$LAUNCHER_SNAPSHOT_DIR/symlink" <<'PY'
+import os
+import sys
+
+with open(sys.argv[2], "wb") as snapshot:
+    snapshot.write(os.fsencode(os.readlink(sys.argv[1])))
+PY
+    elif [ -e "$launcher" ]; then
+        cp -a -- "$launcher" "$LAUNCHER_SNAPSHOT_DIR/entry"
+    else
+        : > "$LAUNCHER_SNAPSHOT_DIR/missing"
+    fi
+}
+
+restore_launcher() {
+    local launcher="$1"
+
+    if [ -z "$LAUNCHER_SNAPSHOT_DIR" ] || [ ! -d "$LAUNCHER_SNAPSHOT_DIR" ]; then
+        return
+    fi
+    if [ -f "$LAUNCHER_SNAPSHOT_DIR/missing" ]; then
+        rm -f -- "$launcher"
+    elif [ -f "$LAUNCHER_SNAPSHOT_DIR/symlink" ]; then
+        rm -rf -- "$launcher"
+        python3 - "$LAUNCHER_SNAPSHOT_DIR/symlink" "$launcher" <<'PY'
+import os
+import sys
+
+with open(sys.argv[1], "rb") as snapshot:
+    os.symlink(os.fsdecode(snapshot.read()), sys.argv[2])
+PY
+    elif [ -e "$LAUNCHER_SNAPSHOT_DIR/entry" ]; then
+        rm -rf -- "$launcher"
+        cp -a -- "$LAUNCHER_SNAPSHOT_DIR/entry" "$launcher"
+    fi
+}
 
 snapshot_shell_configs() {
     SHELL_CONFIG_SNAPSHOT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/topo-shell-config.XXXXXX")
@@ -448,18 +609,15 @@ restore_shell_configs() {
 cleanup_install_staging() {
     if [ -n "$STAGED_INSTALL" ] && [ -d "$STAGED_INSTALL" ]; then rm -rf "$STAGED_INSTALL"; fi
     if [ "$INSTALL_ACTIVATED" = true ]; then
-        if [ "$WAS_INSTALLED" = false ] && [ -n "$LAUNCHER_PATH" ] && [ -L "$LAUNCHER_PATH" ]; then
-            launcher_target=$(readlink -f "$LAUNCHER_PATH" 2>/dev/null || true)
-            expected_target=$(readlink -f "$FINAL_INSTALL/topo" 2>/dev/null || true)
-            if [ -n "$launcher_target" ] && [ "$launcher_target" = "$expected_target" ]; then
-                rm -f "$LAUNCHER_PATH"
-            fi
-        fi
+        if [ -n "$LAUNCHER_PATH" ]; then restore_launcher "$LAUNCHER_PATH"; fi
         if [ -e "$FINAL_INSTALL" ]; then rm -rf "$FINAL_INSTALL"; fi
         restore_shell_configs
     fi
     if [ -n "$BACKUP_INSTALL" ] && [ -d "$BACKUP_INSTALL" ]; then
         mv "$BACKUP_INSTALL" "$FINAL_INSTALL"
+    fi
+    if [ -n "$LAUNCHER_SNAPSHOT_DIR" ] && [ -d "$LAUNCHER_SNAPSHOT_DIR" ]; then
+        rm -rf "$LAUNCHER_SNAPSHOT_DIR"
     fi
     if [ -n "$SHELL_CONFIG_SNAPSHOT_DIR" ] && [ -d "$SHELL_CONFIG_SNAPSHOT_DIR" ]; then
         rm -rf "$SHELL_CONFIG_SNAPSHOT_DIR"
@@ -577,6 +735,7 @@ snapshot_shell_configs
 LINK_TARGET_DIR=$(resolve_link_target_dir) ||
     abort_verification "Could not resolve the launcher path before running topo link."
 LAUNCHER_PATH="$(absolute_link_dir "$LINK_TARGET_DIR")/topo"
+snapshot_launcher "$LAUNCHER_PATH"
 
 # Updates and minimal installs suppress presentation while still performing the
 # PATH repair inside run_install_link().
@@ -592,6 +751,9 @@ if [ ! -L "$LAUNCHER_PATH" ] || [ "$(readlink -f "$LAUNCHER_PATH" 2>/dev/null ||
     abort_verification "Symbolic link verification failed after running topo link."
 fi
 
+remove_legacy_system_launcher "/usr/local/bin/topo" "$LAUNCHER_PATH" "$(readlink -m "$FINAL_INSTALL/topo")" ||
+    abort_verification "Could not remove the unsafe legacy /usr/local/bin/topo launcher."
+
 if [ "$MINIMAL" = false ] && [ "$WAS_INSTALLED" = true ]; then
     DISP_LAUNCHER="${LAUNCHER_PATH/#"$HOME"/~}"
     echo -e "  ${GREEN}✓${NC} ${GRAY}Executable linked to ${BOLD}${DISP_LAUNCHER}${NC}"
@@ -603,28 +765,14 @@ if [ -n "$BACKUP_INSTALL" ] && [ -d "$BACKUP_INSTALL" ]; then
     BACKUP_INSTALL=""
 fi
 INSTALL_ACTIVATED=false
+rm -rf "$LAUNCHER_SNAPSHOT_DIR"
+LAUNCHER_SNAPSHOT_DIR=""
 rm -rf "$SHELL_CONFIG_SNAPSHOT_DIR"
 SHELL_CONFIG_SNAPSHOT_DIR=""
 
-# OOTB PATH Fix: Offer immediate access via /usr/local/bin if not in PATH
-if [ "$MINIMAL" = false ] && ! command -v topo >/dev/null 2>&1; then
-    if [ -c /dev/tty ]; then
-        echo -e "\n  ${YELLOW}⚠ 'topo' is not yet in your PATH.${NC}"
-        echo -e "  ${CYAN}Would you like to link it to ${BOLD}/usr/local/bin${NC}${CYAN} for immediate access? (requires sudo)${NC}"
-        printf "  %b[y/N]%b " "${BOLD}" "${NC}"
-        read -r choice < /dev/tty || choice="n"
-        if [[ "$choice" =~ ^[Yy]$ ]]; then
-            if sudo ln -sf "${INSTALL_DIR}/topo" /usr/local/bin/topo; then
-                echo -e "  ${GREEN}✓ Linked system-wide. You can now run 'topo' immediately!${NC}"
-            fi
-        fi
-    fi
-fi
-
 if ! command -v topo >/dev/null 2>&1; then
-    echo -e "  ${YELLOW}⚠ Warning: 'topo' is still not available in PATH.${NC}"
-    echo -e "  ${GRAY}You can run it directly with:${NC} ${BOLD}${INSTALL_DIR}/topo${NC}"
-    echo -e "  ${GRAY}Or manually link it: ${NC}${BOLD}sudo ln -sf ${INSTALL_DIR}/topo /usr/local/bin/topo${NC}"
+    echo -e "  ${YELLOW}⚠ Warning: 'topo' is not available in this shell yet.${NC}"
+    echo -e "  ${GRAY}Restart your terminal, reload your shell config, or run it directly with:${NC} ${BOLD}${INSTALL_DIR}/topo${NC}"
 fi
 
 # 6. Display final banner and version
