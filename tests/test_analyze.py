@@ -1243,8 +1243,8 @@ def test_needs_admin_for_deletion_rejects_non_home_path():
     assert _needs_admin_for_deletion(Path("/usr/share/topo-test")) is True
 
 
-def test_sudo_remove_operates_on_resolved_root_managed_path():
-    """The validated object is the exact path handed to privileged rm."""
+def test_sudo_remove_unlinks_symlink_instead_of_deleting_its_target():
+    """The privileged branch matches safe_remove's direct-symlink semantics."""
     real_dir = Path("/var/tmp/topo-test-target")
     link = Path("/var/tmp/topo-test-link")
 
@@ -1269,8 +1269,9 @@ def test_sudo_remove_operates_on_resolved_root_managed_path():
     ):
         assert _sudo_remove(link) == (True, 0, "")
 
-    # rm must target the resolved real directory, never the raw symlink path.
-    assert captured["cmd"] == ["rm", "-rf", "--one-file-system", "--", str(real_dir)]
+    # Validation follows the link, but rm receives the raw name and therefore
+    # unlinks only the link. The target directory remains outside rm's reach.
+    assert captured["cmd"] == ["rm", "-rf", "--one-file-system", "--", str(link)]
 
 
 def test_sudo_remove_rejects_user_writable_ancestor(test_env):

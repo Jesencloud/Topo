@@ -8,6 +8,7 @@ import stat
 import sys
 import time
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,35 @@ CACHEDIR_TAG_SIGNATURE = "Signature: 8a477f597d28d172789f06886806bc55"
 TRASH_UNAVAILABLE_REASON = "No trash utility available; refusing to permanently delete"
 
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+class DeletionRejection(str, Enum):
+    """Machine-readable reasons returned when deletion validation refuses a path."""
+
+    EMPTY = "Path is empty"
+    CONTROL_CHARACTERS = "Path contains control characters"
+    NOT_ABSOLUTE = "Path must be absolute"
+    TRAVERSAL = "Path traversal is not allowed"
+    HARD_PROTECTED = "Path is hard-protected"
+    USER_WHITELIST = "Path is protected by user whitelist"
+    SENSITIVE_APP_DATA = "Path contains protected application data"
+    CRITICAL_SYSTEM_PATH = "Refusing to delete critical system path"
+
+    def __str__(self) -> str:
+        return self.value
+
+
+def _protected_path_rejection(path: Path) -> DeletionRejection | str | None:
+    """Return the precise soft-protection reason for a resolved path."""
+    if reason := get_hard_protection_reason(path):
+        if reason == "critical system path":
+            return DeletionRejection.CRITICAL_SYSTEM_PATH
+        if reason == "user whitelist":
+            return DeletionRejection.USER_WHITELIST
+        return f"{DeletionRejection.HARD_PROTECTED}: {reason}"
+    if is_protected(path):
+        return DeletionRejection.SENSITIVE_APP_DATA
+    return None
 
 
 @functools.cache
@@ -197,13 +227,13 @@ def validate_path_for_deletion(
     """Validate a raw deletion target before size checks or unlink attempts."""
     raw_text = os.fspath(path)
     if not raw_text:
-        return False, "Path is empty"
+        return False, DeletionRejection.EMPTY
     if _CONTROL_CHARS_RE.search(raw_text):
-        return False, "Path contains control characters"
+        return False, DeletionRejection.CONTROL_CHARACTERS
     if not Path(raw_text).expanduser().is_absolute():
-        return False, "Path must be absolute"
+        return False, DeletionRejection.NOT_ABSOLUTE
     if any(part == ".." for part in Path(raw_text).parts):
-        return False, "Path traversal is not allowed"
+        return False, DeletionRejection.TRAVERSAL
 
     raw_path = Path(raw_text).expanduser()
     try:
@@ -215,16 +245,16 @@ def validate_path_for_deletion(
         if (reason := get_hard_protection_reason(resolved_path)) and not (
             allow_self_removal and reason in ("Topo installation", "Topo configuration")
         ):
-            return False, f"Path is hard-protected: {reason}"
-    elif is_protected(resolved_path):
-        return False, "Path is whitelisted"
+            return False, f"{DeletionRejection.HARD_PROTECTED}: {reason}"
+    elif reason := _protected_path_rejection(resolved_path):
+        return False, reason
     if resolved_path == Path("/") or resolved_path in DELETION_CRITICAL_EXACT_PATHS:
-        return False, "Refusing to delete critical system path"
+        return False, DeletionRejection.CRITICAL_SYSTEM_PATH
     for critical in CRITICAL_PREFIX_PATHS:
         if (
             resolved_path == critical or critical in resolved_path.parents
         ) and not is_system_cleanable_content(resolved_path):
-            return False, "Refusing to delete critical system path"
+            return False, DeletionRejection.CRITICAL_SYSTEM_PATH
     return True, ""
 
 

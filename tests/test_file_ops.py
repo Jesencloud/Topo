@@ -11,6 +11,7 @@ from lock_helpers import RECORD_LOCK_HOLDER, external_holder
 from src.core.file_ops import (
     _AUDIT_WARNINGS_EMITTED,
     CLEANED_PATHS,
+    DeletionRejection,
     age_cutoff,
     clean_path_by_age,
     get_deletion_log_path,
@@ -143,7 +144,7 @@ def test_safe_remove_prevents_system_deletion(test_env):
     """Verify safe_remove refuses to delete protected paths."""
     success, message = safe_remove("/", use_trash=False)
     assert success is False
-    assert "whitelisted" in message.lower()
+    assert message == DeletionRejection.CRITICAL_SYSTEM_PATH
 
 
 def test_safe_remove_prevents_sensitive_linux_app_data(test_env):
@@ -155,7 +156,7 @@ def test_safe_remove_prevents_sensitive_linux_app_data(test_env):
     success, message = safe_remove(profile_dir, use_trash=False)
 
     assert success is False
-    assert "whitelisted" in message.lower()
+    assert message == DeletionRejection.SENSITIVE_APP_DATA
     assert login_db.exists()
 
 
@@ -186,7 +187,7 @@ def test_safe_remove_keeps_browser_profile_root_and_credentials(test_env):
     success, message = safe_remove(profile_dir, use_trash=False)
 
     assert success is False
-    assert "whitelisted" in message.lower()
+    assert message == DeletionRejection.SENSITIVE_APP_DATA
     assert login_db.exists()
 
 
@@ -783,12 +784,12 @@ def test_safe_remove_respects_parent_whitelist(test_env):
     parent.mkdir()
     child = parent / "child.txt"
     child.write_text("keep")
+    assert add_to_whitelist(str(parent)) == "changed"
 
-    with patch("src.core.file_ops.is_protected", return_value=True):
-        success, msg = safe_remove(child, use_trash=False)
+    success, msg = safe_remove(child, use_trash=False)
 
     assert success is False
-    assert "whitelisted" in msg
+    assert msg == DeletionRejection.USER_WHITELIST
     assert child.exists()
 
 

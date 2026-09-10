@@ -136,7 +136,7 @@ Optional. topo does not create `~/.config/topo/config.json` for you — write it
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `use_trash` | `true` | Where a *recoverable* deletion goes: editor backups, app residue, and the directories `topo analyze` deletes on request are trashed. Set it to `false` to wipe them instead. Caches and stale temp files are always deleted outright — trashing a cache would free nothing. |
+| `use_trash` | `true` | Where a *recoverable* deletion goes. Editor backups, orphaned cache remnants, app residue, zombie autostart entries, broken user symlinks, and user-owned paths deleted from `topo analyze` are trashed; set it to `false` to wipe them instead. Irreplaceable app data (including sandbox data under `~/.var/app` and `~/snap`) always goes to the trash. Routine cache/temp cleanup is always permanent, as is `topo analyze` deletion that requires administrator access. |
 | `min_age_days` | `0` | A floor, in days, under which nothing is old enough to be cleaned. Each cleaner keeps its own window (30 days for caches, 7 for editor backups, 3 for `/tmp`); this can only push one further into the past, never closer to now. `0` leaves every threshold where the code put it. |
 | `show_scrollbar` | `true` | Draw the scrollbar in the interactive selectors. |
 | `theme_color` | `purple` | Title color: `purple`, `cyan`, `blue`, `magenta`, `green`, `yellow` or `red`. `--no-color` and `NO_COLOR` still win. |

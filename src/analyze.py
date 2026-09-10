@@ -22,6 +22,7 @@ from .core.constants import (
 from .core.engine import get_rust_scan_data, get_rust_tree_data, normalize_scan_path
 from .core.file_ops import (
     TRASH_UNAVAILABLE_REASON,
+    DeletionRejection,
     get_direct_child_sizes_fast,
     get_size_fast,
     record_deletion_audit,
@@ -353,41 +354,39 @@ def _sudo_remove(path: Path) -> tuple[bool, int, str]:
     straight to the terminal is overwritten inside the same tick.
     """
     raw_path = Path(path).expanduser()
-    # Resolve once and operate on that exact path for the rest of the function.
-    # Validation, the existence check, the size read and `rm -rf` must all act on
-    # the SAME byte-for-byte path — otherwise validation could clear the
-    # symlink-resolved target while `rm` (run as root) acts on the raw string,
-    # i.e. validate path A but delete path B.
-    try:
-        target_path = raw_path.resolve(strict=False)
-    except OSError:
-        target_path = raw_path.absolute()
+    # validate_path_for_deletion resolves internally, so a link target must pass
+    # the same protection rules as safe_remove. The privileged rm receives the
+    # raw name and therefore unlinks a direct symlink instead of deleting the
+    # tree it points at. Its ancestor audit likewise follows the raw pathname:
+    # those are the directories root traverses to reach the entry it removes.
+    # There is still a pathname race after this audit; closing it requires
+    # fd-relative unlinkat/openat operations rather than a privileged rm command.
 
-    valid, reason = validate_path_for_deletion(target_path)
+    valid, reason = validate_path_for_deletion(raw_path)
     # These messages report a *security decision* about an attacker-controllable
     # name, so the name must never be able to rewrite the line it is printed on.
-    safe_target = sanitize_for_display(str(target_path))
+    safe_target = sanitize_for_display(str(raw_path))
     if not valid:
-        record_deletion_audit(target_path, "sudo-permanent", "rejected-validation")
+        record_deletion_audit(raw_path, "sudo-permanent", "rejected-validation")
         return False, 0, f"{safe_target}: {reason}"
 
-    if not target_path.exists() and not target_path.is_symlink():
-        record_deletion_audit(target_path, "sudo-permanent", "missing", 0)
+    if not raw_path.exists() and not raw_path.is_symlink():
+        record_deletion_audit(raw_path, "sudo-permanent", "missing", 0)
         return False, 0, f"{safe_target}: no longer there"
 
-    size_bytes = get_size_fast(target_path)
+    size_bytes = get_size_fast(raw_path)
     current_uid = os.getuid()
-    ancestors = list(target_path.parents)
+    ancestors = list(raw_path.absolute().parents)
     for index, parent in enumerate(ancestors):
         safe_parent = sanitize_for_display(str(parent))
         try:
             st = parent.lstat()
         except OSError:
-            record_deletion_audit(target_path, "sudo-permanent", "rejected-unreadable-ancestor")
+            record_deletion_audit(raw_path, "sudo-permanent", "rejected-unreadable-ancestor")
             return False, 0, f"{safe_target}: cannot stat path component ({safe_parent})"
 
         if stat.S_ISLNK(st.st_mode):
-            record_deletion_audit(target_path, "sudo-permanent", "rejected-ancestor-symlink")
+            record_deletion_audit(raw_path, "sudo-permanent", "rejected-ancestor-symlink")
             return False, 0, f"{safe_target}: ancestor directory is a symlink ({safe_parent})"
 
         # `rm` receives a pathname, so every directory used to resolve that name
@@ -400,20 +399,20 @@ def _sudo_remove(path: Path) -> tuple[bool, int, str]:
         direct_sticky_parent = index == 0 and bool(st.st_mode & stat.S_ISVTX)
         foreign_owner = st.st_uid not in (0, current_uid) and not direct_sticky_parent
         if user_can_replace or (shared_writable and not direct_sticky_parent) or foreign_owner:
-            record_deletion_audit(target_path, "sudo-permanent", "rejected-unsafe-ancestor")
+            record_deletion_audit(raw_path, "sudo-permanent", "rejected-unsafe-ancestor")
             return False, 0, f"{safe_target}: untrusted ancestor directory ({safe_parent})"
 
     res = run_command(
-        ["rm", "-rf", "--one-file-system", "--", str(target_path)],
+        ["rm", "-rf", "--one-file-system", "--", str(raw_path)],
         use_sudo=True,
         capture=True,
         timeout=_SUDO_REMOVE_TIMEOUT,
     )
     if res.ok:
-        record_deletion_audit(target_path, "sudo-permanent", "deleted", size_bytes)
+        record_deletion_audit(raw_path, "sudo-permanent", "deleted", size_bytes)
         return True, size_bytes, ""
 
-    record_deletion_audit(target_path, "sudo-permanent", "failed", size_bytes)
+    record_deletion_audit(raw_path, "sudo-permanent", "failed", size_bytes)
     return False, 0, f"{safe_target}: rm failed as root"
 
 
@@ -492,7 +491,7 @@ def _safe_remove_analyze_path(
     cleaned_child = False
     freed_bytes = 0
     first_problem = ""
-    if reason == "Path is whitelisted":
+    if reason == DeletionRejection.SENSITIVE_APP_DATA:
         for child in find_cleanable_cache_dirs(path, require_sensitive_app_data_root=True):
             child_size = get_size_fast(child)
             child_removed, child_reason = safe_remove(child, use_trash=use_trash)

@@ -2,8 +2,12 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
-from src.core.file_ops import validate_path_for_deletion
-from src.core.whitelist import SYSTEM_CLEANABLE_ROOTS, is_system_cleanable_content
+from src.core.file_ops import DeletionRejection, validate_path_for_deletion
+from src.core.whitelist import (
+    SYSTEM_CLEANABLE_ROOTS,
+    add_to_whitelist,
+    is_system_cleanable_content,
+)
 
 CORPUS = Path(__file__).parent / "fuzz_corpus" / "dangerous_paths.txt"
 
@@ -47,7 +51,7 @@ def test_system_cache_and_temp_contents_are_allowed_but_roots_are_rejected():
     for root in ["/var/tmp", "/var/cache"]:
         ok, reason = validate_path_for_deletion(root)
         assert ok is False
-        assert reason in {"Path is whitelisted", "Refusing to delete critical system path"}
+        assert reason == DeletionRejection.CRITICAL_SYSTEM_PATH
 
     for child in ["/var/tmp/topo-stale.tmp", "/var/cache/dnf/topo-cache"]:
         ok, reason = validate_path_for_deletion(child)
@@ -64,7 +68,7 @@ def test_non_allowlisted_var_cache_content_stays_protected():
     ]:
         ok, reason = validate_path_for_deletion(path)
         assert ok is False, path
-        assert reason in {"Path is whitelisted", "Refusing to delete critical system path"}
+        assert reason == DeletionRejection.CRITICAL_SYSTEM_PATH
 
 
 def test_allowlisted_package_cache_content_is_still_cleanable():
@@ -84,7 +88,7 @@ def test_package_manager_container_directories_are_protected():
     its siblings stay cleanable."""
     ok, reason = validate_path_for_deletion("/var/cache/apt/archives/partial")
     assert ok is False
-    assert reason in {"Path is whitelisted", "Refusing to delete critical system path"}
+    assert reason == DeletionRejection.CRITICAL_SYSTEM_PATH
     assert is_system_cleanable_content(Path("/var/cache/apt/archives/partial")) is False
 
     for path in ["/var/cache/apt/archives/partial/half.deb", "/var/cache/apt/archives/foo.deb"]:
@@ -118,7 +122,7 @@ def test_redundant_prefix_guard_still_blocks_system_children():
     for path in ["/etc/passwd", "/usr/bin/bash", "/var/log/journal"]:
         ok, reason = validate_path_for_deletion(path)
         assert ok is False
-        assert reason in {"Path is whitelisted", "Refusing to delete critical system path"}
+        assert reason == DeletionRejection.CRITICAL_SYSTEM_PATH
 
 
 def test_symlink_to_critical_path_is_rejected(test_env):
@@ -128,7 +132,26 @@ def test_symlink_to_critical_path_is_rejected(test_env):
     ok, reason = validate_path_for_deletion(link)
 
     assert ok is False
-    assert reason in {"Path is whitelisted", "Refusing to delete critical system path"}
+    assert reason == DeletionRejection.CRITICAL_SYSTEM_PATH
+
+
+def test_rejection_reasons_distinguish_app_data_whitelist_and_system_paths(test_env):
+    profile = test_env / ".mozilla"
+    profile.mkdir()
+    ok, reason = validate_path_for_deletion(profile)
+    assert ok is False
+    assert reason == DeletionRejection.SENSITIVE_APP_DATA
+
+    protected = test_env / "keep-me"
+    protected.mkdir()
+    assert add_to_whitelist(str(protected)) == "changed"
+    ok, reason = validate_path_for_deletion(protected)
+    assert ok is False
+    assert reason == DeletionRejection.USER_WHITELIST
+
+    ok, reason = validate_path_for_deletion("/etc/passwd")
+    assert ok is False
+    assert reason == DeletionRejection.CRITICAL_SYSTEM_PATH
 
 
 def test_broken_symlink_under_user_path_is_allowed(test_env):

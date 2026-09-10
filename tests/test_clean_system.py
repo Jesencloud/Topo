@@ -485,6 +485,7 @@ def test_packagekit_cache_is_swept_on_a_deb_box(tmp_path):
         patch.object(system, "_PACKAGEKIT_CACHE", packagekit),
         patch("src.clean.system.is_system_cleanable_content", return_value=True),
         patch("src.clean.system.is_file_locked", return_value=False),
+        patch("src.clean.system._offline_update_is_staged", return_value=False),
         patch("src.clean.system.run_command", side_effect=run_side_effect),
     ):
         clean_package_manager(dry_run=False)
@@ -594,6 +595,7 @@ def test_clean_package_manager_sweeps_what_dnf_clean_cannot_reach(tmp_path):
         patch("src.clean.system._get_package_manager_cache_paths", return_value=[tmp_path]),
         patch("src.clean.system.is_system_cleanable_content", return_value=True),
         patch("src.clean.system.is_file_locked", return_value=False),
+        patch("src.clean.system._offline_update_is_staged", return_value=False),
         patch("src.clean.system.run_command", side_effect=run_side_effect) as mock_run,
     ):
         clean_package_manager(dry_run=False)
