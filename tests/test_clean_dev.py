@@ -102,9 +102,12 @@ def test_clean_developer_tools(mock_run_cmd, mock_clean_tool, mock_which):
         patch("pathlib.Path.exists", return_value=True),
         patch("src.clean.dev.clean_path_by_age", return_value=(2048, 1)),
     ):
-        size, items, cats = clean_developer_tools(dry_run=False)
+        size, items, cats, trashed = clean_developer_tools(dry_run=False)
         assert cats > 0
         assert size > 0
+        # Developer artifacts are rebuildable caches and are all unlinked, so
+        # none of this group's bytes ever land in the trash.
+        assert trashed == 0
 
 
 def test_clean_tool_cache_reports_actual_freed(test_env):

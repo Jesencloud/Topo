@@ -2,7 +2,7 @@ import contextlib
 import io
 import os
 import shutil
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -25,13 +25,14 @@ from ..core.scan_cache import ScanCache
 from .apps import clean_apps_deep, proactive_app_detection
 from .dev import clean_developer_tools
 from .system import clean_system_data
+from .totals import as_totals
 from .user import clean_user_data
 
 
 @dataclass(frozen=True)
 class CleanupTask:
     name: str
-    action: Callable[..., tuple[int, int, int]]
+    action: Callable[..., Sequence[int]]
 
 
 def build_execution_groups(
@@ -77,8 +78,15 @@ def _print_cleanup_summary(
     total_items: int,
     category_results: list[tuple[str, int, int]],
     interrupted: bool = False,
+    trashed_bytes: int = 0,
 ) -> None:
     """Prints the formatted completion breakdown and disk space summary.
+
+    *trashed_bytes* is the part of *total_size* that went to the trash rather
+    than being unlinked. The trash lives on the same filesystem, so those bytes
+    are recoverable but not reclaimed, and saying "Total space freed" over them
+    would contradict the `Free space now` line printed a moment later. They are
+    subtracted out of the freed total and reported on their own line instead.
 
     *interrupted* means the run stopped before its last group -- Ctrl-C, a kill,
     or a task raising. Everything below is still true, it is just not the whole
@@ -107,13 +115,30 @@ def _print_cleanup_summary(
             item_summary = f"{items:>{count_width}} {noun}".ljust(item_width)
             print(f"  • {name:<25} {GREEN}{bytes_to_human(size):>10}{RESET} ({item_summary})")
 
-    size_label = "\nTotal space freed" if not dry_run else "\nTotal space that can be freed"
-    if interrupted:
-        size_label += " before the interrupt"
-    print(f"{size_label}: {GREEN}{bytes_to_human(total_size)}{RESET} | Items: {total_items}")
+    # In a preview nothing was removed, so no byte has actually reached the
+    # trash yet -- the split describes a run that has not happened, and the
+    # preview keeps its single "can be freed" total. The two-line account is for
+    # the run that really moved the files.
+    reclaimed = total_size
+    if not dry_run and trashed_bytes > 0:
+        reclaimed = total_size - trashed_bytes
+        suffix = " before the interrupt" if interrupted else ""
+        print(
+            f"\nTotal space freed{suffix}: {GREEN}{bytes_to_human(reclaimed)}{RESET}"
+            f" | Items: {total_items}"
+        )
+        print(
+            f"Moved to trash (recoverable): {bytes_to_human(trashed_bytes)}"
+            f" -- empty it to reclaim these"
+        )
+    else:
+        size_label = "\nTotal space freed" if not dry_run else "\nTotal space that can be freed"
+        if interrupted:
+            size_label += " before the interrupt"
+        print(f"{size_label}: {GREEN}{bytes_to_human(total_size)}{RESET} | Items: {total_items}")
 
     if not dry_run:
-        movies = total_size / (8 * 1024 * 1024 * 1024)
+        movies = reclaimed / (8 * 1024 * 1024 * 1024)
         if movies >= 0.1:
             print(f"Equivalent to ~{movies:.1f} 4K movies of storage.")
         print(f"Free space now: {bytes_to_human(free_now)}")
@@ -156,6 +181,7 @@ def run_clean(dry_run: bool = False) -> bool:
 
     total_size = 0
     total_items = 0
+    trashed_bytes = 0
     category_results: list[tuple[str, int, int]] = []
     execution_groups = build_execution_groups(detected_apps)
 
@@ -177,10 +203,11 @@ def run_clean(dry_run: bool = False) -> bool:
             try:
                 with contextlib.redirect_stdout(buf):
                     for task in tasks:
-                        size, items, _ = task.action(dry_run=dry_run)
+                        size, items, _, trashed = as_totals(task.action(dry_run=dry_run))
                         if size > 0 or items > 0:
                             total_size += size
                             total_items += items
+                            trashed_bytes += trashed
                             category_results.append((task.name, size, items))
             finally:
                 # redirect_stdout has already restored the real stdout by now, so
@@ -192,7 +219,12 @@ def run_clean(dry_run: bool = False) -> bool:
         finished = True
     finally:
         _print_cleanup_summary(
-            dry_run, total_size, total_items, category_results, interrupted=not finished
+            dry_run,
+            total_size,
+            total_items,
+            category_results,
+            interrupted=not finished,
+            trashed_bytes=trashed_bytes,
         )
 
         if not dry_run:

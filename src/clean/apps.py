@@ -1,5 +1,5 @@
 import shutil
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +41,7 @@ from ..core.json_store import read_json, write_json_atomic
 from ..core.render import bytes_to_human
 from ..core.system import C_LOCALE_ENV, PACKAGE_TRANSACTION_TIMEOUT, run_command
 from ..core.text import sanitize_for_display
+from .totals import as_totals
 
 
 def proactive_app_detection():
@@ -402,7 +403,9 @@ def clean_orphaned_remnants(dry_run=False, max_age_days=60):
             f"  {SKIP} Orphaned app cache remnants ({bytes_to_human(total_size)}) would be cleaned"
         )
         print(msg)
-    return total_size, total_items
+    # use_trash is read once above, so every counted item took the same branch
+    # and the trashed share is all of it or none of it.
+    return total_size, total_items, (1 if total_items > 0 else 0), (total_size if use_trash else 0)
 
 
 def clean_snap_cache(dry_run=False):
@@ -593,12 +596,10 @@ def clean_desktop_apps_caches(
 class AppCleanerRegistry:
     """Registry and pipeline for deep application cache cleaners."""
 
-    cleaners: list[Callable[..., tuple[int, int] | tuple[int, int, int]]] = []
+    cleaners: list[Callable[..., Sequence[int]]] = []
 
     @classmethod
-    def register(
-        cls, func: Callable[..., tuple[int, int] | tuple[int, int, int]]
-    ) -> Callable[..., tuple[int, int] | tuple[int, int, int]]:
+    def register(cls, func: Callable[..., Sequence[int]]) -> Callable[..., Sequence[int]]:
         cls.cleaners.append(func)
         return func
 
@@ -615,31 +616,30 @@ register_app_cleaner(clean_steam_shader_cache)
 register_app_cleaner(clean_ide_caches)
 
 
-def _run_registered_cleaners(dry_run: bool) -> tuple[int, int, int]:
+def _run_registered_cleaners(dry_run: bool) -> tuple[int, int, int, int]:
     """Every registered sub-cleaner, run in registration order and totalled.
 
-    A cleaner returns either two values or three. The third is how many
-    categories it reported; a two-value cleaner counts as one category when it
-    removed anything and none when it removed nothing, which is what the
-    registry's older cleaners relied on before the third value existed.
+    A cleaner returns anywhere from two to four values; `as_totals` holds the
+    rule for what a missing tail means, including the category count a two-value
+    cleaner leaves to be inferred.
     """
     total_size = 0
     total_items = 0
     total_categories = 0
+    total_trashed = 0
     for cleaner in AppCleanerRegistry.cleaners:
-        result = cleaner(dry_run=dry_run)
-        size, items = result[0], result[1]
-        categories = result[2] if len(result) >= 3 else (1 if items > 0 else 0)
+        size, items, categories, trashed = as_totals(cleaner(dry_run=dry_run))
 
         total_size += size
         total_items += items
         total_categories += categories
-    return total_size, total_items, total_categories
+        total_trashed += trashed
+    return total_size, total_items, total_categories, total_trashed
 
 
 def clean_apps_deep(
     dry_run: bool = False, detected_apps: dict[str, dict[str, Any]] | None = None
-) -> tuple[int, int, int]:
+) -> tuple[int, int, int, int]:
     """Deep cleanup for installed apps, browsers, IDEs, Flatpak/Snap, games, and XDG remnants."""
     if detected_apps is None:
         detected_apps = proactive_app_detection()
@@ -648,10 +648,16 @@ def clean_apps_deep(
         detected_apps=detected_apps, dry_run=dry_run
     )
     total_categories = 1 if total_items > 0 else 0
+    # clean_app_generic unlinks unconditionally, so nothing above this line can
+    # have gone to the trash; only the registered cleaners contribute a share.
+    total_trashed = 0
 
-    pipeline_size, pipeline_items, pipeline_categories = _run_registered_cleaners(dry_run)
+    pipeline_size, pipeline_items, pipeline_categories, pipeline_trashed = _run_registered_cleaners(
+        dry_run
+    )
     total_size += pipeline_size
     total_items += pipeline_items
     total_categories += pipeline_categories
+    total_trashed += pipeline_trashed
 
-    return total_size, total_items, total_categories
+    return total_size, total_items, total_categories, total_trashed

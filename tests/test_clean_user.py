@@ -107,7 +107,7 @@ def test_clean_system_temp_only_removes_stale_user_owned_items(test_env):
 def test_user_cleaners_return_zero_for_missing_paths(monkeypatch, test_env):
     monkeypatch.setattr("pathlib.Path.home", lambda: test_env)
     assert clean_user_logs() == (0, 0, 0)
-    assert clean_backup_files() == (0, 0, 0)
+    assert clean_backup_files() == (0, 0, 0, 0)
     assert clean_thumbnails() == (0, 0, 0)
 
 
@@ -321,8 +321,8 @@ def test_clean_backup_files_dry_run_and_actual(test_env):
         patch("pathlib.Path.home", return_value=test_env),
         patch("src.clean.user.safe_remove", return_value=(True, 1)) as remove,
     ):
-        assert clean_backup_files(dry_run=True) == (3, 2, 1)
-        assert clean_backup_files() == (3, 2, 1)
+        assert clean_backup_files(dry_run=True) == (3, 2, 1, 3)
+        assert clean_backup_files() == (3, 2, 1, 3)
 
     # Editor backups are documents, so they must be recoverable afterwards.
     assert all(call.kwargs["use_trash"] is True for call in remove.call_args_list)
@@ -342,7 +342,7 @@ def test_clean_backup_files_follows_the_use_trash_setting(test_env, capsys):
         patch("src.clean.user.get_use_trash", return_value=False),
         patch("src.clean.user.safe_remove", return_value=(True, 1)) as remove,
     ):
-        assert clean_backup_files() == (5, 1, 1)
+        assert clean_backup_files() == (5, 1, 1, 0)
 
     assert all(call.kwargs["use_trash"] is False for call in remove.call_args_list)
     assert "deleted" in capsys.readouterr().out
@@ -365,7 +365,7 @@ def test_clean_backup_files_keeps_files_a_live_editor_is_still_touching(test_env
         patch("pathlib.Path.home", return_value=test_env),
         patch("src.clean.user.safe_remove", return_value=(True, 1)) as remove,
     ):
-        assert clean_backup_files() == (5, 1, 1)
+        assert clean_backup_files() == (5, 1, 1, 5)
 
     assert [Path(call.args[0]).name for call in remove.call_args_list] == ["old.bak"]
 
@@ -386,7 +386,7 @@ def test_clean_backup_files_skips_entries_that_cannot_be_stated(test_env):
         patch("pathlib.Path.home", return_value=test_env),
         patch.object(Path, "stat", stat),
     ):
-        assert clean_backup_files() == (0, 0, 0)
+        assert clean_backup_files() == (0, 0, 0, 0)
 
 
 def test_clean_thumbnails_empty_failure_and_success(test_env):
@@ -421,4 +421,22 @@ def test_clean_user_data_aggregates_all_cleaners():
         clean_backup_files=lambda _: values[0],
         clean_thumbnails=lambda _: values[0],
     ):
-        assert clean_user_data(True) == (5, 10, 15)
+        assert clean_user_data(True) == (5, 10, 15, 0)
+
+
+def test_clean_user_data_carries_the_trashed_share_up_to_the_runner():
+    """Only the backup files use the trash, and their bytes must survive the hop.
+
+    This is the value the summary subtracts from "Total space freed". Dropping
+    it while aggregating would restore exactly the overstatement P2-2 fixed: the
+    group total would again claim bytes the trash is still holding.
+    """
+    with patch.multiple(
+        "src.clean.user",
+        clean_trash=lambda _: (0, 0, 0, 0),
+        clean_system_temp=lambda _: (0, 0, 0, 0),
+        clean_user_logs=lambda _: (0, 0, 0, 0),
+        clean_backup_files=lambda _: (500, 2, 1, 500),
+        clean_thumbnails=lambda _: (0, 0, 0, 0),
+    ):
+        assert clean_user_data(False) == (500, 2, 1, 500)

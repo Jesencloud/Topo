@@ -11,6 +11,7 @@ from src.clean.runner import (
     build_execution_groups,
     run_clean,
 )
+from src.core.render import bytes_to_human
 
 CLEAN_PACKAGE = Path(__file__).resolve().parent.parent / "src" / "clean"
 
@@ -80,6 +81,62 @@ def test_print_cleanup_summary_dry_run_reports_breakdown(capsys):
     assert "Cache" in output
     assert "Run without --dry-run" in output
     assert "Free space now" not in output
+
+
+def test_print_cleanup_summary_splits_out_what_only_reached_the_trash(capsys):
+    """Trashed bytes are recoverable but not free, so they get their own line.
+
+    The trash is on the same filesystem as the files it holds, so a run that
+    moved 1 GiB there reclaimed nothing -- yet the summary called it "Total
+    space freed" and printed `Free space now` on the next line with the number
+    unchanged. The freed total now excludes it and the trashed share is stated
+    separately, because the report has to add up against the disk.
+    """
+    gib = 1024**3
+    with patch(
+        "src.clean.runner.shutil.disk_usage",
+        return_value=SimpleNamespace(free=10 * 1024**3),
+    ):
+        _print_cleanup_summary(
+            False, 2 * gib, 4, [("User Data & Trash", 2 * gib, 4)], trashed_bytes=gib
+        )
+
+    output = capsys.readouterr().out
+    assert f"Total space freed: {bytes_to_human(gib)}" in output
+    assert f"Moved to trash (recoverable): {bytes_to_human(gib)}" in output
+    # The movies line describes what was actually reclaimed, not the trashed half.
+    assert "Equivalent to ~0.1 4K movies" in output
+    assert "Free space now" in output
+
+
+def test_print_cleanup_summary_keeps_one_total_when_nothing_was_trashed(capsys):
+    with patch(
+        "src.clean.runner.shutil.disk_usage",
+        return_value=SimpleNamespace(free=10 * 1024**3),
+    ):
+        _print_cleanup_summary(False, 2 * 1024**3, 1, [("Cache", 2 * 1024**3, 1)])
+
+    output = capsys.readouterr().out
+    assert "Total space freed: " in output
+    assert "Moved to trash" not in output
+
+
+def test_print_cleanup_summary_preview_keeps_a_single_total(capsys):
+    """A preview removed nothing, so no byte has reached the trash yet.
+
+    Splitting the preview into freed/trashed would describe a run that has not
+    happened; the preview answers "how much can be freed", which is one number.
+    """
+    gib = 1024**3
+    with patch(
+        "src.clean.runner.shutil.disk_usage",
+        return_value=SimpleNamespace(free=10 * 1024**3),
+    ):
+        _print_cleanup_summary(True, 2 * gib, 4, [("Backup", 2 * gib, 4)], trashed_bytes=gib)
+
+    output = capsys.readouterr().out
+    assert f"Total space that can be freed: {bytes_to_human(2 * gib)}" in output
+    assert "Moved to trash" not in output
 
 
 def test_print_cleanup_summary_actual_cleanup_reports_free_space(capsys):

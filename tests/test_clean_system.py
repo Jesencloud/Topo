@@ -1277,4 +1277,4 @@ def test_system_aggregation(tmp_path, monkeypatch):
         clean_journal=lambda _: values[0],
         clean_zombies=lambda _: values[0],
     ):
-        assert clean_system_data(True) == (5, 10, 15)
+        assert clean_system_data(True) == (5, 10, 15, 0)

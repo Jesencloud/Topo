@@ -23,6 +23,7 @@ from ..core.system import (
 )
 from ..core.text import plural
 from ..core.whitelist import is_system_cleanable_content
+from .totals import as_totals
 
 
 def clean_snaps(dry_run: bool = False) -> tuple[int, int, int]:
@@ -824,7 +825,7 @@ def clean_old_kernels(dry_run: bool = False) -> tuple[int, int, int]:
     return 0, 0, 0
 
 
-def clean_system_data(dry_run: bool = False) -> tuple[int, int, int]:
+def clean_system_data(dry_run: bool = False) -> tuple[int, int, int, int]:
     """Combined system and package-manager cleanup.
 
     The order is the one runner.py used to spell out task by task: package
@@ -841,15 +842,19 @@ def clean_system_data(dry_run: bool = False) -> tuple[int, int, int]:
     total_items = 0
     categories = 0
 
-    for s, i, c in (
+    for result in (
         clean_package_manager(dry_run),
         clean_old_kernels(dry_run),
         clean_orphaned_packages(dry_run),
         clean_journal(dry_run),
         clean_zombies(dry_run),
     ):
+        s, i, c, _ = as_totals(result)
         total_size += s
         total_items += i
         categories += c
 
-    return total_size, total_items, categories
+    # Nothing in system cleanup goes to the trash -- package caches, kernels,
+    # journal entries and stale processes are all unlinked outright -- so no
+    # sub-cleaner has a trashed share to report and this stays zero.
+    return total_size, total_items, categories, 0

@@ -17,6 +17,7 @@ from ..core.file_ops import (
 from ..core.heavy_cache import get_ai_model_cleanup_defs, get_container_cache_def
 from ..core.render import bytes_to_human
 from ..core.system import run_command
+from .totals import as_totals
 
 
 def clean_tool_cache(description, command_args, cache_path=None, dry_run=False):
@@ -218,7 +219,7 @@ def clean_container_and_virtualization_caches(dry_run: bool = False) -> tuple[in
     return total_size, total_items
 
 
-def clean_developer_tools(dry_run: bool = False) -> tuple[int, int, int]:
+def clean_developer_tools(dry_run: bool = False) -> tuple[int, int, int, int]:
     """Main entry for developer-focused cleanup pipeline."""
     total_size = 0
     total_items = 0
@@ -234,10 +235,12 @@ def clean_developer_tools(dry_run: bool = False) -> tuple[int, int, int]:
     ]
 
     for cleaner in dev_sub_cleaners:
-        s, i = cleaner(dry_run=dry_run)[:2]
+        s, i, _, _ = as_totals(cleaner(dry_run=dry_run))
         if i > 0:
             total_size += s
             total_items += i
             total_categories += 1
 
-    return total_size, total_items, total_categories
+    # Every developer artifact here is a rebuildable cache and is unlinked
+    # outright, so none of these bytes are sitting in the trash.
+    return total_size, total_items, total_categories, 0

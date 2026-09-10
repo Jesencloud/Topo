@@ -20,6 +20,7 @@ from ..core.file_ops import (
 )
 from ..core.render import bytes_to_human
 from ..core.system import run_command
+from .totals import as_totals
 
 
 def clean_trash(dry_run=False):
@@ -269,8 +270,10 @@ def clean_backup_files(dry_run=False, min_age_days=CLEAN_BACKUP_AGE_DAYS):
         else:
             glyph, status = (SKIP, "would be deleted") if dry_run else (OK, "deleted")
         print(f"  {glyph} Backup/swap files ({bytes_to_human(total_size)}) {status}")
-        return total_size, total_items, 1
-    return 0, 0, 0
+        # Every item above took the same branch -- use_trash is read once, before
+        # the loop -- so the split is all or nothing rather than per file.
+        return total_size, total_items, 1, (total_size if use_trash else 0)
+    return 0, 0, 0, 0
 
 
 def clean_thumbnails(dry_run=False):
@@ -298,16 +301,19 @@ def clean_user_data(dry_run=False):
     total_size = 0
     total_items = 0
     categories = 0
+    trashed_bytes = 0
 
-    for s, i, c in (
+    for result in (
         clean_trash(dry_run),
         clean_system_temp(dry_run),
         clean_user_logs(dry_run),
         clean_backup_files(dry_run),
         clean_thumbnails(dry_run),
     ):
+        s, i, c, t = as_totals(result)
         total_size += s
         total_items += i
         categories += c
+        trashed_bytes += t
 
-    return total_size, total_items, categories
+    return total_size, total_items, categories, trashed_bytes

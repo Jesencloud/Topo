@@ -344,7 +344,7 @@ def test_clean_apps_deep_keeps_wechat_user_data(test_env):
         (path / "message.db").write_text("keep")
 
     with patch("src.clean.apps.is_app_running", return_value=False), _no_real_package_tooling():
-        size, items, categories = clean_apps_deep(dry_run=False, detected_apps={})
+        size, items, categories, _ = clean_apps_deep(dry_run=False, detected_apps={})
 
     assert size >= len(b"cache")
     assert items >= 1
@@ -363,7 +363,7 @@ def test_clean_apps_deep_uses_desktop_app_cache_defs(test_env):
     cache_file.write_bytes(b"d" * 256)
 
     with patch("src.clean.apps.is_app_running", return_value=False), _no_real_package_tooling():
-        size, items, categories = clean_apps_deep(dry_run=False, detected_apps={})
+        size, items, categories, _ = clean_apps_deep(dry_run=False, detected_apps={})
 
     assert size >= 256
     assert items >= 1
@@ -536,7 +536,7 @@ def test_clean_orphaned_remnants(test_env):
     ):
         config_dir = test_env / ".config/orphan_app"
         config_dir.mkdir(parents=True)
-        size, items = clean_orphaned_remnants(dry_run=True)
+        size, items, _, _ = clean_orphaned_remnants(dry_run=True)
         assert items >= 0
 
 
@@ -742,7 +742,30 @@ def test_orphaned_remnants_removes_old_cache(test_env):
         patch("src.clean.apps.get_size_fast", return_value=20),
         patch("src.clean.apps.safe_remove", return_value=(True, "ok")),
     ):
-        assert clean_orphaned_remnants() == (20, 1)
+        assert clean_orphaned_remnants() == (20, 1, 1, 20)
+
+
+def test_orphaned_remnants_reports_nothing_trashed_under_use_trash_false(test_env):
+    """With config.json's use_trash=false the bytes are gone, not recoverable.
+
+    The fourth value is what the summary pulls out of "Total space freed"; if
+    the cleaner reported the trashed share unconditionally, this run would
+    understate what it freed by exactly the bytes it will never get back.
+    """
+    import os
+
+    cache = test_env / ".cache/orphan-app"
+    cache.mkdir(parents=True)
+    old = time.time() - 100 * 86400
+    os.utime(cache, (old, old))
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.clean.apps.shutil.which", return_value=None),
+        patch("src.clean.apps.get_use_trash", return_value=False),
+        patch("src.clean.apps.get_size_fast", return_value=20),
+        patch("src.clean.apps.safe_remove", return_value=(True, "ok")),
+    ):
+        assert clean_orphaned_remnants() == (20, 1, 1, 0)
 
 
 def test_orphaned_remnants_never_touches_desktop_infrastructure(test_env):
@@ -768,7 +791,7 @@ def test_orphaned_remnants_never_touches_desktop_infrastructure(test_env):
         patch("src.clean.apps.get_size_fast", return_value=20),
         patch("src.clean.apps.safe_remove", return_value=(True, "ok")) as mock_remove,
     ):
-        assert clean_orphaned_remnants() == (0, 0)
+        assert clean_orphaned_remnants() == (0, 0, 0, 0)
     mock_remove.assert_not_called()
     assert all((path / "state.bin").exists() for path in protected)
 
@@ -810,10 +833,12 @@ def test_clean_desktop_and_deep_aggregation():
         patch("src.clean.apps.clean_desktop_apps_caches", return_value=(1, 2)),
         patch(
             "src.clean.apps.AppCleanerRegistry.cleaners",
-            [lambda dry_run=False: (3, 4), lambda dry_run=False: (5, 6, 2)],
+            [lambda dry_run=False: (3, 4), lambda dry_run=False: (5, 6, 2, 5)],
         ),
     ):
-        assert clean_apps_deep(detected_apps={}) == (9, 12, 4)
+        # The four-value cleaner's 5 trashed bytes survive the aggregation: they
+        # are what the summary withholds from the freed total.
+        assert clean_apps_deep(detected_apps={}) == (9, 12, 4, 5)
 
 
 def test_clean_snap_cache_covers_the_revision_data_directory(test_env):
@@ -935,6 +960,6 @@ def test_orphaned_remnants_keeps_caches_of_packaged_apps(test_env):
         patch("src.clean.apps.get_size_fast", return_value=20),
         patch("src.clean.apps.safe_remove", return_value=(True, "ok")) as remove,
     ):
-        assert clean_orphaned_remnants() == (0, 0)
+        assert clean_orphaned_remnants() == (0, 0, 0, 0)
 
     remove.assert_not_called()
