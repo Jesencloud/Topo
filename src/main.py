@@ -301,7 +301,6 @@ def _main() -> bool:
     )
 
     # --- Management ---
-    subparsers.add_parser("authorize", help="Setup passwordless sudo for faster cleanup")
     subparsers.add_parser("update", help="Update topo to the latest version")
     remove_parser = subparsers.add_parser(
         "remove",
@@ -367,15 +366,9 @@ def _main() -> bool:
     setup_color_mode(getattr(args, "no_color", False), theme_color=get_theme_color())
     dry_run = getattr(args, "dry_run", False)
 
-    # Authorization setup command
-    #
-    # authorize and whitelist stay ahead of the dispatch table on purpose: they
-    # run before the version banner (both are quiet, script-friendly commands)
-    # and they need neither the interactive-terminal guard nor the lock.
-    if args.command == "authorize":
-        return system.setup_passwordless_sudo()
-
-    # Whitelist Management CLI
+    # Whitelist stays ahead of the dispatch table on purpose: it runs before the
+    # version banner as a quiet, script-friendly command and needs neither the
+    # interactive-terminal guard nor the lock.
     if args.command == "whitelist":
         # The checks stay here because they are argparse's to make: wl_parser
         # knows the usage line to print with them and exits 2, the status a

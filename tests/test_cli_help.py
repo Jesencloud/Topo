@@ -26,6 +26,24 @@ def test_main_help_documents_whitelist_usage():
     assert "Whitelist:" in output
     assert "An empty whitelist is normal before you add a path." in output
     assert "Run topo whitelist --help for whitelist details." in output
+    assert "authorize" not in output.lower()
+    assert "passwordless sudo" not in output.lower()
+
+
+def test_authorize_is_rejected_without_printing_a_sudoers_recipe():
+    result = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "topo"), "authorize"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "invalid choice: 'authorize'" in result.stderr
+    combined_output = result.stdout + result.stderr
+    assert "NOPASSWD" not in combined_output
+    assert "/etc/sudoers.d" not in combined_output
 
 
 def test_whitelist_help_explains_manual_rules():

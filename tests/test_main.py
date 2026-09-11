@@ -377,15 +377,7 @@ def test_status_does_not_take_the_single_instance_lock():
     lock_class.assert_not_called()
 
 
-def test_cli_authorize_link_failure_and_analyze_uninstall_routes():
-    with (
-        patch("sys.argv", ["topo", "authorize"]),
-        patch("src.main.terminal_state.install_signal_handlers"),
-        patch("src.main.system.setup_passwordless_sudo") as setup,
-    ):
-        topo_main.main()
-    setup.assert_called_once_with()
-
+def test_cli_link_failure_and_analyze_uninstall_routes():
     with (
         patch("sys.argv", ["topo", "link"]),
         patch("src.main.terminal_state.install_signal_handlers"),
@@ -500,7 +492,6 @@ def test_main_screen_context_restores_alternate_screen():
         (["topo", "update"], "run_update"),
         (["topo", "remove", "--yes"], "run_remove"),
         (["topo", "doctor"], "run_doctor"),
-        (["topo", "authorize"], "system.setup_passwordless_sudo"),
     ],
 )
 def test_failing_commands_exit_nonzero(argv, target):

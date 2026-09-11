@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 from src.core import system
-from src.core.system import CommandResult, run_command, setup_passwordless_sudo
+from src.core.system import CommandResult, run_command
 
 
 @patch("subprocess.run")
@@ -238,45 +238,3 @@ def test_ensure_sudo_session_treats_sigint_return_as_user_cancel():
     assert clear_sequence.endswith("\033[J")
     assert clear_sequence.count("\033[1A") == 0
     system.SUDO_CANCELLED = False
-
-
-def test_setup_passwordless_sudo_uses_invoking_user(monkeypatch, capsys):
-    monkeypatch.setenv("SUDO_USER", "realuser")
-    monkeypatch.setenv("USER", "root")
-    monkeypatch.setattr("sys.argv", ["/usr/bin/topo"])
-
-    with patch("pathlib.Path.lstat") as mock_lstat:
-        mock_lstat.return_value = MagicMock(st_uid=0, st_mode=0o755)
-        assert setup_passwordless_sudo() is True
-
-    out = capsys.readouterr().out
-    assert "realuser ALL=(ALL) NOPASSWD: /usr/bin/topo" in out
-
-
-def test_setup_passwordless_sudo_refuses_path_with_spaces(monkeypatch, capsys):
-    monkeypatch.setenv("SUDO_USER", "realuser")
-    monkeypatch.setattr("sys.argv", ["/home/real user/.topo/topo"])
-
-    # No usable rule was produced, so `topo authorize` must not report success.
-    assert setup_passwordless_sudo() is False
-
-    out = capsys.readouterr().out
-    assert "special characters or spaces" in out
-    assert "NOPASSWD" not in out
-
-
-def test_setup_passwordless_sudo_refuses_a_user_writable_script(monkeypatch, capsys):
-    # NOPASSWD on a script the user can rewrite is a local root escalation, so
-    # this path prints the safe per-binary alternative instead -- and still
-    # reports failure, because the rule that was asked for was refused.
-    monkeypatch.setenv("SUDO_USER", "realuser")
-    monkeypatch.setattr("sys.argv", ["/home/realuser/.topo/topo"])
-
-    with patch("pathlib.Path.lstat") as mock_lstat:
-        mock_lstat.return_value = MagicMock(st_uid=1000, st_mode=0o755)
-        assert setup_passwordless_sudo() is False
-
-    out = capsys.readouterr().out
-    assert "Refusing NOPASSWD rule" in out
-    assert "ALL=(ALL) NOPASSWD" not in out
-    assert "NOPASSWD: /usr/sbin/fstrim -a" in out

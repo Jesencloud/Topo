@@ -1,15 +1,12 @@
 import os
-import re
 import signal
 import subprocess
 import sys
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from . import terminal_state
 from .constants import (
-    BOLD,
     CLEAR_LINE,
     ERASE_BELOW,
     FAIL,
@@ -19,11 +16,7 @@ from .constants import (
     PURPLE,
     RESET,
     WARN,
-    YELLOW,
 )
-
-_SAFE_USERNAME_RE = re.compile(r"[a-z_][a-z0-9_-]{0,31}\$?\Z")
-_SAFE_SUDOERS_PATH_RE = re.compile(r"/[A-Za-z0-9._+/-]*\Z")
 
 # Global flag to track if user explicitly cancelled sudo auth
 SUDO_CANCELLED = False
@@ -323,60 +316,3 @@ def _clear_interrupted_sudo_prompt(prompt: str | None = None) -> None:
         sys.stdout.flush()
     except (OSError, ValueError):
         return
-
-
-def setup_passwordless_sudo() -> bool:
-    """Print the sudoers rule to enable passwordless sudo; False when it refused.
-
-    Every refusal path prints a ⚠ and produces no usable rule for this script,
-    so a caller that pipes the output somewhere has to be able to tell. The
-    user-writable case still prints a *different*, safe rule as advice -- it is
-    deliberately still a failure: the rule the caller asked for was refused.
-    """
-    user = get_invoking_user()
-    script_path = os.path.realpath(sys.argv[0])
-
-    print(f"\n{BOLD}🛡️  Setup Passwordless Mode{RESET}")
-
-    if not user or user == "unknown" or not _SAFE_USERNAME_RE.match(user):
-        print(f"{WARN} Could not determine a safe username; refusing to generate a sudoers rule.")
-        return False
-
-    if not _SAFE_SUDOERS_PATH_RE.match(script_path):
-        print(
-            f"{WARN} Could not generate a safe sudoers rule for path with special characters "
-            f"or spaces: {script_path!r}"
-        )
-        return False
-
-    # Check if script is owned by root and not writable by non-root users
-    script_p = Path(script_path)
-    is_user_writable = False
-    for p in [script_p, *script_p.parents]:
-        try:
-            st = p.lstat()
-            if st.st_uid != 0 or (st.st_mode & 0o022):
-                is_user_writable = True
-                break
-        except OSError:
-            is_user_writable = True
-            break
-
-    if is_user_writable:
-        print(
-            f"{WARN} Refusing NOPASSWD rule for script at {script_path}:\n"
-            f"  This script is user-writable. Granting NOPASSWD to user-writable scripts allows local privilege escalation.\n"
-        )
-        print(
-            "To allow passwordless maintenance safely, grant NOPASSWD for specific binaries with strict parameters instead:"
-        )
-        print(
-            f"\n{YELLOW}echo '{user} ALL=(root) NOPASSWD: /usr/sbin/fstrim -a, /usr/bin/journalctl --vacuum-time=3d' | sudo tee /etc/sudoers.d/topo{RESET}\n"
-        )
-        return False
-
-    rule = f"{user} ALL=(ALL) NOPASSWD: {script_path}"
-    print("To allow topo to run without ever asking for a password, run this command once:")
-    print(f"\n{YELLOW}echo '{rule}' | sudo tee /etc/sudoers.d/topo{RESET}\n")
-    print("This will create a specific rule for the system-installed topo binary.")
-    return True
