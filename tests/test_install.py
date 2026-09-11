@@ -36,6 +36,16 @@ def test_installer_never_offers_a_privileged_launcher_into_a_user_install():
     assert "bash install.sh --ref main" not in script
 
 
+def test_readmes_install_the_published_release_script():
+    release_url = "https://github.com/Jesencloud/Topo/releases/latest/download/install.sh"
+    mutable_main_url = "https://raw.githubusercontent.com/Jesencloud/Topo/main/install.sh"
+
+    for readme in ("README.md", "README.zh-CN.md"):
+        content = (REPO_ROOT / readme).read_text()
+        assert release_url in content
+        assert mutable_main_url not in content
+
+
 def _fake_python3(tmp_path: Path, version: tuple[int, int, int]) -> Path:
     """A python3 on PATH that reports `version` and is otherwise the real one.
 

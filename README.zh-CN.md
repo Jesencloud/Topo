@@ -41,7 +41,13 @@ sudo pacman -S python curl python-packaging           # Arch / Manjaro
 
 **一键脚本安装 (推荐)**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Jesencloud/Topo/main/install.sh | bash
+curl -fsSL https://github.com/Jesencloud/Topo/releases/latest/download/install.sh | bash
+```
+
+如需可复现安装，请将 `vX.Y.Z` 替换为包含安装器附件的 Release 版本，
+并同时固定安装器与目标版本：
+```bash
+curl -fsSL https://github.com/Jesencloud/Topo/releases/download/vX.Y.Z/install.sh | bash -s -- --version vX.Y.Z
 ```
 
 **包管理器安装 (.deb / .rpm)**

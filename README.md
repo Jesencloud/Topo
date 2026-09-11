@@ -42,7 +42,13 @@ method.
 
 **Script Installation (Recommended)**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Jesencloud/Topo/main/install.sh | bash
+curl -fsSL https://github.com/Jesencloud/Topo/releases/latest/download/install.sh | bash
+```
+
+For a reproducible installation, replace `vX.Y.Z` with a release that includes the installer,
+then pin both the installer and target version:
+```bash
+curl -fsSL https://github.com/Jesencloud/Topo/releases/download/vX.Y.Z/install.sh | bash -s -- --version vX.Y.Z
 ```
 
 **Package Manager (.deb / .rpm)**
