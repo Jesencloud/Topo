@@ -1054,9 +1054,10 @@ def test_service_helpers_and_database_refresh(tmp_path):
         assert _service_exec_target_exists("missing") is False
     with patch("src.optimize.shutil.which", return_value="/usr/bin/app"):
         assert _service_exec_target_exists("app") is True
-    target = tmp_path / "apps"
-    target.mkdir()
+    target = tmp_path / ".local/share/applications"
+    target.mkdir(parents=True)
     with (
+        patch("pathlib.Path.home", return_value=tmp_path),
         patch("src.optimize.shutil.which", return_value="/usr/bin/update"),
         patch("src.optimize.run_command", return_value=CommandResult(["update"], 1)),
     ):
