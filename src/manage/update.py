@@ -470,10 +470,12 @@ def run_update() -> bool:
                 )
                 return False
 
-            script_url = (
-                f"https://raw.githubusercontent.com/Jesencloud/Topo/{remote_tag}/install.sh"
+            script_path = tmp_dir / "install.sh"
+            _download_file(
+                f"https://github.com/Jesencloud/Topo/releases/download/{remote_tag}/install.sh",
+                script_path,
             )
-            raw_bytes = subprocess.check_output(["curl", "-fsSL", script_url], timeout=30)
+            raw_bytes = script_path.read_bytes()
             actual_sha = sha256(raw_bytes).hexdigest()
 
             if actual_sha.lower() != expected_sha.lower():

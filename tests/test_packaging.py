@@ -179,6 +179,13 @@ def test_a_prerelease_tag_never_reaches_the_packaging_job():
     assert "!contains(needs.*.result, 'failure')" in workflow
     assert "needs.build.result == 'success'" in workflow
 
+    # The signed installer is in the common asset list, before the package-only
+    # prerelease guard, so stable and source-only prerelease tags both attach it.
+    selector = workflow.split("- name: Select Release Assets", 1)[1]
+    common_assets, package_assets = selector.split('if [ "$PRERELEASE" != true ]; then', 1)
+    assert "release-assets/install.sh" in common_assets
+    assert "release-assets/install.sh" not in package_assets
+
     # Nothing downstream may assume the packages exist: the artifact download,
     # the staging copy, the checksum manifest and the attached asset list.
     assert "if: env.PRERELEASE != 'true'" in workflow

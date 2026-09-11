@@ -376,23 +376,30 @@ def test_run_update_does_not_install_when_remote_version_is_invalid(mock_check_o
 @patch("src.manage.update.subprocess.run")
 @patch("src.manage.update.subprocess.check_output")
 def test_run_update_installs_only_when_remote_is_newer(mock_check_output, mock_run, _mock_verify):
-    # 1st check_output fetches release tag; 2nd downloads install.sh.
     script_content = "#!/usr/bin/env bash\n"
     script_sha = sha256(script_content.encode()).hexdigest()
     sums_content = f"{script_sha}  install.sh\n"
+    downloaded = []
 
     def fake_download(url, destination, timeout=60):
+        downloaded.append((url, destination.name))
         if destination.name == "SHA256SUMS":
             destination.write_text(sums_content)
+        elif destination.name == "install.sh":
+            destination.write_text(script_content)
         else:
             destination.write_bytes(b"sig")
 
     with patch("src.manage.update._download_file", fake_download):
-        mock_check_output.side_effect = ['{"tag_name": "v999.0.0"}', script_content.encode("utf-8")]
+        mock_check_output.return_value = '{"tag_name": "v999.0.0"}'
         mock_run.return_value = MagicMock(returncode=0)
 
         assert run_update() is True
 
+    assert (
+        "https://github.com/Jesencloud/Topo/releases/download/v999.0.0/install.sh",
+        "install.sh",
+    ) in downloaded
     # Executed without a shell, with the tag as a separate argv element.
     mock_run.assert_called_once()
     argv = mock_run.call_args.args[0]
@@ -423,14 +430,13 @@ def test_run_update_rejects_non_script_payload(mock_check_output, mock_run, _moc
     def fake_download(url, destination, timeout=60):
         if destination.name == "SHA256SUMS":
             destination.write_text(sums_content)
+        elif destination.name == "install.sh":
+            destination.write_text(non_script)
         else:
             destination.write_bytes(b"sig")
 
     with patch("src.manage.update._download_file", fake_download):
-        mock_check_output.side_effect = [
-            '{"tag_name": "v999.0.0"}',
-            non_script.encode("utf-8"),
-        ]
+        mock_check_output.return_value = '{"tag_name": "v999.0.0"}'
 
         assert run_update() is False
 

@@ -181,7 +181,6 @@ PY
     if [ -z "$TARGET_REF" ] || [ "$TARGET_REF" = "latest" ]; then
         echo -e "  ${RED}✗ Error: failed to resolve the latest Topo release.${NC}"
         echo -e "  ${GRAY}Install a specific version with:${NC} ${BOLD}bash install.sh --version v0.6.0${NC}"
-        echo -e "  ${GRAY}Install the development branch with:${NC} ${BOLD}bash install.sh --ref main${NC}"
         exit 1
     fi
 fi
@@ -190,12 +189,12 @@ if [ "$MINIMAL" = false ]; then echo -e "  ${GREEN}✓${NC} ${GRAY}target releas
 # The launcher directory `topo link` will use, resolved the way
 # src/core/paths.py::get_link_target_dir() resolves it: TOPO_LINK_DIR, else
 # /usr/local/bin for root, else ~/.local/bin. Deliberately reimplemented in shell
-# instead of imported from the tree being installed -- this script comes from
-# main, but the tree it installs is whichever release was requested, so an import
-# binds install.sh to *that* release's Python API. Importing get_link_target_dir
-# did exactly that and broke every install of a release predating it
-# (ImportError, then "Could not resolve the launcher path"); the private
-# _get_link_target_dir it replaced only worked by accident of still existing.
+# instead of imported from the tree being installed -- a current release script
+# can install an older release tree, so importing get_link_target_dir binds the
+# installer to *that* release's Python API. It did exactly that and broke every
+# install of a release predating the symbol (ImportError, then "Could not resolve
+# the launcher path"); the private _get_link_target_dir it replaced only worked
+# by accident of still existing.
 # The answer may be relative, exactly as Python's is; only python3's stdlib
 # expanduser() is borrowed, because ~user has no safe shell equivalent.
 # tests/test_install.py runs this function and diffs it against

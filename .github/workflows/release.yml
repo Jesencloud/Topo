@@ -489,14 +489,12 @@ jobs:
           # The attach step needs one asset list per tag kind, and
           # fail_on_unmatched_files is a whole-list switch rather than a per-entry
           # one, so the list is assembled here instead of being written twice.
-          # install.sh is deliberately absent: it is checksummed above so the copy
-          # served from the default branch can be verified against a tag, but the
-          # release itself has never carried it.
           {
             echo 'RELEASE_FILES<<EOF'
             printf '%s\n' \
               release-assets/topo-core-x86_64 \
               release-assets/topo-core-aarch64 \
+              release-assets/install.sh \
               release-assets/topo-src.tar.gz \
               release-assets/SHA256SUMS \
               release-assets/SHA256SUMS.asc \

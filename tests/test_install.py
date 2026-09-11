@@ -32,6 +32,8 @@ def test_installer_never_offers_a_privileged_launcher_into_a_user_install():
     assert 'sudo ln -sf "${INSTALL_DIR}/topo" /usr/local/bin/topo' not in script
     assert "Would you like to link it to" not in script
     assert "Or manually link it" not in script
+    assert "Install the development branch with" not in script
+    assert "bash install.sh --ref main" not in script
 
 
 def _fake_python3(tmp_path: Path, version: tuple[int, int, int]) -> Path:
