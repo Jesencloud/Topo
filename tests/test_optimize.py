@@ -15,6 +15,8 @@ from src.optimize import (
     _SWAPOFF_MIN_TIMEOUT,
     _SWAPON_TIMEOUT,
     OptimizationRegistry,
+    OptimizationResult,
+    OptimizationStatus,
     _extract_service_exec_targets,
     _is_any_process_running,
     _is_sqlite_database,
@@ -77,6 +79,14 @@ def test_registered_optimization_tasks_are_runnable_entry_points():
         assert "dry_run" in inspect.signature(task).parameters, task.__name__
 
 
+def test_optimization_result_is_immutable_and_task_statuses_are_explicit():
+    result = OptimizationResult.success("done")
+    with pytest.raises(AttributeError):
+        result.message = "changed"
+
+    assert run_vacuum_all(dry_run=False).status in OptimizationStatus
+
+
 def test_optimize_system_caps_worker_pool_and_reports_task_failures(capsys):
     def failing_task(dry_run=False):
         raise RuntimeError("failed")
@@ -92,13 +102,46 @@ def test_optimize_system_caps_worker_pool_and_reports_task_failures(capsys):
             ).ThreadPoolExecutor,
         ) as executor,
     ):
-        # A task that raises is logged and the batch continues; that stays a
-        # success, so `topo optimize` on a box without fstrim still exits 0.
-        assert optimize_system(dry_run=True) is True
+        assert optimize_system(dry_run=True) is False
 
     executor.assert_called_once_with(max_workers=4)
     output = capsys.readouterr().out
     assert "failing_task failed (RuntimeError)" in output
+    assert "Tasks completed with errors" in output
+
+
+def test_optimize_system_renders_all_result_statuses_and_succeeds(capsys):
+    tasks = [
+        lambda dry_run=False: OptimizationResult.silent_skip(),
+        lambda dry_run=False: OptimizationResult.visible_skip("not applicable"),
+        lambda dry_run=False: OptimizationResult.success("done"),
+    ]
+    with (
+        patch.object(OptimizationRegistry, "tasks", tasks),
+        patch("src.core.system.authenticate_sudo_session", return_value=True),
+    ):
+        assert optimize_system() is True
+
+    output = capsys.readouterr().out
+    assert "not applicable · skipped" in output
+    assert "done" in output
+    assert "All tasks completed" in output
+
+
+def test_optimize_system_returns_false_for_failed_result(capsys):
+    with (
+        patch.object(
+            OptimizationRegistry,
+            "tasks",
+            [lambda dry_run=False: OptimizationResult.failed("command failed")],
+        ),
+        patch("src.core.system.authenticate_sudo_session", return_value=True),
+    ):
+        assert optimize_system() is False
+
+    output = capsys.readouterr().out
+    assert "✗ command failed" in output
+    assert "Tasks completed with errors" in output
 
 
 def test_run_systemd_user_service_cleanup_removes_broken_unit(test_env):
@@ -114,7 +157,7 @@ def test_run_systemd_user_service_cleanup_removes_broken_unit(test_env):
     ):
         result = run_systemd_user_service_cleanup(dry_run=False)
 
-    assert result == "Removed 1 broken user systemd service"
+    assert result.message == "Removed 1 broken user systemd service"
     assert not service_file.exists()
     mock_run.assert_called_once_with(
         ["systemctl", "--user", "daemon-reload"], capture=True, timeout=10
@@ -130,7 +173,7 @@ def test_run_systemd_user_service_cleanup_keeps_valid_unit(test_env):
     with patch("pathlib.Path.home", return_value=test_env):
         result = run_systemd_user_service_cleanup(dry_run=False)
 
-    assert result is None
+    assert result.status is OptimizationStatus.SILENT_SKIP
     assert service_file.exists()
 
 
@@ -143,7 +186,7 @@ def test_run_systemd_user_service_cleanup_dry_run_keeps_file(test_env):
     with patch("pathlib.Path.home", return_value=test_env):
         result = run_systemd_user_service_cleanup(dry_run=True)
 
-    assert result == "Found 1 broken user systemd service"
+    assert result.message == "Found 1 broken user systemd service"
     assert service_file.exists()
 
 
@@ -161,7 +204,7 @@ def test_run_autostart_cleanup_removes_missing_absolute_exec(test_env):
     ):
         result = run_autostart_cleanup(dry_run=False)
 
-    assert result == "Removed 1 zombie autostart entries"
+    assert result.message == "Removed 1 zombie autostart entries"
 
 
 def test_run_autostart_cleanup_keeps_entry_without_trash_backend(test_env):
@@ -177,7 +220,7 @@ def test_run_autostart_cleanup_keeps_entry_without_trash_backend(test_env):
     ):
         result = run_autostart_cleanup(dry_run=False)
 
-    assert result == "Kept 1 zombie autostart entries (no trash backend available)"
+    assert result.message == "Kept 1 zombie autostart entries (no trash backend available)"
     assert desktop_file.exists()
 
 
@@ -190,7 +233,7 @@ def test_run_autostart_cleanup_dry_run_keeps_missing_exec_file(test_env):
     with patch("pathlib.Path.home", return_value=test_env):
         result = run_autostart_cleanup(dry_run=True)
 
-    assert result == "Found 1 zombie autostart entries"
+    assert result.message == "Found 1 zombie autostart entries"
     assert desktop_file.exists()
 
 
@@ -207,7 +250,7 @@ def test_run_autostart_cleanup_keeps_quoted_existing_exec(test_env):
     with patch("pathlib.Path.home", return_value=test_env):
         result = run_autostart_cleanup(dry_run=False)
 
-    assert result is None
+    assert result.status is OptimizationStatus.SILENT_SKIP
     assert desktop_file.exists()
 
 
@@ -220,7 +263,7 @@ def test_run_autostart_cleanup_keeps_malformed_exec(test_env):
     with patch("pathlib.Path.home", return_value=test_env):
         result = run_autostart_cleanup(dry_run=False)
 
-    assert result is None
+    assert result.status is OptimizationStatus.SILENT_SKIP
     assert desktop_file.exists()
 
 
@@ -235,7 +278,7 @@ def test_run_coredump_cleanup_skips_when_no_core_files(tmp_path):
     ):
         result = run_coredump_cleanup(dry_run=False)
 
-    assert result is None
+    assert result.status is OptimizationStatus.SILENT_SKIP
     mock_run.assert_not_called()
 
 
@@ -251,7 +294,7 @@ def test_run_coredump_cleanup_dry_run_keeps_core_files(tmp_path):
     ):
         result = run_coredump_cleanup(dry_run=True)
 
-    assert result == "System coredumps would be cleared"
+    assert result.message == "System coredumps would be cleared"
     assert core_file.exists()
     mock_run.assert_not_called()
 
@@ -270,7 +313,7 @@ def test_run_coredump_cleanup_deletes_core_files_with_find(tmp_path):
     ):
         result = run_coredump_cleanup(dry_run=False)
 
-    assert result == "System coredumps cleared"
+    assert result.message == "System coredumps cleared"
     mock_run.assert_called_once_with(
         [
             "find",
@@ -302,7 +345,7 @@ def test_run_coredump_cleanup_returns_none_when_find_fails(tmp_path):
     ):
         result = run_coredump_cleanup(dry_run=False)
 
-    assert result is None
+    assert result.status is OptimizationStatus.FAILED
 
 
 def _fake_trash(cmd, **kwargs):
@@ -330,7 +373,7 @@ def test_run_broken_symlink_cleanup_removes_only_broken_links(test_env):
     ):
         result = run_broken_symlink_cleanup(dry_run=False)
 
-    assert result == "Removed 1 broken user symlink"
+    assert result.message == "Removed 1 broken user symlink"
     assert not broken_link.exists()
     assert not broken_link.is_symlink()
     assert valid_link.exists()
@@ -351,7 +394,7 @@ def test_run_broken_symlink_cleanup_keeps_link_without_trash_backend(test_env):
     ):
         result = run_broken_symlink_cleanup(dry_run=False)
 
-    assert result == "Kept 1 broken user symlink (no trash backend available)"
+    assert result.message == "Kept 1 broken user symlink (no trash backend available)"
     assert broken_link.is_symlink()
 
 
@@ -366,7 +409,7 @@ def test_run_broken_symlink_cleanup_skips_relative_link_into_removable_mount(tes
     with patch("pathlib.Path.home", return_value=test_env):
         result = run_broken_symlink_cleanup(dry_run=True)
 
-    assert result is None
+    assert result.status is OptimizationStatus.SILENT_SKIP
     assert link.is_symlink()
 
 
@@ -405,13 +448,13 @@ def test_run_broken_symlink_cleanup_skips_user_dirs_unless_opted_in(test_env, mo
 
     monkeypatch.delenv("TOPO_SYMLINK_SCAN_USER_DIRS", raising=False)
     with patch("pathlib.Path.home", return_value=test_env):
-        assert run_broken_symlink_cleanup(dry_run=True) is None
+        assert run_broken_symlink_cleanup(dry_run=True).status is OptimizationStatus.SILENT_SKIP
 
     monkeypatch.setenv("TOPO_SYMLINK_SCAN_USER_DIRS", "1")
     with patch("pathlib.Path.home", return_value=test_env):
         result = run_broken_symlink_cleanup(dry_run=True)
 
-    assert result == "Found 1 broken user symlinks"
+    assert result.message == "Found 1 broken user symlinks"
     assert broken_link.is_symlink()
 
 
@@ -457,7 +500,7 @@ def test_run_dns_flush_asks_for_no_password_when_the_user_may_flush():
         mock_run.return_value = CommandResult(["resolvectl"], 0)
         res = run_dns_flush(dry_run=False)
 
-    assert res == "DNS resolver cache flushed (resolvectl)"
+    assert res.message == "DNS resolver cache flushed (resolvectl)"
     assert mock_run.call_count == 1
     assert mock_run.call_args.args[0] == ["resolvectl", "flush-caches"]
     assert not mock_run.call_args.kwargs.get("use_sudo")
@@ -477,7 +520,7 @@ def test_run_dns_flush_retries_as_root_when_the_user_may_not():
     ):
         res = run_dns_flush(dry_run=False)
 
-    assert res == "DNS resolver cache flushed (resolvectl)"
+    assert res.message == "DNS resolver cache flushed (resolvectl)"
     assert mock_run.call_count == 2
     assert mock_run.call_args_list[1].kwargs["use_sudo"] is True
 
@@ -495,7 +538,7 @@ def test_run_dns_flush_never_asks_nscd_as_the_user():
         mock_run.return_value = CommandResult(["nscd"], 0)
         res = run_dns_flush(dry_run=False)
 
-    assert res == "DNS resolver cache flushed (nscd)"
+    assert res.message == "DNS resolver cache flushed (nscd)"
     assert mock_run.call_count == 1
     assert mock_run.call_args.args[0] == ["nscd", "-i", "hosts"]
     assert mock_run.call_args.kwargs["use_sudo"] is True
@@ -513,7 +556,9 @@ def test_run_dns_flush_reports_every_cache_it_dropped():
         ),
         patch("src.optimize.run_command", return_value=CommandResult(["x"], 0)),
     ):
-        assert run_dns_flush(dry_run=False) == "DNS resolver caches flushed (resolvectl, nscd)"
+        assert (
+            run_dns_flush(dry_run=False).message == "DNS resolver caches flushed (resolvectl, nscd)"
+        )
 
 
 def test_run_dns_flush_keeps_quiet_when_no_resolver_caches():
@@ -521,7 +566,7 @@ def test_run_dns_flush_keeps_quiet_when_no_resolver_caches():
         patch.object(optimize, "_dns_cache_flushers", return_value=[]),
         patch("src.optimize.run_command") as mock_run,
     ):
-        assert run_dns_flush(dry_run=False) is None
+        assert run_dns_flush(dry_run=False).status is OptimizationStatus.SILENT_SKIP
 
     mock_run.assert_not_called()
 
@@ -537,7 +582,7 @@ def test_run_dns_flush_dry_run_touches_nothing():
     ):
         res = run_dns_flush(dry_run=True)
 
-    assert res == "DNS resolver cache would be flushed (resolvectl)"
+    assert res.message == "DNS resolver cache would be flushed (resolvectl)"
     mock_run.assert_not_called()
 
 
@@ -548,7 +593,7 @@ def test_run_tmpfiles_cleanup():
     ):
         mock_run.return_value = CommandResult(["systemd-tmpfiles"], 0)
         res = run_tmpfiles_cleanup(dry_run=False)
-        assert res == "Systemd tmpfiles clean rules processed"
+        assert res.message == "Systemd tmpfiles clean rules processed"
 
 
 def test_run_user_systemd_reset_failed_resets_failed_units():
@@ -573,7 +618,7 @@ def test_run_user_systemd_reset_failed_resets_failed_units():
     ):
         result = run_user_systemd_reset_failed(dry_run=False)
 
-    assert result == "Reset 2 failed user systemd unit states"
+    assert result.message == "Reset 2 failed user systemd unit states"
     assert mock_run.call_args_list[0].args[0] == [
         "systemctl",
         "--user",
@@ -600,7 +645,7 @@ def test_run_user_systemd_reset_failed_dry_run_does_not_reset():
     ):
         result = run_user_systemd_reset_failed(dry_run=True)
 
-    assert result == "Found 1 failed user systemd unit"
+    assert result.message == "Found 1 failed user systemd unit"
     assert mock_run.call_count == 1
 
 
@@ -614,7 +659,7 @@ def test_run_user_systemd_reset_failed_skips_when_no_failed_units():
     ):
         result = run_user_systemd_reset_failed(dry_run=False)
 
-    assert result is None
+    assert result.status is OptimizationStatus.SILENT_SKIP
     assert mock_run.call_count == 1
 
 
@@ -623,7 +668,9 @@ def test_run_system_systemd_reset_failed_skips_without_sudo():
         patch("src.optimize.has_sudo", return_value=False),
         patch("src.optimize.run_command") as mock_run,
     ):
-        assert run_system_systemd_reset_failed(dry_run=False) is None
+        assert (
+            run_system_systemd_reset_failed(dry_run=False).status is OptimizationStatus.SILENT_SKIP
+        )
 
     mock_run.assert_not_called()
 
@@ -645,7 +692,7 @@ def test_run_system_systemd_reset_failed_uses_sudo_and_the_system_scope():
     ):
         result = run_system_systemd_reset_failed(dry_run=False)
 
-    assert result == "Reset 1 failed system systemd unit state"
+    assert result.message == "Reset 1 failed system systemd unit state"
     # No --user anywhere: the system manager is the default scope, and the reset
     # is the only half that needs privileges -- listing must not ask for them.
     assert mock_run.call_args_list[0].args[0] == [
@@ -675,7 +722,7 @@ def test_run_vacuum_all_skips_when_browser_is_running(test_env):
         result = run_vacuum_all(dry_run=False)
 
     assert (
-        result == "Brave Browser, Chromium, Firefox, Floorp, Google Chrome, LibreWolf, "
+        result.message == "Brave Browser, Chromium, Firefox, Floorp, Google Chrome, LibreWolf, "
         "Microsoft Edge, Opera, Thorium, Vivaldi, Waterfox, Yandex Browser, Zen Browser "
         "running; database optimization skipped"
     )
@@ -702,7 +749,7 @@ def test_vacuum_finds_databases_behind_a_wildcard_profile_directory(test_env):
         patch("pathlib.Path.home", return_value=test_env),
         patch("src.optimize._is_any_process_running", return_value=False),
     ):
-        assert run_vacuum_all(dry_run=True) == "Found 2 databases to optimize"
+        assert run_vacuum_all(dry_run=True).message == "Found 2 databases to optimize"
 
 
 def test_vacuum_covers_flatpak_and_non_default_chromium_profiles(test_env):
@@ -718,7 +765,7 @@ def test_vacuum_covers_flatpak_and_non_default_chromium_profiles(test_env):
         patch("pathlib.Path.home", return_value=test_env),
         patch("src.optimize._is_any_process_running", return_value=False),
     ):
-        assert run_vacuum_all(dry_run=True) == "Found 4 databases to optimize"
+        assert run_vacuum_all(dry_run=True).message == "Found 4 databases to optimize"
 
 
 def test_every_browser_pattern_is_relative_and_wildcards_one_profile_level():
@@ -752,7 +799,7 @@ def test_vacuum_reaches_snap_and_non_firefox_gecko_profiles(test_env):
         patch("pathlib.Path.home", return_value=test_env),
         patch("src.optimize._is_any_process_running", return_value=False),
     ):
-        assert run_vacuum_all(dry_run=True) == "Found 2 databases to optimize"
+        assert run_vacuum_all(dry_run=True).message == "Found 2 databases to optimize"
 
 
 def test_vacuum_reaches_a_browser_whose_root_is_its_profile(test_env):
@@ -767,7 +814,7 @@ def test_vacuum_reaches_a_browser_whose_root_is_its_profile(test_env):
         patch("pathlib.Path.home", return_value=test_env),
         patch("src.optimize._is_any_process_running", return_value=False),
     ):
-        assert run_vacuum_all(dry_run=True) == "Found 1 database to optimize"
+        assert run_vacuum_all(dry_run=True).message == "Found 1 database to optimize"
 
 
 def test_run_desktop_database_refresh_dry_run(test_env):
@@ -780,7 +827,7 @@ def test_run_desktop_database_refresh_dry_run(test_env):
     ):
         result = run_desktop_database_refresh(dry_run=True)
 
-    assert result == "Desktop application database would be refreshed"
+    assert result.message == "Desktop application database would be refreshed"
 
 
 def test_run_mime_database_refresh_dry_run(test_env):
@@ -793,7 +840,7 @@ def test_run_mime_database_refresh_dry_run(test_env):
     ):
         result = run_mime_database_refresh(dry_run=True)
 
-    assert result == "MIME database would be refreshed"
+    assert result.message == "MIME database would be refreshed"
 
 
 def test_vacuum_single_db_closes_connection_on_error(tmp_path):
@@ -899,20 +946,20 @@ def test_simple_optimization_tasks_support_missing_dry_run_success_and_failure(
         patch("src.optimize.shutil.which", return_value=None),
         patch("src.optimize._which_admin_tool", return_value=None),
     ):
-        assert func() is None
+        assert func().status is OptimizationStatus.SILENT_SKIP
     with patch("src.optimize.shutil.which", return_value=f"/usr/bin/{tool}"):
-        assert dry_text in func(dry_run=True)
+        assert dry_text in func(dry_run=True).message
     with (
         patch("src.optimize.shutil.which", return_value=f"/usr/bin/{tool}"),
         patch("src.optimize.run_command", return_value=CommandResult(command, 0)) as run,
     ):
-        assert func() is not None
+        assert func().status is OptimizationStatus.SUCCESS
         assert run.call_args.args[0] == command
     with (
         patch("src.optimize.shutil.which", return_value=f"/usr/bin/{tool}"),
         patch("src.optimize.run_command", return_value=CommandResult(command, 1)),
     ):
-        assert func() is None
+        assert func().status is OptimizationStatus.FAILED
 
 
 def test_tmpfiles_and_flatpak_branches():
@@ -920,21 +967,52 @@ def test_tmpfiles_and_flatpak_branches():
         patch("src.optimize.shutil.which", return_value="/usr/bin/systemd-tmpfiles"),
         patch("src.optimize.run_command", return_value=CommandResult(["tmpfiles"], 1)),
     ):
-        assert run_tmpfiles_cleanup() is None
+        assert run_tmpfiles_cleanup().status is OptimizationStatus.FAILED
     with (
         patch("src.optimize.shutil.which", return_value="/usr/bin/flatpak"),
         patch("src.optimize.has_sudo", return_value=True),
         patch("src.optimize.run_command", return_value=CommandResult(["flatpak"], 0)) as run,
     ):
-        assert "verified" in run_flatpak_repair()
+        assert "verified" in run_flatpak_repair().message
         assert run.call_count == 2
+    with (
+        patch("src.optimize.shutil.which", return_value="/usr/bin/flatpak"),
+        patch("src.optimize.has_sudo", return_value=True),
+        patch(
+            "src.optimize.run_command",
+            side_effect=[CommandResult(["flatpak"], 1), CommandResult(["flatpak"], 0)],
+        ),
+    ):
+        result = run_flatpak_repair()
+        assert result.status is OptimizationStatus.FAILED
+        assert "user" in result.message
+    with (
+        patch("src.optimize.shutil.which", return_value="/usr/bin/flatpak"),
+        patch("src.optimize.has_sudo", return_value=True),
+        patch(
+            "src.optimize.run_command",
+            side_effect=[CommandResult(["flatpak"], 0), CommandResult(["flatpak"], 1)],
+        ),
+    ):
+        result = run_flatpak_repair()
+        assert result.status is OptimizationStatus.FAILED
+        assert "system" in result.message
+    with (
+        patch("src.optimize.shutil.which", return_value="/usr/bin/flatpak"),
+        patch("src.optimize.has_sudo", return_value=False),
+        patch("src.optimize.run_command", return_value=CommandResult(["flatpak"], 0)) as run,
+    ):
+        assert (
+            run_flatpak_repair().message == "Flatpak user storage objects verified (flatpak repair)"
+        )
+        assert run.call_count == 1
     with patch("src.optimize.shutil.which", return_value="/usr/bin/flatpak"):
-        assert "would be verified" in run_flatpak_repair(dry_run=True)
+        assert "would be verified" in run_flatpak_repair(dry_run=True).message
 
 
 def test_autostart_cleanup_no_dir_and_trash_failure_reason(test_env):
     with patch("pathlib.Path.home", return_value=test_env):
-        assert run_autostart_cleanup() is None
+        assert run_autostart_cleanup().status is OptimizationStatus.SILENT_SKIP
     d = test_env / ".config/autostart"
     d.mkdir(parents=True)
     f = d / "dead.desktop"
@@ -944,14 +1022,14 @@ def test_autostart_cleanup_no_dir_and_trash_failure_reason(test_env):
         patch("src.optimize.safe_remove", return_value=(False, TRASH_UNAVAILABLE_REASON)),
     ):
         assert (
-            run_autostart_cleanup()
+            run_autostart_cleanup().message
             == "Kept 1 zombie autostart entries (no trash backend available)"
         )
 
 
 def test_systemd_service_and_failed_reset_error_paths(test_env):
     with patch("pathlib.Path.home", return_value=test_env):
-        assert run_systemd_user_service_cleanup() is None
+        assert run_systemd_user_service_cleanup().status is OptimizationStatus.SILENT_SKIP
     d = test_env / ".config/systemd/user"
     d.mkdir(parents=True)
     (d / "bad.service").write_text("ExecStart=/missing/app\n")
@@ -959,12 +1037,12 @@ def test_systemd_service_and_failed_reset_error_paths(test_env):
         patch("pathlib.Path.home", return_value=test_env),
         patch("src.optimize.safe_remove", return_value=(False, "error")),
     ):
-        assert run_systemd_user_service_cleanup() is None
+        assert run_systemd_user_service_cleanup().status is OptimizationStatus.SILENT_SKIP
     with (
         patch("src.optimize.shutil.which", return_value="/usr/bin/systemctl"),
         patch("src.optimize.run_command", return_value=CommandResult(["systemctl"], 1)),
     ):
-        assert run_user_systemd_reset_failed() is None
+        assert run_user_systemd_reset_failed().status is OptimizationStatus.FAILED
 
 
 def test_service_helpers_and_database_refresh(tmp_path):
@@ -982,7 +1060,7 @@ def test_service_helpers_and_database_refresh(tmp_path):
         patch("src.optimize.shutil.which", return_value="/usr/bin/update"),
         patch("src.optimize.run_command", return_value=CommandResult(["update"], 1)),
     ):
-        assert optimize.run_desktop_database_refresh() is None
+        assert optimize.run_desktop_database_refresh().status is OptimizationStatus.FAILED
 
 
 def test_journal_optimization_reports_journalctls_own_total():
@@ -1007,7 +1085,9 @@ def test_journal_optimization_reports_journalctls_own_total():
             return_value=CommandResult(["journalctl"], 0, stdout="", stderr=narration),
         ),
     ):
-        assert run_journal_optimization() == "Journal vacuumed to 3 days (Reclaimed 1.1 GiB)"
+        assert (
+            run_journal_optimization().message == "Journal vacuumed to 3 days (Reclaimed 1.1 GiB)"
+        )
 
 
 def test_swap_journal_repo_and_coredump_error_paths(tmp_path):
@@ -1015,14 +1095,19 @@ def test_swap_journal_repo_and_coredump_error_paths(tmp_path):
         patch("src.optimize.shutil.which", return_value=None),
         patch("src.optimize._which_admin_tool", return_value=None),
     ):
-        assert run_swap_management() is None
-        assert run_journal_optimization() is None
-        assert run_package_repo_refresh() is None
+        assert run_swap_management().status is OptimizationStatus.SILENT_SKIP
+        assert run_journal_optimization().status is OptimizationStatus.SILENT_SKIP
+        assert run_package_repo_refresh().status is OptimizationStatus.SILENT_SKIP
+    with (
+        patch("src.optimize.shutil.which", return_value="/usr/bin/journalctl"),
+        patch("src.optimize.run_command", return_value=CommandResult(["journalctl"], 1)),
+    ):
+        assert run_journal_optimization().status is OptimizationStatus.FAILED
     with (
         patch("src.optimize.shutil.which", return_value="/usr/bin/journalctl"),
         patch("src.optimize.run_command", return_value=CommandResult(["journalctl"], 0, stdout="")),
     ):
-        assert run_journal_optimization() == "Journal already optimized (under 3 days)"
+        assert run_journal_optimization().message == "Journal already optimized (under 3 days)"
     with (
         patch(
             "src.optimize.shutil.which",
@@ -1030,9 +1115,9 @@ def test_swap_journal_repo_and_coredump_error_paths(tmp_path):
         ),
         patch("src.optimize.run_command", return_value=CommandResult(["pkcon"], 0)),
     ):
-        assert run_package_repo_refresh() == "Software repository index refreshed"
+        assert run_package_repo_refresh().message == "Software repository index refreshed"
     with patch("src.optimize.COREDUMP_DIR", tmp_path / "missing"):
-        assert run_coredump_cleanup() is None
+        assert run_coredump_cleanup().status is OptimizationStatus.SILENT_SKIP
 
 
 # Enough free RAM to clear the _MIN_RAM_SWAP_RATIO gate, so anything that stops
@@ -1045,6 +1130,29 @@ def _swaps_table(tmp_path, device):
     table = tmp_path / "swaps"
     table.write_text(f"{_SWAPS_HEADER}{device}\tpartition\t8388604\t\t524288\t\t100\n")
     return table
+
+
+def test_swap_management_skips_when_ram_is_insufficient(tmp_path):
+    low_ram = "MemAvailable: 1000 kB\nSwapTotal: 8000000 kB\nSwapFree: 2000000 kB\n"
+    with (
+        patch("src.optimize.shutil.which", return_value="/usr/sbin/swapoff"),
+        patch("src.optimize._SWAPS_TABLE", _swaps_table(tmp_path, "/dev/sda2")),
+        patch("builtins.open", mock_open(read_data=low_ram)),
+        patch("src.optimize.run_command") as run,
+    ):
+        assert run_swap_management().status is OptimizationStatus.SILENT_SKIP
+    run.assert_not_called()
+
+
+def test_swap_management_skips_unreadable_meminfo(tmp_path):
+    with (
+        patch("src.optimize.shutil.which", return_value="/usr/sbin/swapoff"),
+        patch("src.optimize._SWAPS_TABLE", _swaps_table(tmp_path, "/dev/sda2")),
+        patch("builtins.open", side_effect=OSError),
+        patch("src.optimize.run_command") as run,
+    ):
+        assert run_swap_management().status is OptimizationStatus.SILENT_SKIP
+    run.assert_not_called()
 
 
 def test_zram_backed_swap_is_never_reset(tmp_path):
@@ -1061,8 +1169,8 @@ def test_zram_backed_swap_is_never_reset(tmp_path):
         patch("builtins.open", mock_open(read_data=_MEMINFO_RAM_RICH)),
         patch("src.optimize.run_command", run_command),
     ):
-        assert run_swap_management() is None
-        assert run_swap_management(dry_run=True) is None
+        assert run_swap_management().status is OptimizationStatus.SILENT_SKIP
+        assert run_swap_management(dry_run=True).status is OptimizationStatus.SILENT_SKIP
     run_command.assert_not_called()
 
 
@@ -1074,8 +1182,8 @@ def test_fstab_backed_swap_is_still_reset(tmp_path):
         patch("builtins.open", mock_open(read_data=_MEMINFO_RAM_RICH)),
         patch("src.optimize.run_command", return_value=CommandResult(["swapoff"], 0)),
     ):
-        assert run_swap_management(dry_run=True).startswith("Swap would be reset")
-        assert run_swap_management().startswith("Swap reset successful")
+        assert run_swap_management(dry_run=True).message.startswith("Swap would be reset")
+        assert run_swap_management().message.startswith("Swap reset successful")
 
 
 def test_unreadable_swap_table_counts_as_unsafe(tmp_path):
@@ -1120,7 +1228,7 @@ def test_swap_is_restored_after_swapoff_is_killed(tmp_path):
     ):
         # No line either way: the swap is back, and a reset that was killed
         # halfway has nothing to claim.
-        assert run_swap_management() is None
+        assert run_swap_management().status is OptimizationStatus.FAILED
 
     assert [cmd for cmd, _ in calls] == [["swapoff", "-a"], ["swapon", "-a"]]
 
@@ -1142,9 +1250,11 @@ def test_swap_left_off_is_reported_instead_of_passing_silently(tmp_path):
         patch("src.optimize.run_command", return_value=CommandResult(["swapoff"], 0)),
         patch("src.optimize.opt_log") as logged,
     ):
-        assert run_swap_management() is None
+        result = run_swap_management()
+        assert result.status is OptimizationStatus.FAILED
+        assert result.message == "Swap was left off; run `sudo swapon -a`"
 
-    logged.assert_called_once_with("Swap was left off; run `sudo swapon -a`", success=False)
+    logged.assert_not_called()
 
 
 def test_a_partial_fstab_restore_still_counts_as_a_reset(tmp_path):
@@ -1165,7 +1275,7 @@ def test_a_partial_fstab_restore_still_counts_as_a_reset(tmp_path):
         ),
         patch("src.optimize.opt_log") as logged,
     ):
-        assert run_swap_management().startswith("Swap reset successful")
+        assert run_swap_management().status is OptimizationStatus.FAILED
     logged.assert_not_called()
 
 
@@ -1183,7 +1293,7 @@ def test_swapoff_timeout_scales_with_the_swap_it_has_to_read_back(tmp_path):
         patch("builtins.open", mock_open(read_data=_MEMINFO_RAM_RICH)),
         patch("src.optimize.run_command", side_effect=run),
     ):
-        assert run_swap_management().startswith("Swap reset successful")
+        assert run_swap_management().message.startswith("Swap reset successful")
 
     # _MEMINFO_RAM_RICH has ~5.7 GiB swapped out, which does not come back from a
     # spinning disk inside the old flat 120s.
@@ -1196,7 +1306,9 @@ def test_swapoff_timeout_scales_with_the_swap_it_has_to_read_back(tmp_path):
 def test_glib_schema_compile_follows_the_shared_refresh_helper(test_env):
     schemas = test_env / ".local/share/glib-2.0/schemas"
     with patch("pathlib.Path.home", return_value=test_env):
-        assert run_glib_schema_compile() is None  # directory absent
+        assert (
+            run_glib_schema_compile().status is OptimizationStatus.SILENT_SKIP
+        )  # directory absent
     schemas.mkdir(parents=True)
     with (
         patch("pathlib.Path.home", return_value=test_env),
@@ -1204,10 +1316,10 @@ def test_glib_schema_compile_follows_the_shared_refresh_helper(test_env):
         patch("src.optimize.run_command", return_value=CommandResult(["glib"], 0)) as run,
     ):
         assert (
-            run_glib_schema_compile(dry_run=True)
+            run_glib_schema_compile(dry_run=True).message
             == "User GSettings schema cache would be refreshed"
         )
-        assert run_glib_schema_compile() == "User GSettings schema cache refreshed"
+        assert run_glib_schema_compile().message == "User GSettings schema cache refreshed"
         assert run.call_args.args[0] == ["glib-compile-schemas", str(schemas)]
 
 
@@ -1228,20 +1340,25 @@ def test_icon_cache_refresh_targets_theme_directories_not_the_root(test_env):
         patch("src.optimize.shutil.which", return_value="/usr/bin/gtk-update-icon-cache"),
         patch("src.optimize.run_command", return_value=CommandResult(["gtk"], 0)) as run,
     ):
-        assert run_icon_cache_refresh(dry_run=True) == "1 user icon theme cache would be rebuilt"
-        assert run_icon_cache_refresh() == "Rebuilt 1 user icon theme cache"
+        assert (
+            run_icon_cache_refresh(dry_run=True).message
+            == "1 user icon theme cache would be rebuilt"
+        )
+        assert run_icon_cache_refresh().message == "Rebuilt 1 user icon theme cache"
         # -q and -f only: GTK3 reads -t as --ignore-theme-index, GTK4 as --index-only.
         assert run.call_args.args[0] == ["gtk-update-icon-cache", "-q", "-f", str(theme)]
 
 
 def test_icon_cache_refresh_error_paths(test_env):
     with patch("src.optimize.shutil.which", return_value=None):
-        assert run_icon_cache_refresh() is None
+        assert run_icon_cache_refresh().status is OptimizationStatus.SILENT_SKIP
     with (
         patch("pathlib.Path.home", return_value=test_env),
         patch("src.optimize.shutil.which", return_value="/usr/bin/gtk-update-icon-cache"),
     ):
-        assert run_icon_cache_refresh() is None  # no themes installed
+        assert (
+            run_icon_cache_refresh().status is OptimizationStatus.SILENT_SKIP
+        )  # no themes installed
     theme = test_env / ".local/share/icons/Broken"
     theme.mkdir(parents=True)
     (theme / "index.theme").write_text("[Icon Theme]\n")
@@ -1250,7 +1367,7 @@ def test_icon_cache_refresh_error_paths(test_env):
         patch("src.optimize.shutil.which", return_value="/usr/bin/gtk-update-icon-cache"),
         patch("src.optimize.run_command", return_value=CommandResult(["gtk"], 1)),
     ):
-        assert run_icon_cache_refresh() is None
+        assert run_icon_cache_refresh().status is OptimizationStatus.FAILED
 
 
 def test_font_cache_refresh_covers_the_user_cache_before_the_system_one():
@@ -1260,15 +1377,15 @@ def test_font_cache_refresh_covers_the_user_cache_before_the_system_one():
     second, privileged pass. A machine without sudo still gets the first.
     """
     with patch("src.optimize.shutil.which", return_value=None):
-        assert run_fccache() is None
+        assert run_fccache().status is OptimizationStatus.SILENT_SKIP
     with patch("src.optimize.shutil.which", return_value="/usr/bin/fc-cache"):
-        assert run_fccache(dry_run=True) == "Font caches would be refreshed (fc-cache)"
+        assert run_fccache(dry_run=True).message == "Font caches would be refreshed (fc-cache)"
     with (
         patch("src.optimize.shutil.which", return_value="/usr/bin/fc-cache"),
         patch("src.optimize.has_sudo", return_value=False),
         patch("src.optimize.run_command", return_value=CommandResult(["fc-cache"], 0)) as run,
     ):
-        assert run_fccache() == "User font cache refreshed (fc-cache)"
+        assert run_fccache().message == "User font cache refreshed (fc-cache)"
         assert run.call_count == 1
         assert run.call_args.kwargs.get("use_sudo") is not True
     with (
@@ -1276,7 +1393,7 @@ def test_font_cache_refresh_covers_the_user_cache_before_the_system_one():
         patch("src.optimize.has_sudo", return_value=True),
         patch("src.optimize.run_command", return_value=CommandResult(["fc-cache"], 0)) as run,
     ):
-        assert run_fccache() == "User & system font caches refreshed (fc-cache)"
+        assert run_fccache().message == "User & system font caches refreshed (fc-cache)"
         assert run.call_args_list[1].kwargs["use_sudo"] is True
     # A failed system pass still leaves the user cache rebuilt, so the task
     # reports what it actually did rather than nothing.
@@ -1288,12 +1405,12 @@ def test_font_cache_refresh_covers_the_user_cache_before_the_system_one():
             side_effect=[CommandResult(["fc-cache"], 0), CommandResult(["fc-cache"], 1)],
         ),
     ):
-        assert run_fccache() == "User font cache refreshed (fc-cache)"
+        assert run_fccache().status is OptimizationStatus.FAILED
     with (
         patch("src.optimize.shutil.which", return_value="/usr/bin/fc-cache"),
         patch("src.optimize.run_command", return_value=CommandResult(["fc-cache"], 1)),
     ):
-        assert run_fccache() is None
+        assert run_fccache().status is OptimizationStatus.FAILED
 
 
 def test_systemd_timer_enabled_reads_the_verdict_lines_not_the_exit_code():
@@ -1328,13 +1445,13 @@ def test_locate_db_refresh_defers_to_an_enabled_distro_timer():
         patch("src.optimize.shutil.which", return_value=None),
         patch("src.optimize._which_admin_tool", return_value=None),
     ):
-        assert run_locate_db_refresh() is None
+        assert run_locate_db_refresh().status is OptimizationStatus.SILENT_SKIP
     with (
         patch("src.optimize._which_admin_tool", return_value="/usr/sbin/updatedb"),
         patch("src.optimize.has_sudo", return_value=False),
         patch("src.optimize.run_command") as run,
     ):
-        assert run_locate_db_refresh() is None
+        assert run_locate_db_refresh().status is OptimizationStatus.SILENT_SKIP
         run.assert_not_called()
     with (
         patch("src.optimize._which_admin_tool", return_value="/usr/sbin/updatedb"),
@@ -1342,8 +1459,8 @@ def test_locate_db_refresh_defers_to_an_enabled_distro_timer():
         patch("src.optimize._updatedb_is_scheduled", return_value=True),
         patch("src.optimize.run_command") as run,
     ):
-        assert run_locate_db_refresh() is None
-        assert run_locate_db_refresh(dry_run=True) is None
+        assert run_locate_db_refresh().status is OptimizationStatus.SILENT_SKIP
+        assert run_locate_db_refresh(dry_run=True).status is OptimizationStatus.SILENT_SKIP
         run.assert_not_called()
 
 
@@ -1381,8 +1498,11 @@ def test_locate_db_refresh_runs_when_nothing_else_maintains_the_index():
         patch("src.optimize._updatedb_is_scheduled", return_value=False),
         patch("src.optimize.run_command", return_value=CommandResult(["updatedb"], 0)) as run,
     ):
-        assert run_locate_db_refresh(dry_run=True) == "locate database would be rebuilt (updatedb)"
-        assert run_locate_db_refresh() == "locate database rebuilt (updatedb)"
+        assert (
+            run_locate_db_refresh(dry_run=True).message
+            == "locate database would be rebuilt (updatedb)"
+        )
+        assert run_locate_db_refresh().message == "locate database rebuilt (updatedb)"
         assert run.call_args.args[0] == ["updatedb"]
         assert run.call_args.kwargs["use_sudo"] is True
         # A full filesystem walk must not be cut off by the default ceiling.
@@ -1393,7 +1513,7 @@ def test_locate_db_refresh_runs_when_nothing_else_maintains_the_index():
         patch("src.optimize._updatedb_is_scheduled", return_value=False),
         patch("src.optimize.run_command", return_value=CommandResult(["updatedb"], 1)),
     ):
-        assert run_locate_db_refresh() is None
+        assert run_locate_db_refresh().status is OptimizationStatus.FAILED
 
 
 def test_repo_refresh_prefers_the_native_package_manager_over_packagekit():
@@ -1421,9 +1541,10 @@ def test_repo_refresh_prefers_the_native_package_manager_over_packagekit():
         patch("src.optimize.run_command", return_value=CommandResult(["dnf"], 0)) as run,
     ):
         assert (
-            run_package_repo_refresh(dry_run=True) == "Software repository index would be refreshed"
+            run_package_repo_refresh(dry_run=True).message
+            == "Software repository index would be refreshed"
         )
-        assert run_package_repo_refresh() == "Software repository index refreshed"
+        assert run_package_repo_refresh().message == "Software repository index refreshed"
         assert run.call_args.args[0] == ["dnf", "makecache"]
         assert run.call_args.kwargs["timeout"] == optimize.REPO_REFRESH_TIMEOUT
     with (
@@ -1433,7 +1554,7 @@ def test_repo_refresh_prefers_the_native_package_manager_over_packagekit():
         ),
         patch("src.optimize.run_command", return_value=CommandResult(["dnf5"], 1)),
     ):
-        assert run_package_repo_refresh() is None
+        assert run_package_repo_refresh().status is OptimizationStatus.FAILED
 
 
 def test_repo_refresh_reaches_apt_on_debian_and_ubuntu():
@@ -1450,7 +1571,7 @@ def test_repo_refresh_reaches_apt_on_debian_and_ubuntu():
         ),
         patch("src.optimize.run_command", return_value=CommandResult(["apt-get"], 0)) as run,
     ):
-        assert run_package_repo_refresh() == "Software repository index refreshed"
+        assert run_package_repo_refresh().message == "Software repository index refreshed"
         assert run.call_args.args[0][:2] == ["apt-get", "update"]
         assert run.call_args.kwargs["use_sudo"] is True
 
@@ -1488,5 +1609,5 @@ def test_chromium_snap_profiles_are_covered(test_env):
         patch("pathlib.Path.home", return_value=test_env),
         patch("src.optimize._is_any_process_running", return_value=False),
     ):
-        assert run_vacuum_all(dry_run=True) == "Found 1 database to optimize"
+        assert run_vacuum_all(dry_run=True).message == "Found 1 database to optimize"
     assert db.exists()

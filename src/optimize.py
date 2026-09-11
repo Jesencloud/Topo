@@ -9,6 +9,9 @@ import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
+from enum import Enum, auto
+from functools import wraps
 from pathlib import Path
 from typing import TypeVar
 
@@ -123,23 +126,60 @@ def opt_log(message, success=True, skipped=False):
         print(f"{CLEAR_LINE}  {icon} {msg}")
 
 
-# What every registered task promises, and the only thing they have in common:
-# one line for the report, or None when there was nothing to say. Bound to a
-# TypeVar rather than used bare on `register` so that a decorated task keeps its
-# own signature -- the type is here to check what enters the list, not to flatten
-# 23 functions into one shape.
-_OptimizationTask = TypeVar("_OptimizationTask", bound=Callable[..., str | None])
+class OptimizationStatus(Enum):
+    SILENT_SKIP = auto()
+    VISIBLE_SKIP = auto()
+    SUCCESS = auto()
+    FAILED = auto()
+
+
+@dataclass(frozen=True)
+class OptimizationResult:
+    status: OptimizationStatus
+    message: str | None = None
+
+    @classmethod
+    def silent_skip(cls) -> "OptimizationResult":
+        return cls(OptimizationStatus.SILENT_SKIP)
+
+    @classmethod
+    def visible_skip(cls, message: str) -> "OptimizationResult":
+        return cls(OptimizationStatus.VISIBLE_SKIP, message)
+
+    @classmethod
+    def success(cls, message: str) -> "OptimizationResult":
+        return cls(OptimizationStatus.SUCCESS, message)
+
+    @classmethod
+    def failed(cls, message: str) -> "OptimizationResult":
+        return cls(OptimizationStatus.FAILED, message)
+
+
+_OptimizationTask = TypeVar(
+    "_OptimizationTask", bound=Callable[..., str | None | OptimizationResult]
+)
 
 
 class OptimizationRegistry:
     """Registry for automatic discovery of system optimization tasks."""
 
-    tasks: list[Callable[..., str | None]] = []
+    tasks: list[Callable[..., OptimizationResult]] = []
 
     @classmethod
     def register(cls, func: _OptimizationTask) -> _OptimizationTask:
-        cls.tasks.append(func)
-        return func
+        @wraps(func)
+        def task(*args, **kwargs) -> OptimizationResult:
+            result = func(*args, **kwargs)
+            if isinstance(result, OptimizationResult):
+                return result
+            if result is None:
+                return OptimizationResult.silent_skip()
+            if kwargs.get("dry_run", False):
+                return OptimizationResult.visible_skip(result)
+            return OptimizationResult.success(result)
+
+        cls.tasks.append(task)
+        return task  # type: ignore[return-value]
 
 
 register_optimization_task = OptimizationRegistry.register
@@ -285,7 +325,9 @@ def run_vacuum_all(dry_run=False):
     db_files = sorted(set(db_files))
 
     if busy_apps and not db_files:
-        return f"{', '.join(sorted(busy_apps))} running; database optimization skipped"
+        return OptimizationResult.visible_skip(
+            f"{', '.join(sorted(busy_apps))} running; database optimization skipped"
+        )
     if not db_files:
         return None
     # The same tail on both messages: what was skipped is decided above, and a
@@ -315,7 +357,7 @@ def run_fstrim(dry_run=False):
         return "SSD partitions would be trimmed (fstrim)"
     if run_command(["fstrim", "-av"], use_sudo=True, capture=True).ok:
         return "SSD partitions trimmed (fstrim)"
-    return None
+    return OptimizationResult.failed("SSD partition trim failed (fstrim)")
 
 
 @register_optimization_task
@@ -333,9 +375,13 @@ def run_fccache(dry_run=False):
     if dry_run:
         return "Font caches would be refreshed (fc-cache)"
     if not run_command(["fc-cache"], capture=True).ok:
-        return None
+        return OptimizationResult.failed("User font cache refresh failed (fc-cache)")
     if has_sudo() and run_command(["fc-cache"], use_sudo=True, capture=True).ok:
         return "User & system font caches refreshed (fc-cache)"
+    if has_sudo():
+        return OptimizationResult.failed(
+            "System font cache refresh failed after user cache succeeded (fc-cache)"
+        )
     return "User font cache refreshed (fc-cache)"
 
 
@@ -348,7 +394,7 @@ def run_tmpfiles_cleanup(dry_run=False):
         return "Systemd tmpfiles clean rules would be processed"
     if run_command(["systemd-tmpfiles", "--clean"], use_sudo=True, capture=True).ok:
         return "Systemd tmpfiles clean rules processed"
-    return None
+    return OptimizationResult.failed("Systemd tmpfiles cleanup failed")
 
 
 @register_optimization_task
@@ -360,7 +406,7 @@ def run_ldconfig(dry_run=False):
         return "Dynamic linker cache would be updated (ldconfig)"
     if run_command(["ldconfig"], use_sudo=True, capture=True).ok:
         return "Dynamic linker cache updated (ldconfig)"
-    return None
+    return OptimizationResult.failed("Dynamic linker cache update failed (ldconfig)")
 
 
 @register_optimization_task
@@ -372,7 +418,7 @@ def run_locale_gen(dry_run=False):
         return "System locale archive would be regenerated"
     if run_command(["locale-gen"], use_sudo=True, capture=True).ok:
         return "System locale archive regenerated"
-    return None
+    return OptimizationResult.failed("System locale archive regeneration failed")
 
 
 @register_optimization_task
@@ -384,7 +430,7 @@ def run_man_db_refresh(dry_run=False):
         return "Manual page database index would be updated (mandb)"
     if run_command(["mandb", "-q"], capture=True).ok:
         return "Manual page database index updated (mandb)"
-    return None
+    return OptimizationResult.failed("Manual page database update failed (mandb)")
 
 
 def _dns_cache_flushers() -> list[tuple[str, list[str], bool]]:
@@ -444,8 +490,12 @@ def run_dns_flush(dry_run=False):
         # and no prompt.
         if run_command(cmd, use_sudo=True, capture=True).ok:
             flushed.append(label)
-    if not flushed:
-        return None
+    if len(flushed) != len(flushers):
+        failed = [label for label, _, _ in flushers if label not in flushed]
+        detail = f"; flushed {', '.join(flushed)}" if flushed else ""
+        return OptimizationResult.failed(
+            f"DNS resolver cache flush failed ({', '.join(failed)}){detail}"
+        )
     return _dns_flush_report(flushed, "flushed")
 
 
@@ -525,7 +575,14 @@ def run_systemd_user_service_cleanup(dry_run=False):
         if removed == 0:
             return None
         if shutil.which("systemctl"):
-            run_command(["systemctl", "--user", "daemon-reload"], capture=True, timeout=10)
+            reload_result = run_command(
+                ["systemctl", "--user", "daemon-reload"], capture=True, timeout=10
+            )
+            if not reload_result.ok:
+                return OptimizationResult.failed(
+                    f"Removed {plural(removed, 'broken user systemd service')}, "
+                    "but user systemd daemon reload failed"
+                )
         return f"Removed {plural(removed, 'broken user systemd service')}"
 
     return f"Found {plural(len(broken_units), 'broken user systemd service')}"
@@ -533,7 +590,7 @@ def run_systemd_user_service_cleanup(dry_run=False):
 
 def _reset_failed_units(
     scope_args: list[str], label: str, dry_run: bool, *, use_sudo: bool
-) -> str | None:
+) -> str | None | OptimizationResult:
     """Clear failed unit state for one systemd scope, counting what was cleared.
 
     The units are listed first so the message can name a number: bare
@@ -558,7 +615,7 @@ def _reset_failed_units(
         timeout=10,
     )
     if not list_result.ok:
-        return None
+        return OptimizationResult.failed(f"Failed to list {label} systemd units")
 
     failed_units = [line for line in list_result.stdout.splitlines() if line.strip()]
     if not failed_units:
@@ -575,7 +632,7 @@ def _reset_failed_units(
     )
     if reset_result.ok:
         return f"Reset {plural(len(failed_units), f'failed {label} systemd unit state')}"
-    return None
+    return OptimizationResult.failed(f"Failed to reset {label} systemd unit states")
 
 
 @register_optimization_task
@@ -691,43 +748,39 @@ def run_swap_management(dry_run=False):
             return None
 
         # Only reset if we have _MIN_RAM_SWAP_RATIOx the used swap available in RAM for safety
-        if available > used_swap * _MIN_RAM_SWAP_RATIO:
-            if dry_run:
-                return f"Swap would be reset (Currently using {bytes_to_human(used_swap)})"
+        if available <= used_swap * _MIN_RAM_SWAP_RATIO:
+            return None
+        if dry_run:
+            return f"Swap would be reset (Currently using {bytes_to_human(used_swap)})"
 
-            # swapoff -a can take time as data is moved back to RAM
-            off = run_command(
-                ["swapoff", "-a"],
-                use_sudo=True,
-                timeout=max(_SWAPOFF_MIN_TIMEOUT, used_swap // _SWAPOFF_BYTES_PER_SECOND),
-            )
-            # Unconditionally, and not inside `if off.ok` where it used to live:
-            # swapoff -a disables the areas one at a time, so a run killed at the
-            # timeout has already turned some -- possibly all -- of them off. The
-            # restore was the part being skipped exactly when it mattered, which
-            # left the machine running without swap until its next reboot, and
-            # since the function then fell through to `return None`, and
-            # optimize_system prints nothing for None, it did so in silence.
-            #
-            # Its exit status is deliberately not consulted: swapon -a is nonzero
-            # when any single fstab entry fails even though the rest came back,
-            # and it is zero on a run that enabled nothing. Only the table it
-            # writes to /proc/swaps answers the question either line below asks.
-            run_command(["swapon", "-a"], use_sudo=True, timeout=_SWAPON_TIMEOUT)
-            if not _swap_is_active():
-                # The one failure in this batch that leaves the system worse than
-                # it was found, so it gets a line of its own -- printed here
-                # rather than returned, because optimize_system gives every
-                # returned string the OK glyph, and a checkmark is not what this
-                # sentence means. opt_log takes print_lock, so it is safe to call
-                # from a pool worker.
-                opt_log("Swap was left off; run `sudo swapon -a`", success=False)
-                return None
-            if off.ok:
-                return f"Swap reset successful (Reclaimed {bytes_to_human(used_swap)})"
+        # swapoff -a can take time as data is moved back to RAM
+        off = run_command(
+            ["swapoff", "-a"],
+            use_sudo=True,
+            timeout=max(_SWAPOFF_MIN_TIMEOUT, used_swap // _SWAPOFF_BYTES_PER_SECOND),
+        )
+        # Unconditionally, and not inside `if off.ok` where it used to live:
+        # swapoff -a disables the areas one at a time, so a run killed at the
+        # timeout has already turned some -- possibly all -- of them off. The
+        # restore was the part being skipped exactly when it mattered, which
+        # left the machine running without swap until its next reboot, and
+        # since the function then fell through to `return None`, and
+        # optimize_system prints nothing for None, it did so in silence.
+        #
+        # Its exit status is deliberately not consulted: swapon -a is nonzero
+        # when any single fstab entry fails even though the rest came back,
+        # and it is zero on a run that enabled nothing. Only the table it
+        # writes to /proc/swaps answers the question either line below asks.
+        restore = run_command(["swapon", "-a"], use_sudo=True, timeout=_SWAPON_TIMEOUT)
+        if not _swap_is_active():
+            return OptimizationResult.failed("Swap was left off; run `sudo swapon -a`")
+        if off.ok and restore.ok:
+            return f"Swap reset successful (Reclaimed {bytes_to_human(used_swap)})"
+        if off.ok:
+            return OptimizationResult.failed("Swap was restored only partially after reset")
+        return OptimizationResult.failed("Swap reset failed")
     except (OSError, ValueError):
-        pass
-    return None
+        return None
 
 
 @register_optimization_task
@@ -741,6 +794,8 @@ def run_journal_optimization(dry_run=False):
     res = run_command(
         ["journalctl", "--vacuum-time=3d"], use_sudo=True, capture=True, env=C_LOCALE_ENV
     )
+    if not res.ok:
+        return OptimizationResult.failed("System journal vacuum failed")
     if res.ok:
         # Both streams and journalctl's own total; see clean_journal() for why
         # stdout alone is empty here and what reading the first size in this
@@ -789,7 +844,7 @@ def run_coredump_cleanup(dry_run=False):
         capture=True,
     )
     if not res.ok:
-        return None
+        return OptimizationResult.failed("System coredump cleanup failed")
 
     return "System coredumps cleared"
 
@@ -911,14 +966,16 @@ def _service_exec_target_exists(command: str) -> bool:
     return shutil.which(command) is not None
 
 
-def _refresh_database(cmd: str, target_dir: Path, label: str, dry_run: bool) -> str | None:
+def _refresh_database(
+    cmd: str, target_dir: Path, label: str, dry_run: bool
+) -> str | None | OptimizationResult:
     if not target_dir.exists() or not shutil.which(cmd):
         return None
     if dry_run:
         return f"{label} would be refreshed"
     if run_command([cmd, str(target_dir)], capture=True, timeout=30).ok:
         return f"{label} refreshed"
-    return None
+    return OptimizationResult.failed(f"{label} refresh failed")
 
 
 @register_optimization_task
@@ -984,8 +1041,10 @@ def run_icon_cache_refresh(dry_run=False):
             ["gtk-update-icon-cache", "-q", "-f", str(theme)], capture=True, timeout=30
         ).ok:
             rebuilt += 1
-    if rebuilt == 0:
-        return None
+    if rebuilt != len(themes):
+        return OptimizationResult.failed(
+            f"Failed to rebuild {len(themes) - rebuilt} user icon theme caches"
+        )
     return f"Rebuilt {plural(rebuilt, 'user icon theme cache')}"
 
 
@@ -997,10 +1056,22 @@ def run_flatpak_repair(dry_run=False):
     if dry_run:
         return "Flatpak system & user objects would be verified (flatpak repair)"
     # Repair user installation first, then system if sudo available
-    run_command(["flatpak", "repair", "--user"], capture=True)
-    if has_sudo():
-        run_command(["flatpak", "repair"], use_sudo=True, capture=True)
-    return "Flatpak storage objects verified (flatpak repair)"
+    user_result = run_command(["flatpak", "repair", "--user"], capture=True)
+    sudo_available = has_sudo()
+    system_result = (
+        run_command(["flatpak", "repair"], use_sudo=True, capture=True) if sudo_available else None
+    )
+    failed = []
+    if not user_result.ok:
+        failed.append("user")
+    if system_result is not None and not system_result.ok:
+        failed.append("system")
+    if failed:
+        return OptimizationResult.failed(
+            f"Flatpak {' & '.join(failed)} storage verification failed (flatpak repair)"
+        )
+    scope = "system & user" if system_result is not None else "user"
+    return f"Flatpak {scope} storage objects verified (flatpak repair)"
 
 
 def _systemd_timer_enabled(unit_names: tuple[str, ...]) -> bool:
@@ -1062,7 +1133,7 @@ def run_locate_db_refresh(dry_run=False):
         return "locate database would be rebuilt (updatedb)"
     if run_command(["updatedb"], use_sudo=True, capture=True, timeout=UPDATEDB_TIMEOUT).ok:
         return "locate database rebuilt (updatedb)"
-    return None
+    return OptimizationResult.failed("locate database rebuild failed (updatedb)")
 
 
 # Native package manager first, PackageKit after: pkcon reaches the same backend
@@ -1096,16 +1167,11 @@ def run_package_repo_refresh(dry_run=False):
     # detector. A cut-off refresh is retried next run, never left half-applied.
     if run_command(cmd, use_sudo=True, capture=True, timeout=REPO_REFRESH_TIMEOUT).ok:
         return "Software repository index refreshed"
-    return None
+    return OptimizationResult.failed("Software repository index refresh failed")
 
 
 def optimize_system(dry_run: bool = False) -> bool:
-    """Run the maintenance task batch; False when it never ran (sudo declined).
-
-    A task that raises is logged and the batch continues, and that stays a
-    success: the tasks are independent maintenance chores, so one unavailable
-    tool (no fstrim, no fc-cache) must not make `topo optimize` look broken.
-    """
+    """Run the maintenance batch and return False when any task fails."""
     sys.stdout.write(CLEAR_SCREEN)
     sys.stdout.flush()
     print(f"\n{PURPLE}System Optimization{RESET}\n")
@@ -1130,6 +1196,7 @@ def optimize_system(dry_run: bool = False) -> bool:
             sys.stdout.flush()
 
     worker_count = min(max(len(registered_tasks), 1), OPTIMIZATION_MAX_WORKERS)
+    failed = False
     try:
         with (
             threaded_spinner(render_optimization_spinner),
@@ -1140,11 +1207,21 @@ def optimize_system(dry_run: bool = False) -> bool:
             for future in as_completed(futures):
                 try:
                     result = future.result()
-                    if result:
-                        opt_log(result, skipped=dry_run)
+                    if result.status is OptimizationStatus.SILENT_SKIP:
+                        continue
+                    if result.message is None:
+                        raise ValueError("optimization result is missing its message")
+                    if result.status is OptimizationStatus.FAILED:
+                        failed = True
+                        opt_log(result.message, success=False)
+                    else:
+                        opt_log(
+                            result.message,
+                            skipped=result.status is OptimizationStatus.VISIBLE_SKIP,
+                        )
                 except Exception as exc:
-                    # Optimization runs independent maintenance tasks concurrently; one
-                    # task failure should not abort the rest of the batch.
+                    # Tasks are independent, so a failure does not abort the batch.
+                    failed = True
                     task = futures[future]
                     opt_log(f"{task.__name__} failed ({type(exc).__name__})", success=False)
     finally:
@@ -1152,5 +1229,8 @@ def optimize_system(dry_run: bool = False) -> bool:
         sys.stdout.flush()
 
     duration = time.time() - start_time
+    if failed:
+        print(f"\n{FAIL} {BOLD}Tasks completed with errors in {duration:.1f}s.{RESET}")
+        return False
     print(f"\n{OK} {BOLD}All tasks completed in {duration:.1f}s.{RESET}")
     return True

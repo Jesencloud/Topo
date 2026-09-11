@@ -289,46 +289,90 @@ def test_clean_orphaned_packages_reports_nothing_when_there_are_no_orphans(
 
 
 @patch("src.clean.system.run_command")
-def test_clean_zombies(mock_run):
-    # Mock ps output with a zombie process
-    mock_run.return_value = MagicMock(
-        returncode=0,
+def test_clean_zombies_counts_unique_successful_parent_signals(mock_run, capsys):
+    ps = SimpleNamespace(
         ok=True,
-        stdout="S   PID  PPID COMMAND\nZ   1234  1111 defunct-app\nS   5678  2222 normal-app\n",
+        stdout=(
+            "S   PID  PPID COMMAND\n"
+            "Z   1234  1111 first\n"
+            "Z   1235  1111 second\n"
+            "Z   1236  2222 third\n"
+        ),
     )
+    mock_run.side_effect = [ps, SimpleNamespace(ok=True), SimpleNamespace(ok=True)]
 
-    s, i, c = clean_zombies(dry_run=False)
-    assert i == 1
-    assert c == 1
-    # Check that SIGCHLD was sent to the parent (1111)
-    mock_run.assert_any_call(["kill", "-SIGCHLD", "1111"], use_sudo=True, capture=True)
-
-    # Test dry run
-    s, i, c = clean_zombies(dry_run=True)
-    assert c == 1
+    assert clean_zombies(dry_run=False) == (0, 2, 1)
+    assert [call.args[0] for call in mock_run.call_args_list[1:]] == [
+        ["kill", "-SIGCHLD", "1111"],
+        ["kill", "-SIGCHLD", "2222"],
+    ]
+    assert "Signaled 2 zombie parents" in capsys.readouterr().out
 
 
 @patch("src.clean.system.run_command")
-def test_clean_zombies_never_signals_init_or_pid_zero(mock_run):
-    """Numeric comparison, not string membership: "01"/"０１" must not reach init (L-2)."""
-    mock_run.return_value = MagicMock(
-        returncode=0,
+def test_clean_zombies_reports_mixed_signal_results(mock_run, capsys):
+    ps = SimpleNamespace(
+        ok=True,
+        stdout=("Z   1234  1111 a\nZ   1235  2222 b\nZ   1236  0 c\nZ   1237  nope d\n"),
+    )
+    mock_run.side_effect = [ps, SimpleNamespace(ok=True), SimpleNamespace(ok=False)]
+
+    assert clean_zombies() == (0, 1, 1)
+    output = capsys.readouterr().out
+    assert "Signaled 1 zombie parent" in output
+    assert "Failed to signal 1 zombie parent" in output
+    assert "2 zombie processes had no actionable parent" in output
+
+
+def test_clean_zombies_all_signal_attempts_fail(capsys):
+    def run(args, **kwargs):
+        if args[0] == "ps":
+            return SimpleNamespace(ok=True, stdout="Z 10 1111 a\nZ 11 2222 b\n")
+        return SimpleNamespace(ok=False)
+
+    with patch("src.clean.system.run_command", side_effect=run):
+        assert clean_zombies() == (0, 0, 0)
+
+    output = capsys.readouterr().out
+    assert "Failed to signal 2 zombie parents" in output
+    assert "Signaled" not in output
+
+
+@patch("src.clean.system.run_command")
+def test_clean_zombies_all_non_actionable(mock_run, capsys):
+    mock_run.return_value = SimpleNamespace(
         ok=True,
         stdout=(
-            "Z   1234  1 a\n"
-            "Z   1235  0 b\n"
-            "Z   1236  01 c\n"
-            "Z   1237  001 d\n"
-            "Z   1238  ０１ e\n"
-            "Z   1239  4321 f\n"
+            "Z 10 0 a\n"
+            "Z 11 0 duplicate-invalid-parent\n"
+            "Z 12 1 b\n"
+            "Z 13 01 c\n"
+            "Z 14 nope d\n"
+            "Z 15 １２ e\n"
         ),
     )
 
-    s, i, c = clean_zombies(dry_run=False)
+    assert clean_zombies() == (0, 0, 0)
+    assert clean_zombies(dry_run=True) == (0, 0, 0)
+    assert all(call.args[0][0] == "ps" for call in mock_run.call_args_list)
+    assert capsys.readouterr().out.count("6 zombie processes had no actionable parent") == 2
 
-    assert i == 6
-    signalled = [call.args[0][2] for call in mock_run.call_args_list if call.args[0][0] == "kill"]
-    assert signalled == ["4321"]
+
+@patch("src.clean.system.run_command")
+def test_clean_zombies_dry_run_previews_eligible_parents(mock_run, capsys):
+    mock_run.return_value = SimpleNamespace(
+        ok=True,
+        stdout=("Z 10 1111 a\nZ 11 1111 b\nZ 12 2222 c\nZ 13 1 d\nZ 14 invalid e\n"),
+    )
+
+    assert clean_zombies(dry_run=True) == (0, 0, 1)
+    mock_run.assert_called_once_with(
+        ["ps", "-eo", "state,pid,ppid,comm"], capture=True, env=C_LOCALE_ENV
+    )
+    output = capsys.readouterr().out
+    assert "2 zombie parents would be signaled" in output
+    assert "2 zombie processes had no actionable parent" in output
+    assert "Signaled" not in output
 
 
 @patch("shutil.which")

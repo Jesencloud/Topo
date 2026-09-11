@@ -3,7 +3,7 @@ import re
 import shutil
 from pathlib import Path
 
-from ..core.constants import OK, SKIP
+from ..core.constants import FAIL, OK, SKIP
 from ..core.file_ops import (
     get_size_fast,
     journal_freed_bytes,
@@ -503,7 +503,7 @@ def clean_orphaned_packages(dry_run: bool = False) -> tuple[int, int, int]:
 
 
 def clean_zombies(dry_run: bool = False) -> tuple[int, int, int]:
-    """Identify and attempt to reap zombie processes."""
+    """Identify zombies and signal each actionable parent once."""
     # The state column is read as the English "Z" code.
     res = run_command(["ps", "-eo", "state,pid,ppid,comm"], capture=True, env=C_LOCALE_ENV)
     if not res.ok:
@@ -519,25 +519,45 @@ def clean_zombies(dry_run: bool = False) -> tuple[int, int, int]:
     if not zombies:
         return 0, 0, 0
 
-    count = len(zombies)
+    eligible_parent_ids: set[int] = set()
+    non_actionable = 0
+    for zombie in zombies:
+        ppid = zombie["ppid"]
+        if ppid.isascii() and ppid.isdigit() and int(ppid) > 1:
+            eligible_parent_ids.add(int(ppid))
+        else:
+            non_actionable += 1
+    eligible_parents = sorted(eligible_parent_ids)
+
     if dry_run:
-        print(f"  {SKIP} {count} zombie processes detected")
-        return 0, 0, 1
+        if eligible_parents:
+            print(f"  {SKIP} {plural(len(eligible_parents), 'zombie parent')} would be signaled")
+        if non_actionable:
+            print(
+                f"  {SKIP} {plural(non_actionable, 'zombie process', 'zombie processes')}"
+                " had no actionable parent"
+            )
+        return 0, 0, int(bool(eligible_parents))
 
-    parents = set(z["ppid"] for z in zombies)
-    for ppid in parents:
-        # Compare numerically, and only accept ASCII digits: a zero-padded "01"
-        # or a Unicode digit form would slip past a string membership test and
-        # send SIGCHLD to init (PID 1) or to the kernel's PID 0 placeholder.
-        if not (ppid.isascii() and ppid.isdigit()):
-            continue
-        parent_pid = int(ppid)
-        if parent_pid <= 1:
-            continue
-        run_command(["kill", "-SIGCHLD", str(parent_pid)], use_sudo=True, capture=True)
+    succeeded = 0
+    failed = 0
+    for parent_pid in eligible_parents:
+        signal = run_command(["kill", "-SIGCHLD", str(parent_pid)], use_sudo=True, capture=True)
+        if signal.ok:
+            succeeded += 1
+        else:
+            failed += 1
 
-    print(f"  {OK} Signaled parents of {count} zombie processes")
-    return 0, count, 1
+    if succeeded:
+        print(f"  {OK} Signaled {plural(succeeded, 'zombie parent')}")
+    if failed:
+        print(f"  {FAIL} Failed to signal {plural(failed, 'zombie parent')}")
+    if non_actionable:
+        print(
+            f"  {SKIP} {plural(non_actionable, 'zombie process', 'zombie processes')}"
+            " had no actionable parent"
+        )
+    return 0, succeeded, int(bool(succeeded))
 
 
 # A kernel package carries its version in its name: linux-image-6.8.0-45-generic

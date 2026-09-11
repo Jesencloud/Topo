@@ -142,7 +142,8 @@ def test_strip_topo_path_lines(test_env):
     with patch("pathlib.Path.home", return_value=test_env):
         changed = _strip_topo_path_lines()
 
-    assert changed is True
+    assert changed.removed is True
+    assert changed.failed is False
     content = bashrc.read_text()
     assert "# Added by topo" not in content
     assert "$HOME/.local/bin" not in content
@@ -154,7 +155,8 @@ def test_strip_topo_path_lines_noop_without_marker(test_env):
     bashrc.write_text("export EDITOR=vim\n")
     with patch("pathlib.Path.home", return_value=test_env):
         changed = _strip_topo_path_lines()
-    assert changed is False
+    assert changed.removed is False
+    assert changed.failed is False
     assert bashrc.read_text() == "export EDITOR=vim\n"
 
 
@@ -247,12 +249,16 @@ def test_strip_path_lines_handles_read_write_errors(test_env):
         patch("pathlib.Path.home", return_value=test_env),
         patch.object(Path, "read_bytes", side_effect=OSError),
     ):
-        assert _strip_topo_path_lines() is False
+        result = _strip_topo_path_lines()
+        assert result.removed is False
+        assert result.failed is False
     with (
         patch("pathlib.Path.home", return_value=test_env),
         patch("src.manage.remove.os.replace", side_effect=OSError),
     ):
-        assert _strip_topo_path_lines() is False
+        result = _strip_topo_path_lines()
+        assert result.removed is False
+        assert result.failed is True
     # The failed write left nothing behind: no .bashrc.topo-tmp-* beside it.
     assert [p.name for p in test_env.glob(".*topo-tmp*")] == []
     assert bashrc.read_bytes() == b"# Added by topo\nexport PATH=x\n"
@@ -274,7 +280,9 @@ def test_strip_path_lines_keeps_non_utf8_rc_bytes_exactly(test_env):
     bashrc.write_bytes(comment + b'# Added by topo\nexport PATH="$HOME/.topo:$PATH"\nalias l=ls\n')
 
     with patch("pathlib.Path.home", return_value=test_env):
-        assert _strip_topo_path_lines() is True
+        result = _strip_topo_path_lines()
+        assert result.removed is True
+        assert result.failed is False
 
     after = bashrc.read_bytes()
     assert after == comment + b"alias l=ls\n"
@@ -291,7 +299,9 @@ def test_strip_path_lines_rewrites_through_a_dotfile_manager_symlink(test_env):
     bashrc.symlink_to(real)
 
     with patch("pathlib.Path.home", return_value=test_env):
-        assert _strip_topo_path_lines() is True
+        result = _strip_topo_path_lines()
+        assert result.removed is True
+        assert result.failed is False
 
     assert bashrc.is_symlink()
     assert bashrc.readlink() == real
@@ -314,7 +324,9 @@ def test_strip_path_lines_preserves_rc_file_mode(test_env):
     bashrc.write_text(body)
     bashrc.chmod(0o600)
     with patch("pathlib.Path.home", return_value=test_env):
-        assert _strip_topo_path_lines() is True
+        result = _strip_topo_path_lines()
+        assert result.removed is True
+        assert result.failed is False
     assert stat.S_IMODE(bashrc.stat().st_mode) == 0o600
 
     bashrc.write_text(body)
@@ -322,7 +334,9 @@ def test_strip_path_lines_preserves_rc_file_mode(test_env):
     previous_umask = os.umask(0o077)
     try:
         with patch("pathlib.Path.home", return_value=test_env):
-            assert _strip_topo_path_lines() is True
+            result = _strip_topo_path_lines()
+        assert result.removed is True
+        assert result.failed is False
     finally:
         os.umask(previous_umask)
     assert stat.S_IMODE(bashrc.stat().st_mode) == 0o644
@@ -337,9 +351,78 @@ def test_package_residue_removes_matching_entries_and_path(test_env, monkeypatch
     (test_env / ".bashrc").write_text("# Added by topo\nexport PATH=x\n")
     monkeypatch.setattr("pathlib.Path.home", lambda: test_env)
     with patch("src.manage.remove._remove_path", return_value=True):
-        removed = _remove_package_user_residue()
-    assert "Launcher compatibility entry" in removed
-    assert "Shell PATH entry" in removed
+        result = _remove_package_user_residue()
+    assert "Launcher compatibility entry" in result.removed
+    assert "Shell PATH entry" in result.removed
+    assert result.failed == []
+
+
+def test_package_residue_reports_only_attempted_failures(test_env, monkeypatch):
+    monkeypatch.setattr("pathlib.Path.home", lambda: test_env)
+    internal_dir = test_env / ".topo"
+    cache_dir = test_env / ".cache/topo"
+    internal_dir.mkdir()
+    cache_dir.mkdir(parents=True)
+
+    def remove_path(path):
+        return Path(path) != cache_dir
+
+    with patch("src.manage.remove._remove_path", side_effect=remove_path):
+        result = _remove_package_user_residue()
+
+    assert result.removed == ["Script install directory"]
+    assert result.failed == ["Temporary scan cache"]
+    assert "Configuration and whitelist" not in result.failed
+    assert "Deletion history / state" not in result.failed
+
+
+@patch("src.manage.remove.get_install_source", return_value="package")
+@patch("src.manage.remove.get_package_remove_argv", return_value=["dnf", "remove", "-y", "topo"])
+@patch("src.manage.remove.subprocess.run", return_value=MagicMock(returncode=0))
+@patch("src.manage.remove._confirm_removal", return_value=True)
+def test_package_remove_returns_false_when_residue_cleanup_partly_fails(
+    _confirm, _run, _argv, _source, test_env, monkeypatch, capsys
+):
+    monkeypatch.setattr("pathlib.Path.home", lambda: test_env)
+    internal_dir = test_env / ".topo"
+    cache_dir = test_env / ".cache/topo"
+    internal_dir.mkdir()
+    cache_dir.mkdir(parents=True)
+
+    def remove_path(path):
+        if Path(path) == cache_dir:
+            return False
+        _do_remove(path)
+        return True
+
+    with patch("src.manage.remove._remove_path", side_effect=remove_path):
+        assert run_remove() is False
+
+    output = capsys.readouterr().out
+    assert "Topo package removal completed" in output
+    assert "Removed Script install directory" in output
+    assert "Failed to remove Temporary scan cache" in output
+    assert "package was removed, but cleanup completed with errors" in output
+
+
+@patch("src.manage.remove.get_install_source", return_value="package")
+@patch("src.manage.remove.get_package_remove_argv", return_value=["dnf", "remove", "-y", "topo"])
+@patch("src.manage.remove.subprocess.run", return_value=MagicMock(returncode=0))
+@patch("src.manage.remove._confirm_removal", return_value=True)
+def test_package_remove_reports_shell_path_rewrite_failure(
+    _confirm, _run, _argv, _source, test_env, monkeypatch, capsys
+):
+    monkeypatch.setattr("pathlib.Path.home", lambda: test_env)
+    bashrc = test_env / ".bashrc"
+    bashrc.write_text("# Added by topo\nexport PATH=x\n")
+
+    with patch("src.manage.remove.os.replace", side_effect=OSError("read-only")):
+        assert run_remove() is False
+
+    output = capsys.readouterr().out
+    assert "Failed to remove Shell PATH entry" in output
+    assert "package was removed, but cleanup completed with errors" in output
+    assert bashrc.read_text() == "# Added by topo\nexport PATH=x\n"
 
 
 @patch("src.manage.remove.get_install_source", return_value="package")
@@ -608,6 +691,38 @@ def test_package_residue_removes_a_launcher_under_topo_link_dir(test_env, monkey
     monkeypatch.setenv("XDG_STATE_HOME", str(test_env / ".local/state"))
 
     with patch("src.manage.remove.safe_remove", side_effect=lambda p, **kw: (_do_remove(p), "ok")):
-        assert "Launcher compatibility entry" in _remove_package_user_residue()
+        result = _remove_package_user_residue()
+        assert "Launcher compatibility entry" in result.removed
+    assert result.failed == []
 
     assert not launcher.exists()
+
+
+def test_remove_path_preserves_permanent_self_removal_policy(test_env):
+    target = test_env / ".topo"
+    target.mkdir()
+    with patch("src.manage.remove.safe_remove", return_value=(True, "ok")) as remove:
+        from src.manage.remove import _remove_path
+
+        assert _remove_path(target) is True
+    remove.assert_called_once_with(
+        target,
+        use_trash=False,
+        allow_app_data_removal=True,
+        allow_self_removal=True,
+    )
+
+
+def test_script_removal_preserves_permanent_self_removal_policy(test_env, monkeypatch, capsys):
+    monkeypatch.setattr("pathlib.Path.home", lambda: test_env)
+    internal_dir = test_env / ".topo"
+    internal_dir.mkdir()
+    with (
+        patch("src.manage.remove.get_install_source", return_value="script"),
+        patch("src.manage.remove.get_size_fast", return_value=1),
+        patch("src.manage.remove.safe_remove", return_value=(True, "ok")) as remove,
+    ):
+        assert run_remove(assume_yes=True) is True
+
+    assert "successfully removed" in capsys.readouterr().out
+    assert remove.call_args.kwargs["use_trash"] is False

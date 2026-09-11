@@ -5,7 +5,7 @@ import stat
 import subprocess
 import sys
 from pathlib import Path
-from typing import TypedDict
+from typing import NamedTuple, TypedDict
 
 from ..core import system, terminal_state
 from ..core.constants import (
@@ -38,6 +38,20 @@ class _RemoveItem(TypedDict, total=False):
     desc: str
     type: str
     size: int
+
+
+class _ResidueResult(NamedTuple):
+    """Labels for residue cleanup attempts, separated by outcome."""
+
+    removed: list[str]
+    failed: list[str]
+
+
+class _ShellPathResult(NamedTuple):
+    """Whether Topo PATH markers were removed or failed to be rewritten."""
+
+    removed: bool
+    failed: bool
 
 
 def _resolve_launcher_symlink(launcher: Path) -> Path | None:
@@ -124,7 +138,7 @@ def _replace_file_bytes(path: Path, data: bytes) -> bool:
     return True
 
 
-def _strip_topo_path_lines() -> bool:
+def _strip_topo_path_lines() -> _ShellPathResult:
     """Remove the `# Added by topo` PATH-export block from shell rc files.
 
     Read and written as bytes, and both markers spelled as bytes, because this
@@ -145,18 +159,24 @@ def _strip_topo_path_lines() -> bool:
     # command taking it back out cannot drift apart; ASCII, so .encode() is exact.
     marker = TOPO_RC_MARKER.encode()
     export_prefix = b"export PATH="
-    changed = False
+    removed = False
+    failed = False
     for config in (Path.home() / ".bashrc", Path.home() / ".zshrc"):
         if not config.exists():
             continue
         try:
             original = config.read_bytes().splitlines()
         except OSError:
+            # An unreadable existing rc file is only a cleanup failure when we can
+            # establish that it contains Topo's marker. Since that is impossible
+            # here, do not turn an unrelated unreadable dotfile into a false error.
             continue
         cleaned: list[bytes] = []
         drop_export = False
+        marker_found = False
         for line in original:
             if line.strip() == marker:
+                marker_found = True
                 drop_export = True
                 continue
             if drop_export and line.strip().startswith(export_prefix):
@@ -164,11 +184,14 @@ def _strip_topo_path_lines() -> bool:
                 continue
             drop_export = False
             cleaned.append(line)
-        if cleaned != original and _replace_file_bytes(
-            config, b"\n".join(cleaned) + (b"\n" if cleaned else b"")
-        ):
-            changed = True
-    return changed
+        if not marker_found:
+            continue
+        if cleaned != original:
+            if _replace_file_bytes(config, b"\n".join(cleaned) + (b"\n" if cleaned else b"")):
+                removed = True
+            else:
+                failed = True
+    return _ShellPathResult(removed=removed, failed=failed)
 
 
 def _launcher_points_to_package(launcher_path: Path) -> bool:
@@ -217,8 +240,9 @@ def _remove_path(path: Path) -> bool:
     return ok
 
 
-def _remove_package_user_residue() -> list[str]:
+def _remove_package_user_residue() -> _ResidueResult:
     removed: list[str] = []
+    failed: list[str] = []
     home = Path.home()
     internal_dir = home / ".topo"
 
@@ -226,21 +250,25 @@ def _remove_package_user_residue() -> list[str]:
     # `topo link` under TOPO_LINK_DIR (or by `sudo topo link`, in /usr/local/bin)
     # would otherwise survive the package removal as a dangling symlink. Not
     # any()/short-circuited on purpose -- more than one can exist, and stopping at
-    # the first would leave the others. Paths this user cannot write simply fail
-    # to be removed and stay unreported.
+    # the first would leave the others.
     launcher_removed = False
+    launcher_failed = False
     for launcher_path in get_launcher_candidates():
-        if (
-            (launcher_path.exists() or launcher_path.is_symlink())
-            and (
-                _launcher_points_to_topo(launcher_path, internal_dir)
-                or _launcher_points_to_package(launcher_path)
-            )
-            and _remove_path(launcher_path)
+        if not (launcher_path.exists() or launcher_path.is_symlink()):
+            continue
+        if not (
+            _launcher_points_to_topo(launcher_path, internal_dir)
+            or _launcher_points_to_package(launcher_path)
         ):
+            continue
+        if _remove_path(launcher_path):
             launcher_removed = True
+        else:
+            launcher_failed = True
     if launcher_removed:
         removed.append("Launcher compatibility entry")
+    if launcher_failed:
+        failed.append("Launcher compatibility entry")
 
     config_dir = get_config_dir()
     # This run holds the instance lock inside ~/.config/topo, so the directory
@@ -256,13 +284,21 @@ def _remove_package_user_residue() -> list[str]:
         (home / ".cache/topo", "Temporary scan cache"),
         (get_state_dir(), "Deletion history / state"),
     ):
-        if _remove_path(path) and not (path == config_dir and config_is_lock_only):
-            removed.append(label)
+        if not (path.exists() or path.is_symlink()):
+            continue
+        if _remove_path(path):
+            if not (path == config_dir and config_is_lock_only):
+                removed.append(label)
+        else:
+            failed.append(label)
 
-    if _strip_topo_path_lines():
+    shell_path = _strip_topo_path_lines()
+    if shell_path.failed:
+        failed.append("Shell PATH entry")
+    if shell_path.removed:
         removed.append("Shell PATH entry")
 
-    return removed
+    return _ResidueResult(removed=removed, failed=failed)
 
 
 def _confirm_removal(prompt: str, assume_yes: bool = False) -> bool:
@@ -367,11 +403,20 @@ def run_remove(dry_run=False, assume_yes=False) -> bool:
             return False
         if process.returncode == 0:
             print(f"\n {OK} Topo package removal completed.")
-            for label in _remove_package_user_residue():
+            residue = _remove_package_user_residue()
+            for label in residue.removed:
                 print(f"  {OK} Removed {label}")
+            for label in residue.failed:
+                print(f"  {FAIL} Failed to remove {label}")
             print(
                 f" {GRAY}If your shell still uses an old command path, run:{RESET} {BOLD}hash -r{RESET}"
             )
+            if residue.failed:
+                print(
+                    f"\n {WARN} {GRAY}Topo package was removed, but cleanup completed "
+                    f"with errors (see above).{RESET}\n"
+                )
+                return False
             return True
         print(f"\n {FAIL} Package removal failed with exit code {process.returncode}.")
         return False
@@ -472,7 +517,11 @@ def run_remove(dry_run=False, assume_yes=False) -> bool:
             had_errors = True
             print(f"  {FAIL} Failed to remove {generated_dir}: {e}")
 
-    if _strip_topo_path_lines():
+    shell_path = _strip_topo_path_lines()
+    if shell_path.failed:
+        had_errors = True
+        print(f"  {FAIL} Failed to remove PATH entry from shell config")
+    if shell_path.removed:
         print(f"  {OK} {GRAY}Removed PATH entry from shell config{RESET}")
 
     if had_errors:
