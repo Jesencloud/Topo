@@ -5,11 +5,12 @@ import stat
 from pathlib import Path
 
 import pytest
-from lock_helpers import RECORD_LOCK_HOLDER, external_holder
+from lock_helpers import FLOCK_HOLDER, RECORD_LOCK_HOLDER, external_holder
 
 from src.core.lock import (
     LockUnavailable,
     SingleInstanceLock,
+    cross_process_lock,
     is_file_locked,
     is_sqlite_busy,
 )
@@ -195,3 +196,51 @@ def test_is_sqlite_busy_detects_external_writer(tmp_path):
 def test_is_sqlite_busy_on_unopenable_database(tmp_path):
     """A database that cannot be opened read-write is treated as busy."""
     assert is_sqlite_busy(tmp_path / "does-not-exist.db")
+
+
+def test_cross_process_lock_reports_held_and_releases(tmp_path):
+    """The happy path: the lock is taken, reported held, and freed on exit.
+
+    After the block, an external process must be able to take the same flock --
+    proof the context manager released it rather than leaking the fd.
+    """
+    lock_file = tmp_path / "wl.lock"
+    with cross_process_lock(lock_file) as held:
+        assert held is True
+    # Freed now: a child can take it without blocking.
+    with external_holder(FLOCK_HOLDER, lock_file):
+        pass
+
+
+def test_cross_process_lock_blocks_until_the_holder_exits(tmp_path):
+    """A second acquirer waits for the first to release, then succeeds.
+
+    While a child holds the flock, a non-blocking probe from the test process
+    must fail; once the child exits the blocking context manager acquires it.
+    flock is per open file description, so a fresh open() genuinely contends.
+    """
+    lock_file = tmp_path / "wl.lock"
+    with external_holder(FLOCK_HOLDER, lock_file):
+        fd = os.open(lock_file, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            os.close(fd)
+    # Holder gone: the blocking lock is free to take.
+    with cross_process_lock(lock_file) as held:
+        assert held is True
+
+
+def test_cross_process_lock_runs_the_block_even_when_unlockable(tmp_path):
+    """An unopenable lock path degrades to held=False, not an exception.
+
+    write_json_atomic() still keeps each write from tearing, so a filesystem
+    that cannot give us the lock must not turn a whitelist edit into a crash.
+    """
+    # Parent path is a regular file, so creating the lock file under it fails.
+    blocker = tmp_path / "not-a-dir"
+    blocker.write_text("x")
+    lock_file = blocker / "wl.lock"
+    with cross_process_lock(lock_file) as held:
+        assert held is False

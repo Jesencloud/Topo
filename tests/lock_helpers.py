@@ -22,6 +22,17 @@ sys.stdout.flush()
 sys.stdin.readline()
 """
 
+# Holds an exclusive flock() — the space cross_process_lock() uses. Creates the
+# file if absent, since the lock file is a sibling that may not exist yet.
+FLOCK_HOLDER = """
+import fcntl, os, sys
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o600)
+fcntl.flock(fd, fcntl.LOCK_EX)
+sys.stdout.write("ready\\n")
+sys.stdout.flush()
+sys.stdin.readline()
+"""
+
 
 @contextlib.contextmanager
 def external_holder(script: str, target: Path) -> Iterator[subprocess.Popen]:

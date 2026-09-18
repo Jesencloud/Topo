@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
+from unittest.mock import patch
 
+import src.core.whitelist as whitelist_module
 from src.core.whitelist import (
     _compiled_home_protection_paths,
     _compiled_whitelist_paths,
@@ -148,6 +150,94 @@ def test_adding_the_same_path_twice_is_unchanged_not_a_failure(test_env):
     assert add_to_whitelist(str(folder)) == "unchanged"
     assert remove_from_whitelist(str(folder)) == "changed"
     assert remove_from_whitelist(str(folder)) == "unchanged"
+
+
+def test_concurrent_adds_of_distinct_paths_all_survive(test_env):
+    """F3: two writers that read the same old list must not lose an update.
+
+    Each thread reads, appends its own path and atomically replaces the file.
+    Without a lock spanning the whole read-modify-write, the second os.replace()
+    lands on top of the first and one path -- reported "changed" -- is simply
+    gone from the file the next scan reads. The cross-process lock serializes
+    the transaction so every reported success is on disk.
+
+    A barrier lines the threads up so they contend on the same starting list,
+    and a short sleep inside the critical section widens the window a missing
+    lock would lose in. flock() is per open file description, so separate
+    open() calls contend even within one process -- the lock is exercised here.
+    """
+    import threading
+    import time
+
+    n = 8
+    paths = [test_env / f"dir_{i}" for i in range(n)]
+    for p in paths:
+        p.mkdir()
+
+    barrier = threading.Barrier(n)
+    results: list[str] = []
+    results_lock = threading.Lock()
+
+    real_read = whitelist_module._read_whitelist
+
+    def slow_read():
+        out = real_read()
+        time.sleep(0.02)  # widen the read->write window
+        return out
+
+    def worker(path: Path):
+        barrier.wait()
+        outcome = add_to_whitelist(str(path))
+        with results_lock:
+            results.append(outcome)
+
+    with patch.object(whitelist_module, "_read_whitelist", side_effect=slow_read):
+        threads = [threading.Thread(target=worker, args=(p,)) for p in paths]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+    assert results == ["changed"] * n
+    stored = set(get_whitelist())
+    assert stored == {str(p.resolve()) for p in paths}
+
+
+def test_concurrent_add_and_remove_act_on_the_latest_file(test_env):
+    """F3: a concurrent add and remove must each see the other's committed work.
+
+    Seed one path, then race an add of a second path against removal of the
+    first. Whichever order the lock grants, the result is the same file: the
+    added path present, the removed path gone. A lost update would instead
+    resurrect the removed path or drop the added one.
+    """
+    import threading
+
+    keep = test_env / "seed"
+    keep.mkdir()
+    added = test_env / "added"
+    added.mkdir()
+    assert add_to_whitelist(str(keep)) == "changed"
+
+    barrier = threading.Barrier(2)
+
+    def do_add():
+        barrier.wait()
+        add_to_whitelist(str(added))
+
+    def do_remove():
+        barrier.wait()
+        remove_from_whitelist(str(keep))
+
+    threads = [threading.Thread(target=do_add), threading.Thread(target=do_remove)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    stored = set(get_whitelist())
+    assert str(added.resolve()) in stored
+    assert str(keep.resolve()) not in stored
 
 
 def test_writing_the_whitelist_leaves_no_scratch_file_behind(test_env):

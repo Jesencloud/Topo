@@ -12,6 +12,7 @@ from .browser_paths import (
 from .constants import WARN
 from .install_source import get_install_root
 from .json_store import read_json, write_json_atomic
+from .lock import cross_process_lock
 from .paths import get_config_dir
 
 PATH_RESOLVE_ERRORS = (OSError, RuntimeError)
@@ -19,6 +20,16 @@ PATH_RESOLVE_ERRORS = (OSError, RuntimeError)
 
 def get_whitelist_file() -> Path:
     return get_config_dir() / "whitelist.json"
+
+
+def get_whitelist_lock_file() -> Path:
+    """Sibling lock file that serializes whitelist read-modify-write updates.
+
+    Deliberately not whitelist.json itself: write_json_atomic() replaces that
+    file via os.replace(), so a lock held on it would end up guarding the old,
+    unlinked inode while a second writer took the new one.
+    """
+    return get_config_dir() / "whitelist.json.lock"
 
 
 # Paths that are always protected recursively
@@ -348,14 +359,20 @@ WhitelistWriteResult = Literal["changed", "unchanged", "failed"]
 def add_to_whitelist(path_str: str) -> WhitelistWriteResult:
     _ensure_config()
     path = Path(path_str).expanduser().resolve()
-    current, trustworthy = _read_whitelist()
-    if not trustworthy:
-        return "failed"
-    if str(path) in current:
-        return "unchanged"
-    current.append(str(path))
-    if not write_json_atomic(get_whitelist_file(), current):
-        return "failed"
+    # The whole read -> trust check -> modify -> atomic replace runs under one
+    # cross-process lock. write_json_atomic() only guarantees no *torn* file;
+    # two concurrent `topo whitelist add` runs that each read the old list would
+    # otherwise each write it back with only their own entry, and the second
+    # os.replace() would drop the first's protection while reporting "changed".
+    with cross_process_lock(get_whitelist_lock_file()):
+        current, trustworthy = _read_whitelist()
+        if not trustworthy:
+            return "failed"
+        if str(path) in current:
+            return "unchanged"
+        current.append(str(path))
+        if not write_json_atomic(get_whitelist_file(), current):
+            return "failed"
     _clear_protection_caches()
     return "changed"
 
@@ -363,14 +380,18 @@ def add_to_whitelist(path_str: str) -> WhitelistWriteResult:
 def remove_from_whitelist(path_str: str) -> WhitelistWriteResult:
     _ensure_config()
     path = Path(path_str).expanduser().resolve()
-    current, trustworthy = _read_whitelist()
-    if not trustworthy:
-        return "failed"
-    if str(path) not in current:
-        return "unchanged"
-    current.remove(str(path))
-    if not write_json_atomic(get_whitelist_file(), current):
-        return "failed"
+    # Same lock as add_to_whitelist(): a concurrent add and remove read from the
+    # same snapshot must not clobber each other, and a re-read inside the lock is
+    # what makes the decision act on the file as it is now, not as it was.
+    with cross_process_lock(get_whitelist_lock_file()):
+        current, trustworthy = _read_whitelist()
+        if not trustworthy:
+            return "failed"
+        if str(path) not in current:
+            return "unchanged"
+        current.remove(str(path))
+        if not write_json_atomic(get_whitelist_file(), current):
+            return "failed"
     _clear_protection_caches()
     return "changed"
 

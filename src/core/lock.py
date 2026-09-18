@@ -3,6 +3,7 @@ import fcntl
 import os
 import sqlite3
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -167,6 +168,45 @@ def is_file_locked(file_path: Path) -> bool:
         return True
     finally:
         os.close(fd)
+
+
+@contextlib.contextmanager
+def cross_process_lock(lock_file: Path) -> Iterator[bool]:
+    """Hold an exclusive advisory lock on *lock_file* for the block's duration.
+
+    Unlike SingleInstanceLock this *blocks* (LOCK_EX, no LOCK_NB) rather than
+    refusing: it serializes a short read-modify-write transaction where a second
+    caller must wait its turn, not abort. Callers pass a dedicated lock file --
+    never the file they are about to replace, since os.replace() swaps the inode
+    out from under a lock held on the target itself.
+
+    Yields True when the lock is actually held, False when it could not be taken
+    (a filesystem without advisory locks, a permission error). The block still
+    runs in the False case: write_json_atomic() keeps each individual write from
+    tearing, so degrading to "no cross-process serialization" is worse than a
+    lost update only under real contention, and failing the command outright on
+    an odd filesystem would be worse still.
+    """
+    flags = os.O_RDWR | os.O_CREAT
+    for name in ("O_NOFOLLOW", "O_CLOEXEC"):
+        flags |= getattr(os, name, 0)
+    fd = -1
+    held = False
+    try:
+        with contextlib.suppress(OSError):
+            lock_file.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with contextlib.suppress(OSError):
+            fd = os.open(lock_file, flags, 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            held = True
+        yield held
+    finally:
+        if fd != -1:
+            if held:
+                with contextlib.suppress(OSError):
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+            with contextlib.suppress(OSError):
+                os.close(fd)
 
 
 def is_sqlite_busy(db_path: Path) -> bool:
