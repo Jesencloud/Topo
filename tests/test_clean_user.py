@@ -411,6 +411,55 @@ def test_clean_thumbnails_empty_failure_and_success(test_env):
         assert clean_thumbnails() == (4, 1, 1)
 
 
+def test_clean_user_logs_leaves_a_whitelisted_live_log_untouched(test_env):
+    """Whitelisting ~/.xsession-errors must stop the truncate, in both modes.
+
+    Truncation clears the file just as a delete would, so the whitelist has to
+    cover it. Otherwise the log reads as protected while its contents are wiped.
+    """
+    from src.core.whitelist import add_to_whitelist
+
+    live = test_env / ".xsession-errors"
+    live.write_bytes(b"x" * 64)
+
+    with patch("pathlib.Path.home", return_value=test_env):
+        assert add_to_whitelist(str(live)) == "changed"
+        # Preview and real run agree: neither counts nor touches the file.
+        assert clean_user_logs(dry_run=True) == (0, 0, 0)
+        assert clean_user_logs() == (0, 0, 0)
+
+    assert live.stat().st_size == 64, "a whitelisted log must not be truncated"
+
+
+def test_clean_system_temp_keeps_a_whitelisted_stale_dir(test_env):
+    """A stale, empty, whitelisted temp dir must survive: no bare rmdir()."""
+    from src.core.whitelist import add_to_whitelist
+
+    fake_tmp = test_env / "tmp"
+    fake_var_tmp = test_env / "var_tmp"
+    fake_tmp.mkdir()
+    fake_var_tmp.mkdir()
+
+    keep = fake_tmp / "stale-keep"
+    keep.mkdir()
+    old_time = time.time() - 5 * 86400
+    os.utime(keep, (old_time, old_time))
+
+    def fake_path(value):
+        if value == "/tmp":
+            return fake_tmp
+        if value == "/var/tmp":
+            return fake_var_tmp
+        return Path(value)
+
+    with patch("pathlib.Path.home", return_value=test_env):
+        assert add_to_whitelist(str(keep)) == "changed"
+        with patch("src.clean.user.Path", side_effect=fake_path):
+            clean_system_temp(dry_run=False, min_age_days=3)
+
+    assert keep.is_dir(), "a whitelisted temp dir must not be rmdir()'d"
+
+
 def test_clean_user_data_aggregates_all_cleaners():
     values = [(1, 2, 3)] * 5
     with patch.multiple(

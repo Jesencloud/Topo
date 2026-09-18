@@ -16,7 +16,9 @@ from ..core.file_ops import (
     clean_path_by_age,
     get_size_fast,
     is_reclaimable_entry_type,
+    record_deletion_audit,
     safe_remove,
+    validate_path_for_deletion,
 )
 from ..core.render import bytes_to_human
 from ..core.system import run_command
@@ -116,10 +118,20 @@ def clean_system_temp(dry_run=False, min_age_days=CLEAN_TEMP_AGE_DAYS):
                     s, i = clean_path_by_age(item, days=min_age_days, dry_run=dry_run)
                     total_size += s
                     total_items += i
-                    # Remove the directory itself only if now empty
+                    # Remove the directory itself only if now empty -- and only
+                    # after the same whitelist/hard-protection gate a real delete
+                    # goes through. A bare rmdir() here used to remove an empty,
+                    # stale, *whitelisted* temp dir the user had asked to keep,
+                    # with no rejection reason recorded. rmdir() (not rmtree)
+                    # stays: it removes the directory entry only when empty, so
+                    # nothing inside is deleted blind.
                     if not dry_run:
-                        with contextlib.suppress(OSError):
-                            item.rmdir()  # Only succeeds if empty
+                        valid, _ = validate_path_for_deletion(item)
+                        if not valid:
+                            record_deletion_audit(item, "permanent", "rejected-validation")
+                        else:
+                            with contextlib.suppress(OSError):
+                                item.rmdir()  # Only succeeds if empty
                 else:
                     size = get_size_fast(item)
                     if safe_remove(item, use_trash=False, dry_run=dry_run)[0]:
@@ -149,15 +161,27 @@ def clean_user_logs(dry_run=False):
     live_log = home / ".xsession-errors"
     live_size = get_size_fast(live_log) if live_log.is_file() else 0
     if live_size > 0:
-        truncated = True
-        if not dry_run:
-            try:
-                os.truncate(live_log, 0)
-            except OSError:
-                truncated = False
-        if truncated:
-            total_size += live_size
-            total_items += 1
+        # Truncating clears the file's contents just as surely as deleting it, so
+        # it goes through the same whitelist/hard-protection gate a delete would.
+        # Without it, whitelisting ~/.xsession-errors (or a parent) still let the
+        # log be emptied -- "protected, but wiped anyway". The check runs in
+        # dry-run too, so the preview never promises a truncation the real run
+        # then refuses.
+        allowed, _ = validate_path_for_deletion(live_log)
+        if not allowed:
+            record_deletion_audit(live_log, "truncate", "rejected-validation")
+        else:
+            truncated = True
+            if not dry_run:
+                try:
+                    os.truncate(live_log, 0)
+                    record_deletion_audit(live_log, "truncate", "truncated", live_size)
+                except OSError:
+                    truncated = False
+                    record_deletion_audit(live_log, "truncate", "failed", live_size)
+            if truncated:
+                total_size += live_size
+                total_items += 1
 
     # Rotated copies have no writer left, so removing them is the right move.
     known_logs = [
