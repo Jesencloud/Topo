@@ -51,9 +51,11 @@ ignore_names = [
     "install_dir",
     # Same thing one record over: UninstallOutcome in uninstall/removal.py. Its
     # other two keys have a same-named local (the screen's package_removed, the
-    # function's own data_left_in_place); removed_paths is only ever read as
-    # result.get("removed_paths"), which vulture does not see.
+    # function's own data_left_in_place); removed_paths and
+    # processes_left_running are only ever read as result.get("..."), which
+    # vulture does not see.
     "removed_paths",
+    "processes_left_running",
     # And once more for the scan records: core/scan_cache.ScanResult mirrors the
     # Rust struct, analyze.FastExploreResult adds the preview keys, and the whole
     # analyze chain reads them as data.get("..."). The coincidental twin covers

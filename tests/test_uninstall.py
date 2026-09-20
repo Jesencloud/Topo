@@ -264,6 +264,141 @@ def test_terminate_apps_does_not_wait_when_nothing_is_running(mock_sleep):
     assert mock_sleep.call_args_list == []
 
 
+# --- process ownership (P1-2) and survivor gating (P1-3) ---
+
+
+def test_pid_belongs_to_app_by_exe_basename():
+    """A PID whose binary is named like the app is proven to be the app's."""
+    app = {"id": "org.telegram.desktop", "name": "Telegram", "type": AppType.FLATPAK}
+    with patch(
+        "src.uninstall.processes.process_exe_path",
+        return_value=Path("/usr/bin/telegram-desktop"),
+    ):
+        assert processes._pid_belongs_to_app(1234, app) is True
+
+
+def test_pid_belongs_to_app_rejects_a_bystander_shell():
+    """A shell or editor sitting in the residue dir matches no app token."""
+    app = {"id": "org.telegram.desktop", "name": "Telegram", "type": AppType.FLATPAK}
+    with (
+        patch("src.uninstall.processes.process_exe_path", return_value=Path("/usr/bin/bash")),
+        patch("src.uninstall.processes.process_cgroup", return_value="0::/user.slice"),
+    ):
+        assert processes._pid_belongs_to_app(1234, app) is False
+
+
+def test_pid_belongs_to_app_by_cli_install_dir(tmp_path):
+    """A CLI tool's binary living under its recorded install_dir proves it."""
+    install_dir = tmp_path / ".local/share/mytool"
+    bin_path = install_dir / "bin" / "mytool-launcher"
+    bin_path.parent.mkdir(parents=True)
+    bin_path.write_text("#!/bin/sh\n")
+    app = {"id": "mytool", "name": "mytool", "type": AppType.CLI, "install_dir": install_dir}
+    # A name that would not match the "mytool" token, so only install_dir can prove it.
+    with patch("src.uninstall.processes.process_exe_path", return_value=bin_path):
+        assert processes._pid_belongs_to_app(1234, app) is True
+
+
+def test_pid_belongs_to_app_by_flatpak_cgroup():
+    app = {"id": "org.telegram.desktop", "name": "Telegram", "type": AppType.FLATPAK}
+    cgroup = "0::/user.slice/app-flatpak-org.telegram.desktop-2345.scope\n"
+    with (
+        patch("src.uninstall.processes.process_exe_path", return_value=None),
+        patch("src.uninstall.processes.process_cgroup", return_value=cgroup),
+    ):
+        assert processes._pid_belongs_to_app(2345, app) is True
+
+
+def test_pid_belongs_to_app_by_snap_cgroup():
+    app = {"id": "spotify", "name": "Spotify", "type": AppType.SNAP}
+    cgroup = "0::/system.slice/snap.spotify.spotify.service\n"
+    with (
+        patch("src.uninstall.processes.process_exe_path", return_value=None),
+        patch("src.uninstall.processes.process_cgroup", return_value=cgroup),
+    ):
+        assert processes._pid_belongs_to_app(1234, app) is True
+
+
+def test_pid_belongs_to_app_false_when_unprovable():
+    """exe unreadable (root's process) and no sandbox marker: skip, do not kill."""
+    app = {"id": "someapp", "name": "Some App", "type": AppType.DNF}
+    with (
+        patch("src.uninstall.processes.process_exe_path", return_value=None),
+        patch("src.uninstall.processes.process_cgroup", return_value=""),
+    ):
+        assert processes._pid_belongs_to_app(1234, app) is False
+
+
+def test_app_owned_pids_keeps_only_proven_pids(test_env):
+    """fuser reports every PID holding the path; only the app's own are kept.
+
+    This is the P1-2 regression guard: the bystander PID is dropped here and its
+    comm never reaches a pkill -x pattern.
+    """
+    residue_path = test_env / ".config" / "myapp"
+    residue_path.mkdir(parents=True)
+    app = {"id": "myapp", "name": "MyApp", "type": AppType.DNF}
+
+    def belongs(pid, _app):
+        return pid == 1234
+
+    with (
+        patch(
+            "src.uninstall.processes.system.run_command",
+            return_value=MagicMock(ok=True, stdout="1234 5678"),
+        ),
+        patch("src.uninstall.processes._pid_belongs_to_app", side_effect=belongs),
+    ):
+        owned = processes.app_owned_pids_in_paths(app, [residue_path])
+
+    assert owned == {1234}
+
+
+def test_terminate_app_processes_returns_surviving_owned_pids():
+    """A PID proven to be the app's that outlives SIGKILL comes back to abort."""
+    app = _ui_app("DNF")
+    with (
+        patch("src.uninstall.processes.running_process_comms", return_value={}),
+        patch("src.uninstall.processes.candidate_process_names", return_value=[]),
+        patch("src.uninstall.processes.app_owned_pids_in_paths", return_value={4242}),
+        patch("src.uninstall.processes._terminate_pids", return_value={4242}),
+        patch("src.uninstall.processes.process_exe_path", return_value=Path("/usr/bin/test-app")),
+    ):
+        survivors = processes.terminate_app_processes(app, [Path("/x")])
+
+    assert survivors == ["test-app (pid 4242)"]
+
+
+def test_terminate_app_processes_returns_empty_when_field_is_clear():
+    app = _ui_app("DNF")
+    with (
+        patch("src.uninstall.processes.running_process_comms", return_value={}),
+        patch("src.uninstall.processes.candidate_process_names", return_value=[]),
+        patch("src.uninstall.processes.app_owned_pids_in_paths", return_value=set()),
+    ):
+        assert processes.terminate_app_processes(app, [Path("/x")]) == []
+
+
+def test_terminate_pids_signals_by_pid_and_reports_survivors():
+    """kill -TERM then -KILL by PID number; a PID still under /proc is a survivor."""
+    alive = {11, 12}
+
+    def pid_alive(pid):
+        return pid in alive
+
+    with (
+        patch("src.uninstall.processes._pid_alive", side_effect=pid_alive),
+        patch("src.uninstall.processes.system.run_command") as mock_run_cmd,
+    ):
+        survivors = processes._terminate_pids({11, 12})
+
+    argvs = [call.args[0] for call in mock_run_cmd.call_args_list]
+    # TERM to both, then KILL to both survivors.
+    assert ["kill", "-TERM", "11"] in argvs
+    assert ["kill", "-KILL", "11"] in argvs
+    assert survivors == {11, 12}
+
+
 def test_run_uninstall_execute_and_exit():
     mock_apps = [
         {
@@ -1627,6 +1762,85 @@ def test_run_uninstall_failed_package_not_counted(capsys):
     out = capsys.readouterr().out
     assert "Removed 0 apps" in out
     assert "Failed:" in out
+
+
+def test_execute_uninstall_aborts_when_processes_survive():
+    """Proven-alive app processes stop the removal: no package call, retryable."""
+    app = _ui_app("DNF")
+    with (
+        patch(
+            "src.uninstall.processes.terminate_app_processes",
+            return_value=["test (pid 42)"],
+        ),
+        patch("src.uninstall.removal._remove_package") as mock_remove,
+        patch("src.uninstall.removal.record_deletion_audit"),
+        patch("src.uninstall.removal.record_history_session") as mock_history,
+    ):
+        result = removal.execute_uninstall(app, [Path("/x")])
+
+    mock_remove.assert_not_called()
+    assert result["package_removed"] is False
+    assert result["removed_paths"] == []
+    assert result["processes_left_running"] == ["test (pid 42)"]
+    # A completed attempt that removed nothing, not an interruption.
+    assert ("uninstall Test", "ended") in [call.args for call in mock_history.call_args_list]
+
+
+def test_execute_uninstall_proceeds_when_field_is_clear():
+    """No survivors: the normal removal path runs."""
+    app = _ui_app("DNF")
+    with (
+        patch("src.uninstall.processes.terminate_app_processes", return_value=[]),
+        patch(
+            "src.uninstall.removal._remove_package",
+            return_value=SimpleNamespace(ok=True),
+        ) as mock_remove,
+        patch("src.uninstall.removal.record_deletion_audit"),
+        patch("src.uninstall.removal.record_history_session"),
+        patch("src.uninstall.removal._remove_residue_paths", return_value=[]),
+    ):
+        result = removal.execute_uninstall(app, [])
+
+    mock_remove.assert_called_once()
+    assert result["package_removed"] is True
+    assert result["processes_left_running"] == []
+
+
+def test_run_uninstall_reports_processes_still_running(capsys):
+    """An app blocked by a live process lands in Failed with a close-and-retry line."""
+    mock_apps = [
+        {
+            "id": "test",
+            "name": "Test",
+            "size_bytes": 100,
+            "size_str": "100B",
+            "type": "DNF",
+            "install_time": 0,
+        }
+    ]
+    with (
+        patch("src.uninstall.manager.UninstallManager.run_full_scan", return_value=mock_apps),
+        patch("src.ui.screens.uninstall.UninstallSelector.run", return_value=[0]),
+        patch("src.ui.screens.uninstall.UninstallPreviewSelector.run", return_value=True),
+        patch("src.uninstall.residue.find_residue_paths", return_value=[]),
+        patch(
+            "src.uninstall.removal.execute_uninstall",
+            return_value={
+                "package_removed": False,
+                "removed_paths": [],
+                "data_left_in_place": False,
+                "processes_left_running": ["test (pid 42)"],
+            },
+        ),
+        patch("src.core.system.ensure_sudo_session", return_value=True),
+        patch("src.ui.navigator.Navigator.wait_for_return", return_value=False),
+    ):
+        run_uninstall()
+
+    out = capsys.readouterr().out
+    assert "Failed:" in out
+    # The report names the blocked app (close-and-retry), not the raw PID line.
+    assert "Still running, not removed (close and retry): Test" in out
 
 
 def test_run_uninstall_does_not_autoremove_the_whole_machine(capsys):

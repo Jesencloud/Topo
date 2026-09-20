@@ -191,8 +191,7 @@ class UninstallManager:
                 app["id"], app["name"], pre_scanned_entries=self._pre_scanned_entries
             )
             is_running = any(
-                comm_pattern(proc) in running
-                for proc in processes.candidate_process_names(app, app_paths)
+                comm_pattern(proc) in running for proc in processes.candidate_process_names(app)
             )
             targets.append((app, app_paths, is_running))
         return targets

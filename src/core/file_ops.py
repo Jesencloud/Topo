@@ -321,6 +321,37 @@ def running_process_comms() -> dict[str, list[int]]:
     return running
 
 
+def process_exe_path(pid: int) -> Path | None:
+    """The binary a running PID is executing, or None when it cannot be read.
+
+    readlink, not read: /proc/<pid>/exe is a symlink to the executable. A
+    process owned by another user (root's, typically) refuses the readlink with
+    EACCES, and one that exited between listing and read gives ENOENT; both come
+    back as None, because the caller's question -- does this PID belong to the
+    app being removed -- has no answer it can act on either way.
+
+    The kernel appends " (deleted)" once the binary is unlinked, which is
+    exactly what a package removal does to it. Stripping the suffix keeps the
+    path comparable to the app's own files in the window before removal, where
+    this check runs.
+    """
+    with contextlib.suppress(OSError):
+        return Path(os.readlink(f"/proc/{pid}/exe").removesuffix(" (deleted)"))
+    return None
+
+
+def process_cgroup(pid: int) -> str:
+    """A running PID's cgroup membership as one string, or "" when unreadable.
+
+    The whole file, not a parsed field: the callers scan it for a substring (a
+    Flatpak app id, a `snap.<name>.` prefix) that names which sandbox the
+    process belongs to. Missing procfs or a vanished PID reads as "".
+    """
+    with contextlib.suppress(OSError):
+        return Path(f"/proc/{pid}/cgroup").read_text(errors="replace")
+    return ""
+
+
 def has_valid_cachedir_tag(path: str | Path) -> bool:
     """Return True when a directory contains a valid CACHEDIR.TAG marker."""
     path = Path(path).expanduser()

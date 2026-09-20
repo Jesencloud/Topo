@@ -21,6 +21,8 @@ from src.core.file_ops import (
     journal_freed_bytes,
     parse_size_from_text,
     parse_size_to_bytes,
+    process_cgroup,
+    process_exe_path,
     record_deletion_audit,
     register_cleaned_path,
     running_process_comms,
@@ -122,6 +124,46 @@ def test_running_process_comms_survives_an_unreadable_proc(monkeypatch):
 
     monkeypatch.setattr("src.core.file_ops.Path", lambda _: Exploding())
     assert running_process_comms() == {}
+
+
+def test_process_exe_path_reads_the_exe_symlink(monkeypatch):
+    monkeypatch.setattr("src.core.file_ops.os.readlink", lambda p: "/usr/bin/telegram-desktop")
+    assert process_exe_path(1234) == Path("/usr/bin/telegram-desktop")
+
+
+def test_process_exe_path_strips_the_deleted_suffix(monkeypatch):
+    """A package removal unlinks the binary; the kernel then marks the link."""
+    monkeypatch.setattr("src.core.file_ops.os.readlink", lambda p: "/usr/bin/fancy-bin (deleted)")
+    assert process_exe_path(1234) == Path("/usr/bin/fancy-bin")
+
+
+def test_process_exe_path_returns_none_when_unreadable(monkeypatch):
+    """A process owned by another user refuses the readlink with EACCES."""
+
+    def deny(_p):
+        raise PermissionError("EACCES")
+
+    monkeypatch.setattr("src.core.file_ops.os.readlink", deny)
+    assert process_exe_path(1234) is None
+
+
+def test_process_cgroup_reads_the_whole_file(tmp_path, monkeypatch):
+    cgroup_file = tmp_path / "cgroup"
+    cgroup_file.write_text("0::/user.slice/app-flatpak-org.telegram.desktop-123.scope\n")
+    monkeypatch.setattr(
+        "src.core.file_ops.Path",
+        lambda p: cgroup_file if p == "/proc/1234/cgroup" else Path(p),
+    )
+    assert "app-flatpak-org.telegram.desktop" in process_cgroup(1234)
+
+
+def test_process_cgroup_returns_empty_when_unreadable(monkeypatch):
+    class Missing:
+        def read_text(self, *a, **k):
+            raise FileNotFoundError("gone")
+
+    monkeypatch.setattr("src.core.file_ops.Path", lambda _p: Missing())
+    assert process_cgroup(1234) == ""
 
 
 def test_whitelist_protection(test_env):

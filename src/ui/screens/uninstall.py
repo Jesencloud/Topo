@@ -69,6 +69,7 @@ def _print_removal_report(
     *,
     interrupted: bool = False,
     data_kept: bool = False,
+    processes_blocked: list[str] | None = None,
 ) -> None:
     """Print what the removal loop actually managed to do, per app and in total.
 
@@ -96,6 +97,14 @@ def _print_removal_report(
         # The label carries the emphasis, the glyph carries the colour; the names
         # themselves stay plain so they can be copied out of the report.
         print(f" {FAIL} {RED}Failed:{RESET} {', '.join(failed_names)}")
+        if processes_blocked:
+            # A distinct reason from the rest: these were not touched at all
+            # because they are still running. Naming them tells the user what to
+            # close before retrying.
+            print(
+                f" {INFO} {GRAY}Still running, not removed "
+                f"(close and retry): {', '.join(processes_blocked)}.{RESET}"
+            )
         if data_kept:
             # Said once, and only when there was data to keep: a failed removal
             # that also wiped the app's configuration would leave nothing to
@@ -190,6 +199,10 @@ def run_uninstall():
 
         removed_names: list[str] = []
         failed_names: list[str] = []
+        # Apps whose removal was abandoned because their own processes would not
+        # close: named separately so the report can tell the user to close them
+        # and retry, rather than reporting a plain failure.
+        procs_blocked: list[str] = []
         total_freed_all = 0
         # Set by the first app whose removal failed with residue still on disk,
         # so the report can say the data is still there without naming it twice.
@@ -222,7 +235,11 @@ def run_uninstall():
                             total_freed_all += app["size_bytes"]
                     else:
                         failed_names.append(safe_app_name)
-                        if result.get("data_left_in_place"):
+                        if result.get("processes_left_running"):
+                            # A more specific failure than "data left in place":
+                            # the app is still running, so nothing was touched.
+                            procs_blocked.append(safe_app_name)
+                        elif result.get("data_left_in_place"):
                             data_kept = True
                 # No cleanup follows the loop. The system-wide `apt-get
                 # autoremove --purge -y` that used to run here took every
@@ -242,6 +259,7 @@ def run_uninstall():
                 total_freed_all,
                 interrupted=not finished,
                 data_kept=data_kept,
+                processes_blocked=procs_blocked,
             )
 
         play_delete()

@@ -37,13 +37,13 @@ from . import processes
 from .discovery import AppRecord
 
 
-class UninstallOutcome(TypedDict):
-    """What :func:`execute_uninstall` answers with: the package, the paths, the data.
+class _UninstallOutcomeBase(TypedDict):
+    """The three keys every :func:`execute_uninstall` return carries.
 
     Declared for the same reason ``AppRecord`` is -- so a key name cannot be
     misspelled and a branch cannot forget one -- and the guarantee runs in that
-    one direction. mypy checks the single ``return`` below against these three
-    keys; it says nothing about what a caller receives, because the screen also
+    one direction. mypy checks the single ``return`` below against these keys;
+    it says nothing about what a caller receives, because the screen also
     receives this dict from tests that patch ``execute_uninstall`` with two of
     the three keys. Those call sites keep reading through ``.get()``, which is
     the honest spelling of "produced elsewhere".
@@ -57,6 +57,21 @@ class UninstallOutcome(TypedDict):
     package_removed: bool
     removed_paths: list[tuple[bool, str]]
     data_left_in_place: bool
+
+
+class UninstallOutcome(_UninstallOutcomeBase, total=False):
+    """The base three keys, plus the one an abort adds.
+
+    ``processes_left_running`` is present only when the removal was abandoned
+    because the app's own processes outlived SIGKILL: it names them, for the
+    report, and its presence is how the screen tells that failure apart from a
+    package manager that simply errored. Split into a ``total=False`` subclass
+    rather than a ``NotRequired`` field because the supported floor is Python
+    3.10, where that spelling does not exist yet -- the same reason and the same
+    shape as ``AppRecord`` in ``discovery.py``.
+    """
+
+    processes_left_running: list[str]
 
 
 def _flatpak_scope(app: AppRecord) -> str:
@@ -310,7 +325,21 @@ def execute_uninstall(app: AppRecord, paths: list[Path]) -> UninstallOutcome:
     session_status = "interrupted"
 
     try:
-        processes.terminate_app_processes(app, paths)
+        survivors = processes.terminate_app_processes(app, paths)
+        if survivors:
+            # The app's own processes ignored SIGKILL. Removing the package now
+            # would unlink the binary out from under a live program, and its
+            # residue would go with it -- so nothing is touched, the failure is
+            # named for the report, and closing the process makes it retryable.
+            # A completed attempt whose answer is "not removed", not a Ctrl-C,
+            # so the session ends rather than staying "interrupted".
+            session_status = "ended"
+            return {
+                "package_removed": False,
+                "removed_paths": [],
+                "data_left_in_place": bool(paths),
+                "processes_left_running": survivors,
+            }
 
         removal = _remove_package(app)
         package_status = "removed" if removal.ok else "failed"
@@ -335,6 +364,7 @@ def execute_uninstall(app: AppRecord, paths: list[Path]) -> UninstallOutcome:
             "package_removed": package_status == "removed",
             "removed_paths": removed_details,
             "data_left_in_place": data_left_in_place,
+            "processes_left_running": [],
         }
     finally:
         if package_status == "failed" and not package_event_recorded:
