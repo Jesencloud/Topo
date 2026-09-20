@@ -1378,6 +1378,87 @@ def test_execute_uninstall_keeps_data_when_the_package_removal_fails(
 
 @patch("src.core.system.run_command")
 @patch("subprocess.run")
+def test_execute_uninstall_reports_residue_that_would_not_delete(mock_run, mock_run_cmd, test_env):
+    """Package off, one residue path stuck: partial success, not full success.
+
+    The old outcome said package_removed=True and counted the whole size as
+    freed, hiding that a leftover directory was still on disk. Now the failed
+    path is named in residue_failed and its bytes come off freed_bytes.
+    """
+    app = {"name": "MyApp", "id": "com.example.MyApp", "type": "DNF", "size_bytes": 1000}
+    kept = test_env / ".config/myapp"
+    kept.mkdir(parents=True)
+    (kept / "blob").write_bytes(b"x" * 200)
+
+    mock_run.return_value = MagicMock(returncode=1)
+    mock_run_cmd.return_value = MagicMock(ok=True, returncode=0)
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("shutil.which", side_effect=lambda x: "/usr/bin/dnf" if x == "dnf" else None),
+        # The package comes off; the residue path refuses to go.
+        patch("src.uninstall.removal.safe_remove", return_value=(False, "in use")),
+        patch("src.uninstall.removal.get_size_fast", return_value=200),
+    ):
+        details = removal.execute_uninstall(app, [kept])
+
+    assert details["package_removed"] is True
+    assert details["residue_failed"]  # names the stuck path
+    # 1000 total minus the 200 bytes still on disk.
+    assert details["freed_bytes"] == 800
+
+
+@patch("src.core.system.run_command")
+def test_execute_uninstall_cli_removal_failure_is_not_reported_as_removed(mock_run_cmd, test_env):
+    """A CLI file that will not delete must fail the removal, not return success.
+
+    The branch discarded safe_remove's result and always returned returncode 0,
+    so a protected or busy binary reported "removed", the residue step ran, and
+    history said "ended" over an app still on disk.
+    """
+    app = {"name": "mytool", "id": "mytool", "type": "CLI", "size_bytes": 500}
+    bin_path = test_env / ".local/bin/mytool"
+    bin_path.parent.mkdir(parents=True)
+    bin_path.write_text("#!/bin/sh\n")
+
+    mock_run_cmd.return_value = MagicMock(ok=True, returncode=0)
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.uninstall.removal.safe_remove", return_value=(False, "protected")),
+        patch("src.uninstall.processes.running_process_comms", return_value={}),
+        patch("src.uninstall.processes.candidate_process_names", return_value=[]),
+        patch("src.uninstall.processes.app_owned_pids_in_paths", return_value=set()),
+    ):
+        details = removal.execute_uninstall(app, [])
+
+    assert details["package_removed"] is False
+
+
+@patch("src.core.system.run_command")
+def test_execute_uninstall_cli_removal_success(mock_run_cmd, test_env):
+    """All existing CLI targets deleted: the removal succeeds."""
+    app = {"name": "mytool", "id": "mytool", "type": "CLI", "size_bytes": 500}
+    bin_path = test_env / ".local/bin/mytool"
+    bin_path.parent.mkdir(parents=True)
+    bin_path.write_text("#!/bin/sh\n")
+
+    mock_run_cmd.return_value = MagicMock(ok=True, returncode=0)
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.uninstall.removal.safe_remove", return_value=(True, "OK")),
+        patch("src.uninstall.processes.running_process_comms", return_value={}),
+        patch("src.uninstall.processes.candidate_process_names", return_value=[]),
+        patch("src.uninstall.processes.app_owned_pids_in_paths", return_value=set()),
+    ):
+        details = removal.execute_uninstall(app, [])
+
+    assert details["package_removed"] is True
+
+
+@patch("src.core.system.run_command")
+@patch("subprocess.run")
 def test_sandbox_app_data_goes_to_the_trash_even_with_trash_disabled(
     mock_run, mock_run_cmd, test_env
 ):
@@ -1841,6 +1922,45 @@ def test_run_uninstall_reports_processes_still_running(capsys):
     assert "Failed:" in out
     # The report names the blocked app (close-and-retry), not the raw PID line.
     assert "Still running, not removed (close and retry): Test" in out
+
+
+def test_run_uninstall_reports_residue_that_stayed(capsys):
+    """Package removed, some residue kept: reported as removed plus a retry line,
+    and the freed total is freed_bytes, not the app's whole size."""
+    mock_apps = [
+        {
+            "id": "test",
+            "name": "Test",
+            "size_bytes": 1000,
+            "size_str": "1000B",
+            "type": "DNF",
+            "install_time": 0,
+        }
+    ]
+    with (
+        patch("src.uninstall.manager.UninstallManager.run_full_scan", return_value=mock_apps),
+        patch("src.ui.screens.uninstall.UninstallSelector.run", return_value=[0]),
+        patch("src.ui.screens.uninstall.UninstallPreviewSelector.run", return_value=True),
+        patch("src.uninstall.residue.find_residue_paths", return_value=[]),
+        patch(
+            "src.uninstall.removal.execute_uninstall",
+            return_value={
+                "package_removed": True,
+                "removed_paths": [(False, ".config/test")],
+                "data_left_in_place": False,
+                "processes_left_running": [],
+                "residue_failed": [".config/test"],
+                "freed_bytes": 800,
+            },
+        ),
+        patch("src.core.system.ensure_sudo_session", return_value=True),
+        patch("src.ui.navigator.Navigator.wait_for_return", return_value=False),
+    ):
+        run_uninstall()
+
+    out = capsys.readouterr().out
+    assert "Removed 1 app" in out
+    assert "Some leftover data could not be removed (retry to clear): Test" in out
 
 
 def test_run_uninstall_does_not_autoremove_the_whole_machine(capsys):

@@ -70,6 +70,7 @@ def _print_removal_report(
     interrupted: bool = False,
     data_kept: bool = False,
     processes_blocked: list[str] | None = None,
+    residue_kept: list[str] | None = None,
 ) -> None:
     """Print what the removal loop actually managed to do, per app and in total.
 
@@ -93,6 +94,15 @@ def _print_removal_report(
     msg = f"Removed {GREEN}{plural(len(removed_names), 'app')}{RESET}, freed {GREEN}"
     msg += f"{bytes_to_human(total_freed)}{RESET}: {names_str}"
     print(msg)
+    if residue_kept:
+        # These apps are in "Removed" above -- their package is gone -- but some
+        # leftover data would not delete, so it was not counted in the freed
+        # total. Its own line rather than the Failed block: the removal did not
+        # fail, it finished with a remainder the user can clear and retry.
+        print(
+            f" {INFO} {GRAY}Some leftover data could not be removed "
+            f"(retry to clear): {', '.join(residue_kept)}.{RESET}"
+        )
     if failed_names:
         # The label carries the emphasis, the glyph carries the colour; the names
         # themselves stay plain so they can be copied out of the report.
@@ -207,6 +217,9 @@ def run_uninstall():
         # Set by the first app whose removal failed with residue still on disk,
         # so the report can say the data is still there without naming it twice.
         data_kept = False
+        # Apps whose package came off but some leftover data would not delete:
+        # reported as removed, with a line naming what stayed and to retry.
+        residue_kept_names: list[str] = []
         # Flipped once the loop has been through every app, so any other way
         # out reports as a stop: Ctrl-C, SIGTERM (SystemExit, not
         # KeyboardInterrupt) and a bug in the removal code all leave it False.
@@ -228,11 +241,27 @@ def run_uninstall():
                     current_status[0] = f"Removing {BOLD}{safe_app_name}{RESET}..."
                     result = removal.execute_uninstall(app, paths)
                     package_removed = bool(result.get("package_removed"))
-                    paths_removed = any(ok for ok, _ in result.get("removed_paths", []))
+                    removed_paths = result.get("removed_paths", [])
+                    paths_removed = any(ok for ok, _ in removed_paths)
+                    # Residue that would not delete: from the outcome when it says
+                    # so, else read back off the per-path success flags.
+                    residue_failed = result.get("residue_failed")
+                    if residue_failed is None:
+                        residue_failed = [desc for ok, desc in removed_paths if not ok]
                     if package_removed or paths_removed:
                         removed_names.append(safe_app_name)
-                        if package_removed:
-                            total_freed_all += app["size_bytes"]
+                        # The bytes actually freed, not the app's whole size: a
+                        # residue path left on disk was counted into that size but
+                        # was not freed. Older result dicts (test doubles) carry no
+                        # freed_bytes, so fall back to the size for a removed app.
+                        freed = result.get("freed_bytes")
+                        if freed is None:
+                            freed = app["size_bytes"] if package_removed else 0
+                        total_freed_all += int(freed)
+                        if package_removed and residue_failed:
+                            # Package gone, some data would not go with it: still a
+                            # success, but the report has to say what stayed.
+                            residue_kept_names.append(safe_app_name)
                     else:
                         failed_names.append(safe_app_name)
                         if result.get("processes_left_running"):
@@ -260,6 +289,7 @@ def run_uninstall():
                 interrupted=not finished,
                 data_kept=data_kept,
                 processes_blocked=procs_blocked,
+                residue_kept=residue_kept_names,
             )
 
         play_delete()

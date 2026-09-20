@@ -29,7 +29,7 @@ from typing import TypedDict
 from ..core import system
 from ..core.config import get_use_trash
 from ..core.constants import AppType
-from ..core.file_ops import record_deletion_audit, safe_remove
+from ..core.file_ops import get_size_fast, record_deletion_audit, safe_remove
 from ..core.history import record_history_session
 from ..core.package_manager import DNF, resolve_admin_tool
 from ..core.whitelist import is_irreplaceable_app_data
@@ -60,18 +60,32 @@ class _UninstallOutcomeBase(TypedDict):
 
 
 class UninstallOutcome(_UninstallOutcomeBase, total=False):
-    """The base three keys, plus the one an abort adds.
+    """The base three keys, plus the ones a real removal fills in.
 
     ``processes_left_running`` is present only when the removal was abandoned
     because the app's own processes outlived SIGKILL: it names them, for the
     report, and its presence is how the screen tells that failure apart from a
-    package manager that simply errored. Split into a ``total=False`` subclass
-    rather than a ``NotRequired`` field because the supported floor is Python
-    3.10, where that spelling does not exist yet -- the same reason and the same
-    shape as ``AppRecord`` in ``discovery.py``.
+    package manager that simply errored.
+
+    ``residue_failed`` and ``freed_bytes`` describe a removal that got past the
+    package step. The package can come off cleanly while a leftover directory
+    will not delete (open by another process, a permission the trash move hits),
+    and the old outcome could not say so: ``package_removed`` was True, the app
+    was reported removed, and its whole size was counted as freed -- including
+    the residue still on disk. ``residue_failed`` names those paths so the
+    report can tell the user what remains and to retry; ``freed_bytes`` is the
+    app's size less what those surviving paths still occupy, so the freed total
+    is what was actually freed.
+
+    Split into a ``total=False`` subclass rather than ``NotRequired`` fields
+    because the supported floor is Python 3.10, where that spelling does not
+    exist yet -- the same reason and the same shape as ``AppRecord`` in
+    ``discovery.py``.
     """
 
     processes_left_running: list[str]
+    residue_failed: list[str]
+    freed_bytes: int
 
 
 def _flatpak_scope(app: AppRecord) -> str:
@@ -144,21 +158,36 @@ def _remove_package(app: AppRecord) -> system.CommandResult:
         return result
 
     if app["type"] == AppType.CLI:
-        # Remove standalone binary & install directory
+        # A CLI app has no package manager: these files are the package, so
+        # removing them is the removal, and whether it succeeded is whether they
+        # went. safe_remove's result was discarded here, and the branch returned
+        # returncode 0 unconditionally -- a protected or busy file that could not
+        # be deleted still reported "removed", and the residue step ran and the
+        # history said "ended" over an app that was still on disk. Any target
+        # that existed and would not delete now fails the whole removal, which is
+        # what makes it retryable instead of silently lost.
         home_path = Path.home()
         cli_targets = [
             home_path / ".local/bin" / app["id"],
             home_path / ".local/share" / app["id"],
             home_path / f".{app['id']}",
         ]
+        all_removed = True
         for cli_target in cli_targets:
             if cli_target.exists():
-                safe_remove(
+                success, _ = safe_remove(
                     cli_target,
                     use_trash=get_use_trash() or is_irreplaceable_app_data(cli_target),
                     allow_app_data_removal=True,
                 )
-        return system.CommandResult(args=["cli_uninstall"], returncode=0, stdout="CLI uninstalled")
+                all_removed = all_removed and success
+        if all_removed:
+            return system.CommandResult(
+                args=["cli_uninstall"], returncode=0, stdout="CLI uninstalled"
+            )
+        return system.CommandResult(
+            args=["cli_uninstall"], returncode=1, error="CLI removal failed"
+        )
 
     if app["type"] == AppType.APT:
         # apt-get, not apt: apt prints "WARNING: apt does not have a stable
@@ -303,6 +332,25 @@ def _remove_residue_paths(paths: list[Path]) -> list[tuple[bool, str]]:
     return removed_details
 
 
+def _freed_bytes(
+    size_bytes: int, paths: list[Path], removed_details: list[tuple[bool, str]]
+) -> int:
+    """The app's size, less any residue path that failed to delete.
+
+    The scan folded each residue path's size into ``size_bytes``, so a path that
+    would not delete is space still occupied, not freed, and comes back off the
+    total. Sized now, after the attempt, because a path that survived deletion is
+    the one still there to measure. ``removed_details`` is one entry per input
+    path, in order, so it pairs with ``paths`` position for position.
+    """
+    freed = size_bytes
+    for (ok, _desc), path in zip(removed_details, paths, strict=True):
+        if not ok:
+            with contextlib.suppress(OSError):
+                freed -= get_size_fast(path)
+    return max(0, freed)
+
+
 def execute_uninstall(app: AppRecord, paths: list[Path]) -> UninstallOutcome:
     """Close one app's processes, remove its package, then remove its residue.
 
@@ -339,6 +387,8 @@ def execute_uninstall(app: AppRecord, paths: list[Path]) -> UninstallOutcome:
                 "removed_paths": [],
                 "data_left_in_place": bool(paths),
                 "processes_left_running": survivors,
+                "residue_failed": [],
+                "freed_bytes": 0,
             }
 
         removal = _remove_package(app)
@@ -356,8 +406,12 @@ def execute_uninstall(app: AppRecord, paths: list[Path]) -> UninstallOutcome:
         # the paths alone makes the failure retryable.
         data_left_in_place = bool(paths) and package_status != "removed"
         removed_details: list[tuple[bool, str]] = []
+        residue_failed: list[str] = []
+        freed_bytes = 0
         if package_status == "removed":
             removed_details = _remove_residue_paths(paths)
+            residue_failed = [desc for ok, desc in removed_details if not ok]
+            freed_bytes = _freed_bytes(package_size, paths, removed_details)
 
         session_status = "ended"
         return {
@@ -365,6 +419,8 @@ def execute_uninstall(app: AppRecord, paths: list[Path]) -> UninstallOutcome:
             "removed_paths": removed_details,
             "data_left_in_place": data_left_in_place,
             "processes_left_running": [],
+            "residue_failed": residue_failed,
+            "freed_bytes": freed_bytes,
         }
     finally:
         if package_status == "failed" and not package_event_recorded:
