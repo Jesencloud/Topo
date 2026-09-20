@@ -1350,6 +1350,54 @@ def test_execute_uninstall_flatpak_user_scope_asks_for_no_password(
 
 @patch("src.core.system.run_command")
 @patch("subprocess.run")
+def test_execute_uninstall_flatpak_custom_installation_targets_it_with_sudo(
+    mock_run, mock_run_cmd, test_env
+):
+    """A custom installation's column prints its name, not system/user. Without
+    --installation=<name> flatpak resolves the ref against system/user and could
+    remove the wrong copy or none; the admin-declared install is root's, so sudo."""
+    app = {
+        "name": "MyApp",
+        "id": "com.example.MyApp",
+        "type": "Flatpak",
+        "size_bytes": 1000,
+        "flatpak_scope": "extra",
+    }
+
+    mock_run.return_value = MagicMock(returncode=1)
+    mock_run_cmd.return_value = MagicMock(returncode=0)
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.uninstall.removal.safe_remove", return_value=(True, "OK")),
+    ):
+        removal.execute_uninstall(app, [])
+
+    assert removal.flatpak_removal_needs_sudo(app) is True
+    mock_run_cmd.assert_called_with(
+        ["flatpak", "uninstall", "--installation=extra", "-y", "com.example.MyApp"],
+        use_sudo=True,
+        capture=True,
+        timeout=PACKAGE_TRANSACTION_TIMEOUT,
+    )
+
+
+def test_flatpak_removal_needs_sudo_by_scope():
+    def app(scope):
+        record = {"id": "x", "name": "X", "type": "Flatpak", "size_bytes": 0}
+        if scope is not None:
+            record["flatpak_scope"] = scope
+        return record
+
+    assert removal.flatpak_removal_needs_sudo(app("system")) is True
+    assert removal.flatpak_removal_needs_sudo(app("extra")) is True  # custom
+    assert removal.flatpak_removal_needs_sudo(app("user")) is False
+    assert removal.flatpak_removal_needs_sudo(app("")) is False
+    assert removal.flatpak_removal_needs_sudo(app(None)) is False
+
+
+@patch("src.core.system.run_command")
+@patch("subprocess.run")
 def test_execute_uninstall_keeps_data_when_the_package_removal_fails(
     mock_run, mock_run_cmd, test_env
 ):
@@ -2668,6 +2716,111 @@ def test_npm_scope_dir_stays_when_another_package_still_lives_in_it(test_env):
         removal._prune_empty_npm_scope_dir("@scope/tool")
 
     assert sibling.exists()
+
+
+def test_scan_npm_records_the_prefix_it_found_the_package_under(test_env):
+    """Discovery keeps the root a package lived under so removal can target it;
+    for the user root that prefix is ~/.npm-global."""
+    pkg = test_env / ".npm-global/lib/node_modules/mytool"
+    pkg.mkdir(parents=True)
+    (pkg / "index.js").write_text("//")
+
+    with (
+        patch("src.uninstall.discovery.shutil.which", return_value="/usr/bin/npm"),
+        patch("pathlib.Path.home", return_value=test_env),
+    ):
+        apps = _scan_npm_global_packages()
+
+    mytool = next(a for a in apps if a["id"] == "mytool")
+    assert mytool["npm_prefix"] == test_env / ".npm-global"
+
+
+def test_npm_removal_needs_sudo_by_prefix(test_env):
+    def app(prefix):
+        record = {"id": "tool", "name": "tool", "type": "NPM", "size_bytes": 0}
+        if prefix is not None:
+            record["npm_prefix"] = prefix
+        return record
+
+    with patch("pathlib.Path.home", return_value=test_env):
+        assert removal.npm_removal_needs_sudo(app(test_env / ".npm-global")) is False
+        assert removal.npm_removal_needs_sudo(app(Path("/usr"))) is True
+        assert removal.npm_removal_needs_sudo(app(Path("/usr/local"))) is True
+        # No prefix (a hand-built or pre-field record): old no-sudo behaviour.
+        assert removal.npm_removal_needs_sudo(app(None)) is False
+
+
+@patch("src.core.system.run_command")
+@patch("subprocess.run")
+def test_execute_uninstall_npm_targets_the_prefix_and_elevates_for_system(
+    mock_run, mock_run_cmd, test_env
+):
+    """A package found under /usr/local cannot be removed by an uninstall aimed at
+    npm's configured prefix -- so --prefix names the tree, and a system tree gets
+    sudo."""
+    app = {
+        "id": "systool",
+        "name": "systool",
+        "type": "NPM",
+        "size_bytes": 10,
+        "npm_prefix": Path("/usr/local"),
+    }
+    mock_run.return_value = MagicMock(returncode=1)
+    mock_run_cmd.return_value = MagicMock(returncode=0, ok=True, stdout="")
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.uninstall.removal.safe_remove", return_value=(True, "OK")),
+    ):
+        removal.execute_uninstall(app, [])
+
+    assert removal.npm_removal_needs_sudo(app) is True
+    mock_run_cmd.assert_any_call(
+        ["npm", "uninstall", "-g", "--prefix", "/usr/local", "systool"],
+        use_sudo=True,
+        capture=True,
+        timeout=PACKAGE_TRANSACTION_TIMEOUT,
+    )
+
+
+@patch("src.core.system.run_command")
+@patch("subprocess.run")
+def test_execute_uninstall_npm_without_prefix_stays_backward_compatible(
+    mock_run, mock_run_cmd, test_env
+):
+    """A record with no npm_prefix (hand-built, or from before the field) removes
+    exactly as it always did: no --prefix, no sudo."""
+    app = {"id": "oldtool", "name": "oldtool", "type": "NPM", "size_bytes": 10}
+    mock_run.return_value = MagicMock(returncode=1)
+    mock_run_cmd.return_value = MagicMock(returncode=0, ok=True, stdout="")
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.uninstall.removal.safe_remove", return_value=(True, "OK")),
+    ):
+        removal.execute_uninstall(app, [])
+
+    mock_run_cmd.assert_any_call(
+        ["npm", "uninstall", "-g", "oldtool"],
+        use_sudo=False,
+        capture=True,
+        timeout=PACKAGE_TRANSACTION_TIMEOUT,
+    )
+
+
+def test_prune_npm_scope_dir_uses_the_prefix_without_calling_npm_root(test_env):
+    """Given a prefix, the scope dir is located under it -- the tree the uninstall
+    targeted -- rather than through `npm root -g`, which need not be that tree."""
+    scope_dir = test_env / "myprefix/lib/node_modules/@scope"
+    scope_dir.mkdir(parents=True)
+
+    with patch(
+        "src.uninstall.removal.system.run_command",
+        side_effect=AssertionError("npm root -g must not be consulted when a prefix is given"),
+    ):
+        removal._prune_empty_npm_scope_dir("@scope/tool", test_env / "myprefix")
+
+    assert not scope_dir.exists()
 
 
 def test_run_uninstall_reports_apps_already_removed_before_a_ctrl_c(capsys):

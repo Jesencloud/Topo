@@ -94,12 +94,14 @@ class _ScannedApp(TypedDict):
 
 
 class AppRecord(_ScannedApp, total=False):
-    """A scanned app, plus the three fields later stages attach to some of them.
+    """A scanned app, plus the fields later stages attach to some of them.
 
-    These three were the argument for typing the record at all. They exist on a
+    These were the argument for typing the record at all. They exist on a
     subset of the apps -- ``flatpak_scope`` only on Flatpaks whose scope column
     was not empty, ``install_dir`` only on standalone CLI tools,
-    ``collateral_packages`` only on apps that reached the removal preview -- and
+    ``collateral_packages`` only on apps that reached the removal preview,
+    ``npm_prefix`` only on global npm packages (the root they were found under,
+    so removal can target it with ``--prefix`` instead of npm's default) -- and
     before this class the only thing that said so was whether a call site reached
     for ``app["x"]`` or ``app.get("x")``. Those two spellings were split across
     the same keys (``app["id"]`` at 16 sites, ``app.get("id")`` at four), so the
@@ -113,6 +115,7 @@ class AppRecord(_ScannedApp, total=False):
     flatpak_scope: str
     install_dir: Path
     collateral_packages: list[str]
+    npm_prefix: Path
 
 
 class _DiscoveredTool(TypedDict):
@@ -849,16 +852,20 @@ def _scan_npm_global_packages() -> list[AppRecord]:
                             pass
 
                         size_str = bytes_to_human(size_bytes) if size_bytes > 0 else "N/A"
-                        apps.append(
-                            _app_record(
-                                pkg_name,
-                                clean_name,
-                                size_bytes,
-                                size_str,
-                                AppType.NPM,
-                                install_time,
-                            )
+                        record = _app_record(
+                            pkg_name,
+                            clean_name,
+                            size_bytes,
+                            size_str,
+                            AppType.NPM,
+                            install_time,
                         )
+                        # The prefix is the root two levels up from
+                        # <prefix>/lib/node_modules: ~/.npm-global, /usr, or
+                        # /usr/local. Removal targets it with --prefix so it
+                        # acts on the tree the package was actually found in.
+                        record["npm_prefix"] = npm_modules_dir.parent.parent
+                        apps.append(record)
             except OSError:
                 pass
     except OSError:

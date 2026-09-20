@@ -91,13 +91,16 @@ class UninstallOutcome(_UninstallOutcomeBase, total=False):
 def _flatpak_scope(app: AppRecord) -> str:
     """Which installation this Flatpak lives in, or "" when the scan could not tell.
 
-    `flatpak list --columns=installation` prints "system", "user", or the id
-    of a custom installation. The third answer normalises to "": its
-    ownership is whatever the admin who created that installation decided,
-    so the removal is left exactly as it was before any of this.
+    `flatpak list --columns=installation` prints "system", "user", or the name
+    of a custom installation (one declared in /etc/flatpak/installations.d).
+    The first two normalise to lower case; a custom name is kept verbatim, so
+    the removal can target it with `--installation=<name>` rather than letting
+    flatpak guess which copy of the ref to take. An empty scope -- the scan
+    could not read the installation column -- stays "" and adds no flag.
     """
-    scope = str(app.get("flatpak_scope") or "").strip().lower()
-    return scope if scope in ("system", "user") else ""
+    raw = str(app.get("flatpak_scope") or "").strip()
+    lowered = raw.lower()
+    return lowered if lowered in ("system", "user") else raw
 
 
 def flatpak_removal_needs_sudo(app: AppRecord) -> bool:
@@ -105,12 +108,38 @@ def flatpak_removal_needs_sudo(app: AppRecord) -> bool:
 
     A system-wide installation lives under /var/lib/flatpak, which the
     invoking user cannot write; flatpak falls back to asking polkit, and a
-    session with no polkit agent -- ssh, a bare tty -- simply fails there.
+    session with no polkit agent -- ssh, a bare tty -- simply fails there. A
+    custom installation is almost always root's too (the admin who declared it
+    put it outside the user's home), so it takes sudo as well; running as root
+    still removes a user-writable custom install cleanly, where the reverse
+    would fail. Only "user" and an unread "" scope need no sudo.
     The screen calls this to decide whether to take a sudo session before it
     enters raw mode, and execute_uninstall calls it to build the command, so
     the authorization and the command that needs it cannot disagree.
     """
-    return app.get("type") == AppType.FLATPAK and _flatpak_scope(app) == "system"
+    return app.get("type") == AppType.FLATPAK and _flatpak_scope(app) not in ("", "user")
+
+
+def npm_removal_needs_sudo(app: AppRecord) -> bool:
+    """Whether removing this global npm package has to be root's work.
+
+    Discovery records the prefix the package was found under (``npm_prefix``):
+    ``~/.npm-global`` is the user's own and removes without sudo, while ``/usr``
+    and ``/usr/local`` are root's -- ``npm uninstall -g`` there fails on
+    permission unless elevated. A record with no prefix (built by hand, or from
+    before this field existed) keeps the old no-sudo behaviour, so the change
+    only ever adds sudo where a system prefix now says it is needed.
+    The screen calls this before raw mode for the same reason it calls
+    ``flatpak_removal_needs_sudo`` -- to own the password prompt outside the
+    selector -- so the two must agree with the command built below.
+    """
+    if app.get("type") != AppType.NPM:
+        return False
+    npm_prefix = app.get("npm_prefix")
+    if npm_prefix is None:
+        return False
+    home = Path.home()
+    return npm_prefix != home and home not in npm_prefix.parents
 
 
 def _remove_package(app: AppRecord) -> system.CommandResult:
@@ -134,8 +163,12 @@ def _remove_package(app: AppRecord) -> system.CommandResult:
         # made for.
         scope = _flatpak_scope(app)
         flatpak_cmd = ["flatpak", "uninstall"]
-        if scope:
+        if scope in ("system", "user"):
             flatpak_cmd.append(f"--{scope}")
+        elif scope:
+            # A custom installation's name, targeted explicitly so flatpak does
+            # not resolve the ref against system/user and remove the wrong copy.
+            flatpak_cmd.append(f"--installation={scope}")
         flatpak_cmd += ["-y", app["id"]]
         return system.run_command(
             flatpak_cmd,
@@ -153,8 +186,22 @@ def _remove_package(app: AppRecord) -> system.CommandResult:
         )
 
     if app["type"] == AppType.NPM:
-        result = system.run_command(["npm", "uninstall", "-g", app["id"]], capture=True, timeout=60)
-        _prune_empty_npm_scope_dir(app["id"])
+        # --prefix targets the exact global root discovery found the package
+        # under, rather than whatever `npm` resolves as its configured prefix,
+        # which need not be the same tree: a package found under /usr/local
+        # cannot be removed by an `npm uninstall -g` aimed at ~/.npm-global.
+        npm_prefix = app.get("npm_prefix")
+        npm_cmd = ["npm", "uninstall", "-g"]
+        if npm_prefix is not None:
+            npm_cmd += ["--prefix", str(npm_prefix)]
+        npm_cmd.append(app["id"])
+        result = system.run_command(
+            npm_cmd,
+            use_sudo=npm_removal_needs_sudo(app),
+            capture=True,
+            timeout=system.PACKAGE_TRANSACTION_TIMEOUT,
+        )
+        _prune_empty_npm_scope_dir(app["id"], npm_prefix)
         return result
 
     if app["type"] == AppType.CLI:
@@ -252,21 +299,31 @@ def _remove_package(app: AppRecord) -> system.CommandResult:
     )
 
 
-def _prune_empty_npm_scope_dir(package_id: str) -> None:
+def _prune_empty_npm_scope_dir(package_id: str, prefix: Path | None = None) -> None:
     """Remove the @scope directory an npm uninstall leaves behind empty.
 
     `npm uninstall -g @cloudbase/cli` takes the package and leaves
     node_modules/@cloudbase, which nothing else will ever clean. Only removed
     when it is genuinely empty, so a second package under the same scope
     keeps it.
+
+    When ``prefix`` is given -- the root discovery found the package under --
+    the scope directory is located there (``<prefix>/lib/node_modules/<scope>``),
+    the same tree the uninstall targeted. Without it the location falls back to
+    `npm root -g`, npm's configured global root, which is the old behaviour and
+    can miss the scope dir when the package lived under a different prefix.
     """
     if "/" not in package_id:
         return
     scope = package_id.split("/")[0]
-    npm_root = system.run_command(["npm", "root", "-g"], capture=True, timeout=5)
-    if not (npm_root.ok and npm_root.stdout.strip()):
-        return
-    scope_dir = Path(npm_root.stdout.strip()) / scope
+    if prefix is not None:
+        node_modules = prefix / "lib" / "node_modules"
+    else:
+        npm_root = system.run_command(["npm", "root", "-g"], capture=True, timeout=5)
+        if not (npm_root.ok and npm_root.stdout.strip()):
+            return
+        node_modules = Path(npm_root.stdout.strip())
+    scope_dir = node_modules / scope
     if not scope_dir.is_dir():
         return
     with contextlib.suppress(OSError):

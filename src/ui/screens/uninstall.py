@@ -175,7 +175,9 @@ def run_uninstall():
             continue
 
         needs_sudo = any(
-            app["type"] in NEEDS_SUDO_TYPES or removal.flatpak_removal_needs_sudo(app)
+            app["type"] in NEEDS_SUDO_TYPES
+            or removal.flatpak_removal_needs_sudo(app)
+            or removal.npm_removal_needs_sudo(app)
             for app, _, _ in all_targets
         )
         # Ensure sudo session (require password) outside raw mode so sudo can own input.
