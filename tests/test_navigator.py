@@ -969,6 +969,38 @@ def test_uninstall_space_then_enter_returns_indices():
     assert result == [0]
 
 
+def test_uninstall_same_id_rows_select_independently():
+    """Two rows sharing an app id -- a Flatpak installed system-wide and per-user
+
+    -- must tick apart. The selection was once keyed on the bare id, so ticking
+    one returned every row that shared it, and one choice became several
+    removals. Ticking the first row here must return only the first row.
+    """
+    items = [
+        {
+            "id": "org.example.App",
+            "name": "Example (system)",
+            "size_bytes": 2000,
+            "size_str": "2 KB",
+            "install_time": 200,
+            "flatpak_scope": "system",
+        },
+        {
+            "id": "org.example.App",
+            "name": "Example (user)",
+            "size_bytes": 1000,
+            "size_str": "1 KB",
+            "install_time": 100,
+            "flatpak_scope": "user",
+        },
+    ]
+    sel = UninstallSelector("t", items)
+    result = drive(sel, [Navigator.SPACE, "\r"])
+
+    assert result == [sel.selected_index]
+    assert len(sel.selected_items) == 1
+
+
 def test_uninstall_page_numbers_accumulate_but_digits_select_current_page():
     """Rows are numbered across the list, matching Analyze.
 
@@ -981,7 +1013,11 @@ def test_uninstall_page_numbers_accumulate_but_digits_select_current_page():
     drive(selector, [Navigator.PGDN, "15", "16", "30", "31", Navigator.ESC])
 
     # 15 and 31 are off this page; 16 and 30 are its first and last rows.
-    assert selector.selected_items == {"app15", "app29"}
+    # selected_items holds record identities now, so resolve the expected ids
+    # back to the rows that carry them.
+    assert selector.selected_items == {
+        id(item) for item in selector.items if item["id"] in {"app15", "app29"}
+    }
 
     selector = UninstallSelector("t", _uninstall_items(30))
     drive(selector, ["20", Navigator.ESC])
@@ -996,7 +1032,7 @@ def test_uninstall_zero_selects_nothing():
 
     selector = UninstallSelector("t", _uninstall_items(30))
     drive(selector, ["10", Navigator.ESC])
-    assert selector.selected_items == {"app9"}
+    assert selector.selected_items == {id(item) for item in selector.items if item["id"] == "app9"}
 
 
 def test_uninstall_number_column_widens_for_three_digit_rows():
@@ -1095,7 +1131,7 @@ def test_uninstall_delete_key_does_not_confirm_selected_app():
     sel = UninstallSelector("t", _uninstall_items())
     result = drive(sel, [Navigator.SPACE, "\x1b[3~", Navigator.ESC])
     assert result == []
-    assert sel.selected_items == {"app0"}
+    assert sel.selected_items == {id(item) for item in sel.items if item["id"] == "app0"}
 
 
 def test_uninstall_esc_returns_empty():

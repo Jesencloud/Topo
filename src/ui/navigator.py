@@ -1138,9 +1138,10 @@ class UninstallSelector(_PagedSelector):
     def __init__(self, title: str, items: list[Any], focus_id: str | None = None) -> None:
         self.title = title
         self.items = items
-        # Keyed on app id, not row index: the sort keys reorder the rows under
-        # the ticks, and Enter has to remove the apps the user pointed at.
-        self.selected_items: set[str] = set()
+        # Keyed on record identity (id(item)), not row index and not app id: the
+        # sort keys reorder the rows under the ticks, and one app id can name
+        # several rows that must tick apart. See _selection_key.
+        self.selected_items: set[int] = set()
         # Lit by an Enter that had nothing to remove, and dropped by the next
         # key. The line it lights is the one that says how to tick a row, so the
         # answer to a mis-keyed Enter costs the list no rows -- the notice this
@@ -1170,8 +1171,14 @@ class UninstallSelector(_PagedSelector):
 
     @property
     def focused_id(self):
-        """The id of the app under the cursor, for reopening the list on it."""
-        return self._selection_key(self.selected_index)
+        """The app id under the cursor, for reopening the list on it.
+
+        The semantic id, deliberately not _selection_key: this one has to
+        survive a rescan and match the same app in a freshly built list, where
+        the record object -- and so its identity -- is a different one. _row_of
+        resolves it back to a row, falling back to the top when the app is gone.
+        """
+        return self.items[self.selected_index]["id"]
 
     def _sort_items(self):
         if self.sort_key == "name":
@@ -1309,7 +1316,7 @@ class UninstallSelector(_PagedSelector):
                 f"\n {THEME_TITLE}{MARK_SECTION} Selected Apps to Remove:{RESET} "
                 f"Press {GREEN}Enter{RESET} {WHITE}to Uninstall{RESET}, {CYAN}ESC{RESET} {WHITE}to Exit{RESET}\033[K\n"
             )
-            selected_names = [i["name"] for i in self.items if i["id"] in self.selected_items]
+            selected_names = [i["name"] for i in self.items if id(i) in self.selected_items]
             selected_columns = 2 if terminal_width >= 80 else 1
             # Two columns already fit: 2 * (_BULLET_PREFIX_WIDTH +
             # NAME_COLUMN_MAX_WIDTH) is 80, the width this branch is taken at, so
@@ -1406,7 +1413,7 @@ class UninstallSelector(_PagedSelector):
                         self.hint_highlighted = True
                         continue
                     return [
-                        i for i, item in enumerate(self.items) if item["id"] in self.selected_items
+                        i for i, item in enumerate(self.items) if id(item) in self.selected_items
                     ]
                 elif key == Navigator.ESC and len(key) == 1:
                     return []
@@ -1414,14 +1421,22 @@ class UninstallSelector(_PagedSelector):
                     continue
 
     def _selection_key(self, idx):
-        """Applications are tracked by id, not row index.
+        """What a ticked row is remembered by: the record object's identity.
 
-        N/S/T re-sort the list in place, so an index would follow whatever row
-        happens to land in that position afterwards -- and this list gates an
-        uninstall. Analyze can afford indices because it clears the selection
-        whenever it sorts.
+        Not the row index -- N/S/T re-sort the list in place, so an index would
+        follow whatever row lands in that position afterwards, and this list
+        gates an uninstall. Not the app id either: one id can name several
+        different rows -- a Flatpak installed both system-wide and per-user, an
+        APT package whose :amd64 and :i386 both stripped to one name, an app a
+        native manager and Snap both report -- and keying on the bare id made
+        ticking one of them tick every row that shared it, so a single choice
+        expanded into several removals. The record dicts are sorted in place and
+        never replaced for the life of the selector, so their id() is unique per
+        row and stable across every re-sort, which is the identity a tick needs.
+        Reopening the list on the focused app after a rescan is a separate
+        question, answered by the semantic id -- see focused_id.
         """
-        return self.items[idx]["id"]
+        return id(self.items[idx])
 
 
 class UninstallPreviewSelector:
