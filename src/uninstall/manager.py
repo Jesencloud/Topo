@@ -185,11 +185,28 @@ class UninstallManager:
             with ThreadPoolExecutor(max_workers=8) as pool:
                 for app, collateral in zip(apps, pool.map(collateral_packages, apps), strict=True):
                     app["collateral_packages"] = collateral
+        # Every installed app's name targets, computed once. A residue path this
+        # app claims that another installed app would claim too is shared or
+        # ambiguous ground -- deleting it on this app's behalf could take data the
+        # other app still uses -- so it is dropped from the removal set below.
+        # Keyed by object identity, not id string: two records with the same id
+        # (a Flatpak's system and user installs) are distinct owners of the same
+        # ~/.var/app/<id>, and dropping it while the other stays is the point.
+        installed_targets = {
+            id(record): residue.app_name_targets(record["id"], record["name"])
+            for record in self.apps
+        }
         targets = []
         for app in apps:
             app_paths = residue.find_residue_paths(
                 app["id"], app["name"], pre_scanned_entries=self._pre_scanned_entries
             )
+            other_target_sets = [
+                target_set
+                for record_id, target_set in installed_targets.items()
+                if record_id != id(app)
+            ]
+            app_paths = residue.drop_paths_shared_with_others(app_paths, other_target_sets)
             is_running = any(
                 comm_pattern(proc) in running for proc in processes.candidate_process_names(app)
             )

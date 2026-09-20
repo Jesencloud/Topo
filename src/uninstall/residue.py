@@ -205,13 +205,28 @@ def _requires_official_only_uninstall(app_id: str, app_name: str) -> bool:
     return any(token in text for token in _OFFICIAL_ONLY_TOKENS)
 
 
-def _get_app_keywords(desktop_file: Path) -> list[str]:
-    """Extracts potential folder name keywords from Exec and Icon fields."""
-    keywords = {name.lower() for name in get_desktop_exec_names(desktop_file)}
+def _get_app_exec_keywords(desktop_file: Path) -> set[str]:
+    """The Exec= program names, lowercased -- what the app calls its binary.
+
+    Kept apart from the Icon= name on purpose: an Exec name is the app's own
+    executable, so a directory sharing it is very likely the app's, and it is
+    allowed to drive directory and service matching. An Icon name is not (see
+    :func:`_get_app_icon_keywords`).
+    """
+    return {name.lower() for name in get_desktop_exec_names(desktop_file)}
+
+
+def _get_app_icon_keywords(desktop_file: Path) -> set[str]:
+    """The Icon= name, lowercased, if the launcher sets one.
+
+    Held separately from the Exec name because an icon name is regularly shared
+    or themed (a stock icon, a name a whole family of apps reuses), so it is no
+    proof that a *directory* wearing it belongs to this app. It is still the way
+    to find the app's own icon *files* (``<icon-name>.png`` under the icon
+    themes), so it reaches :func:`_add_launcher_and_icons` and nothing else.
+    """
     icon_name = get_desktop_icon(desktop_file).lower()
-    if icon_name:
-        keywords.add(icon_name)
-    return list(keywords)
+    return {icon_name} if icon_name else set()
 
 
 def pre_scan_search_roots() -> dict[Path, ResidueEntryIndex]:
@@ -281,6 +296,12 @@ def find_residue_paths(
     *before* the launcher keywords widen them: moving the keyword step above it
     would let a ``~/.<Exec name>`` directory be found too, which is a change in
     what gets deleted rather than a reordering, and is left alone here.
+
+    The Exec= and Icon= names take separate paths from here. Exec names widen
+    ``targets``, which matches directories and services. Icon names go only into
+    ``icon_targets`` and reach only the icon-file step: an icon name is often
+    shared or themed, so a directory wearing it is no proof of ownership, but it
+    is still how the app's own icon files are found.
     """
     if _requires_official_only_uninstall(app_id, app_name):
         return []
@@ -289,13 +310,64 @@ def find_residue_paths(
     found = _ResiduePathSet()
     targets = _residue_name_targets(app_id, app_name)
     _add_home_dot_dirs(found, home_path, targets)
-    targets |= _desktop_launcher_keywords(app_id, home_path)
+    targets |= _desktop_exec_keywords(app_id, home_path)
+    icon_targets = targets | _desktop_icon_keywords(app_id, home_path)
     _add_app_data_dirs(found, home_path, targets, pre_scanned_entries)
-    _add_launcher_and_icons(found, app_id, home_path, targets, pre_scanned_entries)
+    _add_launcher_and_icons(found, app_id, home_path, icon_targets, pre_scanned_entries)
     _add_systemd_user_services(found, home_path, targets, pre_scanned_entries)
     _add_hardcoded_wine_prefix(found, app_name, home_path)
     _add_home_root_hidden_dirs(found, app_name, home_path, pre_scanned_entries)
     return found.as_list()
+
+
+def app_name_targets(app_id: str, app_name: str) -> set[str]:
+    """The name-match targets for one app, exposed for cross-app ownership checks.
+
+    :func:`find_residue_paths` guesses which paths belong to an app; nothing in
+    it looks at the *other* installed apps to notice that a guessed path fits one
+    of them just as well. The caller with the full inventory
+    (``manager.build_removal_targets``) does that check, and it needs the same
+    target vocabulary this module matches with -- so it borrows
+    :func:`_residue_name_targets` through here rather than reimplementing the id
+    splitting and suffix stripping and drifting out of step with it.
+
+    Deliberately the name targets only, not the launcher Exec/Icon keywords: the
+    cross-check reads every installed app, and reading two .desktop files per app
+    to widen a set used only to *keep* a path (never to delete one) is not worth
+    the scan. A shared directory is caught by the app-name and id spellings.
+    """
+    return _residue_name_targets(app_id, app_name)
+
+
+def drop_paths_shared_with_others(
+    paths: list[Path], other_target_sets: list[set[str]]
+) -> list[Path]:
+    """Drop residue paths that another installed app's name would also claim.
+
+    Residue discovery answers "which paths look like app X's"; run once per app
+    it cannot see that a path looks like app Y's just as much. A directory both
+    would claim -- ``~/.config/code`` between two editors, ``~/.var/app/<id>``
+    between a Flatpak's system and user installs -- is not safe to delete on X's
+    behalf, because X may not own it and Y is staying. Kept rather than deleted:
+    residue goes to the trash and a missed leftover is recoverable, an
+    over-eager delete of another app's data is not.
+
+    Names are lowercased and stripped of a leading dot before matching, so a
+    home dot-directory (``~/.foo``, added by :func:`_add_home_dot_dirs` as
+    ``.<target>``) lines up with a bare target ``foo``. Matching reuses
+    :func:`~src.uninstall.names.name_matches`, the same gate discovery used to
+    find the path, so "another app would claim it" means exactly what "this app
+    claimed it" meant.
+    """
+    kept: list[Path] = []
+    for path in paths:
+        entry_lower = path.name.lower().lstrip(".")
+        shared = any(
+            name_matches(entry_lower, target) for targets in other_target_sets for target in targets
+        )
+        if not shared:
+            kept.append(path)
+    return kept
 
 
 def _residue_search_roots(home_path: Path) -> list[Path]:
@@ -352,21 +424,45 @@ def _residue_name_targets(app_id: str, app_name: str) -> set[str]:
     return targets
 
 
-def _desktop_launcher_keywords(app_id: str, home_path: Path) -> set[str]:
-    """Extra name targets taken from the app's own .desktop file.
+def _desktop_launcher_files(app_id: str, home_path: Path) -> tuple[Path, Path]:
+    """The two places this app's .desktop launcher can live.
 
-    The Exec and Icon fields are the one place that records what an app calls
-    itself on disk, which is regularly neither its package id nor its display
-    name. Both launcher locations are read: a package installs into
-    /usr/share/applications, a user or a Flatpak override into ~/.local.
+    A package installs into /usr/share/applications, a user or a Flatpak
+    override into ~/.local. One helper so the Exec and Icon readers below
+    cannot drift onto different lists.
     """
-    keywords: set[str] = set()
-    for desktop_file in (
+    return (
         Path(f"/usr/share/applications/{app_id}.desktop"),
         home_path / f".local/share/applications/{app_id}.desktop",
-    ):
+    )
+
+
+def _desktop_exec_keywords(app_id: str, home_path: Path) -> set[str]:
+    """Extra directory/service name targets from the app's own .desktop Exec=.
+
+    The Exec field records what an app calls its binary on disk, which is
+    regularly neither its package id nor its display name -- so it is allowed to
+    widen the targets that match directories. The Icon field is *not* (see
+    :func:`_desktop_icon_keywords`).
+    """
+    keywords: set[str] = set()
+    for desktop_file in _desktop_launcher_files(app_id, home_path):
         if desktop_file.exists():
-            keywords.update(_get_app_keywords(desktop_file))
+            keywords |= _get_app_exec_keywords(desktop_file)
+    return keywords
+
+
+def _desktop_icon_keywords(app_id: str, home_path: Path) -> set[str]:
+    """The app's Icon= name(s), for matching icon files only.
+
+    Read from the same two launcher locations as the Exec names, but returned
+    apart so :func:`find_residue_paths` can keep them out of directory matching
+    and hand them only to the icon-file step.
+    """
+    keywords: set[str] = set()
+    for desktop_file in _desktop_launcher_files(app_id, home_path):
+        if desktop_file.exists():
+            keywords |= _get_app_icon_keywords(desktop_file)
     return keywords
 
 
@@ -479,13 +575,17 @@ def _add_launcher_and_icons(
     found: _ResiduePathSet,
     app_id: str,
     home_path: Path,
-    targets: set[str],
+    icon_targets: set[str],
     pre_scanned_entries: dict[Path, ResidueEntryIndex] | None,
 ) -> None:
     """The app's user-level .desktop launcher, and icon files named after it.
 
     Left behind, these are what keeps a removed app in the application grid
-    with its icon intact.
+    with its icon intact. The launcher is found by the app id exactly; the icon
+    *files* are matched against ``icon_targets`` -- the name targets plus the
+    Icon= name, which is allowed here (against files) though not against
+    directories, since deleting an over-matched icon file only dulls the grid
+    while an over-matched config directory loses data.
     """
     local_desktop = home_path / ".local/share/applications" / f"{app_id}.desktop"
     if local_desktop.exists():
@@ -496,9 +596,9 @@ def _add_launcher_and_icons(
             continue
         index = pre_scanned_entries.get(icon_root) if pre_scanned_entries else None
         for file_lower, icon_file in _residue_candidates(
-            index, targets, partial(_icon_file_entries, icon_root)
+            index, icon_targets, partial(_icon_file_entries, icon_root)
         ):
-            if any(name_matches(file_lower, target) for target in targets):
+            if any(name_matches(file_lower, target) for target in icon_targets):
                 found.add(icon_file)
 
 

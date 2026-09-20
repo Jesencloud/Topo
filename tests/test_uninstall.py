@@ -1697,14 +1697,137 @@ def test_execute_uninstall_writes_history_for_package_only(mock_run_cmd, test_en
     assert sessions[0].total_size == 2048
 
 
-def test_get_app_keywords(test_env):
+def test_get_app_keywords_splits_exec_from_icon(test_env):
+    # Exec and Icon names come back from separate readers now: an Exec name may
+    # match a directory, an Icon name only an icon file, so they must not mix.
     desktop_file = test_env / "test.desktop"
 
     desktop_file.write_text("Exec=/usr/bin/my-app --arg\nIcon=my-app-icon\n")
-    keywords = residue._get_app_keywords(desktop_file)
 
-    assert "my-app" in keywords
-    assert "my-app-icon" in keywords
+    exec_keywords = residue._get_app_exec_keywords(desktop_file)
+    assert "my-app" in exec_keywords
+    assert "my-app-icon" not in exec_keywords
+
+    icon_keywords = residue._get_app_icon_keywords(desktop_file)
+    assert "my-app-icon" in icon_keywords
+    assert "my-app" not in icon_keywords
+
+
+def test_find_residue_paths_icon_name_never_matches_a_directory(test_env):
+    """A shared/themed Icon= name must not drag a directory wearing it into the
+    removal set: an icon name is no proof a config directory is the app's."""
+    launcher = test_env / ".local/share/applications/com.example.myapp.desktop"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("Exec=/usr/bin/myapp\nIcon=shared-icon\n")
+    # A directory named exactly like the icon, which the app does NOT own.
+    shared_config = test_env / ".config/shared-icon"
+    shared_config.mkdir(parents=True)
+
+    with patch("pathlib.Path.home", return_value=test_env):
+        paths = residue.find_residue_paths("com.example.myapp", "MyApp")
+
+    assert shared_config not in paths
+
+
+def test_find_residue_paths_icon_name_still_matches_an_icon_file(test_env):
+    """The Icon= name is still how the app's own icon files are found -- deleting
+    an over-matched icon file only dulls the grid, so files stay in scope."""
+    launcher = test_env / ".local/share/applications/com.example.myapp.desktop"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("Exec=/usr/bin/myapp\nIcon=shared-icon\n")
+    icon_file = test_env / ".local/share/icons/hicolor/48x48/apps/shared-icon.png"
+    icon_file.parent.mkdir(parents=True)
+    icon_file.write_text("icon")
+
+    with patch("pathlib.Path.home", return_value=test_env):
+        paths = residue.find_residue_paths("com.example.myapp", "MyApp")
+
+    assert icon_file in paths
+
+
+def test_find_residue_paths_exec_name_still_matches_a_directory(test_env):
+    """Regression: the Exec= name (unlike Icon=) is a strong ownership signal and
+    must keep pulling in a directory named after the app's binary."""
+    launcher = test_env / ".local/share/applications/com.example.foobar.desktop"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("Exec=/usr/bin/custombin\nIcon=stock-icon\n")
+    exec_config = test_env / ".config/custombin"
+    exec_config.mkdir(parents=True)
+
+    with patch("pathlib.Path.home", return_value=test_env):
+        paths = residue.find_residue_paths("com.example.foobar", "Foobar")
+
+    assert exec_config in paths
+
+
+def test_app_name_targets_mirrors_residue_name_targets():
+    """The cross-check must match with the exact vocabulary discovery used."""
+    assert residue.app_name_targets("org.gnome.Music", "Music") == residue._residue_name_targets(
+        "org.gnome.Music", "Music"
+    )
+    # A spot check that the id splitting is really in there.
+    targets = residue.app_name_targets("@scope/my-tool", "My Tool")
+    assert {"scope", "my-tool", "my tool"} <= targets
+
+
+def test_drop_paths_shared_with_others_keeps_owner_only_paths():
+    """A path only this app's name claims survives the cross-check."""
+    home = Path.home()
+    owned = home / ".config/myuniqueapp"
+    kept = residue.drop_paths_shared_with_others([owned], [{"otherapp"}])
+    assert kept == [owned]
+
+
+def test_drop_paths_shared_with_others_drops_a_shared_path():
+    """A path another installed app would also claim is left in place, not deleted."""
+    home = Path.home()
+    shared = home / ".config/telegram"
+    kept = residue.drop_paths_shared_with_others([shared], [{"telegram"}])
+    assert kept == []
+
+
+def test_drop_paths_shared_with_others_normalizes_leading_dot():
+    """~/.foo (a home dot-dir) must line up with a bare target 'foo'."""
+    home = Path.home()
+    dot_dir = home / ".foobar"
+    kept = residue.drop_paths_shared_with_others([dot_dir], [{"foobar"}])
+    assert kept == []
+
+
+def test_build_removal_targets_drops_residue_shared_with_another_app():
+    """A directory both installed apps' names would claim is removed from the
+    deletion set: deleting it for one could take data the other still uses."""
+    mgr = UninstallManager()
+    obsidian = {
+        "id": "md.obsidian.Obsidian",
+        "name": "Obsidian",
+        "type": "FLATPAK",
+        "size_bytes": 10,
+    }
+    obsidian_cli = {
+        "id": "obsidian-export",
+        "name": "Obsidian Export",
+        "type": "NPM",
+        "size_bytes": 20,
+    }
+    mgr.apps = [obsidian, obsidian_cli]
+    shared = Path.home() / ".config/obsidian"
+    owned = Path.home() / ".config/obsexport-private"
+
+    def fake_residue(app_id, app_name, pre_scanned_entries=None):
+        return [shared, owned] if app_id == "obsidian-export" else [shared]
+
+    with (
+        patch("src.uninstall.residue.find_residue_paths", side_effect=fake_residue),
+        patch("src.uninstall.processes.candidate_process_names", return_value=[]),
+        patch("src.uninstall.manager.collateral_packages", return_value=[]),
+    ):
+        targets = mgr.build_removal_targets([obsidian_cli])
+
+    _app, paths, _running = targets[0]
+    # "obsidian" is claimed by the Flatpak too -> dropped; the private dir is not.
+    assert shared not in paths
+    assert owned in paths
 
 
 def test_find_residue_paths_never_targets_xdg_user_dirs(test_env):
