@@ -2327,6 +2327,52 @@ def test_uninstall_helpers_and_cache_state(test_env, monkeypatch):
     assert mgr.has_fresh_scan_cache() is False
 
 
+def test_package_db_signature_signs_the_databases_that_exist(tmp_path):
+    # Only databases that stat cleanly contribute a (path, mtime, size) triple;
+    # a missing one is skipped, same as the desktop-dir signature does.
+    status = tmp_path / "status"
+    status.write_text("x")
+    rpm_dir = tmp_path / "rpm"
+    rpm_dir.mkdir()
+    with (
+        patch("src.uninstall.manager._DPKG_STATUS_FILE", status),
+        patch("src.uninstall.manager._RPM_DB_DIR", rpm_dir),
+        patch("src.uninstall.manager._PACMAN_DB_DIR", tmp_path / "does-not-exist"),
+    ):
+        sig = UninstallManager._package_db_signature()
+
+    signed = {entry[0] for entry in sig}
+    assert str(status) in signed
+    assert str(rpm_dir) in signed
+    assert str(tmp_path / "does-not-exist") not in signed
+    assert all(len(entry) == 3 for entry in sig)
+
+
+def test_a_package_database_change_expires_the_scan_cache(tmp_path):
+    # An external apt/dnf/pacman transaction changes a database's mtime/size; the
+    # cache key must change with it so the fresh check fails at once, not after
+    # the 30s TTL.
+    import time
+
+    status = tmp_path / "status"
+    status.write_text("one package")
+    with (
+        patch("src.uninstall.manager._DPKG_STATUS_FILE", status),
+        patch("src.uninstall.manager._RPM_DB_DIR", tmp_path / "no-rpm"),
+        patch("src.uninstall.manager._PACMAN_DB_DIR", tmp_path / "no-pacman"),
+    ):
+        UninstallManager.clear_scan_cache()
+        UninstallManager._scan_cache_apps = [_app_record("id", "Name", 10, "10 B", AppType.CLI)]
+        UninstallManager._scan_cache_key = UninstallManager._current_scan_cache_key()
+        UninstallManager._scan_cache_time = time.monotonic()
+        assert UninstallManager.has_fresh_scan_cache() is True
+
+        # A database write large enough to move size, not just mtime resolution.
+        status.write_text("one package\nanother package installed externally")
+        assert UninstallManager.has_fresh_scan_cache() is False
+    UninstallManager.clear_scan_cache()
+
+
 def test_scan_package_managers_handles_missing_tools_and_bad_output():
     with patch("src.uninstall.discovery.shutil.which", return_value=None):
         assert _scan_rpm_packages(set(), {}) == []

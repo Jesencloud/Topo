@@ -69,6 +69,11 @@ _DPKG_STATUS_FILE = Path("/var/lib/dpkg/status")
 # of a filename. On Fedora this is a symlink to /usr/lib/sysimage/rpm, which
 # stat() follows.
 _RPM_DB_DIR = Path("/var/lib/rpm")
+# Pacman's local package database: one directory per installed package. Exposed
+# here purely so the scan cache can sign it and drop stale results the moment a
+# `pacman -S`/`-R` outside Topo changes it -- the pacman scanner itself still
+# guards on `shutil.which("pacman")`, unchanged by this.
+_PACMAN_DB_DIR = Path("/var/lib/pacman/local")
 
 
 class _ScannedApp(TypedDict):

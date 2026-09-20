@@ -33,7 +33,13 @@ from ..core.package_manager import PACKAGE_QUERY_TOOLS
 from ..core.render import bytes_to_human
 from . import processes, residue
 from .collateral import collateral_packages
-from .discovery import AppRecord, discover_installed_apps
+from .discovery import (
+    _DPKG_STATUS_FILE,
+    _PACMAN_DB_DIR,
+    _RPM_DB_DIR,
+    AppRecord,
+    discover_installed_apps,
+)
 
 
 class UninstallManager:
@@ -69,6 +75,26 @@ class UninstallManager:
             signatures.append((str(directory), int(stat.st_mtime), int(stat.st_size)))
         return tuple(signatures)
 
+    @staticmethod
+    def _package_db_signature() -> tuple[tuple[str, int, int], ...]:
+        """(path, mtime, size) of each package database that exists.
+
+        Whether a tool is on PATH says nothing about whether a package was
+        installed or removed since the scan; the database's mtime does. Signing
+        dpkg's status file and the rpm/pacman database directories makes an
+        external `apt`/`dnf`/`pacman` transaction change the key at once, so the
+        cache expires immediately rather than riding out the 30s TTL with a
+        stale app list. Missing databases are skipped, same as the desktop dirs.
+        """
+        signatures = []
+        for path in (_DPKG_STATUS_FILE, _RPM_DB_DIR, _PACMAN_DB_DIR):
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            signatures.append((str(path), int(stat.st_mtime), int(stat.st_size)))
+        return tuple(signatures)
+
     @classmethod
     def _current_scan_cache_key(cls) -> tuple[Any, ...]:
         return (
@@ -77,6 +103,7 @@ class UninstallManager:
             bool(shutil.which("flatpak")),
             bool(shutil.which("snap")),
             cls._desktop_dirs_signature(),
+            cls._package_db_signature(),
         )
 
     @classmethod
