@@ -11,11 +11,12 @@ from src.core.history import parse_deletion_history
 from src.core.system import APT_NONINTERACTIVE_ENV, C_LOCALE_ENV, PACKAGE_TRANSACTION_TIMEOUT
 from src.ui.screens.uninstall import run_uninstall
 from src.uninstall import processes, removal, residue
-from src.uninstall.collateral import collateral_packages
+from src.uninstall.collateral import _collateral_query, collateral_packages
 from src.uninstall.discovery import (
     _app_record,
     _dpkg_install_time,
     _has_deb_database,
+    _has_pacman_database,
     _has_rpm_database,
     _is_system_component,
     _pre_scan_package_desktop_names,
@@ -64,9 +65,16 @@ def package_databases(monkeypatch, tmp_path_factory):
     rpm_dir = db_root / "rpmdb"
     rpm_dir.mkdir()
     (rpm_dir / "rpmdb.sqlite").write_bytes(b"SQLite format 3\x00")
+    # Pacman's local database: one package subdirectory makes it non-empty, the
+    # way _has_pacman_database() reads it. Same host-independence reason as the
+    # other two -- Fedora/GitHub runners have no /var/lib/pacman/local at all.
+    pacman_dir = db_root / "pacman-local"
+    (pacman_dir / "bash-5.2").mkdir(parents=True)
+    (pacman_dir / "ALPM_DB_VERSION").write_text("9\n")
     monkeypatch.setattr("src.uninstall.discovery._DPKG_STATUS_FILE", status)
     monkeypatch.setattr("src.uninstall.discovery._RPM_DB_DIR", rpm_dir)
-    return SimpleNamespace(deb=status, rpm=rpm_dir)
+    monkeypatch.setattr("src.uninstall.discovery._PACMAN_DB_DIR", pacman_dir)
+    return SimpleNamespace(deb=status, rpm=rpm_dir, pacman=pacman_dir)
 
 
 @pytest.fixture
@@ -959,6 +967,8 @@ def test_apt_scan_trusts_dpkg_over_the_hardcoded_name_lists(mock_which, mock_run
 @patch("src.uninstall.manager.system.run_command")
 @patch("shutil.which")
 def test_run_full_scan_pacman(mock_which, mock_run_cmd):
+    # The autouse package_databases fixture populates _PACMAN_DB_DIR, so the
+    # scanner's _has_pacman_database() guard passes as it would on a real Arch box.
     mock_which.side_effect = lambda x: "/usr/bin/pacman" if x == "pacman" else None
     mock_run_cmd.return_value = MagicMock(
         ok=True,
@@ -1868,7 +1878,7 @@ def test_build_removal_targets_drops_residue_shared_with_another_app():
     with (
         patch("src.uninstall.residue.find_residue_paths", side_effect=fake_residue),
         patch("src.uninstall.processes.candidate_process_names", return_value=[]),
-        patch("src.uninstall.manager.collateral_packages", return_value=[]),
+        patch("src.uninstall.manager._collateral_query", return_value=([], False)),
     ):
         targets = mgr.build_removal_targets([obsidian_cli])
 
@@ -2404,8 +2414,14 @@ def test_a_scanner_asks_no_question_of_a_database_that_holds_nothing(monkeypatch
     empty_status.write_text("")
     empty_rpm_db = tmp_path / "rpmdb"
     empty_rpm_db.mkdir()
+    # An empty pacman database is not empty on disk: it still ships ALPM_DB_VERSION.
+    # The guard must see through that and refuse to fork pacman anyway.
+    empty_pacman_db = tmp_path / "pacman-local"
+    empty_pacman_db.mkdir()
+    (empty_pacman_db / "ALPM_DB_VERSION").write_text("9\n")
     monkeypatch.setattr("src.uninstall.discovery._DPKG_STATUS_FILE", empty_status)
     monkeypatch.setattr("src.uninstall.discovery._RPM_DB_DIR", empty_rpm_db)
+    monkeypatch.setattr("src.uninstall.discovery._PACMAN_DB_DIR", empty_pacman_db)
 
     with (
         patch("src.uninstall.discovery.shutil.which", side_effect=lambda tool: f"/usr/bin/{tool}"),
@@ -2413,6 +2429,7 @@ def test_a_scanner_asks_no_question_of_a_database_that_holds_nothing(monkeypatch
     ):
         assert _scan_apt_packages(set(), {}) == []
         assert _scan_rpm_packages(set(), {}) == []
+        assert _scan_pacman_packages(set(), {}) == []
         # Not "returned nothing": never ran.
         assert run_command.call_args_list == []
 
@@ -2422,6 +2439,15 @@ def test_a_scanner_asks_no_question_of_a_database_that_holds_nothing(monkeypatch
     assert _has_rpm_database() is False
     monkeypatch.setattr("src.uninstall.discovery._RPM_DB_DIR", tmp_path / "absent")
     assert _has_rpm_database() is False
+
+    # Pacman: only ALPM_DB_VERSION (no package subdirectory) is empty; a missing
+    # directory is empty too; one package subdirectory is what makes it non-empty.
+    assert _has_pacman_database() is False
+    monkeypatch.setattr("src.uninstall.discovery._PACMAN_DB_DIR", tmp_path / "absent-pacman")
+    assert _has_pacman_database() is False
+    (empty_pacman_db / "bash-5.2").mkdir()
+    monkeypatch.setattr("src.uninstall.discovery._PACMAN_DB_DIR", empty_pacman_db)
+    assert _has_pacman_database() is True
 
 
 def test_a_populated_database_is_worth_asking(package_databases):
@@ -2433,6 +2459,7 @@ def test_a_populated_database_is_worth_asking(package_databases):
     """
     assert _has_deb_database() is True
     assert _has_rpm_database() is True
+    assert _has_pacman_database() is True
     for leftover in package_databases.rpm.iterdir():
         leftover.unlink()
     (package_databases.rpm / "backend-nobody-has-heard-of").write_bytes(b"\x00")
@@ -2648,38 +2675,105 @@ def test_collateral_packages_asks_nothing_for_a_removal_that_takes_nothing(app_t
 
 def test_collateral_packages_survives_a_query_that_fails():
     """run_command turns a missing binary or a timeout into a result rather than
-    raising; the preview then says nothing, exactly as it did before (O4)."""
+    raising; collateral_packages keeps its old list[str] shape and returns [] (O4)."""
     with patch(
         "src.uninstall.collateral.system.run_command",
-        return_value=MagicMock(returncode=127, stdout="", ok=False),
+        return_value=MagicMock(returncode=127, stdout="", ok=False, timed_out=False, error=""),
     ):
         assert collateral_packages({"id": "vlc", "type": "DNF"}) == []
     # An entry with no package id has nothing to ask about.
     assert collateral_packages({"id": "", "type": "DNF"}) == []
 
 
+def test_collateral_query_flags_a_failed_query_as_unavailable():
+    """The preview needs "could not find out" told apart from "takes nothing", so
+    the query reports (names, unavailable) -- unavailable only on a real failure.
+
+    apt/pacman/dnf exit 0 on success even with no dependents, so `not ok` is the
+    failure signal there. rpm on the zypper path exits 1 for a legitimately empty
+    "no package requires X", so only a timeout/error or some other code is a
+    failure for it -- code 1 is still an answer.
+    """
+    # A missing dnf binary (127): failed, so unavailable.
+    with patch(
+        "src.uninstall.collateral.system.run_command",
+        return_value=MagicMock(returncode=127, stdout="", ok=False, timed_out=False, error=""),
+    ):
+        assert _collateral_query({"id": "vlc", "type": "DNF"}) == ([], True)
+
+    # Zypper/rpm exit 1 with prose = genuinely empty, not a failure.
+    with patch(
+        "src.uninstall.collateral.system.run_command",
+        return_value=MagicMock(
+            returncode=1, stdout="no package requires vlc\n", ok=False, timed_out=False, error=""
+        ),
+    ):
+        assert _collateral_query({"id": "vlc", "type": "Zypper"}) == ([], False)
+
+    # But a missing rpm (127) on the zypper path is a real failure.
+    with patch(
+        "src.uninstall.collateral.system.run_command",
+        return_value=MagicMock(returncode=127, stdout="", ok=False, timed_out=False, error=""),
+    ):
+        assert _collateral_query({"id": "vlc", "type": "Zypper"}) == ([], True)
+
+    # A timeout is a failure regardless of manager.
+    with patch(
+        "src.uninstall.collateral.system.run_command",
+        return_value=MagicMock(returncode=124, stdout="", ok=False, timed_out=True, error=""),
+    ):
+        assert _collateral_query({"id": "vlc", "type": "Pacman"}) == ([], True)
+
+    # A successful query with real dependents: names, and not unavailable.
+    with patch(
+        "src.uninstall.collateral.system.run_command",
+        return_value=MagicMock(
+            returncode=0, stdout="vlc-plugins\n", ok=True, timed_out=False, error=""
+        ),
+    ):
+        assert _collateral_query({"id": "vlc", "type": "DNF"}) == (["vlc-plugins"], False)
+
+    # Unsupported types and empty ids are "nothing to ask", never a failure.
+    assert _collateral_query({"id": "com.example.App", "type": "Flatpak"}) == ([], False)
+    assert _collateral_query({"id": "", "type": "DNF"}) == ([], False)
+
+
 def test_build_removal_targets_records_the_collateral_for_every_app():
     """The preview reads it off the app dict, so the tuple keeps its three fields
-    and every selected app carries a list -- empty when nothing comes with it."""
+    and every selected app carries a list -- empty when nothing comes with it.
+
+    An app whose query failed is stamped collateral_unavailable so the preview
+    can flag it; the others carry no such key, keeping the record minimal.
+    """
     mgr = UninstallManager()
     apps = [
         {"id": "vlc", "name": "VLC", "type": "DNF", "size_bytes": 10},
         {"id": "com.example.App", "name": "Example", "type": "Flatpak", "size_bytes": 10},
+        {"id": "gimp", "name": "GIMP", "type": "Pacman", "size_bytes": 10},
     ]
+
+    def fake_query(app):
+        if app["type"] == "DNF":
+            return ["vlc-plugins"], False
+        if app["type"] == "Pacman":
+            return [], True  # query failed
+        return [], False
 
     with (
         patch("src.uninstall.residue.find_residue_paths", return_value=[]),
         patch("src.uninstall.processes.candidate_process_names", return_value=[]),
-        patch(
-            "src.uninstall.manager.collateral_packages",
-            side_effect=lambda app: ["vlc-plugins"] if app["type"] == "DNF" else [],
-        ),
+        patch("src.uninstall.manager._collateral_query", side_effect=fake_query),
     ):
         targets = mgr.build_removal_targets(apps)
 
-    assert [len(target) for target in targets] == [3, 3]
+    assert [len(target) for target in targets] == [3, 3, 3]
+    assert apps[0]["collateral_packages"] == ["vlc-plugins"]
+    assert "collateral_unavailable" not in apps[0]
+    assert "collateral_unavailable" not in apps[1]
+    assert apps[2]["collateral_unavailable"] is True
     assert [app["collateral_packages"] for app, _paths, _running in targets] == [
         ["vlc-plugins"],
+        [],
         [],
     ]
 

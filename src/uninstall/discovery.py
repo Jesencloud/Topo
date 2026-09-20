@@ -120,6 +120,10 @@ class AppRecord(_ScannedApp, total=False):
     flatpak_scope: str
     install_dir: Path
     collateral_packages: list[str]
+    # Set only when the collateral query for this app could not be answered (tool
+    # missing, timed out, or errored), so the preview can say the dependency
+    # check was unavailable instead of treating an empty result as "takes nothing".
+    collateral_unavailable: bool
     npm_prefix: Path
 
 
@@ -159,6 +163,23 @@ def _has_rpm_database() -> bool:
     """
     with contextlib.suppress(OSError):
         return any(entry.is_file() and entry.stat().st_size > 0 for entry in _RPM_DB_DIR.iterdir())
+    return False
+
+
+def _has_pacman_database() -> bool:
+    """Whether pacman has anything to answer from.
+
+    Same purpose as the rpm/deb guards -- a box with `pacman` installed but that
+    is not Arch has an empty local database, and every scan would otherwise fork
+    `pacman -Qi`/`-Qo` at a 60s timeout to learn nothing. The check is by
+    subdirectory, not file: `/var/lib/pacman/local` holds one directory per
+    installed package (`<name>-<version>/`) plus a single `ALPM_DB_VERSION` file
+    at the top, so an empty database is not empty on disk -- it still ships that
+    one file. Counting files (as the rpm guard does) would call it non-empty;
+    counting package subdirectories is what actually says a package is installed.
+    """
+    with contextlib.suppress(OSError):
+        return any(entry.is_dir() for entry in _PACMAN_DB_DIR.iterdir())
     return False
 
 
@@ -519,7 +540,7 @@ def _pre_scan_package_desktop_names() -> tuple[set[str], dict[str, str]]:
         queries.append(_rpm_desktop_owners)
     if shutil.which("dpkg-query") and _has_deb_database():
         queries.append(_dpkg_desktop_owners)
-    if shutil.which("pacman"):
+    if shutil.which("pacman") and _has_pacman_database():
         queries.append(_pacman_desktop_owners)
 
     # The three tools disagree about output format, not about the question,
@@ -646,7 +667,7 @@ def _scan_apt_packages(
 def _scan_pacman_packages(
     user_app_packages: set[str], package_desktop_names: dict[str, str]
 ) -> list[AppRecord]:
-    if not shutil.which("pacman"):
+    if not shutil.which("pacman") or not _has_pacman_database():
         return []
     apps = []
     try:

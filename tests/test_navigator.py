@@ -1220,6 +1220,29 @@ def test_uninstall_preview_says_nothing_when_nothing_else_leaves(test_env):
     assert "also removes" not in ANSI_CSI_RE.sub("", "".join(c.args[0] for c in writes))
 
 
+def test_uninstall_preview_flags_a_dependency_check_that_could_not_run(test_env):
+    """An empty list plus collateral_unavailable is not "takes nothing" -- the
+    query failed and the real removal still cascades, so the preview says so (P2-6)."""
+    app = {
+        "name": "VLC",
+        "size_bytes": 2048,
+        "collateral_packages": [],
+        "collateral_unavailable": True,
+    }
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch(
+            "src.ui.navigator.shutil.get_terminal_size",
+            return_value=os.terminal_size((100, 30)),
+        ),
+    ):
+        _result, writes = drive_with_writes(UninstallPreviewSelector([(app, [], False)]), ["\r"])
+
+    visible_output = ANSI_CSI_RE.sub("", "".join(c.args[0] for c in writes))
+    assert "could not determine" in visible_output
+
+
 def test_collateral_label_leads_with_the_count_and_fits_the_line():
     """The frame counts physical lines, so a wrapped row would push everything
     below it off by one -- and the count has to survive the clip that prevents it."""

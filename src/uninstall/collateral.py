@@ -36,17 +36,36 @@ def collateral_packages(app: AppRecord) -> list[str]:
     database lock), so those two are asked what requires the package instead:
     apt and pacman answer with the whole transitive set they would really
     remove, the rpm family with its first level. The list is therefore a floor
-    rather than a promise, and a failed or unparsable reply yields an empty
-    one -- the preview then says nothing, exactly as it did before.
+    rather than a promise.
+
+    This keeps the old ``list[str]`` shape for callers that only want the names.
+    :func:`_collateral_query` is the same query and also reports whether it could
+    not be answered -- the preview uses that to tell "takes nothing else" apart
+    from "could not find out", which an empty list alone cannot express.
 
     The apt query carries the same flags as the apt removal in
     execute_uninstall, `-s` in place of `-y`, so on Debian the floor is the
     transaction: what is listed here is what that removal takes.
     """
+    return _collateral_query(app)[0]
+
+
+def _collateral_query(app: AppRecord) -> tuple[list[str], bool]:
+    """The collateral names, plus whether the query could not be answered.
+
+    Two callers want two different things from one subprocess. The preview needs
+    to tell "the removal takes nothing else" apart from "we could not find out"
+    -- a failed query used to come back as an empty list, indistinguishable from
+    a clean one, so the preview drew the same blank line either way while the
+    real removal still cascaded. This returns ``(names, unavailable)``:
+    ``unavailable`` is True only when the tool was missing, timed out, or errored,
+    never merely because the answer was empty. :func:`collateral_packages` keeps
+    the old ``list[str]`` shape for callers that only want the names.
+    """
     app_id = str(app.get("id") or "")
     app_type = str(app.get("type") or "")
     if not app_id:
-        return []
+        return [], False
     if app_type == AppType.APT:
         # -s simulates without root; the whole transaction is narrated, and
         # the removal lines are the interesting ones.
@@ -85,16 +104,34 @@ def collateral_packages(app: AppRecord) -> list[str]:
         argv = ["rpm", "-q", "--whatrequires", app_id, "--qf", "%{NAME}\n"]
         env = system.C_LOCALE_ENV
     else:
-        # A Flatpak, Snap, NPM or CLI removal takes nothing else with it.
-        return []
+        # A Flatpak, Snap, NPM or CLI removal takes nothing else with it. Not a
+        # failure -- there is genuinely nothing to ask.
+        return [], False
 
     # run_command turns a missing binary or a timeout into a CommandResult
-    # rather than raising, and the parser below keeps only bare package names,
-    # so a failed or half-finished reply comes out as an empty list. rpm exits
-    # 1 with "no package requires X" on stdout when there are none, which is
-    # why the return code is not consulted.
+    # rather than raising, so a failed or half-finished reply is caught by
+    # _query_failed below rather than by an exception. The parser keeps only
+    # bare package names, so even an unrecognised reply parses to nothing.
     simulated = system.run_command(argv, capture=True, timeout=30, env=env)
-    return _parse_collateral(simulated.stdout, app_id, app_type)
+    return _parse_collateral(simulated.stdout, app_id, app_type), _query_failed(simulated, app_type)
+
+
+def _query_failed(result: system.CommandResult, app_type: str) -> bool:
+    """Whether a collateral query did not actually get answered.
+
+    A missing tool (returncode 127), a timeout (124, ``timed_out``) or an OSError
+    (``error`` set) means the preview cannot claim to know what leaves with the
+    app. For apt/pacman/dnf that is exactly ``not result.ok``: all three exit 0
+    on success even when nothing depends on the package. rpm is the exception --
+    ``rpm -q --whatrequires`` on the zypper path exits 1 with "no package
+    requires X" as a legitimate empty answer, so 0 and 1 both mean "rpm replied"
+    and only a timeout, an error, or any other code counts as a failure there.
+    """
+    if result.timed_out or result.error:
+        return True
+    if app_type == AppType.ZYPPER:
+        return result.returncode not in (0, 1)
+    return not result.ok
 
 
 def _parse_collateral(stdout: str, app_id: str, app_type: str) -> list[str]:

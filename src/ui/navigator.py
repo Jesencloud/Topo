@@ -1496,6 +1496,15 @@ class UninstallPreviewSelector:
             if collateral:
                 label = self._collateral_label(collateral, collateral_width)
                 buf.append(f"{YELLOW}{self._COLLATERAL_INDENT}{label}{RESET}\033[K\n")
+            elif app.get("collateral_unavailable"):
+                # An empty list here would draw nothing, which reads as "takes
+                # nothing else" -- but the query failed, and the real removal
+                # still cascades dependencies. Say so instead of staying silent.
+                label = pad_and_truncate(
+                    "also removes: could not determine (dependency check unavailable)",
+                    collateral_width,
+                )
+                buf.append(f"{YELLOW}{self._COLLATERAL_INDENT}{label}{RESET}\033[K\n")
             for path in app_paths:
                 is_risky = path.parent == Path.home()
                 mark = f"{YELLOW}⚠{RESET}" if is_risky else f"{BLUE}✓{RESET}"

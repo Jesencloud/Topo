@@ -46,6 +46,7 @@ ignore_names = [
     # id shadows a builtin, which is a defect of its own that ruff would have
     # something to say about.
     "collateral_packages",
+    "collateral_unavailable",
     "flatpak_scope",
     "id",
     "install_dir",

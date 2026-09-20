@@ -32,7 +32,7 @@ from ..core.file_ops import (
 from ..core.package_manager import PACKAGE_QUERY_TOOLS
 from ..core.render import bytes_to_human
 from . import processes, residue
-from .collateral import collateral_packages
+from .collateral import _collateral_query
 from .discovery import (
     _DPKG_STATUS_FILE,
     _PACMAN_DB_DIR,
@@ -210,8 +210,15 @@ class UninstallManager:
         # they go through the same pool rather than being listed a second time.
         if apps:
             with ThreadPoolExecutor(max_workers=8) as pool:
-                for app, collateral in zip(apps, pool.map(collateral_packages, apps), strict=True):
+                for app, (collateral, unavailable) in zip(
+                    apps, pool.map(_collateral_query, apps), strict=True
+                ):
                     app["collateral_packages"] = collateral
+                    # Only stamped when the query could not be answered, so the
+                    # preview can flag "could not determine" instead of drawing the
+                    # same blank line it draws for a genuinely empty result.
+                    if unavailable:
+                        app["collateral_unavailable"] = True
         # Every installed app's name targets, computed once. A residue path this
         # app claims that another installed app would claim too is shared or
         # ambiguous ground -- deleting it on this app's behalf could take data the
