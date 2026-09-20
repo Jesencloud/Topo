@@ -27,7 +27,7 @@ from ..core.desktop_app_cache import (
     DESKTOP_APP_DETECTION_NAMES,
     get_desktop_app_cleanup_defs,
 )
-from ..core.desktop_entry import get_desktop_exec_command
+from ..core.desktop_entry import application_desktop_dirs, get_desktop_exec_command
 from ..core.file_ops import (
     CLEANED_PATHS,
     age_cutoff,
@@ -393,15 +393,7 @@ def clean_orphaned_remnants(dry_run=False, max_age_days=60):
     # exports under ~/.local/share/flatpak, neither of which the system-wide
     # flatpak path below covers.
     desktop_links: dict[str, str] = {}
-    desktop_dirs = [
-        Path.home() / ".local/share/applications",
-        Path("/usr/share/applications"),
-        Path("/usr/local/share/applications"),
-        Path("/var/lib/flatpak/exports/share/applications"),
-        Path.home() / ".local/share/flatpak/exports/share/applications",
-        Path("/var/lib/snapd/desktop/applications"),
-    ]
-    for desktop_dir in desktop_dirs:
+    for desktop_dir in application_desktop_dirs():
         if not desktop_dir.exists():
             continue
         try:

@@ -39,7 +39,11 @@ from ..core.constants import (
     RPM_QUERY_BATCH_SIZE,
     AppType,
 )
-from ..core.desktop_entry import get_desktop_name
+from ..core.desktop_entry import (
+    application_desktop_dirs,
+    get_desktop_name,
+    is_launchable_application,
+)
 from ..core.file_ops import get_size_fast, parse_size_to_bytes
 from ..core.package_manager import get_rpm_family_manager
 from ..core.render import bytes_to_human
@@ -415,10 +419,7 @@ def _installed_desktop_files() -> list[Path]:
     line per queried path.
     """
     desktop_files: list[Path] = []
-    for directory in (
-        Path("/usr/share/applications"),
-        Path.home() / ".local/share/applications",
-    ):
+    for directory in application_desktop_dirs():
         # An unreadable directory costs its own entries and nobody else's.
         # pathlib swallows a PermissionError while walking, but on the
         # supported floor it lets every other OSError through, and this
@@ -550,7 +551,15 @@ def _pre_scan_package_desktop_names() -> tuple[set[str], dict[str, str]]:
         batch = desktop_files[batch_start : batch_start + RPM_QUERY_BATCH_SIZE]
         for query in queries:
             for package, desktop_file in query(batch):
-                user_app_packages.add(package)
+                # Owning a .desktop file is not enough to be a user app: a
+                # Hidden=true tombstone or a Type other than Application (a
+                # URL/DBus helper, a Link) is not something a user launches. A
+                # package is a member as soon as ONE of its entries is
+                # launchable, so this adds per hit -- a package whose every
+                # entry is hidden/non-application adds nothing. NoDisplay is
+                # deliberately not filtered here: those apps still run.
+                if is_launchable_application(desktop_file):
+                    user_app_packages.add(package)
                 # A display name is worth a file read only for a package that
                 # has none yet. exists() is also what keeps a path a tool
                 # echoed back from reaching open(): a NUL byte in it raises

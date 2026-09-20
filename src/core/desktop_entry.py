@@ -128,3 +128,44 @@ def get_desktop_name(path: str | Path, locale: str = "zh_CN") -> str:
 
 def get_desktop_icon(path: str | Path) -> str:
     return parse_desktop_entry(path).get("Icon", "")
+
+
+def get_desktop_type(path: str | Path) -> str:
+    """The ``Type=`` of a desktop entry, or ``""`` when it declares none."""
+    return parse_desktop_entry(path).get("Type", "")
+
+
+def is_hidden_desktop(path: str | Path) -> bool:
+    """Whether the entry sets ``Hidden=true`` (a tombstone, not a real app)."""
+    return parse_desktop_entry(path).get("Hidden", "").lower() == "true"
+
+
+def is_launchable_application(path: str | Path) -> bool:
+    """Whether this entry represents an application a user can launch.
+
+    ``Hidden=true`` is a tombstone the spec says to treat as deleted, and a
+    ``Type`` other than ``Application`` (``Link``, ``Directory``) is not a
+    program at all. A missing ``Type`` defaults to ``Application`` per the
+    spec. ``NoDisplay`` is deliberately not consulted: it only hides the entry
+    from menus, the app still runs, so it counts as launchable here.
+    """
+    return not is_hidden_desktop(path) and get_desktop_type(path) in ("", "Application")
+
+
+def application_desktop_dirs() -> list[Path]:
+    """Every directory a launchable application's .desktop entry may live in.
+
+    A function rather than a constant because two of these are under the home
+    directory, which tests patch: a module-level list would freeze whatever
+    home resolved to at import time. Snap keeps its launchers in snapd's own
+    export directory, and a ``--user`` flatpak install exports under
+    ``~/.local/share/flatpak``, neither of which the system flatpak path covers.
+    """
+    return [
+        Path.home() / ".local/share/applications",
+        Path("/usr/share/applications"),
+        Path("/usr/local/share/applications"),
+        Path("/var/lib/flatpak/exports/share/applications"),
+        Path.home() / ".local/share/flatpak/exports/share/applications",
+        Path("/var/lib/snapd/desktop/applications"),
+    ]

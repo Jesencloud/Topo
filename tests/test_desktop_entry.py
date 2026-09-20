@@ -3,6 +3,9 @@ from src.core.desktop_entry import (
     get_desktop_exec_names,
     get_desktop_icon,
     get_desktop_name,
+    get_desktop_type,
+    is_hidden_desktop,
+    is_launchable_application,
     parse_desktop_entry,
 )
 
@@ -94,3 +97,26 @@ def test_desktop_exec_command_drops_flatpak_and_snap_run(tmp_path):
 
     assert get_desktop_exec_command(flatpak_file) == ""
     assert get_desktop_exec_command(snap_file) == ""
+
+
+def test_launchable_application_reads_hidden_and_type(tmp_path):
+    hidden = tmp_path / "hidden.desktop"
+    hidden.write_text("Type=Application\nHidden=true\nName=Gone\n")
+    link = tmp_path / "link.desktop"
+    link.write_text("Type=Link\nName=A link\n")
+    default_type = tmp_path / "default.desktop"
+    default_type.write_text("Name=No type\n")
+    nodisplay = tmp_path / "nodisplay.desktop"
+    nodisplay.write_text("Type=Application\nNoDisplay=true\nName=Runs anyway\n")
+
+    assert is_hidden_desktop(hidden) is True
+    assert is_launchable_application(hidden) is False
+
+    assert get_desktop_type(link) == "Link"
+    assert is_launchable_application(link) is False
+
+    assert get_desktop_type(default_type) == ""
+    assert is_launchable_application(default_type) is True
+
+    # NoDisplay only hides the entry from menus; the app still launches.
+    assert is_launchable_application(nodisplay) is True

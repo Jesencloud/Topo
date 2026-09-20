@@ -18,6 +18,7 @@ from src.uninstall.discovery import (
     _has_deb_database,
     _has_pacman_database,
     _has_rpm_database,
+    _installed_desktop_files,
     _is_system_component,
     _pre_scan_package_desktop_names,
     _scan_apt_packages,
@@ -1129,6 +1130,13 @@ def test_pre_scan_keeps_user_entries_when_the_system_dir_cannot_be_read(
 
     monkeypatch.setattr(Path, "exists", exists)
     monkeypatch.setattr(Path, "glob", glob)
+    # This test is about one unreadable directory not taking the others down;
+    # pin the scan to exactly the two it reasons about so real host export dirs
+    # (flatpak/snap) cannot leak entries into the exact-equality assertions.
+    monkeypatch.setattr(
+        "src.uninstall.discovery.application_desktop_dirs",
+        lambda: [Path("/usr/share/applications"), apps_dir],
+    )
 
     def one_answer_each(args, **kwargs):
         queried = [a for a in args if a.endswith(".desktop")]
@@ -2312,6 +2320,141 @@ def test_pre_scan_reads_every_owner_of_a_shared_desktop_path(tmp_path, monkeypat
 
     assert packages == {"procps", "libc6", "bash"}
     assert names == {"procps": "Shared App", "libc6": "Shared App", "bash": "Shared App"}
+
+
+def test_installed_desktop_files_scans_the_widened_directory_set(tmp_path, monkeypatch):
+    """The scan follows the full export set, not just the two menu dirs (P3).
+
+    /usr/local and the flatpak/snap export dirs used to be missed here even
+    though clean/apps.py already covered them; both now share
+    application_desktop_dirs(). A .desktop dropped in one of the previously
+    missed dirs must be picked up.
+    """
+    local_dir = tmp_path / "usr/local/share/applications"
+    local_dir.mkdir(parents=True)
+    entry = local_dir / "extra.desktop"
+    entry.write_text("[Desktop Entry]\nName=Extra\n")
+    menu_dir = tmp_path / ".local/share/applications"
+    menu_dir.mkdir(parents=True)
+    (menu_dir / "menu.desktop").write_text("[Desktop Entry]\nName=Menu\n")
+
+    monkeypatch.setattr(
+        "src.uninstall.discovery.application_desktop_dirs",
+        lambda: [menu_dir, local_dir],
+    )
+
+    found = set(_installed_desktop_files())
+
+    assert entry in found
+    assert (menu_dir / "menu.desktop") in found
+
+
+def test_pre_scan_excludes_a_package_whose_only_entry_is_hidden(tmp_path, monkeypatch):
+    """Owning a Hidden=true tombstone is not owning a launchable app (P3)."""
+    monkeypatch.setattr("src.uninstall.discovery._DPKG_STATUS_FILE", tmp_path / "dpkg-status")
+    (tmp_path / "dpkg-status").write_text("Package: bash\n")
+    apps_dir = tmp_path / ".local/share/applications"
+    apps_dir.mkdir(parents=True)
+    hidden = apps_dir / "ghost.desktop"
+    hidden.write_text("[Desktop Entry]\nType=Application\nHidden=true\nName=Ghost\n")
+    monkeypatch.setattr("src.uninstall.discovery.application_desktop_dirs", lambda: [apps_dir])
+
+    with (
+        patch(
+            "src.uninstall.discovery.shutil.which",
+            side_effect=lambda n: "/usr/bin/dpkg-query" if n == "dpkg-query" else None,
+        ),
+        patch("pathlib.Path.home", return_value=tmp_path),
+        patch(
+            "src.uninstall.discovery.system.run_command",
+            return_value=MagicMock(ok=True, stdout=f"ghost-pkg: {hidden}\n"),
+        ),
+    ):
+        packages, _ = _pre_scan_package_desktop_names()
+
+    assert packages == set()
+
+
+def test_pre_scan_excludes_a_package_whose_only_entry_is_a_link(tmp_path, monkeypatch):
+    """A Type other than Application is not a launchable app (P3)."""
+    monkeypatch.setattr("src.uninstall.discovery._DPKG_STATUS_FILE", tmp_path / "dpkg-status")
+    (tmp_path / "dpkg-status").write_text("Package: bash\n")
+    apps_dir = tmp_path / ".local/share/applications"
+    apps_dir.mkdir(parents=True)
+    link = apps_dir / "helper.desktop"
+    link.write_text("[Desktop Entry]\nType=Link\nName=Helper\nURL=https://example.com\n")
+    monkeypatch.setattr("src.uninstall.discovery.application_desktop_dirs", lambda: [apps_dir])
+
+    with (
+        patch(
+            "src.uninstall.discovery.shutil.which",
+            side_effect=lambda n: "/usr/bin/dpkg-query" if n == "dpkg-query" else None,
+        ),
+        patch("pathlib.Path.home", return_value=tmp_path),
+        patch(
+            "src.uninstall.discovery.system.run_command",
+            return_value=MagicMock(ok=True, stdout=f"helper-pkg: {link}\n"),
+        ),
+    ):
+        packages, _ = _pre_scan_package_desktop_names()
+
+    assert packages == set()
+
+
+def test_pre_scan_keeps_a_nodisplay_application(tmp_path, monkeypatch):
+    """NoDisplay hides the menu entry but the app still runs, so it stays (P3)."""
+    monkeypatch.setattr("src.uninstall.discovery._DPKG_STATUS_FILE", tmp_path / "dpkg-status")
+    (tmp_path / "dpkg-status").write_text("Package: bash\n")
+    apps_dir = tmp_path / ".local/share/applications"
+    apps_dir.mkdir(parents=True)
+    entry = apps_dir / "background.desktop"
+    entry.write_text("[Desktop Entry]\nType=Application\nNoDisplay=true\nName=Background\n")
+    monkeypatch.setattr("src.uninstall.discovery.application_desktop_dirs", lambda: [apps_dir])
+
+    with (
+        patch(
+            "src.uninstall.discovery.shutil.which",
+            side_effect=lambda n: "/usr/bin/dpkg-query" if n == "dpkg-query" else None,
+        ),
+        patch("pathlib.Path.home", return_value=tmp_path),
+        patch(
+            "src.uninstall.discovery.system.run_command",
+            return_value=MagicMock(ok=True, stdout=f"bg-pkg: {entry}\n"),
+        ),
+    ):
+        packages, _ = _pre_scan_package_desktop_names()
+
+    assert packages == {"bg-pkg"}
+
+
+def test_pre_scan_keeps_a_package_with_one_visible_entry_among_hidden_ones(tmp_path, monkeypatch):
+    """One launchable entry makes the package a member, even beside hidden ones (P3)."""
+    monkeypatch.setattr("src.uninstall.discovery._DPKG_STATUS_FILE", tmp_path / "dpkg-status")
+    (tmp_path / "dpkg-status").write_text("Package: bash\n")
+    apps_dir = tmp_path / ".local/share/applications"
+    apps_dir.mkdir(parents=True)
+    hidden = apps_dir / "aaa-hidden.desktop"
+    hidden.write_text("[Desktop Entry]\nType=Application\nHidden=true\nName=Hidden\n")
+    visible = apps_dir / "zzz-visible.desktop"
+    visible.write_text("[Desktop Entry]\nType=Application\nName=Visible\n")
+    monkeypatch.setattr("src.uninstall.discovery.application_desktop_dirs", lambda: [apps_dir])
+
+    def both_owned(args, **kwargs):
+        # Same package owns both entries; dpkg-query -S is "owner: path" per line.
+        queried = [a for a in args if a.endswith(".desktop")]
+        return MagicMock(ok=True, stdout="".join(f"shared-pkg: {p}\n" for p in queried))
+
+    with (
+        patch(
+            "src.uninstall.discovery.shutil.which",
+            side_effect=lambda n: "/usr/bin/dpkg-query" if n == "dpkg-query" else None,
+        ),
+        patch("pathlib.Path.home", return_value=tmp_path),
+        patch("src.uninstall.discovery.system.run_command", side_effect=both_owned),
+    ):
+        packages, _ = _pre_scan_package_desktop_names()
+
+    assert packages == {"shared-pkg"}
 
 
 def test_uninstall_helpers_and_cache_state(test_env, monkeypatch):
