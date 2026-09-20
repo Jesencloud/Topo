@@ -44,3 +44,53 @@ def test_desktop_exec_command_rejects_malformed_quoted_exec(tmp_path):
 
     assert get_desktop_exec_command(desktop_file) == ""
     assert get_desktop_exec_names(desktop_file) == set()
+
+
+def test_desktop_exec_command_unwraps_env_and_its_assignments(tmp_path):
+    desktop_file = tmp_path / "app.desktop"
+    desktop_file.write_text("Exec=env FOO=bar /opt/app %U\n")
+
+    assert get_desktop_exec_command(desktop_file) == "/opt/app"
+    assert get_desktop_exec_names(desktop_file) == {"app"}
+
+
+def test_desktop_exec_command_skips_multiple_env_assignments(tmp_path):
+    desktop_file = tmp_path / "app.desktop"
+    desktop_file.write_text("Exec=env A=1 B=2 /usr/bin/foo\n")
+
+    assert get_desktop_exec_command(desktop_file) == "/usr/bin/foo"
+    assert get_desktop_exec_names(desktop_file) == {"foo"}
+
+
+def test_desktop_exec_command_drops_bare_interpreter(tmp_path):
+    desktop_file = tmp_path / "app.desktop"
+    desktop_file.write_text("Exec=python /opt/app/main.py\n")
+
+    assert get_desktop_exec_command(desktop_file) == ""
+    assert get_desktop_exec_names(desktop_file) == set()
+
+
+def test_desktop_exec_command_recognises_interpreter_by_basename(tmp_path):
+    desktop_file = tmp_path / "app.desktop"
+    desktop_file.write_text("Exec=/usr/bin/python3 script.py\n")
+
+    assert get_desktop_exec_command(desktop_file) == ""
+    assert get_desktop_exec_names(desktop_file) == set()
+
+
+def test_desktop_exec_command_drops_sh_wrapper(tmp_path):
+    desktop_file = tmp_path / "app.desktop"
+    desktop_file.write_text("Exec=sh -c 'exec /opt/app'\n")
+
+    assert get_desktop_exec_command(desktop_file) == ""
+    assert get_desktop_exec_names(desktop_file) == set()
+
+
+def test_desktop_exec_command_drops_flatpak_and_snap_run(tmp_path):
+    flatpak_file = tmp_path / "flatpak.desktop"
+    flatpak_file.write_text("Exec=flatpak run org.example.App\n")
+    snap_file = tmp_path / "snap.desktop"
+    snap_file.write_text("Exec=snap run foo\n")
+
+    assert get_desktop_exec_command(flatpak_file) == ""
+    assert get_desktop_exec_command(snap_file) == ""

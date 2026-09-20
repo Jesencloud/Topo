@@ -1,6 +1,34 @@
 import shlex
 from pathlib import Path
 
+# Generic launchers and interpreters that a .desktop Exec= may put in front of
+# the real program. Their basenames are worthless as an app identity: a
+# `python`/`sh`/`node` process anywhere on the machine would match, and turning
+# one into a pkill pattern or a residue keyword risks killing an unrelated
+# process or trashing an unrelated directory. Matched by basename so
+# `/usr/bin/python3` is recognised too.
+_LAUNCHER_NAMES: frozenset[str] = frozenset(
+    {
+        "env",
+        "sh",
+        "bash",
+        "dash",
+        "zsh",
+        "python",
+        "python2",
+        "python3",
+        "perl",
+        "ruby",
+        "node",
+        "nodejs",
+        "flatpak",
+        "snap",
+        "sudo",
+        "pkexec",
+        "exec",
+    }
+)
+
 
 def parse_desktop_entry(path: str | Path) -> dict[str, str]:
     """Parse key/value pairs from a desktop-entry style file.
@@ -41,8 +69,19 @@ def parse_desktop_entry(path: str | Path) -> dict[str, str]:
 def get_desktop_exec_command(path: str | Path) -> str:
     """Return the executable command from a desktop ``Exec=`` field.
 
-    Malformed quoted commands return an empty string so callers can keep the
-    entry instead of deleting something ambiguous.
+    When the first program is a generic launcher, its own name is not the
+    app's, so this looks past it:
+
+    - ``env FOO=bar /opt/app`` skips ``env`` and its ``NAME=VALUE`` assignments
+      and returns ``/opt/app`` -- unwrapping ``env`` is unambiguous.
+    - a bare interpreter or wrapper (``python main.py``, ``sh -c '...'``,
+      ``flatpak run org.example.App``, ``snap run foo``) returns ``""``: the
+      real program is an argument this parser does not try to guess, and the
+      launcher's name must never become a process or residue keyword. The app
+      is still matched by its id/name tokens and, for flatpak/snap, its cgroup.
+
+    Malformed quoted commands and an empty ``Exec=`` return ``""`` so callers
+    can keep the entry instead of deleting something ambiguous.
     """
     exec_value = parse_desktop_entry(path).get("Exec", "")
     if not exec_value:
@@ -51,10 +90,20 @@ def get_desktop_exec_command(path: str | Path) -> str:
         parts = shlex.split(exec_value)
     except ValueError:
         return ""
-    for part in parts:
-        if part.startswith("%"):
+    tokens = [part for part in parts if not part.startswith("%")]
+    if not tokens:
+        return ""
+    first = tokens[0]
+    if Path(first).name not in _LAUNCHER_NAMES:
+        return first
+    if Path(first).name != "env":
+        # A bare interpreter/wrapper: do not guess the inner program.
+        return ""
+    # env: skip it and any NAME=VALUE assignments, return the real program.
+    for token in tokens[1:]:
+        if "=" in token:
             continue
-        return part
+        return token
     return ""
 
 
