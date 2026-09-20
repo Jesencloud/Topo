@@ -1,4 +1,5 @@
 import shutil
+import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ from ..core.constants import (
     OK,
     PROTECTED_CACHE_DIRS,
     RESET,
+    SECONDS_PER_DAY,
     SKIP,
 )
 from ..core.desktop_app_cache import (
@@ -43,6 +45,64 @@ from ..core.system import C_LOCALE_ENV, PACKAGE_TRANSACTION_TIMEOUT, run_command
 from ..core.text import sanitize_for_display
 from .totals import as_totals
 
+# A detected-app record is trusted to name the same directory the scan first
+# found only for this long. Past it, the entry is dropped and re-detected: the
+# path may since have been deleted and its name reused by an unrelated app, and
+# nothing else in the record would catch that.
+_DETECTED_APPS_TTL_SECONDS = 30 * SECONDS_PER_DAY
+
+
+def _dir_identity(path: Path) -> tuple[int, int] | None:
+    """(device, inode) of ``path``, or None if it cannot be stat-ed.
+
+    This is the stable identity of a directory: unlike mtime, which an app bumps
+    every time it writes its own cache, (dev, ino) only changes when the path is
+    a different filesystem object -- i.e. the original was removed and something
+    new was created in its place. That is exactly the reuse we must not clean.
+    """
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return st.st_dev, st.st_ino
+
+
+def _detected_entry_should_drop(name: str, info: dict, now: int) -> bool:
+    """Whether a detected-app record must be pruned before it is trusted again.
+
+    Dropping is safe: discovery re-adds any app whose binary still exists and
+    whose cache directory still lives under ``~/.cache``, stamped afresh. So the
+    conservative call is always to drop when identity cannot be confirmed --
+    the only cost is one re-detection, while the risk of keeping is cleaning a
+    directory that now belongs to a different app.
+    """
+    existing = [p for p in (Path(raw).expanduser() for raw in info.get("paths", [])) if p.exists()]
+
+    # Dead entry: neither a binary on PATH nor any data left. (original rule)
+    if not (shutil.which(name) or shutil.which(name.lower())) and not existing:
+        return True
+
+    # Pre-stamp record: no identity to verify the directory against, so it is
+    # not trusted for cleanup. Drop and let discovery re-add it with a stamp.
+    dev, ino, detected_at = info.get("dev"), info.get("ino"), info.get("detected_at")
+    if dev is None or ino is None or detected_at is None:
+        return True
+    try:
+        stamp = int(detected_at)
+        identity = (int(dev), int(ino))
+    except (TypeError, ValueError):
+        return True
+
+    # Stamp expired: force re-detection so a long-idle record cannot outlive the
+    # directory it was cut for and ride on whatever later took its name.
+    if now - stamp > _DETECTED_APPS_TTL_SECONDS:
+        return True
+
+    # A still-present path that is now a different filesystem object than when
+    # detected -- the original was removed and its name reused. Cleaning it would
+    # wipe the new occupant's data.
+    return any(_dir_identity(p) != identity for p in existing)
+
 
 def proactive_app_detection():
     """Scans for installed apps and matches them with their folders. Also prunes dead entries."""
@@ -62,13 +122,15 @@ def proactive_app_detection():
         not isinstance(stored, dict) or len(detected) != len(stored)
     )
 
-    # 1. Health Check: Prune entries that no longer have a binary AND no longer have data
+    # 1. Health Check: prune dead entries (no binary, no data) and any whose
+    # directory identity can no longer be confirmed -- expired stamp, pre-stamp
+    # record, or a path that is now a different filesystem object than when it
+    # was detected (name reused by another app). Dropped entries that are still
+    # real are re-added with a fresh stamp by the discovery pass below.
     original_count = len(detected)
+    now = int(time.time())
     to_delete = [
-        name
-        for name, info in detected.items()
-        if not (shutil.which(name) or shutil.which(name.lower()))
-        and not any(Path(p).expanduser().exists() for p in info.get("paths", []))
+        name for name, info in detected.items() if _detected_entry_should_drop(name, info, now)
     ]
     for name in to_delete:
         del detected[name]
@@ -103,7 +165,17 @@ def proactive_app_detection():
                     continue
 
                 if shutil.which(name_lower) or shutil.which(item.name):
-                    detected[item.name] = {"paths": [str(item.resolve())], "procs": [name_lower]}
+                    # Stamp the record with the directory's identity (dev, ino)
+                    # and the time, so the health check above can later tell this
+                    # same directory apart from a same-named one that replaced it.
+                    ident = _dir_identity(item)
+                    detected[item.name] = {
+                        "paths": [str(item.resolve())],
+                        "procs": [name_lower],
+                        "dev": ident[0] if ident else None,
+                        "ino": ident[1] if ident else None,
+                        "detected_at": now,
+                    }
                     handled_names.add(name_lower)
                     new_found = True
         except OSError:

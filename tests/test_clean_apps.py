@@ -178,6 +178,160 @@ def test_a_failed_registry_write_keeps_the_previous_one(test_env):
     assert list(test_env.glob("detected_apps.json.tmp-*")) == []
 
 
+def test_a_new_detection_is_stamped_with_directory_identity_and_time(test_env):
+    # The whole point of P2-4: a fresh record must carry (dev, ino) and a
+    # timestamp so a later run can tell this directory apart from a same-named
+    # one that replaces it. Without the stamp there is nothing to verify.
+    cache_dir = test_env / ".cache" / "zqxapp"
+    cache_dir.mkdir()
+    st = cache_dir.stat()
+    registry = test_env / "detected_apps.json"
+
+    with (
+        patch("src.clean.apps.DETECTED_APPS_FILE", registry),
+        patch("shutil.which", return_value="/usr/bin/zqxapp"),
+    ):
+        detected = proactive_app_detection()
+
+    entry = detected["zqxapp"]
+    assert entry["dev"] == st.st_dev
+    assert entry["ino"] == st.st_ino
+    assert isinstance(entry["detected_at"], int) and entry["detected_at"] > 0
+
+
+def test_a_record_whose_directory_identity_still_matches_is_kept(test_env):
+    cache_dir = test_env / ".cache" / "zqxapp"
+    cache_dir.mkdir()
+    st = cache_dir.stat()
+    registry = test_env / "detected_apps.json"
+    registry.write_text(
+        json.dumps(
+            {
+                "zqxapp": {
+                    "paths": [str(cache_dir)],
+                    "procs": ["zqxapp"],
+                    "dev": st.st_dev,
+                    "ino": st.st_ino,
+                    "detected_at": int(time.time()),
+                }
+            }
+        )
+    )
+
+    with (
+        patch("src.clean.apps.DETECTED_APPS_FILE", registry),
+        patch("shutil.which", return_value=None),
+    ):
+        detected = proactive_app_detection()
+
+    assert "zqxapp" in detected
+
+
+def test_a_record_whose_directory_was_reused_by_another_app_is_dropped(test_env):
+    # Same path, different filesystem object than when detected: the original
+    # was removed and its name reused. Cleaning it would wipe the new occupant.
+    cache_dir = test_env / ".cache" / "zqxapp"
+    cache_dir.mkdir()
+    st = cache_dir.stat()
+    registry = test_env / "detected_apps.json"
+    registry.write_text(
+        json.dumps(
+            {
+                "zqxapp": {
+                    "paths": [str(cache_dir)],
+                    "procs": ["zqxapp"],
+                    "dev": st.st_dev,
+                    "ino": st.st_ino + 1,  # inode no longer matches the directory
+                    "detected_at": int(time.time()),
+                }
+            }
+        )
+    )
+
+    # which=None so the discovery pass does not simply re-add it; we are testing
+    # the drop, not re-detection.
+    with (
+        patch("src.clean.apps.DETECTED_APPS_FILE", registry),
+        patch("shutil.which", return_value=None),
+    ):
+        detected = proactive_app_detection()
+
+    assert "zqxapp" not in detected
+
+
+def test_a_record_past_its_ttl_is_dropped(test_env):
+    cache_dir = test_env / ".cache" / "zqxapp"
+    cache_dir.mkdir()
+    st = cache_dir.stat()
+    registry = test_env / "detected_apps.json"
+    registry.write_text(
+        json.dumps(
+            {
+                "zqxapp": {
+                    "paths": [str(cache_dir)],
+                    "procs": ["zqxapp"],
+                    "dev": st.st_dev,
+                    "ino": st.st_ino,
+                    "detected_at": int(time.time()) - (31 * 86400),  # older than the 30d TTL
+                }
+            }
+        )
+    )
+
+    with (
+        patch("src.clean.apps.DETECTED_APPS_FILE", registry),
+        patch("shutil.which", return_value=None),
+    ):
+        detected = proactive_app_detection()
+
+    assert "zqxapp" not in detected
+
+
+def test_a_pre_stamp_record_is_not_trusted_for_cleanup(test_env):
+    # An old-format record (no dev/ino/detected_at) predates identity pinning, so
+    # it cannot prove the directory is still the one it was cut for. Drop it.
+    cache_dir = test_env / ".cache" / "zqxapp"
+    cache_dir.mkdir()
+    registry = test_env / "detected_apps.json"
+    registry.write_text(json.dumps({"zqxapp": {"paths": [str(cache_dir)], "procs": ["zqxapp"]}}))
+
+    with (
+        patch("src.clean.apps.DETECTED_APPS_FILE", registry),
+        patch("shutil.which", return_value=None),
+    ):
+        detected = proactive_app_detection()
+
+    assert "zqxapp" not in detected
+
+
+def test_a_stamped_record_with_a_live_binary_survives_a_missing_path(test_env):
+    # Regression for the original health-check rule: a binary still on PATH keeps
+    # the record even when its cached data is gone -- now expressed with a stamp.
+    registry = test_env / "detected_apps.json"
+    registry.write_text(
+        json.dumps(
+            {
+                "zqxapp": {
+                    "paths": ["/tmp/gone-zqxapp"],
+                    "procs": ["zqxapp"],
+                    "dev": 1,
+                    "ino": 1,
+                    "detected_at": int(time.time()),
+                }
+            }
+        )
+    )
+
+    with (
+        patch("src.clean.apps.DETECTED_APPS_FILE", registry),
+        patch("shutil.which", return_value="/usr/bin/zqxapp"),
+        patch("pathlib.Path.iterdir", return_value=[]),
+    ):
+        detected = proactive_app_detection()
+
+    assert "zqxapp" in detected
+
+
 def test_clean_flatpak_unused():
     from src.clean.apps import clean_flatpak_unused
 
