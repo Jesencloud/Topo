@@ -351,6 +351,29 @@ def _is_sandbox_app_data(path: Path) -> bool:
     return path.parent in (home / ".var/app", home / "snap")
 
 
+def _paths_destroyed_by_package_removal(app: AppRecord, paths: list[Path]) -> list[Path]:
+    """Residue the package removal itself deletes, so it must be trashed first.
+
+    `snap remove` deletes `~/snap/<name>` as part of removing the snap -- the
+    `--purge` flag only turns off the recovery snapshot, it is not what deletes
+    the data. So by the time the residue pass runs, snapd has already wiped
+    `~/snap/<name>` and `safe_remove` finds nothing to move to the trash: a
+    confined browser's bookmarks and saved passwords are gone with no way back.
+    Moving that one directory to the trash before `snap remove` runs is the fix.
+
+    Only `~/snap/<name>` qualifies. snapd also deletes `/var/snap/<name>` and
+    `/root/snap/<name>`, but those are root's and never appear in residue (the
+    search roots are under the user's home), so there is nothing to rescue there.
+    Keyed on the app being a Snap rather than on the path, so a non-Snap app that
+    happens to own a `~/snap/<name>` directory keeps the normal after-removal
+    ordering.
+    """
+    if app.get("type") != AppType.SNAP:
+        return []
+    snap_home = Path.home() / "snap"
+    return [path for path in paths if path.parent == snap_home]
+
+
 def _remove_residue_paths(paths: list[Path]) -> list[tuple[bool, str]]:
     """Delete an app's leftover data, reporting what happened to each path.
 
@@ -448,27 +471,48 @@ def execute_uninstall(app: AppRecord, paths: list[Path]) -> UninstallOutcome:
                 "freed_bytes": 0,
             }
 
+        # A Snap keeps its user data in ~/snap/<name>, and `snap remove`
+        # deletes that directory itself -- so unlike every other manager, the
+        # residue there has to go to the trash *before* the package removal,
+        # or snapd wipes it first and the trash pass finds nothing. Everything
+        # else stays after the removal (pre_removal_paths is empty for them),
+        # and the data-left-in-place / freed-bytes bookkeeping below tracks the
+        # two groups separately.
+        pre_removal_paths = _paths_destroyed_by_package_removal(app, paths)
+        post_removal_paths = [path for path in paths if path not in pre_removal_paths]
+        pre_details = _remove_residue_paths(pre_removal_paths) if pre_removal_paths else []
+
         removal = _remove_package(app)
         package_status = "removed" if removal.ok else "failed"
         record_deletion_audit(app["id"], package_mode, package_status, package_size)
         package_event_recorded = True
 
-        # Nothing is deleted while the app is still installed. The removal
-        # above fails for reasons that have nothing to do with the data --
+        # Nothing that can wait is deleted while the app is still installed. A
+        # removal fails for reasons that have nothing to do with the data --
         # no polkit agent for a system-wide Flatpak, a lock held by another
         # package manager, a package the type dispatch does not know -- and
         # deleting the configuration of an app that is still there is the
         # worst of both outcomes: the user has an installed app that has
-        # forgotten everything, and a retry cannot bring it back. Leaving
-        # the paths alone makes the failure retryable.
-        data_left_in_place = bool(paths) and package_status != "removed"
-        removed_details: list[tuple[bool, str]] = []
-        residue_failed: list[str] = []
-        freed_bytes = 0
+        # forgotten everything, and a retry cannot bring it back. Leaving the
+        # remaining paths alone makes the failure retryable. Only what the
+        # removal would have destroyed anyway (a snap's ~/snap/<name>) is moved
+        # ahead of it, and it goes to the trash, so it is recoverable either way.
+        data_left_in_place = bool(post_removal_paths) and package_status != "removed"
         if package_status == "removed":
-            removed_details = _remove_residue_paths(paths)
+            post_details = _remove_residue_paths(post_removal_paths)
+            removed_details = pre_details + post_details
             residue_failed = [desc for ok, desc in removed_details if not ok]
-            freed_bytes = _freed_bytes(package_size, paths, removed_details)
+            freed_bytes = _freed_bytes(
+                package_size, pre_removal_paths + post_removal_paths, removed_details
+            )
+        else:
+            # The removal failed after the pre-trash step. Report what was
+            # actually trashed (so the user sees the snap data is recoverable),
+            # but claim no freed space -- the package is still installed and its
+            # squashfs still on disk.
+            removed_details = pre_details
+            residue_failed = [desc for ok, desc in pre_details if not ok]
+            freed_bytes = 0
 
         session_status = "ended"
         return {

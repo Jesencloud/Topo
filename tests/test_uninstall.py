@@ -1577,6 +1577,70 @@ def test_execute_uninstall_snap(mock_run_cmd, test_env):
     )
 
 
+@patch("subprocess.run")
+def test_execute_uninstall_snap_trashes_user_data_before_purge(mock_run, test_env):
+    """`snap remove` deletes ~/snap/<name> itself, so the data must reach the
+    trash before the removal runs -- otherwise snapd wipes it first."""
+    app = {"name": "MySnap", "id": "my-snap", "type": "Snap", "size_bytes": 100}
+    snap_data = test_env / "snap/my-snap"
+    snap_data.mkdir(parents=True)
+
+    mock_run.return_value = MagicMock(returncode=1)  # no process holding the dir
+    order: list[str] = []
+
+    def record_remove(path, **kwargs):
+        order.append(f"trash:{path}")
+        return (True, "OK")
+
+    def record_run(argv, **kwargs):
+        order.append(f"run:{argv[0]}:{argv[1] if len(argv) > 1 else ''}")
+        return MagicMock(ok=True, returncode=0)
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.uninstall.removal.safe_remove", side_effect=record_remove) as mock_remove,
+        patch("src.core.system.run_command", side_effect=record_run),
+    ):
+        details = removal.execute_uninstall(app, [snap_data])
+
+    # The snap data is trashed, forced to use_trash even though it is sandbox data.
+    trash_call = mock_remove.call_args_list[0]
+    assert trash_call.args[0] == snap_data
+    assert trash_call.kwargs["use_trash"] is True
+    # ...and that happens before `snap remove` runs.
+    trash_idx = order.index(f"trash:{snap_data}")
+    purge_idx = next(i for i, e in enumerate(order) if e.startswith("run:snap:remove"))
+    assert trash_idx < purge_idx
+    assert details["package_removed"] is True
+    assert details["removed_paths"] == [(True, "snap/my-snap")]
+
+
+@patch("subprocess.run")
+def test_execute_uninstall_snap_data_recoverable_when_purge_fails(mock_run, test_env):
+    """If `snap remove` fails after the pre-trash step, the data is already in the
+    trash (recoverable) and no space is claimed freed (the snap is still on disk)."""
+    app = {"name": "MySnap", "id": "my-snap", "type": "Snap", "size_bytes": 100}
+    snap_data = test_env / "snap/my-snap"
+    snap_data.mkdir(parents=True)
+
+    mock_run.return_value = MagicMock(returncode=1)
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.uninstall.removal.safe_remove", return_value=(True, "OK")) as mock_remove,
+        patch("src.core.system.run_command", return_value=MagicMock(ok=False, returncode=1)),
+    ):
+        details = removal.execute_uninstall(app, [snap_data])
+
+    # The data was still moved to the trash before the failed removal.
+    assert mock_remove.call_args_list[0].args[0] == snap_data
+    assert details["package_removed"] is False
+    assert details["removed_paths"] == [(True, "snap/my-snap")]
+    assert details["freed_bytes"] == 0
+    # The snap data is not "left in place" -- it is in the trash.
+    assert details["data_left_in_place"] is False
+
+
 @patch("src.core.system.run_command")
 @patch("subprocess.run")
 def test_execute_uninstall_dnf(mock_run, mock_run_cmd, test_env):
