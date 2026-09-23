@@ -184,3 +184,47 @@ def test_developer_cache_groups_are_noops_without_tools(monkeypatch):
     assert clean_package_manager_caches() == (0, 0)
     assert clean_cargo_cache() == (0, 0)
     assert clean_container_and_virtualization_caches() == (0, 0)
+
+
+# --- P1-2: a failed prune must read differently from nothing to prune. ---
+
+
+@patch("shutil.which")
+@patch("src.clean.dev.run_command")
+def test_clean_docker_reports_a_failed_prune(mock_run_cmd, mock_which, capsys):
+    mock_which.return_value = "/usr/bin/docker"
+    mock_run_cmd.side_effect = [
+        MagicMock(returncode=0, ok=True),  # docker info -> no sudo needed
+        MagicMock(returncode=1, ok=False, stdout="", stderr="permission denied\n", error=""),
+    ]
+    assert clean_docker(dry_run=False) == (0, 0)
+    out = capsys.readouterr().out
+    assert "Docker prune failed" in out
+    assert "permission denied" in out
+
+
+@patch("shutil.which")
+@patch("src.clean.dev.run_command")
+def test_clean_podman_reports_a_failed_prune(mock_run_cmd, mock_which, capsys):
+    mock_which.return_value = "/usr/bin/podman"
+    mock_run_cmd.return_value = MagicMock(
+        returncode=1, ok=False, stdout="", stderr="cannot connect to Podman socket\n", error=""
+    )
+    with patch("pathlib.Path.exists", return_value=False):
+        assert clean_podman(dry_run=False) == (0, 0)
+    out = capsys.readouterr().out
+    assert "Podman prune failed" in out
+    assert "cannot connect to Podman socket" in out
+
+
+@patch("shutil.which")
+@patch("src.clean.dev.run_command")
+def test_clean_multipass_reports_a_failed_purge(mock_run_cmd, mock_which, capsys):
+    mock_which.return_value = "/usr/bin/multipass"
+    mock_run_cmd.return_value = MagicMock(
+        returncode=1, ok=False, stdout="", stderr="multipassd is not running\n", error=""
+    )
+    assert clean_multipass(dry_run=False) == (0, 0)
+    out = capsys.readouterr().out
+    assert "Multipass purge failed" in out
+    assert "multipassd is not running" in out

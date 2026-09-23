@@ -279,7 +279,7 @@ def test_clean_orphaned_packages_reports_nothing_when_there_are_no_orphans(
     assert clean_orphaned_packages(dry_run=True) == (0, 0, 0)
     assert clean_orphaned_packages(dry_run=False) == (0, 0, 0)
 
-    mock_run.return_value = MagicMock(ok=False, stdout="")
+    mock_run.return_value = MagicMock(ok=False, stdout="", stderr="", error="")
     assert clean_orphaned_packages(dry_run=False) == (0, 0, 0)
 
     # Whatever the answer, nothing was ever removed: only the query ran.
@@ -679,7 +679,7 @@ def test_clean_package_manager_leaves_the_cache_alone_when_the_clean_failed(tmp_
     def run_side_effect(cmd, **kwargs):
         if cmd[1:2] == ["repolist"]:
             return MagicMock(returncode=0, ok=True, stdout="fedora  Fedora 44  enabled\n")
-        return MagicMock(returncode=1, ok=False, stdout="")
+        return MagicMock(returncode=1, ok=False, stdout="", stderr="", error="")
 
     with (
         patch("src.clean.system.get_os_id", return_value="fedora"),
@@ -870,7 +870,10 @@ def test_package_manager_dnf5_measured_and_failed_paths():
         patch("shutil.which", side_effect=lambda n: "/usr/bin/dnf" if n == "dnf" else None),
         patch("src.clean.system._get_package_manager_cache_paths", return_value=[]),
         patch("src.clean.system._measure_package_cache_size", side_effect=[0, 0]),
-        patch("src.clean.system.run_command", return_value=SimpleNamespace(ok=False, stdout="")),
+        patch(
+            "src.clean.system.run_command",
+            return_value=SimpleNamespace(ok=False, stdout="", stderr="", error=""),
+        ),
     ):
         assert clean_package_manager() == (0, 0, 0)
 
@@ -878,7 +881,10 @@ def test_package_manager_dnf5_measured_and_failed_paths():
 def test_journal_failure_or_zero_output_is_noop():
     with (
         patch("shutil.which", return_value="/usr/bin/journalctl"),
-        patch("src.clean.system.run_command", return_value=SimpleNamespace(ok=False, stdout="")),
+        patch(
+            "src.clean.system.run_command",
+            return_value=SimpleNamespace(ok=False, stdout="", stderr="", error=""),
+        ),
     ):
         assert clean_journal() == (0, 0, 0)
 
@@ -930,7 +936,10 @@ def test_orphaned_pacman_reports_pacmans_own_total():
 
 
 def test_zombies_failure_and_empty_output():
-    with patch("src.clean.system.run_command", return_value=SimpleNamespace(ok=False, stdout="")):
+    with patch(
+        "src.clean.system.run_command",
+        return_value=SimpleNamespace(ok=False, stdout="", stderr="", error=""),
+    ):
         assert clean_zombies() == (0, 0, 0)
     with patch(
         "src.clean.system.run_command",
@@ -1248,7 +1257,7 @@ def test_old_kernels_counts_nothing_when_the_dnf_transaction_fails():
     calls, result = _remove_kernels(
         _FEDORA_STALE_ROWS,
         "7.1.10-200.fc44.x86_64",
-        remove=SimpleNamespace(ok=False, stdout=""),
+        remove=SimpleNamespace(ok=False, stdout="", stderr="", error=""),
     )
 
     assert [argv[1] for argv, _env in calls] == ["repoquery", "remove"]
@@ -1324,3 +1333,137 @@ def test_system_aggregation(tmp_path, monkeypatch):
         clean_zombies=lambda _: values[0],
     ):
         assert clean_system_data(True) == (5, 10, 15, 0)
+
+
+# --- P1-2: a failed command must read differently from nothing to do. ---
+
+
+def test_snap_listing_failure_is_reported_not_silent(capsys):
+    """snapd being down returns the same tuple as "no old revisions" -- but says so.
+
+    On a machine with snap the listing always names the base snaps, so a non-zero
+    exit is the daemon, not a tidy system; the reason travels on stderr.
+    """
+    failed = SimpleNamespace(
+        ok=False, stdout="", stderr="error: cannot communicate with server\n", error=""
+    )
+    with (
+        patch("shutil.which", return_value="/usr/bin/snap"),
+        patch("src.clean.system.run_command", return_value=failed) as run,
+    ):
+        assert clean_snaps(dry_run=False) == (0, 0, 0)
+    out = capsys.readouterr().out
+    assert "Snap revision listing failed" in out
+    assert "cannot communicate with server" in out
+    # The failure stood in for the whole run: no per-revision removal was attempted.
+    assert run.call_count == 1
+
+
+def test_snap_partial_removal_failure_is_reported(capsys):
+    """One revision removed, one refused: the refusal is counted out loud."""
+    listing = SimpleNamespace(
+        ok=True,
+        stdout=(
+            "Name  Version  Rev  Tracking  Publisher  Notes\n"
+            "foo   1.0      10   latest    acme       disabled\n"
+            "foo   1.1      11   latest    acme       disabled\n"
+        ),
+    )
+
+    def run(cmd, **kwargs):
+        if cmd[:2] == ["snap", "list"]:
+            return listing
+        # First revision removes, second fails.
+        return SimpleNamespace(ok=cmd[-1] == "10", stdout="", stderr="", error="")
+
+    with (
+        patch("shutil.which", return_value="/usr/bin/snap"),
+        patch("src.clean.system.run_command", side_effect=run),
+    ):
+        assert clean_snaps(dry_run=False) == (0, 1, 1)
+    out = capsys.readouterr().out
+    assert "Removed 1 old Snap revisions" in out
+    assert "Failed to remove 1 old Snap revision" in out
+
+
+def test_journal_vacuum_failure_is_reported(capsys):
+    failed = SimpleNamespace(
+        ok=False,
+        stdout="",
+        stderr="Failed to connect to bus: No such file or directory\n",
+        error="",
+    )
+    with (
+        patch("shutil.which", return_value="/usr/bin/journalctl"),
+        patch("src.clean.system.run_command", return_value=failed),
+    ):
+        assert clean_journal() == (0, 0, 0)
+    out = capsys.readouterr().out
+    assert "Journal vacuum failed" in out
+    assert "Failed to connect to bus" in out
+
+
+def test_zombie_scan_failure_is_reported(capsys):
+    failed = SimpleNamespace(ok=False, stdout="", stderr="ps: command not found\n", error="")
+    with patch("src.clean.system.run_command", return_value=failed):
+        assert clean_zombies() == (0, 0, 0)
+    assert "Zombie process scan failed" in capsys.readouterr().out
+
+
+def test_a_tidy_system_stays_silent(capsys):
+    """The other half of the contract: nothing to do prints nothing."""
+    empty_journal = SimpleNamespace(ok=True, stdout="", stderr="")
+    with (
+        patch("shutil.which", return_value="/usr/bin/journalctl"),
+        patch("src.clean.system.run_command", return_value=empty_journal),
+    ):
+        assert clean_journal() == (0, 0, 0)
+    # A successful vacuum that freed nothing is not a failure -- no line at all.
+    assert capsys.readouterr().out == ""
+
+
+def test_apt_orphan_removal_failure_is_reported(capsys):
+    """A failed autoremove -- lock held mid-run -- is told apart from no orphans."""
+
+    def run(args, **kwargs):
+        if "--dry-run" in args:
+            return SimpleNamespace(ok=True, stdout=_APT_AUTOREMOVE_DRY_RUN)
+        return SimpleNamespace(
+            ok=False,
+            stdout="",
+            stderr="E: Could not get lock /var/lib/dpkg/lock-frontend\n",
+            error="",
+        )
+
+    with (
+        patch("src.clean.system.get_os_id", return_value="ubuntu"),
+        patch("shutil.which", side_effect=lambda x: "/usr/bin/apt-get" if x == "apt-get" else None),
+        patch("src.clean.system.run_command", side_effect=run),
+    ):
+        assert clean_orphaned_packages(dry_run=False) == (0, 0, 0)
+    out = capsys.readouterr().out
+    assert "APT orphan removal failed" in out
+    assert "Could not get lock" in out
+
+
+def test_dnf_kernel_removal_failure_is_reported(capsys):
+    _remove_kernels(
+        _FEDORA_STALE_ROWS,
+        "7.1.10-200.fc44.x86_64",
+        remove=SimpleNamespace(
+            ok=False, stdout="", stderr="Error: Transaction test error\n", error=""
+        ),
+    )
+    out = capsys.readouterr().out
+    assert "Old kernel removal failed" in out
+    assert "Transaction test error" in out
+
+
+def test_apt_kernel_purge_partial_failure_is_reported(capsys):
+    _purge_kernels(
+        _UBUNTU_KERNEL_ROWS,
+        "ubuntu",
+        "6.8.0-45-generic",
+        purge=SimpleNamespace(ok=False, stdout="", stderr="", error=""),
+    )
+    assert "Failed to remove 1 old kernel" in capsys.readouterr().out

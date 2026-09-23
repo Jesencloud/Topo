@@ -19,6 +19,7 @@ from ..core.file_ops import (
 from ..core.heavy_cache import get_ai_model_cleanup_defs, get_container_cache_def
 from ..core.render import bytes_to_human
 from ..core.system import run_command
+from .report import report_command_failure
 from .totals import as_totals
 
 
@@ -88,11 +89,12 @@ def clean_docker(dry_run=False):
         # rebuilds itself; pruning volumes needs its own reviewed flow that names
         # them first. podman's prune below never carried the flag either.
         res = run_command(["docker", "system", "prune", "-f"], use_sudo=use_sudo, capture=True)
-        if res and res.returncode == 0:
+        if res.returncode == 0:
             freed = _docker_reclaimed_bytes(res.stdout)
             freed_str = f" ({bytes_to_human(freed)})" if freed else ""
             print(f"  {OK} Docker system pruned{freed_str}")
             return freed, 1
+        report_command_failure("Docker prune", res)
     return 0, 0
 
 
@@ -106,9 +108,11 @@ def clean_podman(dry_run=False):
             items += 1
         else:
             res = run_command(["podman", "system", "prune", "-f"], capture=True)
-            if res and res.returncode == 0:
+            if res.returncode == 0:
                 print(f"  {OK} Podman system pruned")
                 items += 1
+            else:
+                report_command_failure("Podman prune", res)
 
         # Clean storage cache
         cache_path = get_container_cache_def("podman-cache").resolved_path()
@@ -129,9 +133,10 @@ def clean_multipass(dry_run=False):
             print(f"  {SKIP} Multipass deleted instances would be purged")
             return 0, 1
         res = run_command(["multipass", "purge"], capture=True)
-        if res and res.returncode == 0:
+        if res.returncode == 0:
             print(f"  {OK} Multipass purged")
             return 0, 1
+        report_command_failure("Multipass purge", res)
     return 0, 0
 
 

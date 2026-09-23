@@ -24,6 +24,7 @@ from ..core.system import (
 )
 from ..core.text import plural
 from ..core.whitelist import is_system_cleanable_content
+from .report import report_command_failure
 from .totals import as_totals
 
 
@@ -38,10 +39,17 @@ def clean_snaps(dry_run: bool = False) -> tuple[int, int, int]:
 
     # The revision table is matched on the English word "disabled".
     res = run_command(["snap", "list", "--all"], capture=True, env=C_LOCALE_ENV)
-    if not res or not res.stdout:
+    if not res.ok:
+        # snapd being down is a failure; an empty table (below) is nothing to do.
+        # On a machine with snapd the listing always names the base snaps, so a
+        # non-zero exit here is the daemon, not a tidy system.
+        report_command_failure("Snap revision listing", res)
+        return 0, 0, 0
+    if not res.stdout:
         return 0, 0, 0
 
     count = 0
+    failed = 0
     for line in res.stdout.splitlines():
         if "disabled" in line:
             parts = line.split()
@@ -54,11 +62,14 @@ def clean_snaps(dry_run: bool = False) -> tuple[int, int, int]:
                 )
                 if rm_res.ok:
                     count += 1
+                else:
+                    failed += 1
 
     if count > 0:
         print(f"  {OK} Removed {count} old Snap revisions")
-        return 0, count, 1
-    return 0, 0, 0
+    if failed > 0:
+        print(f"  {FAIL} Failed to remove {plural(failed, 'old Snap revision')}")
+    return (0, count, 1) if count > 0 else (0, 0, 0)
 
 
 def _get_package_manager_cache_paths(cleaner_key: str) -> list[Path]:
@@ -357,6 +368,7 @@ def clean_package_manager(dry_run: bool = False) -> tuple[int, int, int]:
         print(f"  {OK} Cleaned {manager.label} cache{freed_str}")
         return freed, snap_items + 1, snap_cats + 1
 
+    report_command_failure(f"{manager.label} cache clean", res)
     return freed, snap_items, snap_cats
 
 
@@ -372,23 +384,25 @@ def clean_journal(dry_run: bool = False) -> tuple[int, int, int]:
     res = run_command(
         ["journalctl", "--vacuum-size=1M"], use_sudo=True, capture=True, env=C_LOCALE_ENV
     )
-    if res.ok:
-        # journalctl narrates the vacuum on *stderr*: those lines come from
-        # log_info(), which writes to the log target, and the log target of a
-        # non-tty invocation is the error stream. Verified on Fedora 44 --
-        # `journalctl --vacuum-time=100y` leaves stdout empty and prints one
-        # "Vacuuming done" line per journal directory on stderr. Reading stdout
-        # alone, as this did, meant the row below never printed at all.
-        #
-        # And journalctl's own total rather than the first size in the
-        # transcript: the "Deleted archived journal <path> (128.0M)" lines come
-        # first, and the machine-id in those paths used to be read as the size
-        # itself -- one hex run of "06" followed by "e" made a 1.1 GiB vacuum
-        # report 6.0 B.
-        freed = journal_freed_bytes(f"{res.stdout}\n{res.stderr}")
-        if freed > 0:
-            print(f"  {OK} Vacuumed journal logs ({bytes_to_human(freed)})")
-            return freed, 1, 1
+    if not res.ok:
+        report_command_failure("Journal vacuum", res)
+        return 0, 0, 0
+    # journalctl narrates the vacuum on *stderr*: those lines come from
+    # log_info(), which writes to the log target, and the log target of a
+    # non-tty invocation is the error stream. Verified on Fedora 44 --
+    # `journalctl --vacuum-time=100y` leaves stdout empty and prints one
+    # "Vacuuming done" line per journal directory on stderr. Reading stdout
+    # alone, as this did, meant the row below never printed at all.
+    #
+    # And journalctl's own total rather than the first size in the
+    # transcript: the "Deleted archived journal <path> (128.0M)" lines come
+    # first, and the machine-id in those paths used to be read as the size
+    # itself -- one hex run of "06" followed by "e" made a 1.1 GiB vacuum
+    # report 6.0 B.
+    freed = journal_freed_bytes(f"{res.stdout}\n{res.stderr}")
+    if freed > 0:
+        print(f"  {OK} Vacuumed journal logs ({bytes_to_human(freed)})")
+        return freed, 1, 1
     return 0, 0, 0
 
 
@@ -411,7 +425,12 @@ def clean_orphaned_packages(dry_run: bool = False) -> tuple[int, int, int]:
         preview = run_command(
             [tool, "autoremove", "--dry-run"], capture=True, env=APT_NONINTERACTIVE_ENV
         )
-        orphans = _apt_removal_count(preview.stdout) if preview.ok else 0
+        if not preview.ok:
+            # A failed preview is not "no orphans": the lock is held, or apt could
+            # not read its lists. Say so instead of returning the tidy-system tuple.
+            report_command_failure(f"{manager.label} orphan check", preview)
+            return 0, 0, 0
+        orphans = _apt_removal_count(preview.stdout)
         if not orphans:
             return 0, 0, 0
         if dry_run:
@@ -436,6 +455,7 @@ def clean_orphaned_packages(dry_run: bool = False) -> tuple[int, int, int]:
                 f" ({bytes_to_human(freed)})"
             )
             return freed, orphans, 1
+        report_command_failure(f"{manager.label} orphan removal", res)
 
     elif manager.key == "dnf":
         if dry_run:
@@ -474,8 +494,12 @@ def clean_orphaned_packages(dry_run: bool = False) -> tuple[int, int, int]:
                 f" ({bytes_to_human(freed)})"
             )
             return freed, items, 1
+        report_command_failure(f"{manager.label} orphan removal", res)
 
     elif manager.key == "pacman":
+        # `pacman -Qtdq` exits non-zero precisely when there are no orphans, so a
+        # non-ok listing here is the tidy-system case, not a failure to report --
+        # only the removal below, which really does work, gets a failure line.
         list_res = run_command([tool, "-Qtdq"], capture=True)
         if list_res.ok and list_res.stdout.strip():
             orphans = list_res.stdout.split()
@@ -499,6 +523,7 @@ def clean_orphaned_packages(dry_run: bool = False) -> tuple[int, int, int]:
                 freed = _pacman_freed_bytes(remove_res.stdout)
                 print(f"  {OK} Removed {plural(len(orphans), f'orphaned {manager.label} package')}")
                 return freed, len(orphans), 1
+            report_command_failure(f"{manager.label} orphan removal", remove_res)
 
     return 0, 0, 0
 
@@ -508,6 +533,7 @@ def clean_zombies(dry_run: bool = False) -> tuple[int, int, int]:
     # The state column is read as the English "Z" code.
     res = run_command(["ps", "-eo", "state,pid,ppid,comm"], capture=True, env=C_LOCALE_ENV)
     if not res.ok:
+        report_command_failure("Zombie process scan", res)
         return 0, 0, 0
 
     zombies = []
@@ -762,6 +788,7 @@ def clean_old_kernels(dry_run: bool = False) -> tuple[int, int, int]:
             return 0, 0, 1
         freed = 0
         removed = 0
+        failed = 0
         for pkg in to_remove:
             purge = run_command(
                 [tool, "purge", "-y", pkg],
@@ -771,9 +798,12 @@ def clean_old_kernels(dry_run: bool = False) -> tuple[int, int, int]:
                 timeout=PACKAGE_TRANSACTION_TIMEOUT,
             )
             if not purge.ok:
+                failed += 1
                 continue
             removed += 1
             freed += _apt_freed_bytes(purge.stdout)
+        if failed:
+            print(f"  {FAIL} Failed to remove {plural(failed, 'old kernel')}")
         if not removed:
             return 0, 0, 0
         freed_str = f" ({bytes_to_human(freed)})" if freed else ""
@@ -829,6 +859,7 @@ def clean_old_kernels(dry_run: bool = False) -> tuple[int, int, int]:
             timeout=PACKAGE_TRANSACTION_TIMEOUT,
         )
         if not remove.ok:
+            report_command_failure("Old kernel removal", remove)
             return 0, 0, 0
         freed = _dnf_freed_bytes(remove.stdout)
         freed_str = f" ({bytes_to_human(freed)})" if freed else ""
