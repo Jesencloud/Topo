@@ -948,11 +948,15 @@ def test_zombies_failure_and_empty_output():
         assert clean_zombies() == (0, 0, 0)
 
 
-# What `dpkg-query -W -f='${db:Status-Abbrev}\t${Package}\n' 'linux-image-*'`
-# prints: the status triple (want, state, error), a tab, the name -- no header and
-# no fixed-width columns. The row order is dpkg's own -- alphabetical, which puts
-# "-100-" ahead of "-31-" and the metapackage last -- because the code under test
-# must not read it as a version order.
+# What `dpkg-query -W -f='${db:Status-Abbrev}\t${Package}\n' 'linux-*'` prints:
+# the status triple (want, state, error), a tab, the name -- no header and no
+# fixed-width columns. The listing is the broad `linux-*` so a stale kernel's
+# modules and headers arrive with its image (and because a per-prefix glob that
+# matches nothing, as `linux-modules-*` does on Debian, makes dpkg-query exit
+# non-zero); the versioned-kernel regex does the selecting. The row order is
+# dpkg's own -- alphabetical, which puts "-100-" ahead of "-31-" and the
+# metapackage last -- because the code under test must not read it as a version
+# order.
 _UBUNTU_KERNEL_ROWS = """\
 ii \tlinux-image-6.8.0-100-generic
 ii \tlinux-image-6.8.0-31-generic
@@ -964,6 +968,27 @@ ii \tlinux-image-5.10.0-26-amd64
 ii \tlinux-image-5.10.0-28-amd64
 ii \tlinux-image-6.1.0-18-amd64
 ii \tlinux-image-amd64
+"""
+# One Ubuntu kernel is several packages -- image, modules, modules-extra,
+# headers -- interleaved with the running kernel's own packages and the
+# unversioned metapackages the broad `linux-*` glob also returns. The stale
+# version's packages have to be grouped and purged together; only its image was
+# ever seen before.
+_UBUNTU_KERNEL_SUBPACKAGE_ROWS = """\
+ii \tlinux-headers-6.8.0-31-generic
+ii \tlinux-image-6.8.0-31-generic
+ii \tlinux-modules-6.8.0-31-generic
+ii \tlinux-modules-extra-6.8.0-31-generic
+ii \tlinux-headers-6.8.0-40-generic
+ii \tlinux-image-6.8.0-40-generic
+ii \tlinux-modules-6.8.0-40-generic
+ii \tlinux-headers-6.8.0-45-generic
+ii \tlinux-image-6.8.0-45-generic
+ii \tlinux-modules-6.8.0-45-generic
+ii \tlinux-generic
+ii \tlinux-image-generic
+ii \tlinux-headers-generic
+ii \tlinux-libc-dev
 """
 # What `apt-get purge -y` prints. The "2 to remove" line is kept verbatim on
 # purpose: parse_size_from_text() reads it as 2 TB, which is why the code has its
@@ -1021,6 +1046,34 @@ def test_old_kernels_on_ubuntu_purges_the_oldest_not_the_newest():
     assert dry_result == (0, 0, 1)
 
 
+def test_old_kernels_purges_every_subpackage_of_a_stale_version_in_one_transaction():
+    """The image, its modules and its headers go in a single `apt-get purge`,
+    matching the dnf branch.
+
+    Two things were wrong one package at a time off a `linux-image-*`-only
+    listing: the modules (200-400 MB) were never named, so they were orphaned
+    onto the next run; and each row fired its own update-initramfs + update-grub.
+    """
+    purged, result = _purge_kernels(_UBUNTU_KERNEL_SUBPACKAGE_ROWS, "ubuntu", "6.8.0-45-generic")
+
+    # Running 6.8.0-45 stays; 6.8.0-40 is the one previous version kept as a
+    # fallback; 6.8.0-31 -- all four of its packages -- is the only thing purged,
+    # in one transaction, in the row order dpkg listed them.
+    assert purged == [
+        [
+            "apt-get",
+            "purge",
+            "-y",
+            "linux-headers-6.8.0-31-generic",
+            "linux-image-6.8.0-31-generic",
+            "linux-modules-6.8.0-31-generic",
+            "linux-modules-extra-6.8.0-31-generic",
+        ]
+    ]
+    # One kernel version, not the four packages it is made of.
+    assert result == (0, 1, 1)
+
+
 def test_old_kernels_on_debian_leaves_a_kernel_to_fall_back_to():
     """Debian's metapackage is linux-image-amd64: no -generic suffix, and last in
     dpkg's alphabetical order, so it used to take the "keep one previous kernel"
@@ -1065,7 +1118,7 @@ def test_old_kernels_counts_nothing_when_the_purge_fails():
         _UBUNTU_KERNEL_ROWS,
         "ubuntu",
         "6.8.0-45-generic",
-        purge=SimpleNamespace(ok=False, stdout=""),
+        purge=SimpleNamespace(ok=False, stdout="", stderr="", error=""),
     )
 
     assert len(purged) == 1
@@ -1117,7 +1170,7 @@ def test_old_kernels_asks_the_matrix_query_tool_and_respects_a_hold():
             "dpkg-query",
             "-W",
             "-f=${db:Status-Abbrev}\t${Package}\n",
-            "linux-image-*",
+            "linux-*",
         ]
     ]
     # Of the three "ii" rows, the running kernel stays and so does the newest of
@@ -1459,11 +1512,18 @@ def test_dnf_kernel_removal_failure_is_reported(capsys):
     assert "Transaction test error" in out
 
 
-def test_apt_kernel_purge_partial_failure_is_reported(capsys):
+def test_apt_kernel_removal_failure_is_reported(capsys):
     _purge_kernels(
         _UBUNTU_KERNEL_ROWS,
         "ubuntu",
         "6.8.0-45-generic",
-        purge=SimpleNamespace(ok=False, stdout="", stderr="", error=""),
+        purge=SimpleNamespace(
+            ok=False,
+            stdout="",
+            stderr="E: Could not get lock /var/lib/dpkg/lock-frontend\n",
+            error="",
+        ),
     )
-    assert "Failed to remove 1 old kernel" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "Old kernel removal failed" in out
+    assert "Could not get lock" in out

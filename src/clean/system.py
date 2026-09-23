@@ -587,10 +587,17 @@ def clean_zombies(dry_run: bool = False) -> tuple[int, int, int]:
     return 0, succeeded, int(bool(succeeded))
 
 
-# A kernel package carries its version in its name: linux-image-6.8.0-45-generic
-# (Ubuntu), linux-image-6.1.0-18-amd64 (Debian). Names without one -- the
-# linux-image-generic / linux-image-amd64 metapackages -- are not kernels.
-_VERSIONED_KERNEL = re.compile(r"^linux-image-\d")
+# One kernel is several packages, each carrying the version in its name: the
+# image (linux-image-6.8.0-45-generic), its modules (linux-modules-6.8.0-45-
+# generic, linux-modules-extra-6.8.0-45-generic) and its headers
+# (linux-headers-6.8.0-45, linux-headers-6.8.0-45-generic). They are grouped by
+# version and purged together: `apt-get purge linux-image-X` does not take its
+# modules with it (they are the dependency, not the reverse), and matching only
+# the image left 200-400 MB of modules on disk for the orphan sweep to find on
+# the *next* run. Names without a version -- the linux-image-generic /
+# linux-image-amd64 / linux-headers-generic metapackages -- are what pull in each
+# new kernel, not kernels themselves.
+_VERSIONED_KERNEL = re.compile(r"^linux-(?:image|modules-extra|modules|headers)-\d")
 # What dpkg-query is asked for in place of `dpkg -l`'s table: the status pair the
 # selection is made on, and the package name. Deliberately ${Package} and not
 # ${binary:Package} -- kernel images are not Multi-Arch:same, and the name here is
@@ -738,16 +745,21 @@ def clean_old_kernels(dry_run: bool = False) -> tuple[int, int, int]:
         # for and the tool uninstall's scanner reads the same database with. `dpkg
         # -l` was a hand-written copy of that decision, and one that has to be
         # asked for a fixed-width table and then have the fields counted back out
-        # of it.
+        # of it. The glob is the broad `linux-*`, not `linux-image-*`: a stale
+        # kernel's modules and headers have to be purged with its image (see
+        # _VERSIONED_KERNEL), and a per-prefix glob like `linux-modules-*` matches
+        # nothing on Debian -- a glob with no match makes dpkg-query exit non-zero
+        # and would sink the whole listing. The regex does the selecting; the glob
+        # only has to always match something.
         res = run_command(
-            [manager.query_tool, "-W", f"-f={_DPKG_KERNEL_FORMAT}", "linux-image-*"],
+            [manager.query_tool, "-W", f"-f={_DPKG_KERNEL_FORMAT}", "linux-*"],
             capture=True,
             env=C_LOCALE_ENV,
         )
         if not res.ok or not res.stdout:
             return 0, 0, 0
         running = _kernel_version_key(current_kernel)
-        candidates: list[tuple[tuple[int, ...], str]] = []
+        by_version: dict[tuple[int, ...], list[str]] = {}
         for line in res.stdout.splitlines():
             parts = line.split("\t")
             if len(parts) < 2:
@@ -762,53 +774,50 @@ def clean_old_kernels(dry_run: bool = False) -> tuple[int, int, int]:
             if status[:2] != "ii":
                 continue
             if not _VERSIONED_KERNEL.match(name):
-                # Everything without a version in its name: the metapackages
-                # (linux-image-generic on Ubuntu, linux-image-amd64 on Debian)
+                # No version in the name: the metapackages (linux-image-generic
+                # on Ubuntu, linux-image-amd64 on Debian, linux-headers-generic)
                 # that pull in each new kernel -- purging one is how a machine
-                # stops receiving kernel updates -- plus linux-image-extra-* and
-                # linux-image-unsigned-*, which the orphan sweep collects once
-                # the image depending on them is gone.
+                # stops receiving kernel updates -- plus the unversioned tools and
+                # libc-dev the broad `linux-*` glob also returns.
                 continue
             key = _kernel_version_key(name)
             if key == running:
-                # Never the kernel we booted from, whatever its flavour suffix.
+                # Never a package of the kernel we booted from, whatever its
+                # flavour suffix: its image, modules and headers all stay.
                 continue
-            candidates.append((key, name))
+            by_version.setdefault(key, []).append(name)
         # Sorted by version, because dpkg lists rows alphabetically and
         # alphabetically "-100-generic" comes *before* "-91-generic": trusting
-        # that order kept the oldest kernel and purged the newest one.
-        candidates.sort()
-        # Newest of the rest survives -- that is the "one previous version" the
-        # docstring promises, and the entry a failed upgrade boots back into.
-        to_remove = [pkg for _key, pkg in candidates[:-1]]
-        if not to_remove:
+        # that order kept the oldest kernel and purged the newest one. The newest
+        # non-running version survives -- the "one previous version" the docstring
+        # promises, the entry a failed upgrade boots back into.
+        versions_to_remove = sorted(by_version)[:-1]
+        if not versions_to_remove:
             return 0, 0, 0
         if dry_run:
-            print(f"  {SKIP} {plural(len(to_remove), 'old kernel')} would be removed")
+            print(f"  {SKIP} {plural(len(versions_to_remove), 'old kernel')} would be removed")
             return 0, 0, 1
-        freed = 0
-        removed = 0
-        failed = 0
-        for pkg in to_remove:
-            purge = run_command(
-                [tool, "purge", "-y", pkg],
-                use_sudo=True,
-                capture=True,
-                env=APT_NONINTERACTIVE_ENV,
-                timeout=PACKAGE_TRANSACTION_TIMEOUT,
-            )
-            if not purge.ok:
-                failed += 1
-                continue
-            removed += 1
-            freed += _apt_freed_bytes(purge.stdout)
-        if failed:
-            print(f"  {FAIL} Failed to remove {plural(failed, 'old kernel')}")
-        if not removed:
+        # Every package of every stale version in one transaction -- image,
+        # modules and headers together, like the dnf branch below. One package at
+        # a time before, off a `linux-image-*`-only listing: that both left the
+        # modules behind as an orphan for the next run and fired update-initramfs
+        # + update-grub once per package instead of once for the batch, with no
+        # all-or-nothing semantics when one of them failed.
+        packages = [name for version in versions_to_remove for name in by_version[version]]
+        purge = run_command(
+            [tool, "purge", "-y", *packages],
+            use_sudo=True,
+            capture=True,
+            env=APT_NONINTERACTIVE_ENV,
+            timeout=PACKAGE_TRANSACTION_TIMEOUT,
+        )
+        if not purge.ok:
+            report_command_failure("Old kernel removal", purge)
             return 0, 0, 0
+        freed = _apt_freed_bytes(purge.stdout)
         freed_str = f" ({bytes_to_human(freed)})" if freed else ""
-        print(f"  {OK} Removed {plural(removed, 'old kernel')}{freed_str}")
-        return freed, removed, 1
+        print(f"  {OK} Removed {plural(len(versions_to_remove), 'old kernel')}{freed_str}")
+        return freed, len(versions_to_remove), 1
 
     elif manager.key == "dnf":
         # `--installonly` on its own. dnf5 defines it as mutually exclusive with
