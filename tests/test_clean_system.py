@@ -398,6 +398,77 @@ def test_clean_snaps(mock_run, mock_which):
     assert c == 1
 
 
+def test_snap_dry_run_probes_before_it_previews(capsys):
+    """A preview must list the snap first, not promise work on the binary alone.
+
+    `snap` being installed says nothing about whether a disabled revision exists.
+    The old dry run returned a category and printed "would be removed" for every
+    machine with the binary, counting a task that a tidy system never runs. The
+    probe is read-only, so it moves ahead of the preview.
+    """
+    active_only = SimpleNamespace(
+        ok=True,
+        stdout=(
+            "Name    Version  Rev  Tracking  Publisher   Notes\n"
+            "core22  2023     1234 latest    canonical*  -\n"
+        ),
+    )
+    with (
+        patch("shutil.which", return_value="/usr/bin/snap"),
+        patch("src.clean.system.run_command", return_value=active_only) as run,
+    ):
+        assert clean_snaps(dry_run=True) == (0, 0, 0)
+    out = capsys.readouterr().out
+    assert "would be removed" not in out
+    # The listing ran; nothing was previewed as removable because nothing is.
+    assert run.call_args_list[0].args[0] == ["snap", "list", "--all"]
+
+
+def test_snap_dry_run_counts_disabled_and_removes_nothing(capsys):
+    """With disabled revisions the preview names their number and touches none."""
+    listing = SimpleNamespace(
+        ok=True,
+        stdout=(
+            "Name  Version  Rev  Tracking  Publisher  Notes\n"
+            "foo   1.0      10   latest    acme       disabled\n"
+            "foo   1.1      11   latest    acme       disabled\n"
+        ),
+    )
+    with (
+        patch("shutil.which", return_value="/usr/bin/snap"),
+        patch("src.clean.system.run_command", return_value=listing) as run,
+    ):
+        assert clean_snaps(dry_run=True) == (0, 0, 1)
+    out = capsys.readouterr().out
+    assert "2 old Snap revisions would be removed" in out
+    # Only the read-only listing ran; no `snap remove` in a dry run.
+    assert run.call_count == 1
+    assert run.call_args_list[0].args[0] == ["snap", "list", "--all"]
+
+
+def test_snap_notes_column_match_ignores_the_word_elsewhere(capsys):
+    """`disabled` is matched in the Notes column, not anywhere on the line.
+
+    A publisher or snap name that merely contains the word must not be read as a
+    disabled revision -- the old whole-line substring would then feed snapd an
+    *active* name/revision and rely on its refusal to avoid harm.
+    """
+    listing = SimpleNamespace(
+        ok=True,
+        stdout=(
+            "Name           Version  Rev  Tracking  Publisher       Notes\n"
+            "disabled-tools 2.0      55   latest    disabled-corp*  -\n"
+        ),
+    )
+    with (
+        patch("shutil.which", return_value="/usr/bin/snap"),
+        patch("src.clean.system.run_command", return_value=listing) as run,
+    ):
+        assert clean_snaps(dry_run=False) == (0, 0, 0)
+    # Listing only: no removal was attempted for an active revision.
+    assert run.call_count == 1
+
+
 @patch("shutil.which")
 @patch("src.clean.system.run_command")
 @patch("src.clean.system.get_os_id")
@@ -418,6 +489,28 @@ def test_clean_package_manager_fedora(mock_get_os_id, mock_run, mock_which, tmp_
 
         s, i, c = clean_package_manager(dry_run=True)
         assert c == 1
+
+
+@patch("shutil.which")
+@patch("src.clean.system.run_command")
+@patch("src.clean.system.get_os_id")
+def test_dnf_dry_run_does_not_run_repolist(mock_get_os_id, mock_run, mock_which, tmp_path):
+    """A preview must be free and offline: no `dnf repolist` during a dry run.
+
+    `dnf repolist` takes dnf's metadata lock and refreshes metadata over the
+    network when the cache is stale, so a "just looking" preview could block on a
+    running upgrade or pull down megabytes. The orphan scan that needs it is left
+    for the real run; the dry run reports the cache totals it can measure offline.
+    """
+    mock_get_os_id.return_value = "fedora"
+    mock_which.side_effect = lambda x: "/usr/bin/dnf" if x == "dnf" else None
+    mock_run.return_value = MagicMock(returncode=0, ok=True, stdout="")
+
+    with patch("src.clean.system._get_package_manager_cache_paths", return_value=[tmp_path]):
+        clean_package_manager(dry_run=True)
+
+    # Nothing at all runs in a dnf dry run: not the orphan probe, not the clean.
+    assert mock_run.call_count == 0
 
 
 def _dnf_cache_tree(root, repo_dir, *, repodata=0, solv=0, packages=0):

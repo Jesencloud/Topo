@@ -33,11 +33,11 @@ def clean_snaps(dry_run: bool = False) -> tuple[int, int, int]:
     if not shutil.which("snap"):
         return 0, 0, 0
 
-    if dry_run:
-        print(f"  {SKIP} Old Snap revisions would be removed")
-        return 0, 0, 1
-
-    # The revision table is matched on the English word "disabled".
+    # Probe before deciding what the preview says: `snap list --all` is read-only,
+    # and a dry run that announced "old Snap revisions would be removed" on the
+    # mere presence of the snap binary promised work a machine with no disabled
+    # revision would never do -- and counted a task that did not exist. The count
+    # and the preview both come from the parse now.
     res = run_command(["snap", "list", "--all"], capture=True, env=C_LOCALE_ENV)
     if not res.ok:
         # snapd being down is a failure; an empty table (below) is nothing to do.
@@ -45,25 +45,38 @@ def clean_snaps(dry_run: bool = False) -> tuple[int, int, int]:
         # non-zero exit here is the daemon, not a tidy system.
         report_command_failure("Snap revision listing", res)
         return 0, 0, 0
-    if not res.stdout:
+
+    disabled: list[tuple[str, str]] = []
+    for line in res.stdout.splitlines():
+        parts = line.split()
+        # `disabled` lives in the Notes column -- the last one -- and shares it
+        # with other flags as a comma-joined list ("base,disabled"). Matched by
+        # column rather than as a substring of the whole line: the word could
+        # otherwise be a snap's name or a publisher, and parts[0]/parts[2] would
+        # then name an *active* revision snapd only refuses to remove by luck.
+        if len(parts) >= 6 and "disabled" in parts[-1].split(","):
+            disabled.append((parts[0], parts[2]))
+
+    if not disabled:
         return 0, 0, 0
+
+    if dry_run:
+        print(f"  {SKIP} {plural(len(disabled), 'old Snap revision')} would be removed")
+        return 0, 0, 1
 
     count = 0
     failed = 0
-    for line in res.stdout.splitlines():
-        if "disabled" in line:
-            parts = line.split()
-            if len(parts) >= 3:
-                rm_res = run_command(
-                    ["snap", "remove", parts[0], "--revision", parts[2]],
-                    use_sudo=True,
-                    capture=True,
-                    timeout=PACKAGE_TRANSACTION_TIMEOUT,
-                )
-                if rm_res.ok:
-                    count += 1
-                else:
-                    failed += 1
+    for name, revision in disabled:
+        rm_res = run_command(
+            ["snap", "remove", name, "--revision", revision],
+            use_sudo=True,
+            capture=True,
+            timeout=PACKAGE_TRANSACTION_TIMEOUT,
+        )
+        if rm_res.ok:
+            count += 1
+        else:
+            failed += 1
 
     if count > 0:
         print(f"  {OK} Removed {count} old Snap revisions")
@@ -326,7 +339,14 @@ def clean_package_manager(dry_run: bool = False) -> tuple[int, int, int]:
         # Nothing under dnf's roots is safe to promise wholesale, so the measured
         # set is built from the parts alone.
         measured_paths = _repo_cache_cleanable_paths(repo_style_roots)
-        measured_paths += _dnf_orphaned_repo_caches(tool, repo_style_roots)
+        # Finding orphaned repo caches means running `dnf repolist`, which takes
+        # dnf's metadata lock and refreshes metadata over the network when the
+        # cache is stale. A preview has to be free and offline, so it reports the
+        # cache totals alone and leaves the orphan scan for the real run -- the
+        # estimate is a lower bound, honest for a preview, not a number bought
+        # with a lock and a download.
+        if not dry_run:
+            measured_paths += _dnf_orphaned_repo_caches(tool, repo_style_roots)
         sweepable = measured_paths
     else:
         # apt's roots *are* what `apt-get clean` empties, so they are promised as
