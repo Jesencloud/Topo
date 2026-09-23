@@ -1442,6 +1442,34 @@ def test_dnf_freed_bytes_reads_either_dnf_generations_wording():
     assert module._dnf_freed_bytes("") == 0
 
 
+def test_cache_clean_freed_bytes_anchors_per_manager_never_whole_transcript():
+    """The cache-clean fallback reads each manager's own total, not a stray size.
+
+    The whole-transcript parse this replaced would grab any unit-bearing number in
+    the output; a manager's anchored parser only accepts its own freed-space
+    sentence, so an unrelated size (a download line, a cache summary) reads as 0.
+    """
+    from src.clean import system as module
+
+    # Each manager routed to its own anchored parser.
+    assert (
+        module._cache_clean_freed_bytes(
+            "apt", "After this operation, 5 MB disk space will be freed."
+        )
+        == 5 * 1000**2
+    )
+    assert module._cache_clean_freed_bytes("dnf", "Freed space: 312 M\n") == 312 * 1024**2
+    assert (
+        module._cache_clean_freed_bytes("pacman", "Total Removed Size:  12 MiB\n") == 12 * 1024**2
+    )
+
+    # A manager without a parser (zypper), or an unmatched line, falls to 0
+    # rather than to whatever unrelated number happens to be present.
+    assert module._cache_clean_freed_bytes("zypper", "cleaned, 900 MiB downloaded earlier") == 0
+    assert module._cache_clean_freed_bytes("dnf", "Downloaded 900 MiB of metadata") == 0
+    assert module._cache_clean_freed_bytes("apt", "") == 0
+
+
 def test_opensuse_cleans_its_package_cache_but_has_no_orphan_sweep():
     """openSUSE used to fall through every branch: no zypper row existed at all.
 

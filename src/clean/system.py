@@ -381,7 +381,10 @@ def clean_package_manager(dry_run: bool = False) -> tuple[int, int, int]:
     if measured_freed > 0:
         freed += measured_freed
     elif res.ok and res.stdout:
-        freed += parse_size_from_text(res.stdout)
+        # Anchored to this manager's own total, never parse_size_from_text() over
+        # the whole transcript: an unrelated unit-bearing line must not be read as
+        # freed space. No match -> 0, honest for a fallback (see the parser table).
+        freed += _cache_clean_freed_bytes(manager.key, res.stdout)
 
     if res.ok:
         freed_str = f" ({bytes_to_human(freed)})" if freed > 0 else ""
@@ -744,6 +747,29 @@ def _pacman_freed_bytes(output: str) -> int:
     """Bytes freed according to pacman's own report, 0 when it did not say."""
     match = _PACMAN_REMOVED_SIZE.search(output)
     return parse_size_from_text(match.group(1)) if match else 0
+
+
+# The cache-clean fallback total, reached only when the before/after measurement
+# came up empty. Each manager is read through its own anchored parser, for the
+# same reason the orphan-removal branches already are: parse_size_from_text()
+# must never be handed a whole transcript -- its docstring forbids it, and a
+# release that prints a second unit-bearing number in the same output (a download
+# total, a cache summary) would let a whole-transcript scan silently pick the
+# wrong one. An unmatched output yields 0, which is a more honest fallback than a
+# number that might be measuring something else. `apt-get clean` prints no total
+# and zypper has no parser, so both correctly land on 0 here and rely on the
+# measured delta above.
+_CACHE_CLEAN_FREED_PARSERS = {
+    "apt": _apt_freed_bytes,
+    "dnf": _dnf_freed_bytes,
+    "pacman": _pacman_freed_bytes,
+}
+
+
+def _cache_clean_freed_bytes(manager_key: str, output: str) -> int:
+    """Bytes a cache clean freed, by the manager's own total; 0 when unmatched."""
+    parser = _CACHE_CLEAN_FREED_PARSERS.get(manager_key)
+    return parser(output) if parser else 0
 
 
 def clean_old_kernels(dry_run: bool = False) -> tuple[int, int, int]:
