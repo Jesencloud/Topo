@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock, patch
 
 from src.clean.dev import (
+    DAEMON_PRUNE_TIMEOUT,
     clean_ai_models,
     clean_cargo_cache,
     clean_container_and_virtualization_caches,
@@ -39,7 +40,10 @@ def test_clean_docker_execution(mock_sub_run, mock_run_cmd, mock_which):
     # docker's own total is reported instead of the flat 0 this used to return.
     assert size == 2_000_000_000
     mock_run_cmd.assert_called_with(
-        ["docker", "system", "prune", "-f"], use_sudo=True, capture=True
+        ["docker", "system", "prune", "-f"],
+        use_sudo=True,
+        capture=True,
+        timeout=DAEMON_PRUNE_TIMEOUT,
     )
 
 
@@ -112,7 +116,9 @@ def test_clean_podman(mock_run_cmd, mock_which, test_env):
     ):
         size, items = clean_podman(dry_run=False)
         assert items == 2  # 1 for prune, 1 for cache
-        mock_run_cmd.assert_called_with(["podman", "system", "prune", "-f"], capture=True)
+        mock_run_cmd.assert_called_with(
+            ["podman", "system", "prune", "-f"], capture=True, timeout=DAEMON_PRUNE_TIMEOUT
+        )
 
 
 @patch("shutil.which")
@@ -122,7 +128,9 @@ def test_clean_multipass(mock_run_cmd, mock_which):
     mock_run_cmd.return_value = MagicMock(returncode=0)
     size, items = clean_multipass(dry_run=False)
     assert items == 1
-    mock_run_cmd.assert_called_with(["multipass", "purge"], capture=True)
+    mock_run_cmd.assert_called_with(
+        ["multipass", "purge"], capture=True, timeout=DAEMON_PRUNE_TIMEOUT
+    )
 
 
 @patch("src.clean.dev.clean_path_by_age")
@@ -195,7 +203,14 @@ def test_clean_docker_reports_a_failed_prune(mock_run_cmd, mock_which, capsys):
     mock_which.return_value = "/usr/bin/docker"
     mock_run_cmd.side_effect = [
         MagicMock(returncode=0, ok=True),  # docker info -> no sudo needed
-        MagicMock(returncode=1, ok=False, stdout="", stderr="permission denied\n", error=""),
+        MagicMock(
+            returncode=1,
+            ok=False,
+            stdout="",
+            stderr="permission denied\n",
+            error="",
+            timed_out=False,
+        ),
     ]
     assert clean_docker(dry_run=False) == (0, 0)
     out = capsys.readouterr().out
@@ -208,7 +223,12 @@ def test_clean_docker_reports_a_failed_prune(mock_run_cmd, mock_which, capsys):
 def test_clean_podman_reports_a_failed_prune(mock_run_cmd, mock_which, capsys):
     mock_which.return_value = "/usr/bin/podman"
     mock_run_cmd.return_value = MagicMock(
-        returncode=1, ok=False, stdout="", stderr="cannot connect to Podman socket\n", error=""
+        returncode=1,
+        ok=False,
+        stdout="",
+        stderr="cannot connect to Podman socket\n",
+        error="",
+        timed_out=False,
     )
     with patch("pathlib.Path.exists", return_value=False):
         assert clean_podman(dry_run=False) == (0, 0)
@@ -222,9 +242,61 @@ def test_clean_podman_reports_a_failed_prune(mock_run_cmd, mock_which, capsys):
 def test_clean_multipass_reports_a_failed_purge(mock_run_cmd, mock_which, capsys):
     mock_which.return_value = "/usr/bin/multipass"
     mock_run_cmd.return_value = MagicMock(
-        returncode=1, ok=False, stdout="", stderr="multipassd is not running\n", error=""
+        returncode=1,
+        ok=False,
+        stdout="",
+        stderr="multipassd is not running\n",
+        error="",
+        timed_out=False,
     )
     assert clean_multipass(dry_run=False) == (0, 0)
     out = capsys.readouterr().out
     assert "Multipass purge failed" in out
     assert "multipassd is not running" in out
+
+
+# --- P2-5: a daemon front-end SIGKILLed on timeout is not a failed prune. ---
+# docker/podman/multipass only drive a daemon that keeps deleting after the CLI
+# dies, so a timeout must read as "still running", never as failure, and must not
+# be counted as a completed prune.
+
+
+@patch("shutil.which")
+@patch("src.clean.dev.run_command")
+def test_clean_docker_timeout_reads_as_background_not_failure(mock_run_cmd, mock_which, capsys):
+    mock_which.return_value = "/usr/bin/docker"
+    mock_run_cmd.side_effect = [
+        MagicMock(returncode=0, ok=True),  # docker info -> no sudo
+        MagicMock(returncode=124, ok=False, stdout="", stderr="", error="", timed_out=True),
+    ]
+    assert clean_docker(dry_run=False) == (0, 0)
+    out = capsys.readouterr().out
+    assert "background" in out.lower()
+    assert "fail" not in out.lower()
+
+
+@patch("shutil.which")
+@patch("src.clean.dev.run_command")
+def test_clean_podman_timeout_reads_as_background_not_failure(mock_run_cmd, mock_which, capsys):
+    mock_which.return_value = "/usr/bin/podman"
+    mock_run_cmd.return_value = MagicMock(
+        returncode=124, ok=False, stdout="", stderr="", error="", timed_out=True
+    )
+    with patch("pathlib.Path.exists", return_value=False):
+        assert clean_podman(dry_run=False) == (0, 0)
+    out = capsys.readouterr().out
+    assert "background" in out.lower()
+    assert "fail" not in out.lower()
+
+
+@patch("shutil.which")
+@patch("src.clean.dev.run_command")
+def test_clean_multipass_timeout_reads_as_background_not_failure(mock_run_cmd, mock_which, capsys):
+    mock_which.return_value = "/usr/bin/multipass"
+    mock_run_cmd.return_value = MagicMock(
+        returncode=124, ok=False, stdout="", stderr="", error="", timed_out=True
+    )
+    assert clean_multipass(dry_run=False) == (0, 0)
+    out = capsys.readouterr().out
+    assert "background" in out.lower()
+    assert "fail" not in out.lower()

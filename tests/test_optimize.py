@@ -8,7 +8,7 @@ import pytest
 
 from src import optimize
 from src.core.file_ops import TRASH_UNAVAILABLE_REASON
-from src.core.system import CommandResult
+from src.core.system import DEFAULT_COMMAND_TIMEOUT, CommandResult
 from src.optimize import (
     _REPO_REFRESH_COMMANDS,
     _SWAPOFF_BYTES_PER_SECOND,
@@ -328,6 +328,7 @@ def test_run_coredump_cleanup_deletes_core_files_with_find(tmp_path):
         ],
         use_sudo=True,
         capture=True,
+        timeout=optimize.COREDUMP_CLEAN_TIMEOUT,
     )
 
 
@@ -594,6 +595,32 @@ def test_run_tmpfiles_cleanup():
         mock_run.return_value = CommandResult(["systemd-tmpfiles"], 0)
         res = run_tmpfiles_cleanup(dry_run=False)
         assert res.message == "Systemd tmpfiles clean rules processed"
+
+
+def test_long_tasks_pass_an_explicit_timeout_not_the_300s_default():
+    """P2-5: fstrim/tmpfiles are long enough that inheriting the default was a bet.
+
+    Each must hand run_command its own generous ceiling, and that ceiling must be
+    larger than the default it used to fall through to -- otherwise the fix is
+    only cosmetic.
+    """
+    assert optimize.FSTRIM_TIMEOUT > DEFAULT_COMMAND_TIMEOUT
+    assert optimize.TMPFILES_TIMEOUT >= DEFAULT_COMMAND_TIMEOUT
+    assert optimize.COREDUMP_CLEAN_TIMEOUT >= DEFAULT_COMMAND_TIMEOUT
+
+    with (
+        patch("src.optimize._which_admin_tool", return_value="/usr/sbin/fstrim"),
+        patch("src.optimize.run_command", return_value=CommandResult(["fstrim"], 0)) as mock_run,
+    ):
+        run_fstrim(dry_run=False)
+        assert mock_run.call_args.kwargs["timeout"] == optimize.FSTRIM_TIMEOUT
+
+    with (
+        patch("src.optimize.shutil.which", return_value="/usr/bin/systemd-tmpfiles"),
+        patch("src.optimize.run_command", return_value=CommandResult(["tmpfiles"], 0)) as mock_run,
+    ):
+        run_tmpfiles_cleanup(dry_run=False)
+        assert mock_run.call_args.kwargs["timeout"] == optimize.TMPFILES_TIMEOUT
 
 
 def test_run_user_systemd_reset_failed_resets_failed_units():

@@ -8,6 +8,7 @@ from ..core.constants import (
     DEV_CACHES,
     OK,
     SKIP,
+    WARN,
 )
 from ..core.file_ops import (
     SI_MULTIPLIER,
@@ -21,6 +22,17 @@ from ..core.render import bytes_to_human
 from ..core.system import run_command
 from .report import report_command_failure
 from .totals import as_totals
+
+# docker, podman and multipass are all just front-ends to a daemon that does the
+# real work. When the CLI is SIGKILLed on timeout the daemon keeps deleting to
+# completion, so a timeout here is not "the work failed" -- it is "we stopped
+# waiting for the client while the server carries on". These prunes used to
+# inherit the 300 s DEFAULT_COMMAND_TIMEOUT by omission; a docker system prune on
+# a busy host can run past that, and reporting the resulting SIGKILL as a failure
+# said the opposite of what happened on disk. The generous ceiling keeps a normal
+# prune from ever hitting it, and the timeout branch (see clean_docker) reports
+# "still running in the background" rather than failure when it does.
+DAEMON_PRUNE_TIMEOUT = 600
 
 
 def clean_tool_cache(description, command_args, cache_path=None, dry_run=False):
@@ -88,12 +100,22 @@ def clean_docker(dry_run=False):
         # containers, dangling images, unused networks, build cache -- all
         # rebuilds itself; pruning volumes needs its own reviewed flow that names
         # them first. podman's prune below never carried the flag either.
-        res = run_command(["docker", "system", "prune", "-f"], use_sudo=use_sudo, capture=True)
+        res = run_command(
+            ["docker", "system", "prune", "-f"],
+            use_sudo=use_sudo,
+            capture=True,
+            timeout=DAEMON_PRUNE_TIMEOUT,
+        )
         if res.returncode == 0:
             freed = _docker_reclaimed_bytes(res.stdout)
             freed_str = f" ({bytes_to_human(freed)})" if freed else ""
             print(f"  {OK} Docker system pruned{freed_str}")
             return freed, 1
+        if res.timed_out:
+            # The CLI was SIGKILLed, but dockerd goes on deleting; this is unknown,
+            # not failed, so it neither reports an error nor claims a byte count.
+            print(f"  {WARN} Docker prune is still reclaiming space in the background")
+            return 0, 0
         report_command_failure("Docker prune", res)
     return 0, 0
 
@@ -107,10 +129,16 @@ def clean_podman(dry_run=False):
             print(f"  {SKIP} Podman (unused images/build cache) would be pruned")
             items += 1
         else:
-            res = run_command(["podman", "system", "prune", "-f"], capture=True)
+            res = run_command(
+                ["podman", "system", "prune", "-f"], capture=True, timeout=DAEMON_PRUNE_TIMEOUT
+            )
             if res.returncode == 0:
                 print(f"  {OK} Podman system pruned")
                 items += 1
+            elif res.timed_out:
+                # Same as docker: the client died on timeout, the service keeps
+                # pruning. Not counted as a completed prune, not reported failed.
+                print(f"  {WARN} Podman prune is still reclaiming space in the background")
             else:
                 report_command_failure("Podman prune", res)
 
@@ -132,10 +160,14 @@ def clean_multipass(dry_run=False):
         if dry_run:
             print(f"  {SKIP} Multipass deleted instances would be purged")
             return 0, 1
-        res = run_command(["multipass", "purge"], capture=True)
+        res = run_command(["multipass", "purge"], capture=True, timeout=DAEMON_PRUNE_TIMEOUT)
         if res.returncode == 0:
             print(f"  {OK} Multipass purged")
             return 0, 1
+        if res.timed_out:
+            # multipassd carries the purge on past the killed client.
+            print(f"  {WARN} Multipass purge is still running in the background")
+            return 0, 0
         report_command_failure("Multipass purge", res)
     return 0, 0
 

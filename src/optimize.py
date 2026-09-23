@@ -83,6 +83,21 @@ _SWAPOFF_BYTES_PER_SECOND = 30 * 1024**2
 _SWAPON_TIMEOUT = 30
 REPO_REFRESH_TIMEOUT = 120
 UPDATEDB_TIMEOUT = 600
+# Three long-running tasks that used to inherit the 300 s DEFAULT_COMMAND_TIMEOUT
+# by omission, which on a large disk is a bet, not a margin. None of them corrupts
+# anything when SIGKILLed -- fstrim's discard is idempotent and resumes next run,
+# and the two delete passes just leave files they had not reached yet -- so the
+# generous value simply keeps a slow-but-fine run from being reported as failed.
+#
+# fstrim -av on a multi-TB array, or the first discard on a large SSD, routinely
+# runs past five minutes; 30 minutes covers that without waiting forever on a
+# wedged controller. systemd-tmpfiles --clean and the coredump `find -delete`
+# scale with directory size and rarely approach even 300 s, but they get an
+# explicit ceiling for the same reason: no long task should silently depend on
+# the default.
+FSTRIM_TIMEOUT = 1800
+TMPFILES_TIMEOUT = 600
+COREDUMP_CLEAN_TIMEOUT = 600
 OPTIMIZATION_MAX_WORKERS = 4
 
 # Debian keeps /sbin and /usr/sbin out of a non-root PATH on purpose, and Debian
@@ -355,7 +370,7 @@ def run_fstrim(dry_run=False):
         return None
     if dry_run:
         return "SSD partitions would be trimmed (fstrim)"
-    if run_command(["fstrim", "-av"], use_sudo=True, capture=True).ok:
+    if run_command(["fstrim", "-av"], use_sudo=True, capture=True, timeout=FSTRIM_TIMEOUT).ok:
         return "SSD partitions trimmed (fstrim)"
     return OptimizationResult.failed("SSD partition trim failed (fstrim)")
 
@@ -392,7 +407,9 @@ def run_tmpfiles_cleanup(dry_run=False):
         return None
     if dry_run:
         return "Systemd tmpfiles clean rules would be processed"
-    if run_command(["systemd-tmpfiles", "--clean"], use_sudo=True, capture=True).ok:
+    if run_command(
+        ["systemd-tmpfiles", "--clean"], use_sudo=True, capture=True, timeout=TMPFILES_TIMEOUT
+    ).ok:
         return "Systemd tmpfiles clean rules processed"
     return OptimizationResult.failed("Systemd tmpfiles cleanup failed")
 
@@ -842,6 +859,7 @@ def run_coredump_cleanup(dry_run=False):
         ],
         use_sudo=True,
         capture=True,
+        timeout=COREDUMP_CLEAN_TIMEOUT,
     )
     if not res.ok:
         return OptimizationResult.failed("System coredump cleanup failed")
