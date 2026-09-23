@@ -712,6 +712,22 @@ def clean_path_by_age(path: str | Path, days: int, dry_run: bool = False) -> tup
 # "10 EB" parsed as 10 bytes.
 _SIZE_UNIT_POWERS = {"K": 1, "M": 2, "G": 3, "T": 4, "P": 5, "E": 6}
 _SIZE_PREFIXES = "".join(_SIZE_UNIT_POWERS)
+# The decimal counterpart, for the tools that divide by 1000 rather than 1024 and
+# so cannot be read with parse_size_to_bytes below: apt (apt-pkg's SizeToStr) and
+# docker (go-units' HumanSize) both do, and both spell the kilo prefix lowercase.
+# An anchored parser that has already found one of their sentences multiplies
+# with this. It sits here rather than beside either caller because two feature
+# modules now ask for it, and every unit their patterns accept needs an entry or
+# a match raises instead of parsing.
+SI_MULTIPLIER = {
+    "": 1,
+    "k": 1000,
+    "M": 1000**2,
+    "G": 1000**3,
+    "T": 1000**4,
+    "P": 1000**5,
+    "E": 1000**6,
+}
 # What makes this safe to point at a line of command output:
 #
 # (?<![0-9A-Za-z.,]) the number may not start inside a word. A machine-id is one

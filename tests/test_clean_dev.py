@@ -31,14 +31,69 @@ def test_clean_docker_execution(mock_sub_run, mock_run_cmd, mock_which):
     mock_which.return_value = "/usr/bin/docker"
     mock_run_cmd.side_effect = [
         MagicMock(returncode=1, ok=False),
-        MagicMock(returncode=0, ok=True),
+        MagicMock(returncode=0, ok=True, stdout="Total reclaimed space: 2GB\n"),
     ]
 
     size, items = clean_docker(dry_run=False)
     assert items == 1
+    # docker's own total is reported instead of the flat 0 this used to return.
+    assert size == 2_000_000_000
     mock_run_cmd.assert_called_with(
-        ["docker", "system", "prune", "-f", "--volumes"], use_sudo=True, capture=True
+        ["docker", "system", "prune", "-f"], use_sudo=True, capture=True
     )
+
+
+@patch("shutil.which")
+@patch("src.clean.dev.run_command")
+def test_clean_docker_never_prunes_volumes(mock_run_cmd, mock_which, capsys):
+    """An unused volume is a stopped stack's database, not a rebuildable cache.
+
+    `--volumes` deletes every volume no *running* container holds, and nothing in
+    this module keeps a trash copy, so it was permanent data loss with no list,
+    no size and no prompt. Both the command and the preview sentence have to stay
+    clear of volumes.
+    """
+    mock_which.return_value = "/usr/bin/docker"
+    mock_run_cmd.side_effect = [
+        MagicMock(returncode=0, ok=True),
+        MagicMock(returncode=0, ok=True, stdout="Total reclaimed space: 0B\n"),
+    ]
+
+    clean_docker(dry_run=False)
+    for call in mock_run_cmd.call_args_list:
+        assert "--volumes" not in call.args[0]
+
+    mock_run_cmd.reset_mock()
+    clean_docker(dry_run=True)
+    # The preview must not promise a volume prune that no longer happens, and a
+    # dry run touches nothing at all.
+    assert mock_run_cmd.call_args_list == []
+    assert "volume" not in capsys.readouterr().out.lower()
+
+
+def test_docker_reclaimed_bytes_reads_dockers_own_total():
+    from src.clean import dev as module
+
+    # Decimal, because go-units' HumanSize divides by 1000, and the kilo prefix
+    # is the one docker spells lowercase.
+    assert module._docker_reclaimed_bytes("Total reclaimed space: 2GB") == 2_000_000_000
+    assert module._docker_reclaimed_bytes("Total reclaimed space: 1.5MB") == 1_500_000
+    assert module._docker_reclaimed_bytes("Total reclaimed space: 500kB") == 500_000
+    assert module._docker_reclaimed_bytes("Total reclaimed space: 0B") == 0
+    # Anchored on the sentence: the digests a prune lists above its total must not
+    # be read as a size, and a bare size with no sentence is not an answer either.
+    assert (
+        module._docker_reclaimed_bytes(
+            "Deleted Images:\n"
+            "deleted: sha256:9a5b4dc1e3a8f0b2c6d4e7f1a3b5c9d2e4f6a8b0c2d4e6f8a0b2c4d6e8f0a2b4\n"
+            "untagged: ghcr.io/acme/api:v2.4\n"
+            "\n"
+            "Total reclaimed space: 1.5GB\n"
+        )
+        == 1_500_000_000
+    )
+    assert module._docker_reclaimed_bytes("1.5GB") == 0
+    assert module._docker_reclaimed_bytes("") == 0
 
 
 @patch("shutil.which")
@@ -95,7 +150,7 @@ def test_clean_ai_models_uses_shared_cleanup_defs(mock_clean_age, test_env):
 def test_clean_developer_tools(mock_run_cmd, mock_clean_tool, mock_which):
     mock_which.return_value = "/usr/bin/npm"  # Mock npm presence
     mock_clean_tool.return_value = (100, 1)
-    mock_run_cmd.return_value = MagicMock(returncode=0, ok=True)
+    mock_run_cmd.return_value = MagicMock(returncode=0, ok=True, stdout="")
 
     with (
         patch("src.clean.dev.get_size_fast", return_value=2048),

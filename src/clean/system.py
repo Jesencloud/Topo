@@ -5,6 +5,7 @@ from pathlib import Path
 
 from ..core.constants import FAIL, OK, SKIP
 from ..core.file_ops import (
+    SI_MULTIPLIER,
     get_size_fast,
     journal_freed_bytes,
     parse_size_from_text,
@@ -577,18 +578,10 @@ _DPKG_KERNEL_FORMAT = "${db:Status-Abbrev}\t${Package}\n"
 _APT_FREED_SPACE = re.compile(
     r"After this operation, ([0-9.]+)\s*([kMGTPE]?)B disk space will be freed"
 )
-# apt divides by 1000, not 1024 (apt-pkg's SizeToStr), so these are the decimal
-# multipliers rather than parse_size_from_text's binary ones. Every unit the
-# pattern accepts needs an entry here, or a match would raise instead of parse.
-_SI_MULTIPLIER = {
-    "": 1,
-    "k": 1000,
-    "M": 1000**2,
-    "G": 1000**3,
-    "T": 1000**4,
-    "P": 1000**5,
-    "E": 1000**6,
-}
+# apt divides by 1000, not 1024 (apt-pkg's SizeToStr), so the decimal
+# SI_MULTIPLIER applies to this match rather than parse_size_from_text's binary
+# powers. docker's prune total reads the same way, which is why that table lives
+# in core/file_ops.py instead of here.
 # apt's per-package removal lines, the machine-readable half of its narration.
 _APT_REMOVAL_LINE = re.compile(r"^(?:Remv|Purg) \S", re.MULTILINE)
 
@@ -609,7 +602,7 @@ def _apt_freed_bytes(output: str) -> int:
     match = _APT_FREED_SPACE.search(output)
     if not match:
         return 0
-    return int(float(match.group(1)) * _SI_MULTIPLIER[match.group(2)])
+    return int(float(match.group(1)) * SI_MULTIPLIER[match.group(2)])
 
 
 def _apt_removal_count(output: str) -> int:

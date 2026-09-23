@@ -1,3 +1,4 @@
+import re
 import shutil
 from pathlib import Path
 
@@ -9,6 +10,7 @@ from ..core.constants import (
     SKIP,
 )
 from ..core.file_ops import (
+    SI_MULTIPLIER,
     clean_path_by_age,
     get_size_fast,
     register_cleaned_path,
@@ -50,21 +52,47 @@ def clean_tool_cache(description, command_args, cache_path=None, dry_run=False):
     return 0, 0
 
 
+# docker's own total, the closing line of a prune. go-units' HumanSize divides by
+# 1000 and writes the kilo prefix lowercase ("1.653GB", "500kB", "0B"), hence
+# SI_MULTIPLIER rather than the binary powers. Anchored on the sentence because
+# the "Deleted Images:" block above it lists sha256 digests, and a whole-
+# transcript read would answer with whatever size those hex digits look like.
+_DOCKER_RECLAIMED_SPACE = re.compile(r"Total reclaimed space:\s*([0-9.]+)\s*([kMGTPE]?)B")
+
+
+def _docker_reclaimed_bytes(output: str) -> int:
+    """Bytes docker says its prune reclaimed, 0 when it did not say."""
+    match = _DOCKER_RECLAIMED_SPACE.search(output)
+    if not match:
+        return 0
+    return int(float(match.group(1)) * SI_MULTIPLIER[match.group(2)])
+
+
 def clean_docker(dry_run=False):
-    """Clean unused Docker data."""
+    """Clean the rebuildable half of Docker's disk usage."""
     if shutil.which("docker"):
         if dry_run:
-            print(f"  {SKIP} Docker (unused images/volumes) would be pruned")
+            print(f"  {SKIP} Docker (unused images/build cache) would be pruned")
             return 0, 1
         use_sudo = True
         if run_command(["docker", "info"], capture=True, timeout=10).ok:
             use_sudo = False
-        res = run_command(
-            ["docker", "system", "prune", "-f", "--volumes"], use_sudo=use_sudo, capture=True
-        )
+        # No `--volumes`. -f already turns off docker's own "are you sure"
+        # listing, so this runs unattended; `--volumes` would then delete every
+        # volume no *running* container holds -- a stopped compose stack's
+        # database, a service's upload directory -- which is user data, not a
+        # cache, and nothing this module cleans gets a trash copy (see
+        # clean_developer_tools' closing comment). It also does not mean the same
+        # volume set across docker releases. What is pruned here -- stopped
+        # containers, dangling images, unused networks, build cache -- all
+        # rebuilds itself; pruning volumes needs its own reviewed flow that names
+        # them first. podman's prune below never carried the flag either.
+        res = run_command(["docker", "system", "prune", "-f"], use_sudo=use_sudo, capture=True)
         if res and res.returncode == 0:
-            print(f"  {OK} Docker system pruned")
-            return 0, 1
+            freed = _docker_reclaimed_bytes(res.stdout)
+            freed_str = f" ({bytes_to_human(freed)})" if freed else ""
+            print(f"  {OK} Docker system pruned{freed_str}")
+            return freed, 1
     return 0, 0
 
 
@@ -74,7 +102,7 @@ def clean_podman(dry_run=False):
     items = 0
     if shutil.which("podman"):
         if dry_run:
-            print(f"  {SKIP} Podman (unused images/volumes) would be pruned")
+            print(f"  {SKIP} Podman (unused images/build cache) would be pruned")
             items += 1
         else:
             res = run_command(["podman", "system", "prune", "-f"], capture=True)
