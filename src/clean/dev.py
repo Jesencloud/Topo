@@ -53,7 +53,7 @@ def clean_tool_cache(description, command_args, cache_path=None, dry_run=False):
     if total_size > 0 or not cache_path:
         res = run_command(command_args, capture=True)
         cache_gone = cache_path and not Path(cache_path).expanduser().exists()
-        if (res and res.returncode == 0) or cache_gone:
+        if res.ok or cache_gone:
             # Report space actually reclaimed (before - after), not the pre-clean
             # size, since `npm/pip/go cache clean` may only clear part of it.
             freed = total_size
@@ -106,7 +106,7 @@ def clean_docker(dry_run=False):
             capture=True,
             timeout=DAEMON_PRUNE_TIMEOUT,
         )
-        if res.returncode == 0:
+        if res.ok:
             freed = _docker_reclaimed_bytes(res.stdout)
             freed_str = f" ({bytes_to_human(freed)})" if freed else ""
             print(f"  {OK} Docker system pruned{freed_str}")
@@ -132,7 +132,7 @@ def clean_podman(dry_run=False):
             res = run_command(
                 ["podman", "system", "prune", "-f"], capture=True, timeout=DAEMON_PRUNE_TIMEOUT
             )
-            if res.returncode == 0:
+            if res.ok:
                 print(f"  {OK} Podman system pruned")
                 items += 1
             elif res.timed_out:
@@ -161,7 +161,7 @@ def clean_multipass(dry_run=False):
             print(f"  {SKIP} Multipass deleted instances would be purged")
             return 0, 1
         res = run_command(["multipass", "purge"], capture=True, timeout=DAEMON_PRUNE_TIMEOUT)
-        if res.returncode == 0:
+        if res.ok:
             print(f"  {OK} Multipass purged")
             return 0, 1
         if res.timed_out:

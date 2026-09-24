@@ -104,7 +104,7 @@ def test_docker_reclaimed_bytes_reads_dockers_own_total():
 @patch("src.clean.dev.run_command")
 def test_clean_podman(mock_run_cmd, mock_which, test_env):
     mock_which.return_value = "/usr/bin/podman"
-    mock_run_cmd.return_value = MagicMock(returncode=0)
+    mock_run_cmd.return_value = MagicMock(returncode=0, ok=True)
 
     # Ensure the cache path exists for the test
     cache_path = test_env / ".cache/containers"
@@ -125,7 +125,7 @@ def test_clean_podman(mock_run_cmd, mock_which, test_env):
 @patch("src.clean.dev.run_command")
 def test_clean_multipass(mock_run_cmd, mock_which):
     mock_which.return_value = "/usr/bin/multipass"
-    mock_run_cmd.return_value = MagicMock(returncode=0)
+    mock_run_cmd.return_value = MagicMock(returncode=0, ok=True)
     size, items = clean_multipass(dry_run=False)
     assert items == 1
     mock_run_cmd.assert_called_with(
@@ -178,7 +178,7 @@ def test_clean_tool_cache_reports_actual_freed(test_env):
     cache = test_env / ".cache/mytool"
     cache.mkdir(parents=True)
     with (
-        patch("src.clean.dev.run_command", return_value=MagicMock(returncode=0)),
+        patch("src.clean.dev.run_command", return_value=MagicMock(returncode=0, ok=True)),
         patch("src.clean.dev.get_size_fast", side_effect=[1000, 200]),  # before, after
         patch("pathlib.Path.exists", return_value=True),
     ):

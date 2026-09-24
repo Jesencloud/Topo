@@ -63,6 +63,26 @@ APT_NONINTERACTIVE_ENV = {**C_LOCALE_ENV, "DEBIAN_FRONTEND": "noninteractive"}
 
 @dataclass
 class CommandResult:
+    """The outcome of one run_command call.
+
+    `returncode` is not always the child's own exit status. Two of run_command's
+    paths never get a status back from the child and both synthesize one: a
+    timeout, where the child is killed before it can exit, reports 124 with
+    `timed_out` set, and a failure to spawn (OSError, SubprocessError), where
+    there is no child at all, reports 127 with `error` set. Both numbers are exit
+    codes a command can also return by itself -- timeout(1) exits 124, a shell
+    exits 127 for "command not found" -- so the number alone never says whether
+    it came from the command or from here.
+
+    `timed_out` and `error` are what tell those apart, and `ok` is why most
+    callers never have to think about it: it demands a zero exit *and* neither
+    synthetic path. Prefer `ok`. The two places that legitimately read the number
+    show the only two safe shapes -- collateral.py's `_query_failed` rules
+    `timed_out` and `error` out first, before letting rpm's exit 1 count as a
+    real answer; ensure_sudo_session below compares against the SIGINT pair, -2
+    and 130, which 124 and 127 cannot collide with.
+    """
+
     args: list[str]
     returncode: int
     stdout: str = ""

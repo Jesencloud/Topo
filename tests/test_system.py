@@ -125,6 +125,36 @@ def test_run_command_timeout_result(mock_run):
     assert result.stdout == "partial"
 
 
+def test_synthetic_124_and_127_are_told_apart_only_by_timed_out_and_error():
+    """P2-4: both synthesized returncodes collide with real exit codes.
+
+    The convention CommandResult's docstring states, pinned: a real `exit 124`
+    and a timeout carry the same number, so do a real `exit 127` and a failed
+    spawn, and only `timed_out` and `error` separate each pair. Anyone who later
+    reads `returncode == 124` as "it timed out" gets a failing test before they
+    get a bug report.
+    """
+    with patch("subprocess.run", return_value=MagicMock(returncode=124, stdout="", stderr="")):
+        real_124 = run_command(["timeout", "1", "sleep", "5"], timeout=30)
+    with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(["sleep"], timeout=1)):
+        synthetic_124 = run_command(["sleep", "5"], timeout=1)
+
+    assert real_124.returncode == synthetic_124.returncode == 124
+    assert real_124.timed_out is False
+    assert synthetic_124.timed_out is True
+
+    with patch("subprocess.run", return_value=MagicMock(returncode=127, stdout="", stderr="")):
+        real_127 = run_command(["sh", "-c", "nosuchtool"], timeout=30)
+    with patch("subprocess.run", side_effect=OSError("No such file or directory")):
+        synthetic_127 = run_command(["nosuchtool"], timeout=30)
+
+    assert real_127.returncode == synthetic_127.returncode == 127
+    assert real_127.error == ""
+    assert synthetic_127.error != ""
+
+    assert not any(res.ok for res in (real_124, synthetic_124, real_127, synthetic_127))
+
+
 @contextmanager
 def _as_terminal():
     """Patch the state that makes the rewind sequence reachable at all.
