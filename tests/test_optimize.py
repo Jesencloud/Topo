@@ -598,7 +598,7 @@ def test_run_tmpfiles_cleanup():
 
 
 def test_long_tasks_pass_an_explicit_timeout_not_the_300s_default():
-    """P2-5: fstrim/tmpfiles are long enough that inheriting the default was a bet.
+    """P2-5: fstrim/tmpfiles/flatpak repair are long enough that the default was a bet.
 
     Each must hand run_command its own generous ceiling, and that ceiling must be
     larger than the default it used to fall through to -- otherwise the fix is
@@ -607,6 +607,7 @@ def test_long_tasks_pass_an_explicit_timeout_not_the_300s_default():
     assert optimize.FSTRIM_TIMEOUT > DEFAULT_COMMAND_TIMEOUT
     assert optimize.TMPFILES_TIMEOUT >= DEFAULT_COMMAND_TIMEOUT
     assert optimize.COREDUMP_CLEAN_TIMEOUT >= DEFAULT_COMMAND_TIMEOUT
+    assert optimize.FLATPAK_REPAIR_TIMEOUT > DEFAULT_COMMAND_TIMEOUT
 
     with (
         patch("src.optimize._which_admin_tool", return_value="/usr/sbin/fstrim"),
@@ -621,6 +622,18 @@ def test_long_tasks_pass_an_explicit_timeout_not_the_300s_default():
     ):
         run_tmpfiles_cleanup(dry_run=False)
         assert mock_run.call_args.kwargs["timeout"] == optimize.TMPFILES_TIMEOUT
+
+    # Both scopes, user and sudo'd system -- a repair checksums the whole OSTree
+    # store, so neither may ride the default.
+    with (
+        patch("src.optimize.shutil.which", return_value="/usr/bin/flatpak"),
+        patch("src.optimize.has_sudo", return_value=True),
+        patch("src.optimize.run_command", return_value=CommandResult(["flatpak"], 0)) as mock_run,
+    ):
+        run_flatpak_repair(dry_run=False)
+        assert len(mock_run.call_args_list) == 2
+        for call in mock_run.call_args_list:
+            assert call.kwargs["timeout"] == optimize.FLATPAK_REPAIR_TIMEOUT
 
 
 def test_run_user_systemd_reset_failed_resets_failed_units():

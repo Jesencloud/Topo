@@ -83,11 +83,12 @@ _SWAPOFF_BYTES_PER_SECOND = 30 * 1024**2
 _SWAPON_TIMEOUT = 30
 REPO_REFRESH_TIMEOUT = 120
 UPDATEDB_TIMEOUT = 600
-# Three long-running tasks that used to inherit the 300 s DEFAULT_COMMAND_TIMEOUT
+# Four long-running tasks that used to inherit the 300 s DEFAULT_COMMAND_TIMEOUT
 # by omission, which on a large disk is a bet, not a margin. None of them corrupts
 # anything when SIGKILLed -- fstrim's discard is idempotent and resumes next run,
-# and the two delete passes just leave files they had not reached yet -- so the
-# generous value simply keeps a slow-but-fine run from being reported as failed.
+# the two delete passes just leave files they had not reached yet, and a repair
+# re-verifies from scratch -- so the generous value simply keeps a slow-but-fine
+# run from being reported as failed.
 #
 # fstrim -av on a multi-TB array, or the first discard on a large SSD, routinely
 # runs past five minutes; 30 minutes covers that without waiting forever on a
@@ -95,9 +96,21 @@ UPDATEDB_TIMEOUT = 600
 # scale with directory size and rarely approach even 300 s, but they get an
 # explicit ceiling for the same reason: no long task should silently depend on
 # the default.
+#
+# flatpak repair walks and checksums every object in the OSTree store, so it
+# scales with installed runtime size -- multi-GB GNOME/KDE platforms put it in
+# the same minutes-scale bracket as fstrim. It is deliberately NOT given the
+# daemon "still running in the background" treatment that clean/dev.py's prunes
+# get: topo runs the system scope as `sudo flatpak repair`, and because
+# capture=True leaves sudo no pty to fork a monitor into, sudo execs flatpak
+# directly -- the process killed is flatpak itself, not a client in front of
+# flatpak-system-helper, so nothing carries on afterwards. A killed repair
+# really did not finish, and reporting it as failed is correct; it just must not
+# be killed for being slow.
 FSTRIM_TIMEOUT = 1800
 TMPFILES_TIMEOUT = 600
 COREDUMP_CLEAN_TIMEOUT = 600
+FLATPAK_REPAIR_TIMEOUT = 1800
 OPTIMIZATION_MAX_WORKERS = 4
 
 # Debian keeps /sbin and /usr/sbin out of a non-root PATH on purpose, and Debian
@@ -1074,10 +1087,16 @@ def run_flatpak_repair(dry_run=False):
     if dry_run:
         return "Flatpak system & user objects would be verified (flatpak repair)"
     # Repair user installation first, then system if sudo available
-    user_result = run_command(["flatpak", "repair", "--user"], capture=True)
+    user_result = run_command(
+        ["flatpak", "repair", "--user"], capture=True, timeout=FLATPAK_REPAIR_TIMEOUT
+    )
     sudo_available = has_sudo()
     system_result = (
-        run_command(["flatpak", "repair"], use_sudo=True, capture=True) if sudo_available else None
+        run_command(
+            ["flatpak", "repair"], use_sudo=True, capture=True, timeout=FLATPAK_REPAIR_TIMEOUT
+        )
+        if sudo_available
+        else None
     )
     failed = []
     if not user_result.ok:
