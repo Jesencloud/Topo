@@ -26,6 +26,7 @@ unreadable whitelist must never be mistaken for either.
 """
 
 import contextlib
+import itertools
 import json
 import os
 from pathlib import Path
@@ -65,6 +66,12 @@ def read_json(path: Path) -> tuple[Any, JsonState]:
         return None, "unreadable"
 
 
+# A process-wide counter so no two writes share a scratch name. next() on an
+# itertools.count is atomic under the GIL, so it hands a fresh value to every
+# concurrent caller without a lock of its own.
+_scratch_counter = itertools.count()
+
+
 def write_json_atomic(path: Path, data: Any) -> bool:
     """Replace *path* with *data*, or leave it exactly as it was.
 
@@ -73,10 +80,16 @@ def write_json_atomic(path: Path, data: Any) -> bool:
     never a truncated one. fsync before the rename is what makes that true after
     a crash as well -- without it the rename can land while the new contents are
     still only in the page cache, which is the empty-file failure in a slower
-    disguise. The pid in the name keeps two processes from sharing one scratch
-    file, and a crashed run's leftovers from being adopted by the next.
+    disguise. The scratch name is unique per *write*, not just per process: the
+    pid keeps two processes -- and a crashed run's leftovers -- from sharing one
+    file, but two threads of one process share a pid, so a pid-only name let them
+    truncate the same scratch file and one thread's os.replace() then published
+    what the other half-wrote (or failed ENOENT once the sibling renamed it
+    away). The counter closes that window -- the whitelist seed racing eight
+    `topo whitelist add` threads each get their own scratch file -- so the
+    atomicity guarantee holds within a process too.
     """
-    tmp = path.with_name(f"{path.name}.tmp-{os.getpid()}")
+    tmp = path.with_name(f"{path.name}.tmp-{os.getpid()}-{next(_scratch_counter)}")
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=4)
