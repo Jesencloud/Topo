@@ -213,17 +213,32 @@ class OptimizationRegistry:
 register_optimization_task = OptimizationRegistry.register
 
 
-def _is_any_process_running(process_names: list[str]) -> bool:
+def _is_any_process_running(process_names: list[str]) -> bool | None:
+    """True when one of these is up, False when none is, None when pgrep could not say.
+
+    "Could not say" used to answer False along with the genuine negative, and the
+    caller vacuums browser databases on the strength of it. Both ways of not
+    knowing took that path: a machine with no pgrep (containers, minimal
+    installs) returned early, and a pgrep that missed the one-second deadline on
+    a loaded box failed `.ok` exactly like a clean "no match" does. pgrep's own
+    grammar is what separates them -- exit 1 is the real negative, while 2
+    (usage) and 3 (fatal) are not answers, and neither is a result of ours that
+    timed out or never spawned.
+    """
     if not shutil.which("pgrep"):
-        return False
+        return None
     # "chromium-browser" is 16 characters, one over what the kernel's comm field
     # holds, and pgrep rejects a pattern that long instead of matching the
     # truncated name -- so an untruncated check reported a running Chromium as
     # idle and let its databases be vacuumed underneath it.
-    return any(
-        run_command(["pgrep", "-x", comm_pattern(name)], capture=True, timeout=1).ok
-        for name in process_names
-    )
+    unknown = False
+    for name in process_names:
+        res = run_command(["pgrep", "-x", comm_pattern(name)], capture=True, timeout=1)
+        if res.ok:
+            return True
+        if res.timed_out or res.error or res.returncode != 1:
+            unknown = True
+    return None if unknown else False
 
 
 def _is_sqlite_database(db_file: Path) -> bool:
@@ -335,9 +350,17 @@ def run_vacuum_all(dry_run=False):
     """Task to optimize all browser databases."""
     db_files: list[Path] = []
     busy_apps = set()
+    unchecked_apps = set()
     home = Path.home()
     for app_name, process_names, patterns in _BROWSER_DB_TARGETS:
-        if _is_any_process_running(list(process_names)):
+        running = _is_any_process_running(list(process_names))
+        if running is None:
+            # Not "idle" -- pgrep could not answer. VACUUM rewrites the whole
+            # database file, so the unknown case is skipped alongside the running
+            # one instead of being handed to the locking checks further down.
+            unchecked_apps.add(app_name)
+            continue
+        if running:
             busy_apps.add(app_name)
             continue
         for pattern in patterns:
@@ -352,19 +375,24 @@ def run_vacuum_all(dry_run=False):
     # VACUUM the same file twice and double-count it in the total.
     db_files = sorted(set(db_files))
 
-    if busy_apps and not db_files:
+    # Two clauses that never merge: "running" is an answer, "unverifiable" is the
+    # absence of one, and announcing the second as the first is exactly what the
+    # old fail-open check did.
+    skipped = []
+    if busy_apps:
+        skipped.append(f"{', '.join(sorted(busy_apps))} running")
+    if unchecked_apps:
+        skipped.append(f"{', '.join(sorted(unchecked_apps))} unverifiable")
+
+    if skipped and not db_files:
         return OptimizationResult.visible_skip(
-            f"{', '.join(sorted(busy_apps))} running; database optimization skipped"
+            f"{'; '.join(skipped)}; database optimization skipped"
         )
     if not db_files:
         return None
     # The same tail on both messages: what was skipped is decided above, and a
     # preview and a real run skip the same apps for the same reason.
-    suffix = (
-        f"; skipped {plural(len(busy_apps), 'running app')}: {', '.join(sorted(busy_apps))}"
-        if busy_apps
-        else ""
-    )
+    suffix = f"; skipped: {'; '.join(skipped)}" if skipped else ""
     if dry_run:
         return f"Found {plural(len(db_files), 'database')} to optimize{suffix}"
 
@@ -643,6 +671,7 @@ def _reset_failed_units(
         ],
         capture=True,
         timeout=10,
+        env=C_LOCALE_ENV,
     )
     if not list_result.ok:
         return OptimizationResult.failed(f"Failed to list {label} systemd units")
@@ -1121,7 +1150,9 @@ def _systemd_timer_enabled(unit_names: tuple[str, ...]) -> bool:
     """
     if not shutil.which("systemctl"):
         return False
-    result = run_command(["systemctl", "is-enabled", *unit_names], capture=True, timeout=10)
+    result = run_command(
+        ["systemctl", "is-enabled", *unit_names], capture=True, timeout=10, env=C_LOCALE_ENV
+    )
     return any(line.strip() == "enabled" for line in result.stdout.splitlines())
 
 

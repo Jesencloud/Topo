@@ -19,7 +19,7 @@ from ..core.file_ops import (
 )
 from ..core.heavy_cache import get_ai_model_cleanup_defs, get_container_cache_def
 from ..core.render import bytes_to_human
-from ..core.system import run_command
+from ..core.system import has_sudo, run_command
 from .report import report_command_failure
 from .totals import as_totals
 
@@ -87,9 +87,23 @@ def clean_docker(dry_run=False):
         if dry_run:
             print(f"  {SKIP} Docker (unused images/build cache) would be pruned")
             return 0, 1
-        use_sudo = True
-        if run_command(["docker", "info"], capture=True, timeout=10).ok:
-            use_sudo = False
+        # `docker info` fails for two unrelated reasons: this user is not in the
+        # docker group, or the daemon is not running at all. Escalating on both
+        # meant a stopped daemon drew a password prompt and then a prune that
+        # could not have worked. A sudo session we already hold separates them
+        # without reading docker's error text -- if the daemon answers root, the
+        # first failure was permissions; if it does not, there is nothing to
+        # prune. Neither branch asks for a password on behalf of a destructive
+        # command.
+        use_sudo = False
+        if not run_command(["docker", "info"], capture=True, timeout=10).ok:
+            if not has_sudo():
+                print(f"  {SKIP} Docker needs sudo · prune skipped")
+                return 0, 0
+            if not run_command(["docker", "info"], use_sudo=True, capture=True, timeout=10).ok:
+                print(f"  {SKIP} Docker daemon unreachable · prune skipped")
+                return 0, 0
+            use_sudo = True
         # No `--volumes`. -f already turns off docker's own "are you sure"
         # listing, so this runs unattended; `--volumes` would then delete every
         # volume no *running* container holds -- a stopped compose stack's

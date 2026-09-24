@@ -907,7 +907,8 @@ def test_opt_log_skipped_and_process_helpers(capsys):
     opt_log("preview", skipped=True)
     assert "preview · skipped" in capsys.readouterr().out
     with patch("src.optimize.shutil.which", return_value=None):
-        assert _is_any_process_running(["firefox"]) is False
+        # No pgrep is not an answer about the process -- see P3-3.
+        assert _is_any_process_running(["firefox"]) is None
     with (
         patch("src.optimize.shutil.which", return_value="/usr/bin/pgrep"),
         patch(
@@ -932,6 +933,54 @@ def test_is_any_process_running_trims_to_the_kernel_comm_limit():
         assert _is_any_process_running(["chromium-browser"]) is False
 
     assert run.call_args.args[0] == ["pgrep", "-x", "chromium-browse"]
+
+
+def test_is_any_process_running_separates_no_from_could_not_tell():
+    """P3-3: a pgrep that cannot answer must not be read as "not running".
+
+    Exit 1 is pgrep saying "no match", and it is the only negative pgrep gives.
+    A one-second deadline missed on a loaded box, a usage error, and a pgrep that
+    never spawned all used to arrive as that same False -- and False is what lets
+    run_vacuum_all rewrite a live browser's database.
+    """
+    with patch("src.optimize.shutil.which", return_value="/usr/bin/pgrep"):
+        with patch(
+            "src.optimize.run_command",
+            return_value=CommandResult(
+                ["pgrep"], 124, error="Command timed out after 1s", timed_out=True
+            ),
+        ):
+            assert _is_any_process_running(["firefox"]) is None
+        with patch(
+            "src.optimize.run_command",
+            return_value=CommandResult(["pgrep"], 2, stderr="pgrep: pattern that searches for"),
+        ):
+            assert _is_any_process_running(["firefox"]) is None
+        # A real "no match" is still a real answer.
+        with patch("src.optimize.run_command", return_value=CommandResult(["pgrep"], 1)):
+            assert _is_any_process_running(["firefox"]) is False
+        # And one process confirmed up outranks another that could not be checked.
+        with patch(
+            "src.optimize.run_command",
+            side_effect=[
+                CommandResult(["pgrep"], 124, timed_out=True),
+                CommandResult(["pgrep"], 0),
+            ],
+        ):
+            assert _is_any_process_running(["firefox", "chrome"]) is True
+
+
+def test_run_vacuum_all_skips_browsers_it_could_not_check(test_env):
+    """P3-3: an unverifiable browser is reported as that, never as running."""
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.optimize._is_any_process_running", return_value=None),
+    ):
+        result = run_vacuum_all(dry_run=False)
+
+    assert result.status == OptimizationStatus.VISIBLE_SKIP
+    assert result.message.endswith("unverifiable; database optimization skipped")
+    assert "running" not in result.message
 
 
 def test_sqlite_detection_and_vacuum_skip_guards(tmp_path):

@@ -25,13 +25,16 @@ def test_clean_tool_cache_dry_run():
 
 
 @patch("shutil.which")
+@patch("src.clean.dev.has_sudo")
 @patch("src.clean.dev.run_command")
 @patch("subprocess.run")
-def test_clean_docker_execution(mock_sub_run, mock_run_cmd, mock_which):
+def test_clean_docker_execution(mock_sub_run, mock_run_cmd, mock_has_sudo, mock_which):
     """Verify docker cleanup logic and sudo detection."""
     mock_which.return_value = "/usr/bin/docker"
+    mock_has_sudo.return_value = True
     mock_run_cmd.side_effect = [
-        MagicMock(returncode=1, ok=False),
+        MagicMock(returncode=1, ok=False),  # docker info -> not in the docker group
+        MagicMock(returncode=0, ok=True),  # sudo docker info -> the daemon is up
         MagicMock(returncode=0, ok=True, stdout="Total reclaimed space: 2GB\n"),
     ]
 
@@ -253,6 +256,50 @@ def test_clean_multipass_reports_a_failed_purge(mock_run_cmd, mock_which, capsys
     out = capsys.readouterr().out
     assert "Multipass purge failed" in out
     assert "multipassd is not running" in out
+
+
+# --- P3-4: `docker info` failing is not by itself a reason to escalate. ---
+
+
+@patch("shutil.which")
+@patch("src.clean.dev.has_sudo")
+@patch("src.clean.dev.run_command")
+def test_clean_docker_does_not_ask_for_a_password_it_does_not_have(
+    mock_run_cmd, mock_has_sudo, mock_which, capsys
+):
+    """Without a sudo session already in hand, a failed probe skips the prune.
+
+    It used to assume the only reason `docker info` fails is group membership,
+    and go straight to `sudo docker system prune -f` -- a password prompt raised
+    on behalf of a destructive command, for a diagnosis nothing had confirmed.
+    """
+    mock_which.return_value = "/usr/bin/docker"
+    mock_has_sudo.return_value = False
+    mock_run_cmd.return_value = MagicMock(returncode=1, ok=False)
+
+    assert clean_docker(dry_run=False) == (0, 0)
+    # The unprivileged probe and nothing else: no sudo'd command, no prune.
+    assert mock_run_cmd.call_count == 1
+    assert "sudo" in capsys.readouterr().out.lower()
+
+
+@patch("shutil.which")
+@patch("src.clean.dev.has_sudo")
+@patch("src.clean.dev.run_command")
+def test_clean_docker_skips_when_the_daemon_is_down(
+    mock_run_cmd, mock_has_sudo, mock_which, capsys
+):
+    """A daemon that does not answer root either is down, not a permissions problem."""
+    mock_which.return_value = "/usr/bin/docker"
+    mock_has_sudo.return_value = True
+    mock_run_cmd.side_effect = [
+        MagicMock(returncode=1, ok=False),  # docker info
+        MagicMock(returncode=1, ok=False),  # sudo docker info -> still nothing there
+    ]
+
+    assert clean_docker(dry_run=False) == (0, 0)
+    assert mock_run_cmd.call_count == 2  # the prune itself never ran
+    assert "unreachable" in capsys.readouterr().out.lower()
 
 
 # --- P2-5: a daemon front-end SIGKILLed on timeout is not a failed prune. ---

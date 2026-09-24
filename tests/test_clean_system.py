@@ -388,7 +388,7 @@ def test_clean_snaps(mock_run, mock_which):
     assert i == 1
     assert c == 1
     mock_run.assert_any_call(
-        ["snap", "remove", "core22", "--revision", "1234"],
+        ["snap", "remove", "--revision", "1234", "--", "core22"],
         use_sudo=True,
         capture=True,
         timeout=PACKAGE_TRANSACTION_TIMEOUT,
@@ -993,7 +993,14 @@ def test_orphaned_pacman_paths():
     ):
         assert clean_orphaned_packages(dry_run=True) == (0, 0, 1)
         assert clean_orphaned_packages() == (0, 2, 1)
-        assert run.call_args_list[-1].args[0] == ["pacman", "-Rns", "--noconfirm", "foo", "bar"]
+        assert run.call_args_list[-1].args[0] == [
+            "pacman",
+            "-Rns",
+            "--noconfirm",
+            "--",
+            "foo",
+            "bar",
+        ]
 
 
 def test_orphaned_pacman_reports_pacmans_own_total():
@@ -1547,8 +1554,10 @@ def test_snap_partial_removal_failure_is_reported(capsys):
     def run(cmd, **kwargs):
         if cmd[:2] == ["snap", "list"]:
             return listing
-        # First revision removes, second fails.
-        return SimpleNamespace(ok=cmd[-1] == "10", stdout="", stderr="", error="")
+        # First revision removes, second fails. Read by the flag rather than by
+        # position: the name moved behind `--`, so the last token is the snap.
+        revision = cmd[cmd.index("--revision") + 1]
+        return SimpleNamespace(ok=revision == "10", stdout="", stderr="", error="")
 
     with (
         patch("shutil.which", return_value="/usr/bin/snap"),

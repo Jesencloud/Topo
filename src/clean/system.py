@@ -68,7 +68,11 @@ def clean_snaps(dry_run: bool = False) -> tuple[int, int, int]:
     failed = 0
     for name, revision in disabled:
         rm_res = run_command(
-            ["snap", "remove", name, "--revision", revision],
+            # The name is parsed out of the listing above, so it goes after `--`
+            # for the same reason the paths in _remove_unreachable_cache_paths do:
+            # snapd's naming rules are what keep a leading dash out of it today,
+            # and those are snapd's guarantee to keep, not this parser's.
+            ["snap", "remove", "--revision", revision, "--", name],
             use_sudo=True,
             capture=True,
             timeout=PACKAGE_TRANSACTION_TIMEOUT,
@@ -523,7 +527,7 @@ def clean_orphaned_packages(dry_run: bool = False) -> tuple[int, int, int]:
         # `pacman -Qtdq` exits non-zero precisely when there are no orphans, so a
         # non-ok listing here is the tidy-system case, not a failure to report --
         # only the removal below, which really does work, gets a failure line.
-        list_res = run_command([tool, "-Qtdq"], capture=True)
+        list_res = run_command([tool, "-Qtdq"], capture=True, env=C_LOCALE_ENV)
         if list_res.ok and list_res.stdout.strip():
             orphans = list_res.stdout.split()
             if dry_run:
@@ -532,7 +536,10 @@ def clean_orphaned_packages(dry_run: bool = False) -> tuple[int, int, int]:
                 )
                 return 0, 0, 1
             remove_res = run_command(
-                [tool, "-Rns", "--noconfirm"] + orphans,
+                # Same as the snap branch: these names came out of a parse, so
+                # they are passed as operands rather than trusted to not look
+                # like options.
+                [tool, "-Rns", "--noconfirm", "--", *orphans],
                 use_sudo=True,
                 capture=True,
                 env=C_LOCALE_ENV,
