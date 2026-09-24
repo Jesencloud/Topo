@@ -8,7 +8,7 @@ from ..core.file_ops import (
     SI_MULTIPLIER,
     get_size_fast,
     journal_freed_bytes,
-    parse_size_from_text,
+    parse_size_to_bytes,
     record_deletion_audit,
 )
 from ..core.heavy_cache import PACKAGE_MANAGER_CACHE_DEFS
@@ -385,7 +385,7 @@ def clean_package_manager(dry_run: bool = False) -> tuple[int, int, int]:
     if measured_freed > 0:
         freed += measured_freed
     elif res.ok and res.stdout:
-        # Anchored to this manager's own total, never parse_size_from_text() over
+        # Anchored to this manager's own total, never parse_size_to_bytes() over
         # the whole transcript: an unrelated unit-bearing line must not be read as
         # freed space. No match -> 0, honest for a fallback (see the parser table).
         freed += _cache_clean_freed_bytes(manager.key, res.stdout)
@@ -473,7 +473,7 @@ def clean_orphaned_packages(dry_run: bool = False) -> tuple[int, int, int]:
             timeout=PACKAGE_TRANSACTION_TIMEOUT,
         )
         if res.ok:
-            # apt's own total, not parse_size_from_text over the whole transcript:
+            # apt's own total, not parse_size_to_bytes over the whole transcript:
             # that takes the first size-looking token anywhere in it, and reads
             # apt's decimal kB/MB as binary ones (D7).
             freed = _apt_freed_bytes(res.stdout)
@@ -501,7 +501,7 @@ def clean_orphaned_packages(dry_run: bool = False) -> tuple[int, int, int]:
         )
         if res.ok:
             # Both numbers come from dnf's transaction summary. What they replace:
-            # parse_size_from_text() over the entire transcript, which returns the
+            # parse_size_to_bytes() over the entire transcript, which returns the
             # first size-looking token anywhere in it -- on dnf5 that is the size
             # column of the first row of the package table, not the total (D7's
             # mistake, in the branch D7 did not touch) -- and `stdout.count("\n")
@@ -634,7 +634,7 @@ _VERSIONED_KERNEL = re.compile(r"^linux-(?:image|modules-extra|modules|headers)-
 # handed straight to `apt-get purge`, which wants it unqualified, exactly as the
 # old fixed-width table printed it.
 _DPKG_KERNEL_FORMAT = "${db:Status-Abbrev}\t${Package}\n"
-# apt's own total for one operation. parse_size_from_text() cannot be pointed at
+# apt's own total for one operation. parse_size_to_bytes() cannot be pointed at
 # the transcript: fed the whole thing it matches "2 to remove" as 2 TB. The
 # sentence is English because the purge runs under APT_NONINTERACTIVE_ENV, and
 # matching "freed" keeps the "additional disk space will be used" wording out.
@@ -642,7 +642,7 @@ _APT_FREED_SPACE = re.compile(
     r"After this operation, ([0-9.]+)\s*([kMGTPE]?)B disk space will be freed"
 )
 # apt divides by 1000, not 1024 (apt-pkg's SizeToStr), so the decimal
-# SI_MULTIPLIER applies to this match rather than parse_size_from_text's binary
+# SI_MULTIPLIER applies to this match rather than parse_size_to_bytes's binary
 # powers. docker's prune total reads the same way, which is why that table lives
 # in core/file_ops.py instead of here.
 # apt's per-package removal lines, the machine-readable half of its narration.
@@ -686,7 +686,7 @@ def _apt_removal_count(output: str) -> int:
 _NEVRA_VERSION = re.compile(r"-(?:\d+:)?(\d[^-]*-[^-]*)$")
 # dnf's own total. dnf5 says "After this operation, 4 MiB will be freed (install
 # 0 B, remove 4 MiB)"; dnf4 closes its transaction table with "Freed space: 4 M".
-# Both count in 1024s, so the matched size goes straight to parse_size_from_text()
+# Both count in 1024s, so the matched size goes straight to parse_size_to_bytes()
 # -- what must never be handed to it is the whole transcript.
 _DNF_FREED_SPACE = (
     re.compile(r"After this operation, ([0-9.]+\s*[kKMGTPE]?i?B) will be freed"),
@@ -721,7 +721,7 @@ def _dnf_freed_bytes(output: str) -> int:
     for pattern in _DNF_FREED_SPACE:
         match = pattern.search(output)
         if match:
-            return parse_size_from_text(match.group(1))
+            return parse_size_to_bytes(match.group(1))
     return 0
 
 
@@ -745,7 +745,7 @@ def _dnf_removal_count(output: str) -> int:
 # pacman's own total, printed above the confirmation prompt and under
 # --noconfirm alike: "Total Removed Size:  12.34 MiB". pacman counts in 1024s
 # (its size_to_str divides by 1024), so the matched size goes to
-# parse_size_from_text() unchanged. Same shape as dnf4's "Freed space:" pattern
+# parse_size_to_bytes() unchanged. Same shape as dnf4's "Freed space:" pattern
 # above, for the same reason: an anchor on one tool's own total line.
 _PACMAN_REMOVED_SIZE = re.compile(r"Total Removed Size:\s*([0-9.]+\s*[kKMGTPE]?i?B?)")
 
@@ -753,12 +753,12 @@ _PACMAN_REMOVED_SIZE = re.compile(r"Total Removed Size:\s*([0-9.]+\s*[kKMGTPE]?i
 def _pacman_freed_bytes(output: str) -> int:
     """Bytes freed according to pacman's own report, 0 when it did not say."""
     match = _PACMAN_REMOVED_SIZE.search(output)
-    return parse_size_from_text(match.group(1)) if match else 0
+    return parse_size_to_bytes(match.group(1)) if match else 0
 
 
 # The cache-clean fallback total, reached only when the before/after measurement
 # came up empty. Each manager is read through its own anchored parser, for the
-# same reason the orphan-removal branches already are: parse_size_from_text()
+# same reason the orphan-removal branches already are: parse_size_to_bytes()
 # must never be handed a whole transcript -- its docstring forbids it, and a
 # release that prints a second unit-bearing number in the same output (a download
 # total, a cache summary) would let a whole-transcript scan silently pick the

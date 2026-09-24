@@ -807,7 +807,3 @@ def journal_freed_bytes(output: str) -> int:
     prints two totals and the freed space is their sum.
     """
     return sum(parse_size_to_bytes(size) for size in _JOURNAL_VACUUM_FREED.findall(output))
-
-
-# Alias for semantic clarity in command output parsing
-parse_size_from_text = parse_size_to_bytes

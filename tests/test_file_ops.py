@@ -19,7 +19,6 @@ from src.core.file_ops import (
     get_size_fast,
     is_app_running,
     journal_freed_bytes,
-    parse_size_from_text,
     parse_size_to_bytes,
     process_cgroup,
     process_exe_path,
@@ -645,13 +644,13 @@ def test_get_size_survives_lstat_oserror(test_env):
         assert get_size_fast(probe) == 0
 
 
-def test_parse_size_from_text():
-    assert parse_size_from_text("freed 1.5 GB of space") == int(1.5 * 1024**3)
-    assert parse_size_from_text("total 500 MB") == int(500 * 1024**2)
-    assert parse_size_from_text("10 KB used") == int(10 * 1024)
+def test_parse_size_to_bytes():
+    assert parse_size_to_bytes("freed 1.5 GB of space") == int(1.5 * 1024**3)
+    assert parse_size_to_bytes("total 500 MB") == int(500 * 1024**2)
+    assert parse_size_to_bytes("10 KB used") == int(10 * 1024)
     assert parse_size_to_bytes("1.5 GiB") == int(1.5 * 1024**3)
-    assert parse_size_from_text("no size here") == 0
-    assert parse_size_from_text("") == 0
+    assert parse_size_to_bytes("no size here") == 0
+    assert parse_size_to_bytes("") == 0
     assert parse_size_to_bytes("4096") == 4096
     assert parse_size_to_bytes("  1024  ") == 1024
     # ...but stray numbers inside non-numeric text are not misread as bytes.
@@ -680,12 +679,12 @@ def test_parse_size_ignores_the_numbers_that_are_not_sizes():
     from starting in the middle of a word.
     """
     # A unit letter that is really the first letter of the next word.
-    assert parse_size_from_text("Removing 12 packages") == 0
-    assert parse_size_from_text("Deleted 3 entries") == 0
+    assert parse_size_to_bytes("Removing 12 packages") == 0
+    assert parse_size_to_bytes("Deleted 3 entries") == 0
     # A number that starts inside a word: any hex run in a path or an id.
-    assert parse_size_from_text("/var/log/journal/76223d7d25d54f59a3700c2f06ec503c") == 0
+    assert parse_size_to_bytes("/var/log/journal/76223d7d25d54f59a3700c2f06ec503c") == 0
     # A size the whole way through is still read, wherever it sits in the line.
-    assert parse_size_from_text("Total reclaimed space: 1.2 GiB") == int(1.2 * 1024**3)
+    assert parse_size_to_bytes("Total reclaimed space: 1.2 GiB") == int(1.2 * 1024**3)
 
 
 def test_parse_size_reads_the_whole_number_and_refuses_a_negative_one():
@@ -710,7 +709,7 @@ def test_journal_freed_bytes_reads_journalctls_own_total():
     assert journal_freed_bytes(JOURNAL_VACUUM_OUTPUT) == int(1.1 * 1024**3)
     # And not the per-file line above it, which is what anchoring on the sentence
     # is for -- reading the transcript from the front finds 128.0M at best.
-    assert parse_size_from_text(JOURNAL_VACUUM_OUTPUT) == 128 * 1024**2
+    assert parse_size_to_bytes(JOURNAL_VACUUM_OUTPUT) == 128 * 1024**2
 
 
 def test_journal_freed_bytes_sums_every_directory_it_vacuumed():

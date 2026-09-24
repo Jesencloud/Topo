@@ -35,7 +35,7 @@ from ..core.file_ops import (
     get_direct_child_sizes_fast,
     get_size_fast,
     is_app_running,
-    parse_size_from_text,
+    parse_size_to_bytes,
     register_cleaned_path,
     safe_remove,
 )
@@ -309,7 +309,7 @@ def clean_flatpak_unused(dry_run=False):
             timeout=PACKAGE_TRANSACTION_TIMEOUT,
         )
         if res.ok and res.stdout and "Uninstalling" in res.stdout:
-            freed += parse_size_from_text(res.stdout)
+            freed += parse_size_to_bytes(res.stdout)
             uninstalled_any = True
 
     if uninstalled_any:

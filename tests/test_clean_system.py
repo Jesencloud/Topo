@@ -47,7 +47,7 @@ Reading state information...
 0 upgraded, 0 newly installed, 0 to remove and 2 not upgraded.
 """
 # `dnf autoremove -y` on dnf5, transcribed from `dnf --assumeno remove tree` on
-# Fedora 44. The size column of the first table row is the trap: parse_size_from_text
+# Fedora 44. The size column of the first table row is the trap: parse_size_to_bytes
 # over this whole transcript answers 120.0 KiB whatever the transaction total is, and
 # on a two-package removal it answers the size of one of them.
 _DNF5_AUTOREMOVE_OUTPUT = """\
@@ -162,7 +162,7 @@ def test_system_cleaners_no_tools_return_zero(_mock_which):
 def test_clean_orphaned_packages_fedora(mock_get_os_id, mock_run, mock_which):
     """dnf's own two numbers, from its transaction summary (D14).
 
-    What this used to accept: parse_size_from_text() over the whole transcript and
+    What this used to accept: parse_size_to_bytes() over the whole transcript and
     `stdout.count("\\n") // 2`. Against the fixture below the first answers 120 KiB --
     the size column of the table's first row -- for a transaction that freed 576, and
     the second answers 6 packages for a transaction that removed 2.
@@ -231,7 +231,7 @@ def test_clean_orphaned_packages_ubuntu(mock_get_os_id, mock_run, mock_which):
 
     # apt's own two numbers: one Purg line per package, and the freed total in the
     # decimal kB apt-pkg prints. 132 kB is 132000 bytes, not 132 * 1024 -- which is
-    # what parse_size_from_text over the whole transcript used to make of it.
+    # what parse_size_to_bytes over the whole transcript used to make of it.
     assert (s, i, c) == (132000, 2, 1)
     # apt-get, unlike dnf, runs maintainer scripts that may ask debconf a question
     # with nobody able to see the prompt.
@@ -1091,7 +1091,7 @@ ii \tlinux-headers-generic
 ii \tlinux-libc-dev
 """
 # What `apt-get purge -y` prints. The "2 to remove" line is kept verbatim on
-# purpose: parse_size_from_text() reads it as 2 TB, which is why the code has its
+# purpose: parse_size_to_bytes() reads it as 2 TB, which is why the code has its
 # own parser anchored on apt's sentence.
 _APT_PURGE_OUTPUT = """\
 Reading package lists...
@@ -1295,7 +1295,7 @@ def test_apt_freed_bytes_reads_apts_sentence_and_nothing_else():
     assert module._apt_freed_bytes("After this operation, 512  B disk space will be freed.") == 512
     # An install is not a free: this wording must not be counted.
     assert module._apt_freed_bytes("After this operation, 12.3 MB of additional disk space") == 0
-    # The line parse_size_from_text() would have read as 2 TB.
+    # The line parse_size_to_bytes() would have read as 2 TB.
     assert module._apt_freed_bytes("0 upgraded, 0 newly installed, 2 to remove") == 0
     assert module._apt_freed_bytes("") == 0
 

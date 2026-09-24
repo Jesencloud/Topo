@@ -149,6 +149,20 @@ def run_command(
     # stdin, which is why this cannot become the default.
     detach_stdin: bool = False,
 ):
+    """Run one external command and describe the outcome as a CommandResult.
+
+    `capture=True`, the default, reads the child's entire stdout and stderr into
+    memory: subprocess.run holds no ceiling and nothing here adds one. That is a
+    precondition on the caller rather than an oversight. Every command sent
+    through this gateway has output bounded by a *set* -- a package list, a file
+    list, a tool's own summary -- which puts the real ceiling in the low
+    megabytes even for `dpkg-query` on a full system. A command whose output is
+    bounded by time instead (`journalctl -f`, `tail -f`, a daemon's log) must not
+    be run here with capture on, and a short timeout does not make it safe: the
+    deadline kills the child, but whatever it wrote before then was already
+    buffered, and the timeout path hands that partial output back as well. Such a
+    command needs streaming, which CommandResult deliberately does not do.
+    """
     cmd = (["sudo", "-n"] + args if SUDO_CANCELLED else ["sudo"] + args) if use_sudo else args
     # Overlay rather than replace: dropping PATH, HOME or DISPLAY would break the
     # very tools being called. Pass C_LOCALE_ENV here whenever the output is
