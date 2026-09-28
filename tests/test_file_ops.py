@@ -1,6 +1,7 @@
 import os
 import socket
 import stat
+import sys
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -642,6 +643,47 @@ def test_get_size_survives_lstat_oserror(test_env):
         assert get_size(probe) == 0
     with patch("pathlib.Path.is_symlink", side_effect=OSError):
         assert get_size_fast(probe) == 0
+
+
+def test_get_size_walks_a_tree_deeper_than_the_recursion_limit(test_env, monkeypatch):
+    """The engine-less walk is iterative, so depth is bounded by the heap.
+
+    get_size() used to call itself once per directory level, so a chain deeper
+    than sys.getrecursionlimit() raised RecursionError instead of returning a
+    size. The explicit stack has no such ceiling.
+    """
+    # Force the pure-Python fallback: with the bundled engine present, get_size
+    # takes the fast path and never descends in Python at all.
+    monkeypatch.setattr("src.core.file_ops._get_fast_scan_data", lambda _p: None)
+
+    depth = sys.getrecursionlimit() + 100
+    chain_root = test_env / "chain"
+    chain_root.mkdir()
+    # Build the chain one level at a time: Path.mkdir(parents=True) and
+    # os.makedirs both recurse per level and would blow the limit before the
+    # walk under test even runs.
+    current = chain_root
+    for _ in range(depth):
+        current = current / "d"
+        current.mkdir()
+    leaf = current
+    (leaf / "payload").write_bytes(b"0" * 321)
+    try:
+        assert get_size(chain_root) == 321
+    finally:
+        # Tear the chain down by hand, bottom-up: shutil.rmtree -- which pytest's
+        # own tmp_path teardown uses -- recurses and would hit the same limit on
+        # a tree this deep.
+        (leaf / "payload").unlink(missing_ok=True)
+        current = leaf
+        while True:
+            try:
+                current.rmdir()
+            except OSError:
+                break
+            if current == chain_root:
+                break
+            current = current.parent
 
 
 def test_parse_size_to_bytes():

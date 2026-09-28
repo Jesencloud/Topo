@@ -1,11 +1,18 @@
+import json
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
+from src.core.engine import ENGINE_SCHEMA_VERSION
 from src.core.package_manager import APT
 from src.core.system import CommandResult
 from src.manage import doctor
+
+
+def _engine_stdout(payload):
+    """Wrap a payload as the engine's versioned stdout envelope for a mock."""
+    return json.dumps({"schema_version": ENGINE_SCHEMA_VERSION, "data": payload})
 
 
 def _command_result(args, returncode=0, stdout="", stderr="", error="", timed_out=False):
@@ -70,7 +77,7 @@ def test_run_doctor_uses_temporary_size_probe_with_short_timeout(tmp_path):
             assert probe_dir != home
             assert home not in probe_dir.parents
             assert (probe_dir / "sample.txt").exists()
-            return _command_result(args, stdout='{"total_size_bytes": 5}')
+            return _command_result(args, stdout=_engine_stdout({"total_size_bytes": 5}))
 
         return _command_result(args, returncode=1)
 
@@ -121,7 +128,7 @@ def test_run_doctor_probes_the_engine_it_reported(tmp_path, capsys):
             probed.append(args[0])
             if len(args) == 1:
                 return _command_result(args, returncode=1, stderr="Usage: topo-core <path>")
-            return _command_result(args, stdout='{"total_size_bytes": 5}')
+            return _command_result(args, stdout=_engine_stdout({"total_size_bytes": 5}))
 
         return _command_result(args, returncode=1)
 
@@ -259,3 +266,36 @@ def test_the_version_probe_asks_in_the_c_locale():
         assert doctor._check_tool("curl") == (True, "8.18.0")
 
     assert calls == [(["curl", "--version"], doctor.C_LOCALE_ENV)]
+
+
+def test_size_probe_flags_an_engine_schema_it_does_not_understand(tmp_path):
+    # A stale or foreign engine: exit 0, well-formed envelope, but a schema_version
+    # this build does not speak. doctor names the drift instead of reporting a
+    # generic "invalid size", because that is the mismatch a real scan would meet
+    # by falling back to pure Python -- the health check should say why.
+    engine = tmp_path / "topo-core"
+    engine.write_text("#!/bin/sh\n")
+    engine.chmod(0o755)
+    future = doctor.ENGINE_SCHEMA_VERSION + 1
+    payload = {"total_size_bytes": 5}
+
+    def fake_run_command(args, capture=True, timeout=300):
+        return _command_result(args, stdout=json.dumps({"schema_version": future, "data": payload}))
+
+    with patch("src.manage.doctor.run_command", side_effect=fake_run_command):
+        ok, detail = doctor._check_rust_size_probe(engine)
+
+    assert ok is False
+    assert detail == f"Engine schema v{future}, expected v{doctor.ENGINE_SCHEMA_VERSION}"
+
+
+def test_size_probe_accepts_a_well_formed_versioned_envelope(tmp_path):
+    engine = tmp_path / "topo-core"
+    engine.write_text("#!/bin/sh\n")
+    engine.chmod(0o755)
+
+    def fake_run_command(args, capture=True, timeout=300):
+        return _command_result(args, stdout=_engine_stdout({"total_size_bytes": 4096}))
+
+    with patch("src.manage.doctor.run_command", side_effect=fake_run_command):
+        assert doctor._check_rust_size_probe(engine) == (True, "OK")

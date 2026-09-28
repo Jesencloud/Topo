@@ -1,6 +1,6 @@
 # Ties the engines committed under src/core/bin/ to the Rust source they
 # were built from. Refresh with packaging/build-engine.sh; never by hand.
 # built with rustc 1.98.0 (88d9e12ae 2026-08-18)
-source  e015bce487ffe1ee9830ee27ee68911b078961c6aeca52090f347d4d662731ea
-topo-core-x86_64  ce4331a0aeb91c7c879e4fbeb41be8ae837f4b183af52766a23a90efd2341a0f
-topo-core-aarch64  1ff8964dbd894f0d5d8db426412c0848e16260da32be145e4815662f2c916985
+source  2092cd1c5a0cb22f820e4be39d474ea1deb2eb866ee5cb6f1832b7b572165181
+topo-core-x86_64  5c11615ca5834cf678cd3b1217948557aba21b08fb08adc1f35bf45e24f570a4
+topo-core-aarch64  945ba61e85cdb4d7827344760fb09b3fd3229fdf70fd8b2426ad63d50b8fe895

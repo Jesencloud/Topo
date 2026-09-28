@@ -1,6 +1,5 @@
 import contextlib
 import functools
-import json
 import os
 import re
 import shutil
@@ -14,7 +13,7 @@ from typing import Any
 
 from .config import get_min_age_days
 from .constants import SECONDS_PER_DAY, WARN
-from .engine import get_core_binary, get_rust_scan_data
+from .engine import _unwrap_engine_payload, get_core_binary, get_rust_scan_data, normalize_scan_path
 from .paths import get_state_dir
 from .scan_cache import ScanResult
 from .system import run_command
@@ -401,17 +400,48 @@ def get_size(path: str | Path) -> int:
         except Exception:
             pass
 
+    # Pure-Python fallback: the engine is unavailable (or declined this path), so
+    # walk it here. An explicit stack rather than get_size() calling itself once
+    # per directory level keeps a pathologically deep tree from exhausting the
+    # interpreter's recursion limit. The root's own engine attempt already
+    # happened above; each descendant directory gets the same attempt the
+    # recursive form gave it before we walk it by hand.
+    total, stack = _scandir_sizes(p)
+    while stack:
+        current = stack.pop()
+        try:
+            fast_size = _get_fast_scan_data(current)
+        except Exception:
+            fast_size = None
+        if fast_size is not None:
+            total += _coerce_non_negative_size(fast_size.get("total_size_bytes")) or 0
+            continue
+        size, children = _scandir_sizes(current)
+        total += size
+        stack.extend(children)
+    return total
+
+
+def _scandir_sizes(directory: Path) -> tuple[int, list[Path]]:
+    """One directory level: the bytes of its files and symlinks, plus its subdirs.
+
+    Symlinks (including those pointing at directories) are sized as the link
+    itself and never descended, matching get_size()'s top-level rule -- unlinking
+    one frees only the link's own bytes. Subdirectories are handed back for the
+    caller's explicit-stack walk rather than recursed into here.
+    """
     total = 0
+    subdirs: list[Path] = []
     try:
-        with os.scandir(p) as it:
+        with os.scandir(directory) as it:
             for entry in it:
                 if entry.is_symlink() or entry.is_file():
                     total += entry.stat(follow_symlinks=False).st_size
                 elif entry.is_dir():
-                    total += get_size(entry.path)
+                    subdirs.append(Path(entry.path))
     except OSError:
         pass
-    return total
+    return total, subdirs
 
 
 def _coerce_non_negative_size(value: Any) -> int | None:
@@ -431,8 +461,17 @@ def get_size_fast(path: str | Path) -> int:
 
     The engine now counts hidden files (skip_hidden=false), so its total matches
     the pure-Python walk while being far faster on huge trees (node_modules, the
-    cargo registry, model caches). Files and engine-less environments fall back to
-    the exact Python implementation.
+    cargo registry, model caches).
+
+    One deliberate divergence: symlinks *inside* the tree. The engine counts only
+    regular files, so a symlink contributes nothing; get_size() counts a symlink's
+    own bytes (its target's path length), since that is what unlinking it frees. So
+    a machine with an engine reports a few bytes less per contained symlink than an
+    engine-less one -- the fallback is not byte-for-byte identical here. The gap is
+    tiny and always downward, so it never promises a deletion the run won't perform;
+    it only shows up as a display difference on symlink-dense trees (pnpm stores,
+    node_modules/.bin). A top-level symlink is handled identically by both paths
+    (sized as the link, below).
     """
     p = Path(path)
     try:
@@ -590,13 +629,16 @@ def _get_path_stats(path: Path) -> dict[str, Any] | None:
     binary = get_core_binary()
     if binary is None:
         return None
-    result = run_command([str(binary), "--stats", str(path)], capture=True, timeout=300)
+    # Normalize the path the same way get_rust_scan_data and get_rust_tree_data
+    # do, so all three entry points hand the engine one stable absolute argument.
+    result = run_command(
+        [str(binary), "--stats", str(normalize_scan_path(path))], capture=True, timeout=300
+    )
     if not result.ok:
         return None
-    try:
-        data = json.loads(result.stdout)
-    except (json.JSONDecodeError, TypeError):
-        return None
+    # Same versioned envelope as the other two modes; _unwrap_engine_payload
+    # returns None on a mismatch so a foreign/stale engine falls back to Python.
+    data = _unwrap_engine_payload(result.stdout)
     return data if isinstance(data, dict) else None
 
 

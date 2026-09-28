@@ -15,12 +15,22 @@ import functools
 import json
 import platform
 from pathlib import Path
+from typing import cast
 
 from .scan_cache import ScanCache, ScanResult
 from .system import run_command
 
 # How long a single topo-core invocation may take before it is abandoned.
 _SCAN_COMMAND_TIMEOUT = 300
+
+# The stdout JSON contract this build speaks. topo-core wraps every mode's output
+# as {"schema_version": N, "data": <payload>}; we accept a payload only when N
+# equals this, and otherwise fall back to the pure-Python walk. Must equal
+# scanner.rs's SCHEMA_VERSION -- the release process pins one engine to one
+# checkout, so a mismatch means a foreign or stale binary, which this refuses to
+# misread. Bump both together whenever the payload shape changes.
+ENGINE_SCHEMA_VERSION = 1
+
 
 # The only architectures an engine is built for. `platform.machine()` values, so
 # arm64 is in here for the platforms that spell aarch64 that way, and the two
@@ -63,6 +73,29 @@ def normalize_scan_path(path: str | Path) -> Path:
         return raw.absolute()
 
 
+def _unwrap_engine_payload(stdout: str) -> object | None:
+    """Return the engine's payload from its versioned envelope, or None.
+
+    Every topo-core mode prints {"schema_version": N, "data": <payload>}. This
+    returns <payload> only when N is the version this build understands
+    (ENGINE_SCHEMA_VERSION). A non-JSON, non-object, or version-mismatched
+    envelope -- a truncated write, or a foreign/stale engine binary -- yields
+    None, and every caller reads None as "use the pure-Python path" rather than
+    trust a shape it cannot verify. The payload itself is still unchecked here;
+    callers guard its type (get_rust_scan_data's isinstance, get_rust_tree_data's
+    dict/`.`(dict) pair), so this only adds the version gate in front of them.
+    """
+    try:
+        envelope = json.loads(stdout)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(envelope, dict):
+        return None
+    if envelope.get("schema_version") != ENGINE_SCHEMA_VERSION:
+        return None
+    return envelope.get("data")
+
+
 def get_rust_scan_data(path: Path, *, use_cache: bool = True) -> ScanResult | None:
     """Calls the architecture-specific topo-core binary and returns parsed JSON."""
     binary = get_core_binary()
@@ -77,12 +110,20 @@ def get_rust_scan_data(path: Path, *, use_cache: bool = True) -> ScanResult | No
 
     res = run_command([str(binary), str(path)], capture=True, timeout=_SCAN_COMMAND_TIMEOUT)
     if res.ok:
-        try:
-            data = json.loads(res.stdout)
-        except json.JSONDecodeError:
+        data = _unwrap_engine_payload(res.stdout)
+        # A well-formed but non-object payload (a bare number, string, or array)
+        # survives the envelope's version gate, so ScanCache.set and every caller
+        # -- which expect a dict and would raise AttributeError on .get() -- are
+        # still shielded here. get_rust_tree_data guards the same way; keep the
+        # three entry points symmetric rather than trusting the payload's shape.
+        if not isinstance(data, dict):
             return None
-        ScanCache.set(path, data)
-        return data
+        # isinstance narrows _unwrap_engine_payload's object to dict[Any, Any];
+        # the ScanResult shape itself is still a promise the release process keeps,
+        # not a check (see ScanResult's docstring), so this cast asserts nothing new.
+        result = cast(ScanResult, data)
+        ScanCache.set(path, result)
+        return result
     return None
 
 
@@ -100,10 +141,7 @@ def get_rust_tree_data(path: Path) -> ScanResult | None:
     )
     if not res.ok:
         return None
-    try:
-        tree = json.loads(res.stdout)
-    except json.JSONDecodeError:
-        return None
+    tree = _unwrap_engine_payload(res.stdout)
     if not isinstance(tree, dict) or not isinstance(tree.get("."), dict):
         return None
     root_data: ScanResult | None = None

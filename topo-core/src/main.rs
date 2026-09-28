@@ -24,9 +24,18 @@ fn main() {
         &args[1]
     };
 
+    // --min-bytes is a trailing tree-mode flag; only run_tree honours it. Scan
+    // for it strictly after the positional path, so a directory literally named
+    // "--min-bytes" is scanned rather than mistaken for the flag. Python's own
+    // calls never pass it, so this only hardens manual invocation.
+    let flag_start = if tree_mode || stats_mode { 3 } else { 2 };
     let mut min_bytes = DEFAULT_TREE_MIN_BYTES;
-    if let Some(position) = args.iter().position(|arg| arg == "--min-bytes")
-        && let Some(value) = args.get(position + 1)
+    if let Some(offset) = args
+        .get(flag_start..)
+        .unwrap_or(&[])
+        .iter()
+        .position(|arg| arg == "--min-bytes")
+        && let Some(value) = args.get(flag_start + offset + 1)
         && let Ok(parsed) = value.parse::<u64>()
     {
         min_bytes = parsed;

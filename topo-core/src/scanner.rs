@@ -21,6 +21,50 @@ pub const TOP_FILE_MIN_BYTES: u64 = 1_048_576; // 1 MiB
 const MOUNT_SKIP_DIR_NAMES: [&str; 6] = ["proc", "sys", "dev", "run", "mnt", "media"];
 const ALWAYS_SKIP_DIR_NAMES: [&str; 1] = ["lost+found"];
 
+// The version of the stdout JSON contract, bumped whenever a field is renamed,
+// removed, or changes meaning. Every `run_*` mode wraps its payload as
+// {"schema_version": N, "data": <payload>} so the Python side can refuse a
+// payload it does not understand and fall back to its pure-Python walk rather
+// than misread a shape it cannot verify. The release process still pins one
+// engine to one Python by commit; this only makes a mismatch (a foreign or
+// stale engine) detectable at runtime instead of silent.
+pub const SCHEMA_VERSION: u32 = 1;
+
+// Wraps a payload with its schema version for transport. Deliberately not part
+// of any payload struct: the version is transport metadata, so it never enters
+// ScanCache and never perturbs the `_cache_estimated_bytes` accounting, which is
+// computed over the payload alone.
+#[derive(Serialize)]
+struct Envelope<T: Serialize> {
+    schema_version: u32,
+    data: T,
+}
+
+fn write_envelope<W: Write, T: Serialize>(mut writer: W, payload: T) -> std::io::Result<()> {
+    let envelope = Envelope {
+        schema_version: SCHEMA_VERSION,
+        data: payload,
+    };
+    // serde_json::to_writer hands back its own error type; fold it into io::Error
+    // so the serialize and the two writes share one Result the caller can act on.
+    serde_json::to_writer(&mut writer, &envelope).map_err(std::io::Error::other)?;
+    writeln!(writer)?;
+    // Flush here rather than at process exit: a broken pipe or full disk then
+    // surfaces as an error we can report, instead of a silent truncation.
+    writer.flush()
+}
+
+fn emit<T: Serialize>(payload: T) {
+    let stdout = std::io::stdout();
+    if write_envelope(stdout.lock(), payload).is_err() {
+        // A truncated or failed write must not look like a successful scan: exit
+        // non-zero so the Python side sees res.ok == false and takes its
+        // pure-Python fallback rather than parsing a half-written payload as if
+        // it were the whole answer.
+        std::process::exit(1);
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct ScanResult {
     pub path: String,
@@ -467,10 +511,7 @@ pub fn compute_stats(root_path: &Path) -> PathStats {
 }
 
 pub fn run_single(root_path: &Path) {
-    let stdout = std::io::stdout();
-    let mut output = stdout.lock();
-    let _ = serde_json::to_writer(&mut output, &compute_single(root_path));
-    let _ = writeln!(output);
+    emit(compute_single(root_path));
 }
 
 /// Emit the tree aggregates as JSON, pruned by `min_bytes`.
@@ -487,17 +528,11 @@ pub fn run_tree(root_path: &Path, min_bytes: u64) {
         .filter(|(key, aggregate)| key.as_str() == "." || aggregate.total_size_bytes >= min_bytes)
         .map(|(key, aggregate)| (key.clone(), aggregate))
         .collect();
-    let stdout = std::io::stdout();
-    let mut writer = stdout.lock();
-    let _ = serde_json::to_writer(&mut writer, &output);
-    let _ = writeln!(writer);
+    emit(output);
 }
 
 pub fn run_stats(root_path: &Path) {
-    let stdout = std::io::stdout();
-    let mut output = stdout.lock();
-    let _ = serde_json::to_writer(&mut output, &compute_stats(root_path));
-    let _ = writeln!(output);
+    emit(compute_stats(root_path));
 }
 
 /// The device half of the skip rule lives here rather than in
@@ -533,5 +568,43 @@ mod tests {
             "decided by name alone"
         )));
         assert!(!skips_child("proc.bin", || panic!("decided by name alone")));
+    }
+
+    #[test]
+    fn every_mode_wraps_its_payload_in_a_versioned_envelope() {
+        // The three run_* modes all serialize through write_envelope, so one
+        // check of the envelope shape covers the contract they share: a
+        // schema_version alongside the untouched payload under "data". Python
+        // refuses any other schema_version and falls back to its own walk, so
+        // this number and src/core/engine.py's ENGINE_SCHEMA_VERSION must agree.
+        let mut buf = Vec::new();
+        super::write_envelope(&mut buf, serde_json::json!({"total_size_bytes": 7}))
+            .expect("writing to a Vec cannot fail");
+        let parsed: serde_json::Value = serde_json::from_slice(&buf).unwrap();
+
+        assert_eq!(parsed["schema_version"], super::SCHEMA_VERSION);
+        assert_eq!(parsed["data"], serde_json::json!({"total_size_bytes": 7}));
+        // Trailing newline, as the Python side reads one line of stdout.
+        assert!(buf.ends_with(b"}\n"));
+    }
+
+    #[test]
+    fn a_write_failure_is_surfaced_rather_than_swallowed() {
+        // emit() turns this Err into a non-zero exit, so a broken pipe or a full
+        // disk makes the Python side see res.ok == false and fall back to its own
+        // walk, instead of parsing a truncated payload as a complete scan.
+        struct FailingWriter;
+        impl std::io::Write for FailingWriter {
+            fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let result =
+            super::write_envelope(FailingWriter, serde_json::json!({"total_size_bytes": 7}));
+        assert!(result.is_err());
     }
 }

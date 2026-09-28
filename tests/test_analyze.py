@@ -32,6 +32,7 @@ from src.analyze import (
     parallel_scan_sizes,
     percent_of,
 )
+from src.core.engine import ENGINE_SCHEMA_VERSION
 from src.core.file_ops import CACHEDIR_TAG_SIGNATURE, has_valid_cachedir_tag
 from src.core.scan_cache import ScanCache
 from src.ui.navigator import ANSI_CSI_RE, NOTICE_TEXT_LIMIT
@@ -49,6 +50,11 @@ from src.ui.screens.analyze import (
     _warn_notice,
     run_deep_analysis,
 )
+
+
+def _engine_stdout(payload):
+    """Wrap a payload as the engine's versioned stdout envelope for a mock."""
+    return json.dumps({"schema_version": ENGINE_SCHEMA_VERSION, "data": payload})
 
 
 def test_scan_cache():
@@ -208,12 +214,16 @@ def test_rust_cache_hint_never_undercharges_the_generic_estimate(tmp_path):
     (tmp_path / "目录-中文" / "inner" / "f.bin").write_bytes(b"y" * 512)
 
     root = normalize_scan_path(tmp_path)
-    single = json.loads(
+    single_envelope = json.loads(
         subprocess.run([str(binary), str(root)], capture_output=True, text=True, check=True).stdout
     )
+    # The real binary emits the versioned envelope; unwrap it the way the boundary
+    # does before the estimator comparison, and pin the version while we are here.
+    assert single_envelope["schema_version"] == ENGINE_SCHEMA_VERSION
+    single = single_envelope["data"]
     assert single["_cache_estimated_bytes"] >= ScanCache._estimate(single)
 
-    tree = json.loads(
+    tree_envelope = json.loads(
         subprocess.run(
             [str(binary), "--tree", str(root), "--min-bytes", "0"],
             capture_output=True,
@@ -221,6 +231,8 @@ def test_rust_cache_hint_never_undercharges_the_generic_estimate(tmp_path):
             check=True,
         ).stdout
     )
+    assert tree_envelope["schema_version"] == ENGINE_SCHEMA_VERSION
+    tree = tree_envelope["data"]
     assert len(tree) > 30
     for relative, aggregate in tree.items():
         node = root if relative == "." else root / relative
@@ -295,7 +307,7 @@ def test_get_rust_scan_data_success(mock_run):
     }
 
     # Mock successful subprocess run
-    mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(mock_data))
+    mock_run.return_value = MagicMock(returncode=0, stdout=_engine_stdout(mock_data))
 
     # We need to mock Path.exists for the binary
     with patch("pathlib.Path.exists", return_value=True):
@@ -316,7 +328,7 @@ def test_get_rust_tree_data_seeds_descendant_cache():
         patch("src.core.engine.get_core_binary", return_value=Path("/tmp/topo-core")),
         patch(
             "src.core.engine.run_command",
-            return_value=MagicMock(ok=True, stdout=json.dumps(payload)),
+            return_value=MagicMock(ok=True, stdout=_engine_stdout(payload)),
         ),
     ):
         data = get_rust_tree_data(root)
@@ -449,7 +461,7 @@ def test_get_rust_tree_data_survives_lru_eviction(test_env):
 
     fake_res = MagicMock()
     fake_res.ok = True
-    fake_res.stdout = json.dumps(large_tree)
+    fake_res.stdout = _engine_stdout(large_tree)
 
     with (
         patch("src.core.engine.run_command", return_value=fake_res),
@@ -469,7 +481,7 @@ def test_get_rust_tree_data_returns_root_even_when_root_is_too_large_to_cache(te
         "file_count": 10,
         "subdirs": {"oversized-name": 1000},
     }
-    fake_res = MagicMock(ok=True, stdout=json.dumps({".": root_data}))
+    fake_res = MagicMock(ok=True, stdout=_engine_stdout({".": root_data}))
     with (
         patch("src.core.engine.run_command", return_value=fake_res),
         patch.object(ScanCache, "MAX_ESTIMATED_BYTES", 1),

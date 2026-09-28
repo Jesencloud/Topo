@@ -22,7 +22,7 @@ from ..core.constants import (
     YELLOW,
     read_topo_version,
 )
-from ..core.engine import get_core_binary
+from ..core.engine import ENGINE_SCHEMA_VERSION, get_core_binary
 from ..core.install_source import get_install_root, get_install_source
 from ..core.package_manager import PACKAGE_MANAGERS, detect_package_manager, resolve_admin_tool
 from ..core.paths import get_config_dir
@@ -131,8 +131,21 @@ def _check_rust_size_probe(engine: Path | None) -> tuple[bool | None, str]:
                 return False, _command_failure_detail(result)
 
             try:
-                data = json.loads(result.stdout)
+                envelope = json.loads(result.stdout)
             except json.JSONDecodeError:
+                return False, "Invalid engine JSON output"
+
+            # The envelope's version is what the boundary checks at runtime, so
+            # doctor surfaces a mismatch by name rather than as a vague "invalid
+            # size" -- a wrong version here means a foreign or stale binary, and
+            # the pure-Python fallback is what a real scan would silently use.
+            if not isinstance(envelope, dict):
+                return False, "Invalid engine JSON output"
+            version = envelope.get("schema_version")
+            if version != ENGINE_SCHEMA_VERSION:
+                return False, f"Engine schema v{version}, expected v{ENGINE_SCHEMA_VERSION}"
+            data = envelope.get("data")
+            if not isinstance(data, dict):
                 return False, "Invalid engine JSON output"
 
             size_bytes = int(data.get("total_size_bytes", -1))

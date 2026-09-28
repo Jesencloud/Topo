@@ -33,12 +33,15 @@ TOOLCHAIN="${TOPO_ENGINE_TOOLCHAIN:-stable}"
 
 # Sort object keys and drop the one field two runs over the same tree may
 # legitimately disagree on: reading a directory updates its atime, and --stats
-# folds atime into newest_activity_secs.
+# folds atime into newest_activity_secs. That field lives inside the envelope's
+# "data" payload, so descend one level before dropping it; the schema_version
+# stays in the compared output so a version drift still shows up as a diff.
 NORMALIZE_JSON='
 import json, sys
 data = json.load(sys.stdin)
-if isinstance(data, dict):
-    data.pop("newest_activity_secs", None)
+payload = data.get("data") if isinstance(data, dict) else None
+if isinstance(payload, dict):
+    payload.pop("newest_activity_secs", None)
 json.dump(data, sys.stdout, sort_keys=True)
 '
 

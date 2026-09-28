@@ -10,6 +10,7 @@ install.sh reaches the same conclusion from the same list, and the tests here
 require the two to keep naming the same things.
 """
 
+import json
 import platform
 import re
 import subprocess
@@ -18,8 +19,33 @@ from pathlib import Path
 import pytest
 
 from src.core import engine
+from src.core.system import CommandResult
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _envelope(data, version=engine.ENGINE_SCHEMA_VERSION):
+    """The engine's stdout for one payload: a versioned {schema_version, data}."""
+    return json.dumps({"schema_version": version, "data": data})
+
+
+def _mock_engine_stdout(monkeypatch, tmp_path, stdout):
+    """Stand up a fake x86_64 engine whose one call returns `stdout`, exit 0.
+
+    Returns the normalized scan path and leaves ScanCache empty so a test can
+    assert the boundary neither returned nor cached the payload.
+    """
+    monkeypatch.setattr(platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(engine, "__file__", str(tmp_path / "engine.py"))
+    (tmp_path / "bin").mkdir(exist_ok=True)
+    (tmp_path / "bin" / "topo-core-x86_64").write_bytes(b"\x7fELF")
+    monkeypatch.setattr(
+        engine,
+        "run_command",
+        lambda *a, **k: CommandResult(args=list(a[0]), returncode=0, stdout=stdout),
+    )
+    engine.ScanCache.clear()
+    return engine.normalize_scan_path(tmp_path)
 
 
 @pytest.fixture(autouse=True)
@@ -82,6 +108,51 @@ def test_the_scan_helpers_skip_the_subprocess_when_there_is_no_engine(monkeypatc
 
     assert engine.get_rust_scan_data(Path("/tmp")) is None
     assert engine.get_rust_tree_data(Path("/tmp")) is None
+
+
+@pytest.mark.parametrize("data", [123, "oops", [1, 2], None])
+def test_get_rust_scan_data_rejects_a_well_formed_non_object_payload(monkeypatch, tmp_path, data):
+    # A zero-exit engine whose envelope carries valid JSON that is not an object:
+    # _unwrap_engine_payload passes it (the version matches), but ScanCache.set and
+    # every caller call .get() on it. Without the isinstance guard this raised
+    # AttributeError; get_rust_tree_data already guards the same way, so the scan
+    # entry point must too -- return None (pure-Python fallback) and never seed the
+    # cache with a non-dict.
+    scan_path = _mock_engine_stdout(monkeypatch, tmp_path, _envelope(data))
+
+    assert engine.get_rust_scan_data(scan_path, use_cache=False) is None
+    assert engine.ScanCache.get(scan_path) is None
+
+
+@pytest.mark.parametrize("stdout", ["123", '"oops"', "[1, 2]", "null", '{"total_size_bytes": 5}'])
+def test_the_scan_helpers_reject_a_payload_that_is_not_a_versioned_envelope(
+    monkeypatch, tmp_path, stdout
+):
+    # Valid JSON, exit 0, but no {"schema_version", "data"} wrapper -- what a
+    # pre-envelope or foreign engine prints. The bare object case ({"total_size..."})
+    # is the one that matters: its schema_version is absent (!= the expected int),
+    # so the boundary refuses it instead of caching a shape it never version-checked.
+    scan_path = _mock_engine_stdout(monkeypatch, tmp_path, stdout)
+
+    assert engine.get_rust_scan_data(scan_path, use_cache=False) is None
+    assert engine.get_rust_tree_data(scan_path) is None
+    assert engine.ScanCache.get(scan_path) is None
+
+
+def test_the_scan_helpers_reject_a_schema_version_they_do_not_understand(monkeypatch, tmp_path):
+    # A future/foreign engine: correct envelope, well-formed ScanResult payload,
+    # but a schema_version this build does not speak. The release process pins one
+    # engine to one checkout, so this only happens with a stale or foreign binary;
+    # both helpers fall back to pure Python rather than trust a contract that moved.
+    payload = {"path": "/x", "total_size_bytes": 5, "file_count": 1, "subdirs": {}, "top_files": []}
+    other_version = engine.ENGINE_SCHEMA_VERSION + 1
+    scan_path = _mock_engine_stdout(
+        monkeypatch, tmp_path, _envelope(payload, version=other_version)
+    )
+
+    assert engine.get_rust_scan_data(scan_path, use_cache=False) is None
+    assert engine.get_rust_tree_data(scan_path) is None
+    assert engine.ScanCache.get(scan_path) is None
 
 
 def test_this_host_resolves_a_bundled_engine_when_one_is_built_for_it():
