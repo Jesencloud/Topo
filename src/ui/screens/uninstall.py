@@ -146,7 +146,17 @@ def run_uninstall():
             apps = manager.run_full_scan(use_cache=True)
 
         if not apps:
-            print(f"\n   {RED}No applications found to uninstall.{RESET}")
+            if manager.failed_sources:
+                # An empty list with a dead source is not "nothing installed" --
+                # every scanner that could have answered raised, so say so instead
+                # of the reassuring no-apps line the empty-machine case gets.
+                joined = ", ".join(manager.failed_sources)
+                print(
+                    f"\n   {RED}Could not scan {joined}. "
+                    f"No other applications were found to uninstall.{RESET}"
+                )
+            else:
+                print(f"\n   {RED}No applications found to uninstall.{RESET}")
             Navigator.wait_for_return()
             return
 
@@ -155,7 +165,9 @@ def run_uninstall():
         # exactly the apps this scan found. The cursor is the one thing handed
         # back, so a cancelled uninstall reopens on the app it was about instead
         # of at the top of the list.
-        selector = UninstallSelector(SCREEN_TITLE, apps, focus_id=focus_id)
+        selector = UninstallSelector(
+            SCREEN_TITLE, apps, focus_id=focus_id, dropped_sources=manager.failed_sources
+        )
         selected_indices = selector.run()
 
         if not selected_indices:

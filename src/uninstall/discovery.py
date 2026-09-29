@@ -1035,8 +1035,8 @@ def _scan_standalone_cli_apps() -> list[AppRecord]:
     return apps
 
 
-def discover_installed_apps() -> list[AppRecord]:
-    """Every app the eight sources can find, in whatever order they answered.
+def discover_installed_apps() -> tuple[list[AppRecord], list[str]]:
+    """Every app the eight sources can find, and the sources that could not answer.
 
     The pre-scan goes first and alone: three of the seven scanners need its two
     answers -- which packages own an installed ``.desktop`` file, and what display
@@ -1049,6 +1049,11 @@ def discover_installed_apps() -> list[AppRecord]:
     the list, which is the whole reason the result is collected per future: a
     machine where `snap list` dies should still get its rpm packages.
 
+    A source that raises used to vanish without a word, so a user staring at a
+    list missing every snap could not tell an incomplete scan from an empty one.
+    Its name now rides back in the second return value, sorted, so the caller can
+    say the list is short a source rather than let the failure pass silently.
+
     Records come back unsorted and without residue sizes. The caller
     (``UninstallManager.run_full_scan``) adds the per-app residue it finds and
     decides the order, because "which paths belong to this app" is a question
@@ -1056,20 +1061,23 @@ def discover_installed_apps() -> list[AppRecord]:
     """
     user_app_packages, package_desktop_names = _pre_scan_package_desktop_names()
 
-    scan_tasks = [
-        lambda: _scan_rpm_packages(user_app_packages, package_desktop_names),
-        lambda: _scan_apt_packages(user_app_packages, package_desktop_names),
-        lambda: _scan_pacman_packages(user_app_packages, package_desktop_names),
-        _scan_flatpak_apps,
-        lambda: _scan_snap_apps(package_desktop_names),
-        _scan_npm_global_packages,
-        _scan_standalone_cli_apps,
+    scan_tasks: list[tuple[str, Callable[[], list[AppRecord]]]] = [
+        ("rpm", lambda: _scan_rpm_packages(user_app_packages, package_desktop_names)),
+        ("apt", lambda: _scan_apt_packages(user_app_packages, package_desktop_names)),
+        ("pacman", lambda: _scan_pacman_packages(user_app_packages, package_desktop_names)),
+        ("flatpak", _scan_flatpak_apps),
+        ("snap", lambda: _scan_snap_apps(package_desktop_names)),
+        ("npm", _scan_npm_global_packages),
+        ("standalone", _scan_standalone_cli_apps),
     ]
 
     apps: list[AppRecord] = []
+    failed_sources: list[str] = []
     with ThreadPoolExecutor(max_workers=len(scan_tasks)) as executor:
-        futures = [executor.submit(task) for task in scan_tasks]
+        futures = {executor.submit(task): name for name, task in scan_tasks}
         for future in as_completed(futures):
-            with contextlib.suppress(Exception):
+            try:
                 apps.extend(future.result())
-    return apps
+            except Exception:
+                failed_sources.append(futures[future])
+    return apps, sorted(failed_sources)

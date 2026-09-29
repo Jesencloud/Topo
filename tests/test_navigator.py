@@ -963,6 +963,24 @@ def test_uninstall_empty_list_does_not_offer_a_selection_hint():
     assert not any("Select apps to uninstall" in line for line in lines)
 
 
+def test_uninstall_selector_warns_about_a_dropped_source():
+    """A source discovery could not scan is named on screen, so a list missing
+    every snap does not look the same as a machine with no snaps installed."""
+    lines = render_lines(
+        UninstallSelector("t", _uninstall_items(), dropped_sources=["snap", "npm"])
+    )
+    warning = next(line for line in lines if "Could not scan" in line)
+    assert "snap" in warning
+    assert "npm" in warning
+    assert "may be missing" in warning
+
+
+def test_uninstall_selector_stays_quiet_when_every_source_answered():
+    """The common path has no dropped sources, so no warning line is drawn."""
+    lines = render_lines(UninstallSelector("t", _uninstall_items()))
+    assert not any("Could not scan" in line for line in lines)
+
+
 def test_uninstall_space_then_enter_returns_indices():
     sel = UninstallSelector("t", _uninstall_items())
     result = drive(sel, [Navigator.SPACE, "\r"])

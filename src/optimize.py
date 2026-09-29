@@ -1266,32 +1266,42 @@ def optimize_system(dry_run: bool = False) -> bool:
     worker_count = min(max(len(registered_tasks), 1), OPTIMIZATION_MAX_WORKERS)
     failed = False
     try:
-        with (
-            threaded_spinner(render_optimization_spinner),
-            ThreadPoolExecutor(max_workers=worker_count) as executor,
-        ):
-            futures = {executor.submit(task, dry_run=dry_run): task for task in registered_tasks}
+        with threaded_spinner(render_optimization_spinner):
+            # Managed by hand rather than as a `with`, because the context
+            # manager's __exit__ hardcodes shutdown(wait=True) and would drain the
+            # whole queue: after a Ctrl-C the tasks that had not started yet would
+            # still be run, one by one, though the user asked to stop. shutdown()
+            # below passes cancel_futures=True to drop those unstarted tasks. wait
+            # stays True so a task already in flight (fstrim, a package repair)
+            # finishes rather than being abandoned mid-transaction.
+            executor = ThreadPoolExecutor(max_workers=worker_count)
+            try:
+                futures = {
+                    executor.submit(task, dry_run=dry_run): task for task in registered_tasks
+                }
 
-            for future in as_completed(futures):
-                try:
-                    result = future.result()
-                    if result.status is OptimizationStatus.SILENT_SKIP:
-                        continue
-                    if result.message is None:
-                        raise ValueError("optimization result is missing its message")
-                    if result.status is OptimizationStatus.FAILED:
+                for future in as_completed(futures):
+                    try:
+                        result = future.result()
+                        if result.status is OptimizationStatus.SILENT_SKIP:
+                            continue
+                        if result.message is None:
+                            raise ValueError("optimization result is missing its message")
+                        if result.status is OptimizationStatus.FAILED:
+                            failed = True
+                            opt_log(result.message, success=False)
+                        else:
+                            opt_log(
+                                result.message,
+                                skipped=result.status is OptimizationStatus.VISIBLE_SKIP,
+                            )
+                    except Exception as exc:
+                        # Tasks are independent, so a failure does not abort the batch.
                         failed = True
-                        opt_log(result.message, success=False)
-                    else:
-                        opt_log(
-                            result.message,
-                            skipped=result.status is OptimizationStatus.VISIBLE_SKIP,
-                        )
-                except Exception as exc:
-                    # Tasks are independent, so a failure does not abort the batch.
-                    failed = True
-                    task = futures[future]
-                    opt_log(f"{task.__name__} failed ({type(exc).__name__})", success=False)
+                        task = futures[future]
+                        opt_log(f"{task.__name__} failed ({type(exc).__name__})", success=False)
+            finally:
+                executor.shutdown(wait=True, cancel_futures=True)
     finally:
         sys.stdout.write(f"{CLEAR_LINE}")
         sys.stdout.flush()

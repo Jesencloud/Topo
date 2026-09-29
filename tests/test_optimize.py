@@ -110,6 +110,68 @@ def test_optimize_system_caps_worker_pool_and_reports_task_failures(capsys):
     assert "Tasks completed with errors" in output
 
 
+def test_optimize_pool_drops_unstarted_tasks_when_interrupted(capsys):
+    """A Ctrl-C must not silently run the tasks that had not started yet.
+
+    The pool's own context-manager exit calls shutdown(wait=True) with no
+    cancel_futures, which drains the entire queue -- so an interrupt used to let
+    every remaining maintenance task run to completion after the user asked to
+    stop. The fix shuts the pool down with cancel_futures=True, dropping the
+    unstarted work; wait stays True so a task already in flight still finishes
+    rather than being torn mid-transaction.
+
+    An immediate KeyboardInterrupt from the first task, with far more tasks queued
+    than four workers can drain in the unwind window, makes the drop observable:
+    with the fix only the handful in flight can complete, without it all of them
+    run.
+    """
+    import threading
+    import time
+
+    executed = 0
+    executed_lock = threading.Lock()
+
+    def interrupter(dry_run=False):
+        raise KeyboardInterrupt
+
+    def slow_task(dry_run=False):
+        nonlocal executed
+        time.sleep(0.01)
+        with executed_lock:
+            executed += 1
+        return OptimizationResult.silent_skip()
+
+    total_slow = 60
+    tasks = [interrupter] + [slow_task] * total_slow
+
+    shutdown_kwargs: list[dict] = []
+    real_tpe = __import__("concurrent.futures", fromlist=["ThreadPoolExecutor"]).ThreadPoolExecutor
+
+    def make_executor(*args, **kwargs):
+        ex = real_tpe(*args, **kwargs)
+        original_shutdown = ex.shutdown
+
+        def spy(*a, **k):
+            shutdown_kwargs.append(k)
+            return original_shutdown(*a, **k)
+
+        ex.shutdown = spy
+        return ex
+
+    with (
+        patch.object(OptimizationRegistry, "tasks", tasks),
+        patch("src.core.system.authenticate_sudo_session", return_value=True),
+        patch("src.optimize.ThreadPoolExecutor", side_effect=make_executor),
+        pytest.raises(KeyboardInterrupt),
+    ):
+        optimize_system(dry_run=True)
+
+    # The queued tasks were cancelled, not drained: nowhere near all 60 ran.
+    assert executed < total_slow
+    # And the drop went through the intended mechanism, exactly once.
+    assert shutdown_kwargs == [{"wait": True, "cancel_futures": True}]
+
+
 def test_optimize_system_renders_all_result_statuses_and_succeeds(capsys):
     tasks = [
         lambda dry_run=False: OptimizationResult.silent_skip(),

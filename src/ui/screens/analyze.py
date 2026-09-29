@@ -168,7 +168,14 @@ def _scan_with_spinner(
     result list with an in-place redraw — exactly like a cache hit, no flash or
     jitter. Only scans slower than the grace period paint the scan header (in
     place, without a full-screen clear) and animate the spinner."""
-    with ThreadPoolExecutor(max_workers=1) as executor:
+    # Managed by hand rather than as a `with`: the context manager's __exit__
+    # calls shutdown(wait=True) with no cancel_futures, so shutdown() below passes
+    # cancel_futures=True to match the optimize pool -- a Ctrl-C during the wait
+    # drops the scan if it had not started yet instead of running it after the
+    # user asked to stop. (With one worker and one task the task is usually already
+    # in flight, so wait=True still lets that scan finish rather than tearing it.)
+    executor = ThreadPoolExecutor(max_workers=1)
+    try:
         future = executor.submit(worker)
         elapsed = 0.0
         header_shown = False
@@ -194,6 +201,8 @@ def _scan_with_spinner(
         finally:
             if header_shown:
                 print(" " * last_len, end="\r", flush=True)
+    finally:
+        executor.shutdown(wait=True, cancel_futures=True)
 
 
 def _get_rust_scan_data_with_spinner(

@@ -2687,10 +2687,34 @@ def test_run_full_scan_cache(monkeypatch):
     monkeypatch.setattr(mgr, "_calculate_app_sizes_and_residues", lambda apps, roots: None)
     discovered = [{"id": "x", "install_time": 1, "size_bytes": 1}]
     with patch(
-        "src.uninstall.manager.discover_installed_apps", return_value=discovered
+        "src.uninstall.manager.discover_installed_apps", return_value=(discovered, [])
     ) as discover:
         assert len(mgr.run_full_scan(use_cache=True)) == 1
         assert len(mgr.run_full_scan(use_cache=True)) == 1
+    assert discover.call_count == 1
+
+
+def test_run_full_scan_carries_and_caches_the_dropped_sources(monkeypatch):
+    """The sources discovery could not scan reach the caller, and a cache hit
+    reopens the same warning instead of dropping it on the second look."""
+    mgr = UninstallManager()
+    monkeypatch.setattr(
+        UninstallManager, "_current_scan_cache_key", classmethod(lambda cls: ("key",))
+    )
+    monkeypatch.setattr("src.uninstall.residue.pre_scan_search_roots", lambda: {})
+    monkeypatch.setattr(mgr, "_calculate_app_sizes_and_residues", lambda apps, roots: None)
+    discovered = [{"id": "x", "install_time": 1, "size_bytes": 1}]
+    with patch(
+        "src.uninstall.manager.discover_installed_apps",
+        return_value=(discovered, ["snap"]),
+    ) as discover:
+        mgr.run_full_scan(use_cache=True)
+        assert mgr.failed_sources == ["snap"]
+        # Second call inside the freshness window is a cache hit -- it must
+        # restore the failed-source list, not leave last turn's warning to vanish.
+        mgr.failed_sources = []
+        mgr.run_full_scan(use_cache=True)
+        assert mgr.failed_sources == ["snap"]
     assert discover.call_count == 1
 
 
@@ -2698,7 +2722,9 @@ def test_discovery_keeps_the_other_sources_when_one_scanner_raises(monkeypatch):
     """One package manager's tool misbehaving costs its own list, not the scan.
 
     Seven scanners run in parallel and each shells out; a tool that segfaults or
-    prints something unparseable used to be able to empty the whole app list.
+    prints something unparseable used to be able to empty the whole app list. The
+    source it died on now comes back named, so the screen can say the list is
+    short a source rather than let the failure pass without a word.
     """
     monkeypatch.setattr(
         "src.uninstall.discovery._pre_scan_package_desktop_names", lambda: (set(), {})
@@ -2717,7 +2743,9 @@ def test_discovery_keeps_the_other_sources_when_one_scanner_raises(monkeypatch):
         lambda: [{"id": "tool", "install_time": 1, "size_bytes": 1}],
     )
 
-    assert [app["id"] for app in discover_installed_apps()] == ["tool"]
+    apps, failed_sources = discover_installed_apps()
+    assert [app["id"] for app in apps] == ["tool"]
+    assert failed_sources == ["rpm"]
 
 
 def test_build_removal_targets_reuses_the_scan_index(monkeypatch):
@@ -2729,7 +2757,7 @@ def test_build_removal_targets_reuses_the_scan_index(monkeypatch):
     monkeypatch.setattr("src.uninstall.residue.pre_scan_search_roots", lambda: index)
     monkeypatch.setattr(mgr, "_calculate_app_sizes_and_residues", lambda apps, roots: None)
 
-    with patch("src.uninstall.manager.discover_installed_apps", return_value=[]):
+    with patch("src.uninstall.manager.discover_installed_apps", return_value=([], [])):
         mgr.run_full_scan()
     assert mgr._pre_scanned_entries is index
 

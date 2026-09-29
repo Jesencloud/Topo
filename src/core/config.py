@@ -122,6 +122,16 @@ def get_config() -> dict[str, Any]:
     changes it mid-run, and that drops the cache, so a hand edit between runs
     still takes effect on the next one.
 
+    The snapshot is per process: this cache fills once and is held for the
+    process's life, and clear_config_cache() only fires in the process that
+    called save_config(). A *different* process editing the config while this
+    one runs is not observed here until this process next starts -- a deliberate
+    semantic, not an oversight. Making it cross-process would put a stat() on the
+    config file into every read to compare mtimes, and this cache exists
+    precisely because that read sits on the per-candidate hot path; the
+    single-instance lock already keeps a destructive command from overlapping a
+    config write for more than the moment before it acquires.
+
     The result always carries every key and a validated value, because
     load_config() runs the file through normalize_config() -- which is why the
     getters below can index it and coerce, with no second round of checks.

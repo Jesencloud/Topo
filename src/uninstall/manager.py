@@ -47,9 +47,17 @@ class UninstallManager:
     _scan_cache_apps: list[AppRecord] | None = None
     _scan_cache_time = 0.0
     _scan_cache_key: tuple[Any, ...] | None = None
+    # The sources discovery could not scan on the run that filled the cache,
+    # cached beside the apps: a cache hit reopens the same list, so it has to
+    # reopen the same "this list is short a source" warning too, not drop it.
+    _scan_cache_failed_sources: list[str] | None = None
 
     def __init__(self):
         self.apps: list[AppRecord] = []
+        # Package-manager sources whose scan raised on the last run_full_scan, so
+        # the screen can tell the user the app list is missing one rather than let
+        # a dead `snap list` shrink the list without a word. See discovery.
+        self.failed_sources: list[str] = []
         # The residue index run_full_scan built, kept so the preview can reuse it.
         # Only ever valid inside the process that built it: ResidueEntryIndex
         # buckets grams with the per-process-randomized str.__hash__.
@@ -60,6 +68,7 @@ class UninstallManager:
         cls._scan_cache_apps = None
         cls._scan_cache_time = 0.0
         cls._scan_cache_key = None
+        cls._scan_cache_failed_sources = None
 
     @staticmethod
     def _desktop_dirs_signature() -> tuple[tuple[str, int, int], ...]:
@@ -158,9 +167,10 @@ class UninstallManager:
         cache_key = self._current_scan_cache_key()
         if use_cache and self.has_fresh_scan_cache():
             self.apps = [app.copy() for app in self._scan_cache_apps or []]
+            self.failed_sources = list(self._scan_cache_failed_sources or [])
             return self.apps
 
-        apps = discover_installed_apps()
+        apps, self.failed_sources = discover_installed_apps()
 
         pre_scanned_entries = residue.pre_scan_search_roots()
         self._pre_scanned_entries = pre_scanned_entries
@@ -176,6 +186,7 @@ class UninstallManager:
             self.__class__._scan_cache_apps = [app.copy() for app in self.apps]
             self.__class__._scan_cache_time = time.monotonic()
             self.__class__._scan_cache_key = cache_key
+            self.__class__._scan_cache_failed_sources = list(self.failed_sources)
         return self.apps
 
     def build_removal_targets(

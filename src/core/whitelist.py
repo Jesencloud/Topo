@@ -429,9 +429,67 @@ def _compiled_whitelist_paths() -> tuple[Path, ...]:
     return tuple(_resolve_path(path) for path in get_whitelist())
 
 
+# The whitelist-file fingerprint the two protection caches were last built
+# against. It changes whenever any process rewrites the file -- write_json_atomic
+# replaces it via os.replace(), which swaps in a fresh inode -- so comparing it
+# is how a `topo clean` already underway learns that a separate `topo whitelist
+# add` has protected a new path. See _refresh_protection_caches_if_stale.
+_whitelist_signature: tuple[int, int, int] | None = None
+
+
+def _whitelist_file_signature() -> tuple[int, int, int] | None:
+    """(st_ino, st_mtime_ns, st_size) of the whitelist file, or None when absent.
+
+    The same fingerprint ScanCache keys its entries on, for the same reason: a
+    cross-process os.replace() gives the file a new inode, and a missing file is
+    its own stable signature.
+    """
+    try:
+        st = os.stat(get_whitelist_file())
+    except OSError:
+        return None
+    return (st.st_ino, st.st_mtime_ns, st.st_size)
+
+
 def _clear_protection_caches() -> None:
+    """Drop the memoized whitelist verdicts and record the file as current.
+
+    Called by the writers in *this* process; the signature is stamped so the
+    reader path below does not then re-clear on its next query for a change it
+    already accounted for.
+    """
+    global _whitelist_signature
     _compiled_whitelist_paths.cache_clear()
     get_hard_protection_reason_cached.cache_clear()
+    _whitelist_signature = _whitelist_file_signature()
+
+
+def _refresh_protection_caches_if_stale() -> None:
+    """Drop the memoized verdicts when the file changed under a running command.
+
+    add_to_whitelist/remove_from_whitelist clear the caches in the process that
+    writes, but `topo whitelist add` runs in a *different* process from a `topo
+    clean` already walking the disk -- and that clean deliberately never takes the
+    single-instance lock away from whitelist, so the two really do overlap.
+    Without this, the clean would keep the verdicts it memoized before the write
+    -- including a path it recorded as *unprotected* -- for its whole run, and
+    could delete something the user has just protected. Re-checking the file's
+    signature before each hard-protection query carries the change across the
+    process boundary, the way ScanCache re-checks an entry's signature before
+    trusting it.
+
+    Mutating the module global from whatever thread reaches a deletion first is
+    benign under the GIL, exactly like config's lazy cache init: two threads at
+    most clear an already-empty cache and store the same signature, and a verdict
+    computed while another thread clears is still recomputed from the current
+    file -- never stale.
+    """
+    global _whitelist_signature
+    current = _whitelist_file_signature()
+    if current != _whitelist_signature:
+        _whitelist_signature = current
+        _compiled_whitelist_paths.cache_clear()
+        get_hard_protection_reason_cached.cache_clear()
 
 
 def is_system_cleanable_content(path: Path) -> bool:
@@ -529,6 +587,7 @@ def get_hard_protection_reason_cached(path_str: str) -> str | None:
 
 def get_hard_protection_reason(path) -> str | None:
     """Return why a path is protected across every deletion context."""
+    _refresh_protection_caches_if_stale()
     return get_hard_protection_reason_cached(str(path))
 
 

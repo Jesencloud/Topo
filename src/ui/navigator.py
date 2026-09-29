@@ -1135,9 +1135,19 @@ class UninstallSelector(_PagedSelector):
     # ui.screens alone), a Sequence would not do because _sort_items() sorts in
     # place, and re-declaring the row here would be the second copy of a type the
     # feature already owns.
-    def __init__(self, title: str, items: list[Any], focus_id: str | None = None) -> None:
+    def __init__(
+        self,
+        title: str,
+        items: list[Any],
+        focus_id: str | None = None,
+        dropped_sources: list[str] | None = None,
+    ) -> None:
         self.title = title
         self.items = items
+        # Sources discovery could not scan this run, named so the list can warn
+        # it is short a package manager rather than pass an incomplete scan off
+        # as the whole truth. Empty on the common path where every source answered.
+        self.dropped_sources = dropped_sources or []
         # Keyed on record identity (id(item)), not row index and not app id: the
         # sort keys reorder the rows under the ticks, and one app id can name
         # several rows that must tick apart. See _selection_key.
@@ -1215,6 +1225,18 @@ class UninstallSelector(_PagedSelector):
             f"\n {THEME_TITLE}{self.title}{RESET} "
             f"{GRAY}{len(self.selected_items)}/{total_len} selected{RESET}\033[K\n\n"
         )
+
+        # A source discovery could not scan is worth one line: without it a list
+        # missing every snap looks the same as a machine with no snaps, and the
+        # user picks from it believing it is complete. Yellow and the ⚠ glyph are
+        # the TUI's "look here", and WARN already carries the glyph's own colour
+        # so it still reads when colours are off.
+        if self.dropped_sources:
+            joined = ", ".join(self.dropped_sources)
+            buf.append(
+                f" {WARN} {YELLOW}Could not scan {joined}; some installed apps "
+                f"may be missing from this list.{RESET}\033[K\n\n"
+            )
 
         if total_len == 0:
             focus_line = _frame_line_count(buf)

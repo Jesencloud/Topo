@@ -3,6 +3,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import src.core.whitelist as whitelist_module
+from src.core.json_store import write_json_atomic
 from src.core.whitelist import (
     _compiled_home_protection_paths,
     _compiled_whitelist_paths,
@@ -49,6 +50,35 @@ def test_protection_rules_are_compiled_once_and_whitelist_changes_invalidate(tes
     assert add_to_whitelist(str(protected)) == "changed"
     assert _compiled_whitelist_paths.cache_info().currsize == 0
     assert is_protected(protected / "child") is True
+
+
+def test_a_whitelist_add_in_another_process_reaches_a_running_command(test_env):
+    """A path already judged unprotected must become protected once a *separate*
+    process adds it -- the running command's per-process caches would otherwise
+    outlive the protection the user just set.
+
+    add_to_whitelist clears the caches only in the process that writes, so a
+    `topo whitelist add` (which deliberately never takes the single-instance lock
+    from a `topo clean` already underway) is simulated here by writing the file
+    directly, without that in-process clear.
+    """
+    keep = test_env / "keep"
+    keep.mkdir()
+
+    # The running command memoizes "not protected", exactly as clean would before
+    # the user acts.
+    assert is_protected(keep) is False
+    assert is_protected(keep / "child") is False
+
+    # The separate process's write: the file gains the path, but this process's
+    # _clear_protection_caches() never runs. os.replace() swaps the inode, so the
+    # file's signature changes even if this lands in the same clock tick.
+    write_json_atomic(get_whitelist_file(), [str(keep.resolve())])
+
+    # The stale None must not survive: the signature change is picked up on the
+    # next query and the protection now applies.
+    assert is_protected(keep) is True
+    assert is_protected(keep / "child") is True
 
 
 def test_whitelist_normalization(test_env):
