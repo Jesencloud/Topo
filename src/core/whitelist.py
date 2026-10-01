@@ -282,15 +282,17 @@ def _get_resolved_home() -> Path:
 
 
 def _ensure_config():
-    try:
-        config_dir = get_config_dir()
-        whitelist_file = get_whitelist_file()
-        ensure_private_dir(config_dir)
-        if not whitelist_file.exists():
-            # Seed with empty list; critical paths are hardcoded for safety.
-            write_json_atomic(whitelist_file, [], mode=0o600)
-    except OSError:
-        pass
+    # Only ensures the config dir exists and is private. The whitelist file is
+    # deliberately NOT seeded here: _read_whitelist() already reads a missing file
+    # as an empty, trustworthy list, so a seed bought nothing -- and the seed
+    # write ran outside the cross-process lock the writers take. On a fresh
+    # install two concurrent `topo whitelist add` runs could race there: one adds
+    # and writes ["/a"] under the lock, then the other's _ensure_config (its
+    # exists() check having lost the race) writes [] back over it before taking
+    # the lock, dropping "/a" while that first add already reported "changed".
+    # Removing the seed removes the only whitelist write that was not under lock.
+    # ensure_private_dir swallows its own OSError, so no guard is needed here.
+    ensure_private_dir(get_config_dir())
 
 
 _WHITELIST_WARNING_EMITTED = False

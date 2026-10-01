@@ -406,3 +406,22 @@ def test_the_whitelist_file_and_its_dir_are_owner_only(test_env):
     whitelist_file = get_whitelist_file()
     assert stat.S_IMODE(whitelist_file.stat().st_mode) == 0o600
     assert stat.S_IMODE(whitelist_file.parent.stat().st_mode) == 0o700
+
+
+def test_a_fresh_whitelist_query_does_not_seed_a_file(test_env):
+    # The seed write of [] used to run outside the lock the writers take, so on a
+    # fresh install a concurrent `add` could have the seed clobber the just-added
+    # entry. _read_whitelist already reads a missing file as an empty, trustworthy
+    # list, so there is nothing to seed -- and querying must not create the file
+    # (nor the lost-protection race) as a side effect.
+    assert get_whitelist() == []
+    assert not get_whitelist_file().exists()
+
+
+def test_a_first_add_on_a_fresh_install_persists_exactly_that_entry(test_env):
+    # With the seed write gone, the first add on a fresh install still writes a
+    # correct one-entry list (the file is created by the locked write, not a seed).
+    keep = test_env / "keep"
+
+    assert add_to_whitelist(str(keep)) == "changed"
+    assert get_whitelist() == [str(keep.resolve())]
