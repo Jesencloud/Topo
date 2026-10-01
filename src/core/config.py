@@ -1,7 +1,9 @@
+import sys
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from .constants import WARN
 from .json_store import read_json, write_json_atomic
 from .paths import get_config_dir
 
@@ -39,6 +41,33 @@ _LEGACY_INERT_KEYS = ("min_age_days", "theme_color")
 
 _config_cache: dict[str, Any] | None = None
 
+_CONFIG_WARNING_EMITTED = False
+
+
+def _warn_config_unreadable() -> None:
+    """Say once, on stderr, that config.json exists but could not be read.
+
+    The fallback defaults are the safer side for every key but ``min_age_days``:
+    that one is a floor the user raised to make topo *more* cautious than its own
+    defaults, and the default is 0 (no floor). Falling back to it silently would
+    drop the floor and let a cleanup delete files it was sparing -- the same
+    worst-direction, silent failure the whitelist refuses to make. Announcing it
+    (the whitelist warns for the same reason) is what keeps that from happening
+    with nothing on screen to notice it by. A *missing* config is a fresh install
+    and stays silent; only a present-but-unreadable one is announced.
+    """
+    global _CONFIG_WARNING_EMITTED
+    if _CONFIG_WARNING_EMITTED:
+        return
+    _CONFIG_WARNING_EMITTED = True
+    print(
+        f"{WARN} topo: cannot read {get_config_file()} -- using default settings "
+        "this run. Any min_age_days floor you set is NOT in effect, so a cleanup "
+        "may remove files it would otherwise spare. Fix the file, or delete it to "
+        "start from the defaults.",
+        file=sys.stderr,
+    )
+
 
 def load_config() -> dict[str, Any]:
     """Read config.json, or the defaults when it is absent or unreadable.
@@ -48,15 +77,22 @@ def load_config() -> dict[str, Any]:
     read that wrote would mean `topo remove` created ~/.config/topo/config.json
     at startup and then reported it as leftover configuration it had removed.
 
-    Unlike the whitelist, falling back here is the conservative direction and
-    stays silent: the defaults are the *safer* settings (``use_trash`` on), and
-    nothing about them can widen what a cleanup deletes. What must not happen is
-    writing those defaults back over a file that merely failed to parse, so the
-    save below is reached only from the legacy-migration branch, which by then has
-    a file it could read.
+    Most of the defaults are the *safer* side (``use_trash`` on), so an absent
+    config -- a fresh install -- falls back silently. ``min_age_days`` is the one
+    exception: it is a floor the user raised to make topo more cautious, and its
+    default is 0 (no floor), so falling back drops that floor and *widens* what a
+    cleanup deletes. A present-but-unreadable config is therefore announced on
+    stderr (via _warn_config_unreadable), the same way the whitelist refuses to
+    lose a protection in silence; a missing one is not. The defaults are still
+    used either way, because there is nothing trustworthy to use instead. What
+    must not happen is writing those defaults back over a file that merely failed
+    to parse, so the save below is reached only from the legacy-migration branch,
+    which by then has a file it could read.
     """
     user_config, state = read_json(get_config_file())
     if state != "ok":
+        if state == "unreadable":
+            _warn_config_unreadable()
         return deepcopy(DEFAULT_CONFIG)
 
     if isinstance(user_config, dict) and "config_version" not in user_config:

@@ -159,9 +159,12 @@ def test_get_min_age_days_falls_back_on_a_corrupt_value(test_env):
     assert get_min_age_days() == DEFAULT_CONFIG["min_age_days"]
 
 
-def test_an_unparsable_config_falls_back_without_being_overwritten(test_env):
-    # Unlike the whitelist, defaulting here is the safe direction (use_trash on),
-    # so it stays quiet -- but the file the user still has to fix must survive.
+def test_an_unparsable_config_falls_back_without_being_overwritten(test_env, monkeypatch, capsys):
+    # A present-but-unreadable config falls back to defaults, which drops any
+    # min_age_days floor the user set -- a cleanup would silently widen -- so it
+    # warns (the whitelist does the same). The file the user still has to fix must
+    # survive untouched.
+    monkeypatch.setattr("src.core.config._CONFIG_WARNING_EMITTED", False)
     config_dir = get_config_dir()
     config_dir.mkdir(parents=True, exist_ok=True)
     config_file = config_dir / "config.json"
@@ -169,18 +172,49 @@ def test_an_unparsable_config_falls_back_without_being_overwritten(test_env):
     clear_config_cache()
 
     assert load_config() == DEFAULT_CONFIG
+    warning = capsys.readouterr().err
+    assert str(config_file) in warning
+    assert "min_age_days" in warning
     assert config_file.read_text() == '{"use_trash": fal'
 
 
-def test_a_config_whose_bytes_are_not_utf8_falls_back(test_env):
+def test_a_missing_config_falls_back_without_warning(test_env, monkeypatch, capsys):
+    # A fresh install -- no file at all -- is the one case the defaults are the
+    # whole truth, so it must stay silent (unlike the unreadable case above).
+    monkeypatch.setattr("src.core.config._CONFIG_WARNING_EMITTED", False)
+    clear_config_cache()
+
+    assert load_config() == DEFAULT_CONFIG
+    assert capsys.readouterr().err == ""
+
+
+def test_the_unreadable_config_warning_is_printed_once(test_env, monkeypatch, capsys):
+    monkeypatch.setattr("src.core.config._CONFIG_WARNING_EMITTED", False)
+    config_file = get_config_dir() / "config.json"
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    config_file.write_text("{not json")
+
+    for _ in range(5):
+        clear_config_cache()
+        load_config()
+
+    assert capsys.readouterr().err.count("cannot read") == 1
+
+
+def test_a_config_whose_bytes_are_not_utf8_falls_back(test_env, monkeypatch, capsys):
     # A theme name written by an editor in latin-1 used to raise
-    # UnicodeDecodeError before the first line of any command's output.
+    # UnicodeDecodeError before the first line of any command's output. Now the
+    # stray byte decodes to U+FFFD, the JSON still parses (state "ok"), and only
+    # the unknown theme name falls back via normalize_config -- so no warning: the
+    # file was readable, nothing the user set was silently dropped but the color.
+    monkeypatch.setattr("src.core.config._CONFIG_WARNING_EMITTED", False)
     config_dir = get_config_dir()
     config_dir.mkdir(parents=True, exist_ok=True)
     (config_dir / "config.json").write_bytes(b'{"config_version": 2, "theme_color": "caf\xe9"}')
     clear_config_cache()
 
     assert load_config()["theme_color"] == DEFAULT_CONFIG["theme_color"]
+    assert capsys.readouterr().err == ""
 
 
 def test_saving_the_config_leaves_no_scratch_file_behind(test_env):
