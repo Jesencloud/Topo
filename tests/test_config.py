@@ -1,4 +1,6 @@
 import json
+import os
+import stat
 
 from src.core.config import (
     CONFIG_VERSION,
@@ -238,3 +240,18 @@ def test_a_failed_save_keeps_the_stored_config(test_env, monkeypatch):
     clear_config_cache()
     assert json.loads(config_file.read_text())["theme_color"] == "cyan"
     assert load_config()["theme_color"] == "cyan"
+
+
+def test_save_config_writes_a_private_file_and_directory(test_env):
+    # The config dir holds the whitelist too, so both the dir and the file are
+    # brought to owner-only. umask 000 proves it is the explicit mode (and the
+    # dir chmod) that tightens them, not a lucky inherited umask.
+    old = os.umask(0o000)
+    try:
+        assert save_config(dict(DEFAULT_CONFIG)) is True
+    finally:
+        os.umask(old)
+
+    config_dir = get_config_dir()
+    assert stat.S_IMODE(config_dir.stat().st_mode) == 0o700
+    assert stat.S_IMODE((config_dir / "config.json").stat().st_mode) == 0o600

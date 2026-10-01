@@ -70,11 +70,13 @@ def test_proactive_app_detection_health_check(test_env):
 
 
 def test_proactive_app_detection_write_error(test_env):
-    # Mock finding a new app but fail to write the registry
+    # Mock finding a new app but fail to write the registry. write_json_atomic
+    # now creates its scratch file with os.open (O_EXCL|O_NOFOLLOW), so the write
+    # failure is simulated there rather than at builtins.open.
     with (
         patch("shutil.which", return_value="/usr/bin/new_app"),
         patch("pathlib.Path.iterdir") as mock_iter,
-        patch("builtins.open", side_effect=OSError("Write failed")),
+        patch("src.core.json_store.os.open", side_effect=OSError("Write failed")),
     ):
         m_dir = MagicMock()
         m_dir.is_dir.return_value = True

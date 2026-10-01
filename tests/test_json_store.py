@@ -8,10 +8,12 @@ thing this run does not know about.
 """
 
 import json
+import os
+import stat
 
 import pytest
 
-from src.core.json_store import read_json, write_json_atomic
+from src.core.json_store import ensure_private_dir, read_json, write_json_atomic
 
 
 def test_read_json_separates_absent_from_unusable(tmp_path):
@@ -108,3 +110,41 @@ def test_every_shape_topo_stores_survives_the_round_trip(tmp_path, value):
 
     assert write_json_atomic(path, value) is True
     assert read_json(path) == (value, "ok")
+
+
+def test_write_json_atomic_honours_an_explicit_mode(tmp_path):
+    # 0600 has no group/other bits, so the umask cannot widen or narrow it -- the
+    # whitelist and config rely on exactly this to stay unreadable by other users.
+    path = tmp_path / "secret.json"
+
+    assert write_json_atomic(path, ["/keep"], mode=0o600) is True
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_write_json_atomic_defaults_to_the_old_world_readable_mode(tmp_path):
+    # Callers that do not care (detected_apps) keep the plain open("w") behaviour.
+    path = tmp_path / "derived.json"
+    old = os.umask(0o022)
+    try:
+        assert write_json_atomic(path, ["/a"]) is True
+    finally:
+        os.umask(old)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o644
+
+
+def test_ensure_private_dir_creates_a_private_directory(tmp_path):
+    d = tmp_path / "config" / "topo"
+
+    assert ensure_private_dir(d) is True
+    assert stat.S_IMODE(d.stat().st_mode) == 0o700
+
+
+def test_ensure_private_dir_tightens_a_directory_an_older_release_left_loose(tmp_path):
+    # exist_ok=True ignores mode, so a dir first created 0755 stays 0755 until
+    # something actively chmods it. ensure_private_dir is that something.
+    d = tmp_path / "topo"
+    d.mkdir(mode=0o755)
+    os.chmod(d, 0o755)
+
+    assert ensure_private_dir(d) is True
+    assert stat.S_IMODE(d.stat().st_mode) == 0o700

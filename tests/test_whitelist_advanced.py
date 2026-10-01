@@ -1,4 +1,6 @@
 import json
+import os
+import stat
 from pathlib import Path
 from unittest.mock import patch
 
@@ -389,3 +391,18 @@ def test_xdg_user_data_dirs_protected_as_directories(test_env):
     # Files inside are NOT hard-protected — Analyze can still delete them.
     assert get_hard_protection_reason(test_env / "Music" / "song.mp3") is None
     assert is_protected(test_env / "Music" / "song.mp3") is False
+
+
+def test_the_whitelist_file_and_its_dir_are_owner_only(test_env):
+    # The whitelist names the paths the user cares about, so neither it nor the
+    # dir that holds it should be readable by other users. umask 000 proves the
+    # explicit mode is what keeps them private, not an inherited umask.
+    old = os.umask(0o000)
+    try:
+        assert add_to_whitelist(str(test_env / "keep")) == "changed"
+    finally:
+        os.umask(old)
+
+    whitelist_file = get_whitelist_file()
+    assert stat.S_IMODE(whitelist_file.stat().st_mode) == 0o600
+    assert stat.S_IMODE(whitelist_file.parent.stat().st_mode) == 0o700

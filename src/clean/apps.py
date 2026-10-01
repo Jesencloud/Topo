@@ -39,7 +39,7 @@ from ..core.file_ops import (
     register_cleaned_path,
     safe_remove,
 )
-from ..core.json_store import read_json, write_json_atomic
+from ..core.json_store import ensure_private_dir, read_json, write_json_atomic
 from ..core.render import bytes_to_human
 from ..core.system import C_LOCALE_ENV, PACKAGE_TRANSACTION_TIMEOUT, run_command
 from ..core.text import sanitize_for_display
@@ -190,9 +190,7 @@ def proactive_app_detection():
         or unusable_registry
         or not DETECTED_APPS_FILE.exists()
     ):
-        try:
-            DETECTED_APPS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        except OSError:
+        if not ensure_private_dir(DETECTED_APPS_FILE.parent):
             return detected
         if write_json_atomic(DETECTED_APPS_FILE, detected) and new_found:
             msg = f"  {INFO} {GRAY}Updated local app registry ({len(detected)} apps known){RESET}"

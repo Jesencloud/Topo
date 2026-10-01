@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from .constants import WARN
-from .json_store import read_json, write_json_atomic
+from .json_store import ensure_private_dir, read_json, write_json_atomic
 from .paths import get_config_dir
 
 
@@ -133,11 +133,9 @@ def normalize_config(user_config: Any) -> dict[str, Any]:
 
 
 def save_config(config: dict[str, Any]) -> bool:
-    try:
-        get_config_dir().mkdir(parents=True, exist_ok=True)
-    except OSError:
+    if not ensure_private_dir(get_config_dir()):
         return False
-    if not write_json_atomic(get_config_file(), config):
+    if not write_json_atomic(get_config_file(), config, mode=0o600):
         return False
     clear_config_cache()
     return True

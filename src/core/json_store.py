@@ -29,6 +29,7 @@ import contextlib
 import itertools
 import json
 import os
+import stat
 from pathlib import Path
 from typing import Any, Literal
 
@@ -72,7 +73,7 @@ def read_json(path: Path) -> tuple[Any, JsonState]:
 _scratch_counter = itertools.count()
 
 
-def write_json_atomic(path: Path, data: Any) -> bool:
+def write_json_atomic(path: Path, data: Any, *, mode: int = 0o644) -> bool:
     """Replace *path* with *data*, or leave it exactly as it was.
 
     The temporary file is a sibling, so os.replace() stays within one filesystem
@@ -88,10 +89,22 @@ def write_json_atomic(path: Path, data: Any) -> bool:
     away). The counter closes that window -- the whitelist seed racing eight
     `topo whitelist add` threads each get their own scratch file -- so the
     atomicity guarantee holds within a process too.
+
+    *mode* is the permission bits the final file ends up with (subject to the
+    umask, which can only tighten it). It defaults to 0644 -- the plain
+    ``open(..., "w")`` default this used to produce -- so a caller that does not
+    care keeps the old behaviour. The whitelist and config pass 0600: the
+    whitelist in particular is the one file whose contents say which paths the
+    user cares about, and leaving it world-readable is the asymmetry this closes.
+    The scratch file is opened with O_EXCL and O_NOFOLLOW rather than a bare
+    ``open``: the name is unique per write, so one that already exists is a
+    planted file or a symlink left in our place, and following it would write the
+    new contents somewhere we did not choose -- refusing is the safe answer.
     """
     tmp = path.with_name(f"{path.name}.tmp-{os.getpid()}-{next(_scratch_counter)}")
     try:
-        with open(tmp, "w", encoding="utf-8") as f:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=4)
             f.flush()
             os.fsync(f.fileno())
@@ -110,4 +123,32 @@ def write_json_atomic(path: Path, data: Any) -> bool:
             os.fsync(dir_fd)
         finally:
             os.close(dir_fd)
+    return True
+
+
+def ensure_private_dir(path: Path) -> bool:
+    """Create *path* as a 0700 directory, tightening it if it already exists.
+
+    mkdir's ``mode`` applies only at creation, and ``exist_ok=True`` ignores it
+    outright, so a directory an older release (or another tool) first created
+    group- or world-readable stays that way until something actively chmods it --
+    the same reason the audit log reclaims its state dir to 0700 in file_ops. The
+    config dir holds the whitelist, so it is brought to 0700 here. Only a real
+    directory we own is tightened: a symlink is never chmod'd through, and under
+    sudo a dir owned by someone else is left alone rather than locked away from
+    its owner. Best-effort on the chmod -- a mode we may not change leaves the
+    looser one rather than failing the write, which is the safe side to err on.
+    """
+    try:
+        path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    except OSError:
+        return False
+    with contextlib.suppress(OSError):
+        st = path.lstat()
+        if (
+            stat.S_ISDIR(st.st_mode)
+            and st.st_uid == os.getuid()
+            and stat.S_IMODE(st.st_mode) & 0o077
+        ):
+            os.chmod(path, 0o700)
     return True

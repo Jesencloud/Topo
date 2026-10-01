@@ -11,7 +11,7 @@ from .browser_paths import (
 )
 from .constants import WARN
 from .install_source import get_install_root
-from .json_store import read_json, write_json_atomic
+from .json_store import ensure_private_dir, read_json, write_json_atomic
 from .lock import cross_process_lock
 from .paths import get_config_dir
 
@@ -285,11 +285,10 @@ def _ensure_config():
     try:
         config_dir = get_config_dir()
         whitelist_file = get_whitelist_file()
-        if not config_dir.exists():
-            config_dir.mkdir(parents=True, exist_ok=True)
+        ensure_private_dir(config_dir)
         if not whitelist_file.exists():
             # Seed with empty list; critical paths are hardcoded for safety.
-            write_json_atomic(whitelist_file, [])
+            write_json_atomic(whitelist_file, [], mode=0o600)
     except OSError:
         pass
 
@@ -371,7 +370,7 @@ def add_to_whitelist(path_str: str) -> WhitelistWriteResult:
         if str(path) in current:
             return "unchanged"
         current.append(str(path))
-        if not write_json_atomic(get_whitelist_file(), current):
+        if not write_json_atomic(get_whitelist_file(), current, mode=0o600):
             return "failed"
     _clear_protection_caches()
     return "changed"
@@ -390,7 +389,7 @@ def remove_from_whitelist(path_str: str) -> WhitelistWriteResult:
         if str(path) not in current:
             return "unchanged"
         current.remove(str(path))
-        if not write_json_atomic(get_whitelist_file(), current):
+        if not write_json_atomic(get_whitelist_file(), current, mode=0o600):
             return "failed"
     _clear_protection_caches()
     return "changed"
