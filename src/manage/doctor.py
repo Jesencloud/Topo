@@ -2,10 +2,12 @@ import json
 import platform
 import re
 import shutil
+import stat
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from ..core.config import get_config_file, unrecognized_config_keys
 from ..core.constants import (
     BLUE,
     BOLD,
@@ -28,6 +30,7 @@ from ..core.package_manager import PACKAGE_MANAGERS, detect_package_manager, res
 from ..core.paths import get_config_dir
 from ..core.system import C_LOCALE_ENV, get_invoking_user, get_os_id, run_command
 from ..core.text import plural
+from ..core.whitelist import get_whitelist_file
 
 DOCTOR_COMMAND_TIMEOUT = 5
 VERSION_UNAVAILABLE = "Unavailable (VERSION missing, empty or unreadable)"
@@ -244,6 +247,23 @@ def _report_filesystem_utilities(engine: Path | None) -> list[str]:
     return failures
 
 
+def _mode_label(path: Path) -> str:
+    """Octal mode of *path*, flagging any group/other access.
+
+    The config dir holds the whitelist, and the whitelist and config.json are
+    meant to be owner-only (0700 / 0600). Showing the mode here is where a user
+    notices one an older release left world-readable.
+    """
+    try:
+        mode = stat.S_IMODE(path.lstat().st_mode)
+    except OSError:
+        return "mode unknown"
+    octal = format(mode, "04o")
+    if mode & 0o077:
+        return f"{YELLOW}{octal} — group/other access{RESET}"
+    return octal
+
+
 def _report_permissions() -> None:
     print(f"{BOLD}{BLUE}Permissions{RESET}")
     has_sudo_session = run_command(
@@ -256,9 +276,19 @@ def _report_permissions() -> None:
 
     config_dir = get_config_dir()
     if config_dir.exists():
-        print(f"  {OK} Config Dir:  {CYAN}{config_dir}{RESET} (Exists)")
+        print(f"  {OK} Config Dir:  {CYAN}{config_dir}{RESET} ({_mode_label(config_dir)})")
     else:
         print(f"  {NA} Config Dir:  {GRAY}{config_dir}{RESET} (Missing)")
+
+    for label, path in (("Whitelist", get_whitelist_file()), ("Config File", get_config_file())):
+        if path.exists():
+            print(f"  {OK} {label}:   {CYAN}{path.name}{RESET} ({_mode_label(path)})")
+
+    unknown = unrecognized_config_keys()
+    if unknown:
+        print(
+            f"  {WARN} Config has keys topo does not read (ignored): {YELLOW}{', '.join(unknown)}{RESET}"
+        )
     print()
 
 

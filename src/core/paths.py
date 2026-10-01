@@ -3,6 +3,17 @@ from pathlib import Path
 
 
 def get_config_dir() -> Path:
+    """Topo's config directory: the whitelist, config.json and the app registry.
+
+    Deliberately ``~/.config/topo`` rather than ``$XDG_CONFIG_HOME/topo``, even
+    though get_state_dir() below honours XDG_STATE_HOME. Honouring XDG_CONFIG_HOME
+    here would relocate the config dir for anyone who has it set, orphaning the
+    whitelist they already built -- a silently lost *protection*, the one failure
+    this code works hardest to avoid elsewhere. On the vast majority of systems
+    XDG_CONFIG_HOME is unset and resolves to exactly ~/.config anyway, so the
+    fixed path is both the common case and the safe one. If this ever moves, it
+    must carry the existing dir with it, not just start reading a new location.
+    """
     return Path.home() / ".config" / "topo"
 
 

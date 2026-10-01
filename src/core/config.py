@@ -252,3 +252,18 @@ def get_min_age_days() -> int:
 def get_theme_color() -> str:
     """Name of the title color; see THEME_COLOR_NAMES."""
     return str(get_config()["theme_color"])
+
+
+def unrecognized_config_keys() -> list[str]:
+    """Keys present in config.json that no released topo reads.
+
+    normalize_config silently drops anything outside DEFAULT_CONFIG, so a typo
+    (``min_age_day`` for ``min_age_days``) takes effect nowhere with nothing on
+    screen to notice it by. `topo doctor` surfaces these so the mistake is at
+    least visible. Returns [] when the file is absent or unreadable -- those are
+    not "unknown keys", and load_config already answers them.
+    """
+    user_config, state = read_json(get_config_file())
+    if state != "ok" or not isinstance(user_config, dict):
+        return []
+    return sorted(key for key in user_config if key not in DEFAULT_CONFIG)

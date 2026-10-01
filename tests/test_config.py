@@ -14,6 +14,7 @@ from src.core.config import (
     load_config,
     normalize_config,
     save_config,
+    unrecognized_config_keys,
 )
 from src.core.file_ops import age_cutoff
 from src.core.paths import get_config_dir
@@ -306,3 +307,18 @@ def test_an_absurd_min_age_days_does_not_crash_age_cutoff(test_env):
 
     assert get_min_age_days() == 0
     assert isinstance(age_cutoff(0), float)
+
+
+def test_unrecognized_config_keys_lists_only_the_unknown_ones(test_env):
+    # A typo'd key takes effect nowhere and normalize_config drops it silently;
+    # doctor surfaces it through this so the mistake is at least visible.
+    _write_raw_config(
+        {"config_version": CONFIG_VERSION, "use_trash": True, "min_age_day": 5, "wat": 1}
+    )
+
+    assert unrecognized_config_keys() == ["min_age_day", "wat"]
+
+
+def test_unrecognized_config_keys_is_empty_when_the_file_is_absent(test_env):
+    # A missing or unreadable file is not "unknown keys" -- load_config answers it.
+    assert unrecognized_config_keys() == []
