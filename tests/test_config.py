@@ -255,3 +255,33 @@ def test_save_config_writes_a_private_file_and_directory(test_env):
     config_dir = get_config_dir()
     assert stat.S_IMODE(config_dir.stat().st_mode) == 0o700
     assert stat.S_IMODE((config_dir / "config.json").stat().st_mode) == 0o600
+
+
+def test_a_config_behind_the_current_version_is_migrated_and_restamped(test_env, monkeypatch):
+    # The bug P2-2 fixed: the gate keyed on a *missing* config_version, so once a
+    # file was stamped it could never migrate again -- a v2 -> v3 step could never
+    # join the v1 -> v2 one. Simulate a future bump and confirm a now-behind file
+    # is migrated, re-stamped and saved, with its real choices preserved.
+    future = CONFIG_VERSION + 1
+    monkeypatch.setattr("src.core.config.CONFIG_VERSION", future)
+    monkeypatch.setattr(
+        "src.core.config.DEFAULT_CONFIG", {**DEFAULT_CONFIG, "config_version": future}
+    )
+    config_file = _write_raw_config({"config_version": CONFIG_VERSION, "use_trash": False})
+
+    config = load_config()
+
+    assert config["config_version"] == future
+    assert config["use_trash"] is False
+    assert json.loads(config_file.read_text())["config_version"] == future
+
+
+def test_a_config_at_the_current_version_is_not_rewritten(test_env):
+    # No migration is due, so load_config must not re-save: the on-disk bytes stay
+    # exactly as written (save_config would reformat them with indent=4).
+    config_file = _write_raw_config({"config_version": CONFIG_VERSION, "theme_color": "cyan"})
+    before = config_file.read_text()
+
+    load_config()
+
+    assert config_file.read_text() == before

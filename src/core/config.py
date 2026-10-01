@@ -44,6 +44,41 @@ _config_cache: dict[str, Any] | None = None
 _CONFIG_WARNING_EMITTED = False
 
 
+def _stored_config_version(user_config: dict[str, Any]) -> int:
+    """The version a stored config claims, or 1 for the pre-version files.
+
+    <= 1.1.2 wrote no config_version key at all, so a missing one means "the
+    oldest format". A value that is not a plain int (or is a bool, which is an
+    int subclass) is treated the same way: it is not a version this code ever
+    wrote, so migration should run and re-stamp it rather than trust it.
+    """
+    stored = user_config.get("config_version")
+    if isinstance(stored, bool) or not isinstance(stored, int):
+        return 1
+    return stored
+
+
+def _migrate_config(user_config: dict[str, Any]) -> dict[str, Any]:
+    """Upgrade a stored config in place from its version toward CONFIG_VERSION.
+
+    Each step is guarded by the version it starts from, so the next format bump
+    (v2 -> v3) adds a branch here and actually runs. That is the whole reason the
+    caller gates on "version is behind" rather than "no config_version key": the
+    absence-only gate could fire exactly once ever, so a v2 -> v3 migration could
+    never join the v1 -> v2 one below -- a stored v2 file would slip straight
+    through normalize_config with no migration step applied.
+    """
+    if _stored_config_version(user_config) < 2:
+        # 1 -> 2: min_age_days and theme_color were written by <= 1.1.2 but read
+        # by nobody, so a stored value was never a deliberate choice. Drop it
+        # rather than suddenly honour it -- otherwise wiring the keys up would
+        # move every existing install off the cleanup thresholds and the title
+        # color it has always had.
+        for key in _LEGACY_INERT_KEYS:
+            user_config.pop(key, None)
+    return user_config
+
+
 def _warn_config_unreadable() -> None:
     """Say once, on stderr, that config.json exists but could not be read.
 
@@ -95,16 +130,13 @@ def load_config() -> dict[str, Any]:
             _warn_config_unreadable()
         return deepcopy(DEFAULT_CONFIG)
 
-    if isinstance(user_config, dict) and "config_version" not in user_config:
-        # Written before these keys did anything. A stored value cannot be a
-        # deliberate choice -- setting it changed nothing -- so it is dropped
-        # rather than suddenly honoured: otherwise wiring the keys up would move
-        # every existing install off the cleanup thresholds and the title color
-        # it has always had. Stamped and rewritten once, so a choice made from
-        # now on sticks.
-        for key in _LEGACY_INERT_KEYS:
-            user_config.pop(key, None)
-        config = normalize_config(user_config)
+    if isinstance(user_config, dict) and _stored_config_version(user_config) < CONFIG_VERSION:
+        # A config an older topo wrote: migrate it up its version gradient, then
+        # normalize_config (which carries config_version from DEFAULT_CONFIG)
+        # stamps the current version, and save it once so the upgrade sticks. A
+        # file already at CONFIG_VERSION -- or ahead of it, which a downgrade must
+        # not clobber -- skips straight to normalize_config below without a save.
+        config = normalize_config(_migrate_config(user_config))
         save_config(config)
         return config
 
