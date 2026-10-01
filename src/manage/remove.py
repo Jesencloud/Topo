@@ -214,7 +214,7 @@ def _launcher_points_to_package(launcher_path: Path) -> bool:
 
 
 def _config_dir_is_lock_only(config_dir: Path) -> bool:
-    """True when ~/.config/topo contains nothing but this run's own lock file.
+    """True when ~/.config/topo holds nothing but this run's own lock file.
 
     `topo remove` is itself a lock-holding command, so by the time it looks
     around, SingleInstanceLock has already created ~/.config/topo/topo.lock.
@@ -222,12 +222,18 @@ def _config_dir_is_lock_only(config_dir: Path) -> bool:
     report a clean system: run it twice and the second run would offer to delete
     the directory the second run just made. An empty directory is still treated
     as removable residue, exactly as before the lock covered this command.
+
+    Scratch files (``<name>.tmp-<pid>-<n>``) a crashed write left behind are not
+    configuration either -- write_json_atomic reaps its own, but one orphaned by
+    a kill at the wrong moment would otherwise read as leftover config and keep a
+    clean system from ever reporting clean. They are ignored here as well.
     """
     try:
-        return [entry.name for entry in config_dir.iterdir()] == [LOCK_FILE_PATH.name]
+        entries = [entry.name for entry in config_dir.iterdir() if ".tmp-" not in entry.name]
     except OSError:
         # Unreadable is not lock-only; let the normal removal path try and report.
         return False
+    return entries == [LOCK_FILE_PATH.name]
 
 
 def _remove_path(path: Path) -> bool:

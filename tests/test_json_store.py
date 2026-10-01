@@ -10,6 +10,7 @@ thing this run does not know about.
 import json
 import os
 import stat
+import time
 
 import pytest
 
@@ -148,3 +149,50 @@ def test_ensure_private_dir_tightens_a_directory_an_older_release_left_loose(tmp
 
     assert ensure_private_dir(d) is True
     assert stat.S_IMODE(d.stat().st_mode) == 0o700
+
+
+def test_write_json_atomic_reports_rather_than_raises_on_unserialisable_data(tmp_path):
+    # json.dump raises TypeError (not OSError) on data it cannot serialise. That
+    # must still mean "the file was not replaced" -- False, no scratch left, no
+    # exception out of a function typed -> bool -- not a traceback.
+    path = tmp_path / "state.json"
+    path.write_text('["previous"]')
+
+    assert write_json_atomic(path, {"bad": object()}) is False
+    assert path.read_text() == '["previous"]'
+    assert list(tmp_path.glob("state.json.tmp-*")) == []
+
+
+def test_read_json_treats_an_oversized_file_as_unreadable(tmp_path, monkeypatch):
+    # A file far larger than any state topo writes is refused without being pulled
+    # whole into memory -- "unreadable", the answer every caller already handles.
+    monkeypatch.setattr("src.core.json_store._MAX_JSON_BYTES", 64)
+    path = tmp_path / "huge.json"
+    path.write_text(json.dumps(["x" * 200]))
+
+    assert read_json(path) == (None, "unreadable")
+
+
+def test_write_json_atomic_reaps_a_crashed_writes_stale_scratch(tmp_path):
+    # A scratch file a killed write left behind is removed by the next write, so
+    # it neither accumulates nor makes `topo remove` see leftover configuration.
+    path = tmp_path / "state.json"
+    stale = tmp_path / f"{path.name}.tmp-9999-0"
+    stale.write_text("half written")
+    old = time.time() - 3600
+    os.utime(stale, (old, old))
+
+    assert write_json_atomic(path, ["/a"]) is True
+    assert not stale.exists()
+    assert read_json(path) == (["/a"], "ok")
+
+
+def test_write_json_atomic_leaves_a_fresh_scratch_alone(tmp_path):
+    # A scratch younger than a live write might belong to another process mid-write,
+    # so the reaper must not touch it.
+    path = tmp_path / "state.json"
+    fresh = tmp_path / f"{path.name}.tmp-9999-0"
+    fresh.write_text("in flight")
+
+    assert write_json_atomic(path, ["/a"]) is True
+    assert fresh.exists()

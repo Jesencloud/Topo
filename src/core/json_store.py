@@ -30,6 +30,7 @@ import itertools
 import json
 import os
 import stat
+import time
 from pathlib import Path
 from typing import Any, Literal
 
@@ -39,6 +40,12 @@ from typing import Any, Literal
 #            directory. Never silently equivalent to "missing".
 JsonState = Literal["ok", "missing", "unreadable"]
 
+# A config/whitelist/registry topo writes is kilobytes; megabytes means the file
+# is not what we wrote -- a log redirected onto it, a disk-fill, a crafted file --
+# so reading it whole into memory to parse is refused as "unreadable" rather than
+# attempted. Far above any real state file, far below anything that strains memory.
+_MAX_JSON_BYTES = 8 * 1024 * 1024
+
 
 def read_json(path: Path) -> tuple[Any, JsonState]:
     """Parse *path*, reporting whether it was absent or merely unusable.
@@ -46,12 +53,20 @@ def read_json(path: Path) -> tuple[Any, JsonState]:
     Never creates anything: every command reads the config before printing its
     first line, and a read that wrote would have `topo remove` create the file it
     then reports as leftover configuration.
+
+    A file past _MAX_JSON_BYTES is reported "unreadable" without being parsed --
+    the same answer every caller already handles -- so an absurdly large file
+    cannot be pulled whole into memory here.
     """
     try:
-        raw = path.read_bytes()
+        with open(path, "rb") as f:
+            raw = f.read(_MAX_JSON_BYTES + 1)
     except FileNotFoundError:
         return None, "missing"
     except OSError:
+        return None, "unreadable"
+
+    if len(raw) > _MAX_JSON_BYTES:
         return None, "unreadable"
 
     try:
@@ -71,6 +86,31 @@ def read_json(path: Path) -> tuple[Any, JsonState]:
 # itertools.count is atomic under the GIL, so it hands a fresh value to every
 # concurrent caller without a lock of its own.
 _scratch_counter = itertools.count()
+
+# A scratch file older than this is a crashed write's leftover, not one still in
+# flight: write_json_atomic creates, fsyncs and renames in well under a second,
+# so a minute is far past any live write.
+_SCRATCH_STALE_SECONDS = 60
+
+
+def _reap_stale_scratch(path: Path) -> None:
+    """Best-effort removal of scratch files a crashed write left beside *path*.
+
+    write_json_atomic unlinks its own scratch on failure, so the only leftovers
+    are from a process killed between os.open and os.replace. Nothing else reaps
+    them, so they would accumulate -- and because they sit in the config dir, make
+    `topo remove` read the directory as still holding configuration. Only files
+    with this path's scratch prefix and older than a live write are touched.
+    """
+    prefix = f"{path.name}.tmp-"
+    cutoff = time.time() - _SCRATCH_STALE_SECONDS
+    with contextlib.suppress(OSError):
+        for entry in path.parent.iterdir():
+            if not entry.name.startswith(prefix):
+                continue
+            with contextlib.suppress(OSError):
+                if entry.lstat().st_mtime < cutoff:
+                    entry.unlink()
 
 
 def write_json_atomic(path: Path, data: Any, *, mode: int = 0o644) -> bool:
@@ -100,7 +140,14 @@ def write_json_atomic(path: Path, data: Any, *, mode: int = 0o644) -> bool:
     ``open``: the name is unique per write, so one that already exists is a
     planted file or a symlink left in our place, and following it would write the
     new contents somewhere we did not choose -- refusing is the safe answer.
+
+    Returns False on any failure -- not just OSError, but the TypeError /
+    ValueError / RecursionError json.dump raises on data it cannot serialise or
+    nesting too deep. All of them mean the same thing to the caller (the file was
+    not replaced), and all of them must still clean up the scratch file rather
+    than let it leak or escape as an exception out of a function typed `-> bool`.
     """
+    _reap_stale_scratch(path)
     tmp = path.with_name(f"{path.name}.tmp-{os.getpid()}-{next(_scratch_counter)}")
     try:
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
@@ -109,7 +156,7 @@ def write_json_atomic(path: Path, data: Any, *, mode: int = 0o644) -> bool:
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, path)
-    except OSError:
+    except (OSError, TypeError, ValueError, RecursionError):
         with contextlib.suppress(OSError):
             tmp.unlink(missing_ok=True)
         return False
