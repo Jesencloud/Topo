@@ -145,3 +145,44 @@ def test_record_history_session_writes_interrupted_and_drops_unknown_statuses():
         ("clean", "session", "ended", 0),
         ("clean", "session", "interrupted", 0),
     ]
+
+
+def test_parse_event_clamps_a_negative_size_to_zero(tmp_path):
+    # A corrupt or hand-edited negative size would subtract from a session total.
+    log = tmp_path / "deletions.log"
+    log.write_text(
+        "\n".join(
+            [
+                "2026-05-31T10:00:00+08:00\tsession\t0\tstarted\tclean",
+                "2026-05-31T10:00:01+08:00\tpermanent\t-500\tdeleted\t/tmp/a",
+                "2026-05-31T10:00:02+08:00\tsession\t0\tended\tclean",
+            ]
+        )
+    )
+
+    sessions = parse_deletion_history(log)
+
+    assert sessions[0].total_size == 0
+
+
+def test_parse_deletion_history_reads_only_the_last_lines(tmp_path, monkeypatch):
+    # The never-rotated log is read bounded: lines past the cap scroll off, and a
+    # session whose boundary fell outside the window simply does not appear.
+    monkeypatch.setattr("src.core.history._MAX_HISTORY_LINES", 3)
+    log = tmp_path / "deletions.log"
+    log.write_text(
+        "\n".join(
+            [
+                "2026-05-31T09:00:00+08:00\tsession\t0\tstarted\told",
+                "2026-05-31T09:00:01+08:00\tpermanent\t10\tdeleted\t/tmp/old",
+                "2026-05-31T10:00:00+08:00\tsession\t0\tstarted\tnew",
+                "2026-05-31T10:00:01+08:00\tpermanent\t20\tdeleted\t/tmp/new",
+                "2026-05-31T10:00:02+08:00\tsession\t0\tended\tnew",
+            ]
+        )
+    )
+
+    commands = [s.command for s in parse_deletion_history(log)]
+
+    assert "old" not in commands
+    assert "new" in commands

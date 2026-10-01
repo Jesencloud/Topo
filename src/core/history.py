@@ -1,3 +1,4 @@
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -9,6 +10,14 @@ from .file_ops import (
 )
 from .render import bytes_to_human
 from .text import sanitize_for_display
+
+# deletions.log is append-only and never rotated, so reading it whole would make
+# `topo history` cost grow with every deletion ever made -- while the render only
+# ever shows the last handful of sessions. Parsing just the last N lines bounds
+# the memory and the object churn; N is far above any realistic history (and a
+# session whose "started" line fell outside the window degrades gracefully to the
+# "ungrouped" bucket below, exactly as a pre-session legacy line does).
+_MAX_HISTORY_LINES = 50000
 
 REMOVED_STATUSES = {"deleted", "removed"}
 TRASHED_PREFIXES = ("trashed",)
@@ -100,8 +109,18 @@ def parse_deletion_history(log_path: Path | None = None) -> list[HistorySession]
     active: HistorySession | None = None
     ungrouped: HistorySession | None = None
 
-    for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        event = _parse_event(raw_line)
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            # deque keeps only the last N lines in memory while the file is read,
+            # so a log grown huge over years does not come in all at once. Fields
+            # never contain a raw newline (the writer escapes control chars), so
+            # the sole terminator is the one stripped here.
+            recent_lines = deque(f, maxlen=_MAX_HISTORY_LINES)
+    except OSError:
+        return []
+
+    for raw_line in recent_lines:
+        event = _parse_event(raw_line.rstrip("\n"))
         if event is None:
             continue
 
@@ -205,7 +224,10 @@ def _parse_event(line: str) -> DeletionEvent | None:
         return None
     timestamp, mode, raw_size, status, path = parts
     try:
-        size_bytes = int(raw_size)
+        # The writer clamps to >= 0; a negative here means a hand-edited or
+        # corrupt line, and a negative size would only subtract from a session's
+        # total. Clamp it rather than trust it. A non-numeric size stays None.
+        size_bytes = max(int(raw_size), 0)
     except ValueError:
         size_bytes = None
     return DeletionEvent(
