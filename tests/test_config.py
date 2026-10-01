@@ -5,6 +5,7 @@ import stat
 from src.core.config import (
     CONFIG_VERSION,
     DEFAULT_CONFIG,
+    MAX_MIN_AGE_DAYS,
     clear_config_cache,
     get_config,
     get_min_age_days,
@@ -14,6 +15,7 @@ from src.core.config import (
     normalize_config,
     save_config,
 )
+from src.core.file_ops import age_cutoff
 from src.core.paths import get_config_dir
 
 
@@ -285,3 +287,22 @@ def test_a_config_at_the_current_version_is_not_rewritten(test_env):
     load_config()
 
     assert config_file.read_text() == before
+
+
+def test_normalize_config_rejects_an_absurd_min_age_days(test_env):
+    # JSON admits arbitrary-precision ints and the only other check is >= 0, so a
+    # hand-edited few-hundred-digit value would reach age_cutoff and overflow the
+    # int->float conversion. Over the cap is treated like any invalid value.
+    assert normalize_config({"min_age_days": 10**400})["min_age_days"] == 0
+    assert normalize_config({"min_age_days": MAX_MIN_AGE_DAYS + 1})["min_age_days"] == 0
+    # The cap itself is still accepted -- it is a sane domain limit, not a crash.
+    assert normalize_config({"min_age_days": MAX_MIN_AGE_DAYS})["min_age_days"] == MAX_MIN_AGE_DAYS
+
+
+def test_an_absurd_min_age_days_does_not_crash_age_cutoff(test_env):
+    # The crash this guards against: a stored huge value flowing into
+    # time.time() - min_age_days * SECONDS_PER_DAY.
+    _write_raw_config({"config_version": CONFIG_VERSION, "min_age_days": 10**400})
+
+    assert get_min_age_days() == 0
+    assert isinstance(age_cutoff(0), float)

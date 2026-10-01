@@ -21,6 +21,15 @@ CONFIG_VERSION = 2
 # unknown name is rejected at load time instead of blanking the title.
 THEME_COLOR_NAMES = ("purple", "cyan", "blue", "magenta", "green", "yellow", "red")
 
+# Upper bound on min_age_days. It is a floor on file age, so 100 years is already
+# far past any real use -- but the real job is to reject the absurd: age_cutoff()
+# computes ``time.time() - min_age_days * SECONDS_PER_DAY``, and a hand-edited
+# value of a few hundred digits (JSON admits any-precision ints, and the only
+# other check is ``>= 0``) overflows the int->float conversion and crashes every
+# age-gated cleanup with an uncaught OverflowError. A value over the cap is
+# treated like any other invalid one: dropped back to the default.
+MAX_MIN_AGE_DAYS = 36500
+
 DEFAULT_CONFIG: dict[str, Any] = {
     "config_version": CONFIG_VERSION,
     "use_trash": True,
@@ -149,7 +158,11 @@ def normalize_config(user_config: Any) -> dict[str, Any]:
         return config
 
     min_age_days = user_config.get("min_age_days")
-    if isinstance(min_age_days, int) and not isinstance(min_age_days, bool) and min_age_days >= 0:
+    if (
+        isinstance(min_age_days, int)
+        and not isinstance(min_age_days, bool)
+        and 0 <= min_age_days <= MAX_MIN_AGE_DAYS
+    ):
         config["min_age_days"] = min_age_days
 
     for key in ("use_trash", "show_scrollbar"):
