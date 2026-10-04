@@ -18,12 +18,15 @@ from ..core.constants import (
     RESET,
     SUMMARY_RULE_WIDTH,
     THEME_TITLE,
+    WARN,
 )
 from ..core.history import record_history_session
 from ..core.render import bytes_to_human
 from ..core.scan_cache import ScanCache
+from ..core.text import plural
 from .apps import clean_apps_deep, proactive_app_detection
 from .dev import clean_developer_tools
+from .report import command_failure_count, reset_command_failures
 from .system import clean_system_data
 from .totals import as_totals
 from .user import clean_user_data
@@ -79,6 +82,7 @@ def _print_cleanup_summary(
     category_results: list[tuple[str, int, int]],
     interrupted: bool = False,
     trashed_bytes: int = 0,
+    failed: int = 0,
 ) -> None:
     """Prints the formatted completion breakdown and disk space summary.
 
@@ -92,11 +96,21 @@ def _print_cleanup_summary(
     or a task raising. Everything below is still true, it is just not the whole
     run. The summary is printed either way, because the numbers describe files
     that are already gone.
+
+    *failed* is how many command-level cleanups failed (a package-manager clean,
+    a kernel purge, a container prune that came back non-zero). A completed run
+    with failures reads as "completed with errors", not "complete", so the
+    headline matches the exit status run_clean returns -- the per-command ✗ lines
+    are already above; this is the one-line account of them.
     """
     free_now = shutil.disk_usage(os.path.expanduser("~")).free
     print("\n" + "=" * SUMMARY_RULE_WIDTH)
     if interrupted:
         status_text = "Scan interrupted (Preview)" if dry_run else "Cleanup interrupted"
+    elif failed:
+        status_text = (
+            "Scan completed with errors (Preview)" if dry_run else "Cleanup completed with errors"
+        )
     else:
         status_text = "Scan complete (Preview)" if dry_run else "Cleanup complete"
     print(f"{BLUE}{status_text}{RESET}")
@@ -148,6 +162,11 @@ def _print_cleanup_summary(
         print(
             f"\n{INFO} {GRAY}Stopped before the end: the groups above had already run, the rest never started.{RESET}"
         )
+    if failed:
+        print(
+            f"\n{WARN} {GRAY}{plural(failed, 'cleanup task')} failed (see the ✗ lines above); "
+            f"topo clean exits non-zero so a script can tell.{RESET}"
+        )
     if dry_run:
         print(f"\n{INFO} {GRAY}Run without --dry-run to actually delete these files.{RESET}")
 
@@ -155,11 +174,18 @@ def _print_cleanup_summary(
 def run_clean(dry_run: bool = False) -> bool:
     """Orchestrates system, user, app, and developer tool cleanup pipelines.
 
-    False means the cleanup never ran (sudo declined). Individual delete
-    failures are reported per line by the sub-cleaners but do not fail the run:
-    a cache file another process is holding is expected, not an error the caller
-    should act on.
+    Returns whether the run did what was asked, so `topo clean` can exit non-zero
+    for a script. False means either the cleanup never ran (sudo declined) or a
+    command-level cleanup failed partway -- a package-manager clean, a kernel
+    purge or a container prune that came back non-zero, counted through
+    report_command_failure. The per-file occupancy failures the user-data and app
+    sweeps expect -- a cache file another process still holds -- are reported per
+    line but do NOT fail the run: they are routine, not something the caller must
+    act on. In a dry run the same count catches a probe that could not complete
+    (an orphan check that failed), so a preview that could not be produced in full
+    also exits non-zero rather than claiming a clean bill.
     """
+    reset_command_failures()
     detected_apps = proactive_app_detection()
 
     print(f"\n{PURPLE}Clean Your Linux{RESET}\n")
@@ -225,6 +251,7 @@ def run_clean(dry_run: bool = False) -> bool:
             category_results,
             interrupted=not finished,
             trashed_bytes=trashed_bytes,
+            failed=command_failure_count(),
         )
 
         if not dry_run:
@@ -232,4 +259,7 @@ def run_clean(dry_run: bool = False) -> bool:
 
         record_history_session(session_command, "ended" if finished else "interrupted")
 
-    return True
+    # A command-level failure anywhere in the run (even one that did not stop the
+    # run) is a non-zero exit: the ✗ lines above are on screen, and the script
+    # driving `topo clean && ...` must not continue as if the cleanup was clean.
+    return command_failure_count() == 0

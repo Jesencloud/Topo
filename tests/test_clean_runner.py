@@ -5,6 +5,11 @@ from unittest.mock import patch
 
 import pytest
 
+from src.clean.report import (
+    command_failure_count,
+    report_command_failure,
+    reset_command_failures,
+)
 from src.clean.runner import (
     CleanupTask,
     _print_cleanup_summary,
@@ -319,3 +324,98 @@ def test_run_clean_does_not_log_a_finish_when_the_run_was_killed(capsys):
 
     assert history.call_args_list[-1].args == ("clean", "interrupted")
     assert "Cleanup interrupted" in capsys.readouterr().out
+
+
+def _failed_command(stderr="", error=""):
+    """A stand-in CommandResult carrying only what report_command_failure reads."""
+    return SimpleNamespace(stderr=stderr, error=error)
+
+
+def test_report_command_failure_counts_and_prints(capsys):
+    # The visible ✗ line and the run's exit status are driven by the same call:
+    # printing the failure and counting it must stay together.
+    reset_command_failures()
+    assert command_failure_count() == 0
+
+    report_command_failure("apt-get clean", _failed_command(stderr="E: dpkg frontend lock"))
+    report_command_failure("Docker prune", _failed_command(error="timed out"))
+
+    assert command_failure_count() == 2
+    out = capsys.readouterr().out
+    assert "apt-get clean failed: E: dpkg frontend lock" in out
+    assert "Docker prune failed: timed out" in out
+
+
+def test_run_clean_exits_nonzero_when_a_command_level_cleanup_fails(capsys):
+    """The P1 scenario: a command topo ran to do real work came back non-zero.
+
+    The task frees nothing and returns the same all-zero tuple a tidy system
+    would, so before the failure counter `topo clean` reported success. Now the
+    command failure is counted, the headline reads "completed with errors", and
+    the run exits non-zero so `topo clean && ...` does not continue.
+    """
+
+    def failing_task(dry_run=False):
+        report_command_failure("apt-get clean", _failed_command(stderr="E: dpkg frontend lock"))
+        return 0, 0, 0
+
+    groups = [("System & Package Manager", [CleanupTask("System & Packages", failing_task)])]
+    with (
+        patch("src.clean.runner.proactive_app_detection", return_value={}),
+        patch("src.clean.runner.system.authenticate_sudo_session", return_value=True),
+        patch("src.clean.runner.build_execution_groups", return_value=groups),
+        patch("src.clean.runner.record_history_session") as history,
+        patch("src.clean.runner.ScanCache.clear"),
+        patch(
+            "src.clean.runner.shutil.disk_usage",
+            return_value=SimpleNamespace(free=10 * 1024**3),
+        ),
+    ):
+        assert run_clean() is False
+
+    # The run completed every group, so the audit log still says "ended" -- it was
+    # not interrupted, it finished with errors.
+    assert history.call_args_list[-1].args == ("clean", "ended")
+    output = capsys.readouterr().out
+    assert "apt-get clean failed" in output
+    assert "Cleanup completed with errors" in output
+    assert "cleanup task failed" in output
+
+
+def test_run_clean_resets_the_failure_count_between_runs(capsys):
+    # A failure left in the module counter by one run must not fail the next.
+    reset_command_failures()
+    report_command_failure("stale failure", _failed_command(error="from a previous run"))
+    capsys.readouterr()
+
+    def clean_task(dry_run=False):
+        return 0, 0, 0
+
+    groups = [("Category", [CleanupTask("Cache", clean_task)])]
+    with (
+        patch("src.clean.runner.proactive_app_detection", return_value={}),
+        patch("src.clean.runner.system.authenticate_sudo_session", return_value=True),
+        patch("src.clean.runner.build_execution_groups", return_value=groups),
+        patch("src.clean.runner.record_history_session"),
+        patch("src.clean.runner.ScanCache.clear"),
+        patch(
+            "src.clean.runner.shutil.disk_usage",
+            return_value=SimpleNamespace(free=10 * 1024**3),
+        ),
+    ):
+        assert run_clean() is True
+
+    assert "Cleanup complete" in capsys.readouterr().out
+
+
+def test_print_cleanup_summary_reads_as_errors_when_a_command_failed(capsys):
+    with patch(
+        "src.clean.runner.shutil.disk_usage",
+        return_value=SimpleNamespace(free=10 * 1024**3),
+    ):
+        _print_cleanup_summary(False, 1024, 1, [("System & Packages", 1024, 1)], failed=2)
+
+    output = capsys.readouterr().out
+    assert "Cleanup completed with errors" in output
+    assert "2 cleanup tasks failed" in output
+    assert "Cleanup complete\n" not in output
