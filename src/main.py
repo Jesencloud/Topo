@@ -249,6 +249,21 @@ def _run_alternate_tui(command, *args):
 #     `action() is not False` in _execute_main_router is the only place an
 #     outcome becomes an exit code, which is why the instance guard raises
 #     LockUnavailable instead of exiting where it stands.
+#
+# --dry-run reads the same codes with one narrowing: its exit status reports
+# whether the *preview* was produced in full, not whether a real run would have
+# succeeded. A dry run deletes nothing, so it has no delete to fail; what it can
+# fail is a read-only probe (a scan hitting a permission error, an orphan check
+# the package manager refused), and that still counts as a failure -> 1, because
+# a preview built on a probe that did not complete is not the preview the user
+# asked for. clean's dry run returns the same command-failure count as its real
+# run (the count catches those probe failures), optimize's runs its tasks in
+# preview mode and fails on any that raise, and remove's preview has nothing to
+# probe so it is always 0. One asymmetry is deliberate, not a gap: a dry run
+# never prompts for sudo (authenticate_sudo_session short-circuits True under
+# dry_run), so "sudo declined" -- a real-run 1 -- simply cannot arise in a
+# preview. Pre-preview gates still apply as above: bad args -> 2, a held
+# single-instance lock -> 1.
 def _handle_broken_pipe() -> NoReturn:
     """Exit quietly when the reader of our stdout pipe has gone away.
 

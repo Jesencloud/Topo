@@ -382,6 +382,35 @@ def test_run_clean_exits_nonzero_when_a_command_level_cleanup_fails(capsys):
     assert "cleanup task failed" in output
 
 
+def test_run_clean_dry_run_exits_nonzero_when_a_preview_probe_fails(capsys):
+    """P3's dry-run convention: a preview is only a 0 if it was produced in full.
+
+    A dry run deletes nothing, but a read-only probe can still fail (an orphan
+    check the package manager refused). That goes through report_command_failure
+    the same way, so the preview exits non-zero -- a preview built on a probe that
+    did not complete is not the one the user asked for.
+    """
+
+    def failing_probe(dry_run=False):
+        report_command_failure("dnf orphan check", _failed_command(error="timed out"))
+        return 0, 0, 0
+
+    groups = [("System & Package Manager", [CleanupTask("System & Packages", failing_probe)])]
+    with (
+        patch("src.clean.runner.proactive_app_detection", return_value={}),
+        patch("src.clean.runner.system.authenticate_sudo_session", return_value=True),
+        patch("src.clean.runner.build_execution_groups", return_value=groups),
+        patch("src.clean.runner.record_history_session"),
+        patch(
+            "src.clean.runner.shutil.disk_usage",
+            return_value=SimpleNamespace(free=10 * 1024**3),
+        ),
+    ):
+        assert run_clean(dry_run=True) is False
+
+    assert "Scan completed with errors (Preview)" in capsys.readouterr().out
+
+
 def test_run_clean_resets_the_failure_count_between_runs(capsys):
     # A failure left in the module counter by one run must not fail the next.
     reset_command_failures()
