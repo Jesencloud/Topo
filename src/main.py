@@ -182,9 +182,14 @@ def _print_interrupted():
     which is exactly CLEAR_LINE's job.
     """
     terminal_state.reset_terminal(force=True)
+    # CLEAR_LINE stays on stdout -- it erases the half-written spinner line that
+    # lives there. The notice itself goes to stderr: an interrupt is a non-success
+    # outcome, and the contract keeps failures and refusals off stdout so
+    # `topo clean > report.txt` interrupted mid-run collects the report, not the
+    # "interrupted" line.
     sys.stdout.write(CLEAR_LINE)
     sys.stdout.flush()
-    print(INTERRUPTED_MESSAGE)
+    print(INTERRUPTED_MESSAGE, file=sys.stderr)
 
 
 def _run_terminal_tui_command(command, *args):
@@ -306,6 +311,24 @@ def main():
         raise SystemExit(1)
 
 
+def _positive_int(value: str) -> int:
+    """argparse type for --limit: a count of sessions must be a whole number >= 1.
+
+    0 or a negative "number of sessions" is a misuse, not a quiet request for 1.
+    Raising ArgumentTypeError lets argparse answer it the way it answers any bad
+    argument -- usage on stderr, exit 2 -- instead of main() clamping it with
+    max(..., 1) and running as though 1 had been asked for. It matches how the
+    whitelist subcommand already rejects a missing PATH.
+    """
+    try:
+        number = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"must be a whole number, not {value!r}") from None
+    if number < 1:
+        raise argparse.ArgumentTypeError(f"must be 1 or greater, not {number}")
+    return number
+
+
 def _main() -> bool:
     parser = argparse.ArgumentParser(
         prog="topo",
@@ -357,7 +380,7 @@ def _main() -> bool:
     )
     history_parser.add_argument(
         "--limit",
-        type=int,
+        type=_positive_int,
         default=10,
         metavar="N",
         help="Number of sessions to show (default: 10)",
@@ -555,7 +578,7 @@ def _execute_main_router(args, dry_run) -> bool:
         "optimize": lambda: optimize_system(dry_run),
         "status": show_status,
         "doctor": run_doctor,
-        "history": lambda: show_history(limit=max(args.limit, 1)),
+        "history": lambda: show_history(limit=args.limit),
         "link": lambda: run_install_link(silent=args.silent),
         "update": run_update,
         "remove": lambda: run_remove(dry_run, args.yes),

@@ -85,5 +85,5 @@ except KeyboardInterrupt:
     # because the import is one of the things this very handler is covering -- and
     # 130 is the same 128 + SIGINT main() exits with. Keep both in sync.
     restore_terminal_after_interrupt()
-    print("\n🚫 Process interrupted by user.")
+    print("\n🚫 Process interrupted by user.", file=sys.stderr)
     sys.exit(130)

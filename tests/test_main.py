@@ -258,10 +258,14 @@ def test_interrupt_keeps_what_is_already_on_the_screen(capsys):
         topo_main._print_interrupted()
 
     reset.assert_called_once_with(force=True)
-    output = capsys.readouterr().out
-    assert "✓ Removed 1.2 GB of package caches" in output
-    assert topo_main.INTERRUPTED_MESSAGE in output
-    assert "\033[2J" not in output
+    captured = capsys.readouterr()
+    # The record of what was deleted survives on stdout; the "interrupted" notice
+    # is a non-success outcome, so it goes to stderr (contract: failures/refusals
+    # off stdout).
+    assert "✓ Removed 1.2 GB of package caches" in captured.out
+    assert topo_main.INTERRUPTED_MESSAGE in captured.err
+    assert topo_main.INTERRUPTED_MESSAGE not in captured.out
+    assert "\033[2J" not in captured.out
 
 
 def test_alternate_tui_runs_command_inside_screen():
@@ -586,3 +590,29 @@ def test_main_handles_a_broken_pipe_from_the_final_flush():
 
     assert exc.value.code == 128 + signal.SIGPIPE
     dup2.assert_called_once_with(99, 1)
+
+
+@pytest.mark.parametrize("bad", ["0", "-5"])
+def test_history_rejects_a_non_positive_limit(bad):
+    # A count of 0 or fewer sessions is a misuse, not a quiet request for 1: it
+    # earns argparse's own exit 2, like any bad argument -- not a silent clamp.
+    with (
+        patch("sys.argv", ["topo", "history", "--limit", bad]),
+        patch("src.main.terminal_state.install_signal_handlers"),
+        pytest.raises(SystemExit) as exc,
+    ):
+        topo_main.main()
+
+    assert exc.value.code == 2
+
+
+def test_history_passes_a_valid_limit_through_without_clamping():
+    with (
+        patch("sys.argv", ["topo", "history", "--limit", "3"]),
+        patch("src.main.terminal_state.install_signal_handlers"),
+        patch("src.main.system.get_os_id", return_value="test-os"),
+        patch("src.main.show_history") as show_history,
+    ):
+        topo_main.main()
+
+    show_history.assert_called_once_with(limit=3)
