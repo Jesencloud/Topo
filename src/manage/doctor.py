@@ -305,7 +305,12 @@ def run_doctor() -> bool:
 
     curl and gpg are the one grey area: without them `topo update` cannot work,
     but everything else can, and a package install never updates itself. They
-    get a ⚠ with the consequence spelled out, not a failure.
+    get a ⚠ with the consequence spelled out, not a failure. So a green exit
+    (0) means topo itself is healthy, not that every command will run: `topo
+    update` in particular can still be grounded by a missing curl/gpg that this
+    report flagged with ⚠ and deliberately did not count. A script gating an
+    update on doctor should read the Update Prerequisites section, not just the
+    exit code.
 
     The report is the sections below in this order, each printing its own
     heading; the three that can find a hard problem hand their failures back,
