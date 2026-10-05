@@ -1,7 +1,10 @@
 import argparse
+import os
+import signal
 import sys
 from collections.abc import Callable
 from contextlib import contextmanager
+from typing import NoReturn
 
 from .clean.runner import run_clean
 from .core import system, terminal_state
@@ -207,6 +210,10 @@ def _run_alternate_tui(command, *args):
 # 1  it did not: a failure, a refusal, or a cancellation
 # 2  argparse rejected the arguments (argparse's own convention)
 # 130 interrupted (see main())
+# 141 the reader of our stdout pipe closed it (128 + SIGPIPE) -- `topo history |
+#    head` is the ordinary case. main() redirects stdout to /dev/null and exits
+#    with this; it is the shell's own convention for a pipe death, not an outcome
+#    a run_xxx() ever returns. See _handle_broken_pipe().
 #
 # Before this contract every command exited 0 no matter what, so a failed
 # signature verification, a package manager that returned non-zero, a `remove`
@@ -232,10 +239,38 @@ def _run_alternate_tui(command, *args):
 #     `action() is not False` in _execute_main_router is the only place an
 #     outcome becomes an exit code, which is why the instance guard raises
 #     LockUnavailable instead of exiting where it stands.
+def _handle_broken_pipe() -> NoReturn:
+    """Exit quietly when the reader of our stdout pipe has gone away.
+
+    `topo history | head` closes the read end after a few lines; the next write
+    -- or the interpreter's final flush of buffered stdout -- then raises
+    BrokenPipeError. Left alone that is either an uncaught traceback or the
+    "Exception ignored ... BrokenPipeError" CPython prints when the *shutdown*
+    flush fails, plus a confusing exit code. Point stdout's file descriptor at
+    /dev/null so that final flush (and any atexit terminal reset) has somewhere
+    to go, then exit with the shell's own convention for a pipe death. Only
+    report commands reach here: the menu, analyze and uninstall already refuse a
+    non-terminal stdout, so no alternate-screen session is open to corrupt.
+    """
+    try:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+    except OSError:
+        pass
+    raise SystemExit(128 + signal.SIGPIPE)
+
+
 def main():
     terminal_state.install_signal_handlers()
     try:
         ok = _main()
+        # Flush inside the try so a reader that already closed the pipe surfaces
+        # here as a catchable BrokenPipeError, rather than as a failed flush at
+        # interpreter shutdown -- the small-output case, where every write fit in
+        # the block buffer and the only flush is the last one.
+        sys.stdout.flush()
+    except BrokenPipeError:
+        _handle_broken_pipe()
     except KeyboardInterrupt:
         _print_interrupted()
         raise SystemExit(130) from None

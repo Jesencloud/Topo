@@ -1,3 +1,4 @@
+import signal
 from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -540,3 +541,48 @@ def test_unrouted_command_reports_a_missing_handler(capsys):
     args = SimpleNamespace(command="ghost", limit=10, silent=False, yes=False)
     assert topo_main._execute_main_router(args, False) is False
     assert "has no handler" in capsys.readouterr().err
+
+
+def test_main_exits_quietly_when_the_output_pipe_is_closed_mid_run():
+    """`topo history | head`: a write hits a closed reader -> BrokenPipeError.
+
+    It must become a quiet 141 (128 + SIGPIPE) with stdout redirected to
+    /dev/null, not a traceback and not the "Exception ignored ... BrokenPipeError"
+    CPython prints when the shutdown flush fails.
+    """
+    with (
+        patch("src.main.terminal_state.install_signal_handlers"),
+        patch("src.main._main", side_effect=BrokenPipeError),
+        patch("src.main.os.open", return_value=99),
+        patch("src.main.os.dup2") as dup2,
+        pytest.raises(SystemExit) as exc,
+    ):
+        topo_main.main()
+
+    assert exc.value.code == 128 + signal.SIGPIPE
+    # stdout's fd was pointed at the devnull we opened, so the final flush is quiet.
+    dup2.assert_called_once()
+    assert dup2.call_args.args[0] == 99
+
+
+def test_main_handles_a_broken_pipe_from_the_final_flush():
+    """The small-output case: every write fit the buffer, only the last flush fails.
+
+    main() flushes inside its try precisely so this surfaces as a catchable
+    BrokenPipeError instead of a shutdown-time "Exception ignored" line.
+    """
+    flushing_stdout = MagicMock()
+    flushing_stdout.flush.side_effect = BrokenPipeError
+    flushing_stdout.fileno.return_value = 1
+    with (
+        patch("src.main.terminal_state.install_signal_handlers"),
+        patch("src.main._main", return_value=True),
+        patch("src.main.sys.stdout", flushing_stdout),
+        patch("src.main.os.open", return_value=99),
+        patch("src.main.os.dup2") as dup2,
+        pytest.raises(SystemExit) as exc,
+    ):
+        topo_main.main()
+
+    assert exc.value.code == 128 + signal.SIGPIPE
+    dup2.assert_called_once_with(99, 1)
