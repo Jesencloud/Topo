@@ -44,6 +44,9 @@ from .ui.tui import (
 )
 
 DRY_RUN_HELP = "Preview changes without deleting"
+# Also hardcoded verbatim in the `topo` launcher's KeyboardInterrupt fallback:
+# that layer catches a Ctrl-C during import, before this module (and this
+# constant) is available, so it cannot import this name. Keep the two in sync.
 INTERRUPTED_MESSAGE = "🚫 Process interrupted by user."
 
 # Commands requiring single-instance concurrency lock. `None` is the bare `topo`
@@ -209,7 +212,14 @@ def _run_alternate_tui(command, *args):
 #    (already up to date, no residue to remove, an empty whitelist)
 # 1  it did not: a failure, a refusal, or a cancellation
 # 2  argparse rejected the arguments (argparse's own convention)
-# 130 interrupted (see main())
+# 130 interrupted: SIGINT / Ctrl-C. main() raises SystemExit(128 + SIGINT); the
+#    launcher repeats the same code for a Ctrl-C during startup, before main()
+#    has installed its handler.
+# 143 terminated: SIGTERM. Raised as SystemExit(128 + SIGTERM) by
+#    terminal_state._handle_signal, not here -- it propagates through main()
+#    untouched. Both signal deaths follow the shell's 128 + signum rule; 130 just
+#    happens to equal 128 + SIGINT, which is why main() spells it that way rather
+#    than hardcoding the number, so the two interrupt codes share one source.
 # 141 the reader of our stdout pipe closed it (128 + SIGPIPE) -- `topo history |
 #    head` is the ordinary case. main() redirects stdout to /dev/null and exits
 #    with this; it is the shell's own convention for a pipe death, not an outcome
@@ -273,7 +283,10 @@ def main():
         _handle_broken_pipe()
     except KeyboardInterrupt:
         _print_interrupted()
-        raise SystemExit(130) from None
+        # 128 + SIGINT == 130; spelled this way so both signal-death codes come
+        # from one 128 + signum rule (SIGTERM's 143 is raised the same way in
+        # terminal_state._handle_signal) rather than a bare literal here.
+        raise SystemExit(128 + signal.SIGINT) from None
     if not ok:
         raise SystemExit(1)
 

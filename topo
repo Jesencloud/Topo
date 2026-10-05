@@ -77,6 +77,13 @@ try:
     if __name__ == "__main__":
         main()
 except KeyboardInterrupt:
+    # Only a Ctrl-C during import above, or in the instant after main() is called
+    # but before it installs its own signal handler, reaches here: once main() is
+    # running it catches KeyboardInterrupt itself and converts it to
+    # SystemExit(130), which this clause does not intercept. The message is a
+    # verbatim copy of src.main.INTERRUPTED_MESSAGE -- it cannot be imported,
+    # because the import is one of the things this very handler is covering -- and
+    # 130 is the same 128 + SIGINT main() exits with. Keep both in sync.
     restore_terminal_after_interrupt()
     print("\n🚫 Process interrupted by user.")
     sys.exit(130)
