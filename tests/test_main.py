@@ -62,7 +62,7 @@ def test_run_terminal_tui_command_keeps_its_output_on_interrupt():
 
     clear_screen.assert_called_once_with()
     reset_terminal.assert_called_once_with(force=True)
-    print_mock.assert_called_once_with(topo_main.INTERRUPTED_MESSAGE)
+    print_mock.assert_called_once_with(topo_main.INTERRUPTED_MESSAGE, file=topo_main.sys.stderr)
     wait_for_return.assert_not_called()
 
 
@@ -285,7 +285,7 @@ def test_alternate_tui_runs_command_inside_screen():
         (["topo", "clean", "--dry-run"], "run_clean", (True,)),
         (["topo", "optimize"], "optimize_system", (False,)),
         (["topo", "status"], "show_status", ()),
-        (["topo", "history", "--limit", "0"], "show_history", (1,)),
+        (["topo", "history", "--limit", "5"], "show_history", (5,)),
         (["topo", "update"], "run_update", ()),
         (["topo", "remove", "--dry-run"], "run_remove", (True, False)),
         (["topo", "remove", "--yes"], "run_remove", (False, True)),
