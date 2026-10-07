@@ -14,9 +14,11 @@ src/core/ as before, so src/core/bin/ is untouched.
 import functools
 import json
 import platform
+import sys
 from pathlib import Path
 from typing import cast
 
+from .constants import WARN
 from .scan_cache import ScanCache, ScanResult
 from .system import run_command
 
@@ -30,6 +32,60 @@ _SCAN_COMMAND_TIMEOUT = 300
 # checkout, so a mismatch means a foreign or stale binary, which this refuses to
 # misread. Bump both together whenever the payload shape changes.
 ENGINE_SCHEMA_VERSION = 1
+
+# Why the engine must not be asked again in this process, or None while it is
+# usable. Set only for failures that are a property of the *binary* rather than
+# of the path being scanned -- a schema_version this build does not speak, which
+# means a stale or foreign engine. Every later call would fail the same way, so
+# latching it turns N pointless forks into one.
+#
+# This is what keeps file_ops.get_size's fallback honest. That walk used to ask
+# the engine about every descendant directory; with an engine present but unable
+# to answer, each of those forks scanned a whole subtree and then had its result
+# discarded, so one linear walk became O(entries x depth). The fallback no longer
+# re-asks at all, and this latch makes the *first* refusal cheap for every other
+# caller too.
+_engine_unusable_reason: str | None = None
+_engine_warning_emitted = False
+
+
+def engine_unusable_reason() -> str | None:
+    """The reason the engine is being skipped this run, or None while it works."""
+    return _engine_unusable_reason
+
+
+def reset_engine_state() -> None:
+    """Forget the latch (and its one-shot warning). For tests.
+
+    The latch is process-wide, so without this one test that feeds the boundary a
+    mismatched schema would turn the engine off for every test that runs after
+    it. conftest clears it around each test, the same way it clears the config
+    cache.
+    """
+    global _engine_unusable_reason, _engine_warning_emitted
+    _engine_unusable_reason = None
+    _engine_warning_emitted = False
+
+
+def _mark_engine_unusable(reason: str) -> None:
+    """Latch the engine off for this process, saying so once on stderr.
+
+    Visible rather than silent: a binary speaking another schema degrades every
+    scan to the pure-Python walk, which is correct but far slower, and a user
+    watching `topo analyze` crawl has no other way to learn that the engine on
+    disk is not the engine this build speaks to. stderr because it is a
+    degradation notice, not part of any report (see main.py's exit-code contract).
+    """
+    global _engine_unusable_reason, _engine_warning_emitted
+    _engine_unusable_reason = reason
+    if _engine_warning_emitted:
+        return
+    _engine_warning_emitted = True
+    print(
+        f"{WARN} topo: the bundled scan engine is unusable ({reason}); "
+        "falling back to the slower pure-Python walk for the rest of this run.",
+        file=sys.stderr,
+    )
 
 
 # The only architectures an engine is built for. `platform.machine()` values, so
@@ -92,6 +148,12 @@ def _unwrap_engine_payload(stdout: str) -> object | None:
     if not isinstance(envelope, dict):
         return None
     if envelope.get("schema_version") != ENGINE_SCHEMA_VERSION:
+        # A property of the binary, not of this path: latch it off so the rest of
+        # the run stops forking an engine that cannot answer.
+        _mark_engine_unusable(
+            f"it speaks schema {envelope.get('schema_version')!r}, "
+            f"this build speaks {ENGINE_SCHEMA_VERSION}"
+        )
         return None
     return envelope.get("data")
 
@@ -103,10 +165,15 @@ def get_rust_scan_data(path: Path, *, use_cache: bool = True) -> ScanResult | No
         return None
 
     path = normalize_scan_path(path)
-    # Check cache first
-    cached = ScanCache.get(path)
-    if use_cache and cached:
+    # Only look when the answer may be used: ScanCache.get() costs a stat, moves
+    # the entry to the LRU tail and evicts it when the signature moved, none of
+    # which a use_cache=False caller asked for.
+    cached = ScanCache.get(path) if use_cache else None
+    if cached:
         return cached
+    # A cached measurement is still good after the latch; a fresh scan is not.
+    if _engine_unusable_reason is not None:
+        return None
 
     res = run_command([str(binary), str(path)], capture=True, timeout=_SCAN_COMMAND_TIMEOUT)
     if res.ok:
@@ -130,7 +197,7 @@ def get_rust_scan_data(path: Path, *, use_cache: bool = True) -> ScanResult | No
 def get_rust_tree_data(path: Path) -> ScanResult | None:
     """Scan once and seed ScanCache for every significant descendant."""
     binary = get_core_binary()
-    if binary is None:
+    if binary is None or _engine_unusable_reason is not None:
         return None
 
     path = normalize_scan_path(path)

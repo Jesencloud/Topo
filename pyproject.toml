@@ -68,6 +68,11 @@ ignore_names = [
     "preview_truncated",
     "top_files",
     "total_size_bytes",
+    # core/engine.reset_engine_state clears the process-wide "engine is unusable"
+    # latch. Only tests/conftest.py calls it -- an autouse fixture, so that one
+    # test feeding the boundary a mismatched schema cannot turn the engine off for
+    # every test after it -- and vulture reads src/ alone.
+    "reset_engine_state",
 ]
 
 [tool.ruff]

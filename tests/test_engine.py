@@ -29,6 +29,17 @@ def _envelope(data, version=engine.ENGINE_SCHEMA_VERSION):
     return json.dumps({"schema_version": version, "data": data})
 
 
+def _scan_payload(path="/x", total_size_bytes=5):
+    """A minimal well-formed ScanResult, for tests about the boundary not the shape."""
+    return {
+        "path": str(path),
+        "total_size_bytes": total_size_bytes,
+        "file_count": 1,
+        "subdirs": {},
+        "top_files": [],
+    }
+
+
 def _mock_engine_stdout(monkeypatch, tmp_path, stdout):
     """Stand up a fake x86_64 engine whose one call returns `stdout`, exit 0.
 
@@ -144,7 +155,7 @@ def test_the_scan_helpers_reject_a_schema_version_they_do_not_understand(monkeyp
     # but a schema_version this build does not speak. The release process pins one
     # engine to one checkout, so this only happens with a stale or foreign binary;
     # both helpers fall back to pure Python rather than trust a contract that moved.
-    payload = {"path": "/x", "total_size_bytes": 5, "file_count": 1, "subdirs": {}, "top_files": []}
+    payload = _scan_payload()
     other_version = engine.ENGINE_SCHEMA_VERSION + 1
     scan_path = _mock_engine_stdout(
         monkeypatch, tmp_path, _envelope(payload, version=other_version)
@@ -190,3 +201,63 @@ def test_install_sh_knows_the_same_architectures_by_the_same_names():
 
     answers = dict(zip(arches, result.stdout.splitlines(), strict=True))
     assert answers == {**engine._ENGINE_BY_ARCH, "riscv64": "", "armv7l": "", "i686": ""}
+
+
+def test_a_schema_mismatch_latches_the_engine_off_for_the_rest_of_the_run(
+    monkeypatch, tmp_path, capsys
+):
+    """One refusal is enough; the binary will not start speaking our schema.
+
+    Before this, every caller kept forking an engine that could not answer --
+    file_ops.get_size's fallback did it once per descendant directory, and each
+    fork scanned a whole subtree before its result was discarded.
+    """
+    payload = _scan_payload()
+    scan_path = _mock_engine_stdout(
+        monkeypatch, tmp_path, _envelope(payload, version=engine.ENGINE_SCHEMA_VERSION + 1)
+    )
+
+    assert engine.get_rust_scan_data(scan_path, use_cache=False) is None
+    assert engine.engine_unusable_reason() is not None
+    # Said once, on stderr: a silent degradation to the slow path is undiagnosable.
+    err = capsys.readouterr().err
+    assert "scan engine is unusable" in err
+    assert str(engine.ENGINE_SCHEMA_VERSION) in err
+
+    # Latched: no later call reaches the subprocess, in either scan mode.
+    monkeypatch.setattr(
+        engine, "run_command", lambda *a, **k: pytest.fail("re-forked a latched-off engine")
+    )
+    assert engine.get_rust_scan_data(tmp_path / "other", use_cache=False) is None
+    assert engine.get_rust_tree_data(tmp_path / "other") is None
+    # And it does not repeat the notice on every later refusal.
+    assert "scan engine is unusable" not in capsys.readouterr().err
+
+
+def test_the_latch_still_serves_an_already_cached_measurement(monkeypatch, tmp_path):
+    # The latch means "stop running the binary", not "forget what it measured
+    # before it went bad": a cached entry is still a real measurement.
+    scan_path = _mock_engine_stdout(
+        monkeypatch, tmp_path, _envelope(_scan_payload(tmp_path, total_size_bytes=7))
+    )
+    assert engine.get_rust_scan_data(scan_path) is not None
+
+    engine._mark_engine_unusable("test")
+    monkeypatch.setattr(
+        engine, "run_command", lambda *a, **k: pytest.fail("re-forked a latched-off engine")
+    )
+    cached = engine.get_rust_scan_data(scan_path)
+    assert cached is not None
+    assert cached["total_size_bytes"] == 7
+
+
+def test_use_cache_false_does_not_disturb_the_cache(monkeypatch, tmp_path):
+    # ScanCache.get costs a stat, moves the entry to the LRU tail and evicts it on
+    # a moved signature. A caller that will not use the answer should not pay for
+    # that, nor perturb the ordering the next eviction depends on.
+    scan_path = _mock_engine_stdout(monkeypatch, tmp_path, _envelope(_scan_payload(tmp_path)))
+    monkeypatch.setattr(
+        engine.ScanCache, "get", lambda *a, **k: pytest.fail("looked up a cache it would not use")
+    )
+
+    assert engine.get_rust_scan_data(scan_path, use_cache=False) is not None

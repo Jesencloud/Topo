@@ -13,7 +13,13 @@ from typing import Any
 
 from .config import get_min_age_days
 from .constants import SECONDS_PER_DAY, WARN
-from .engine import _unwrap_engine_payload, get_core_binary, get_rust_scan_data, normalize_scan_path
+from .engine import (
+    _unwrap_engine_payload,
+    engine_unusable_reason,
+    get_core_binary,
+    get_rust_scan_data,
+    normalize_scan_path,
+)
 from .paths import get_state_dir
 from .scan_cache import ScanResult
 from .system import run_command
@@ -401,22 +407,29 @@ def get_size(path: str | Path) -> int:
             pass
 
     # Pure-Python fallback: the engine is unavailable (or declined this path), so
-    # walk it here. An explicit stack rather than get_size() calling itself once
-    # per directory level keeps a pathologically deep tree from exhausting the
-    # interpreter's recursion limit. The root's own engine attempt already
-    # happened above; each descendant directory gets the same attempt the
-    # recursive form gave it before we walk it by hand.
+    # walk it here by hand -- and only by hand.
+    #
+    # This loop used to re-ask the engine about every descendant directory. That
+    # is free when there is no binary at all, and pathological when there is one
+    # that cannot answer: a stale binary speaking another schema, or a root that
+    # timed out, made every directory fork a fresh engine which scanned its whole
+    # subtree and then had the result thrown away -- a linear walk turned into
+    # O(entries x depth). None of the reasons the root attempt can fail get better
+    # one directory down: a missing or foreign binary stays missing or foreign
+    # (engine.py now latches that off after the first refusal), and a timeout
+    # costs another full timeout to rediscover. So this stops asking.
+    #
+    # It also makes the measurement self-consistent. Mixing engine-measured and
+    # Python-measured subtrees inside one total meant contained symlinks were
+    # counted in some branches and not others (the engine sees only regular
+    # files); now every byte in this total was measured the same way.
+    #
+    # An explicit stack rather than get_size() calling itself once per directory
+    # level keeps a pathologically deep tree from exhausting the interpreter's
+    # recursion limit.
     total, stack = _scandir_sizes(p)
     while stack:
-        current = stack.pop()
-        try:
-            fast_size = _get_fast_scan_data(current)
-        except Exception:
-            fast_size = None
-        if fast_size is not None:
-            total += _coerce_non_negative_size(fast_size.get("total_size_bytes")) or 0
-            continue
-        size, children = _scandir_sizes(current)
+        size, children = _scandir_sizes(stack.pop())
         total += size
         stack.extend(children)
     return total
@@ -627,7 +640,7 @@ def _has_recent_content(path: Path, cutoff: float) -> bool:
 def _get_path_stats(path: Path) -> dict[str, Any] | None:
     """Return size and newest activity from one Rust traversal."""
     binary = get_core_binary()
-    if binary is None:
+    if binary is None or engine_unusable_reason() is not None:
         return None
     # Normalize the path the same way get_rust_scan_data and get_rust_tree_data
     # do, so all three entry points hand the engine one stable absolute argument.

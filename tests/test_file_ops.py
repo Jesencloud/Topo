@@ -629,6 +629,38 @@ def test_get_size_error_handling():
         assert get_size(Path("/tmp")) == 0
 
 
+def test_get_size_asks_the_engine_once_not_once_per_directory(test_env):
+    """The fallback walk is pure Python; it must not re-fork the engine per level.
+
+    It used to ask the engine about every descendant directory. With no binary
+    that is free, but with a binary that cannot answer -- one speaking another
+    schema, or a root that timed out -- every directory forked a fresh engine
+    which scanned its whole subtree and then had the result discarded, so a linear
+    walk cost O(entries x depth). One refusal for the root is the whole budget.
+    """
+    root = test_env / "tree"
+    expected = 0
+    for branch in ("a", "b", "c"):
+        for leaf in ("x", "y"):
+            directory = root / branch / leaf
+            directory.mkdir(parents=True)
+            (directory / "f").write_bytes(b"0" * 10)
+            expected += 10
+
+    calls: list[Path] = []
+
+    def declining_engine(path):
+        calls.append(path)
+        return None
+
+    with patch("src.core.file_ops._get_fast_scan_data", side_effect=declining_engine):
+        assert get_size(root) == expected
+
+    # 9 directories in this tree (root + 3 branches + 6 leaves); only the root is
+    # ever offered to the engine.
+    assert calls == [root]
+
+
 def test_get_size_survives_lstat_oserror(test_env):
     """get_size must not leak an OSError from its is_symlink/lstat probe.
 

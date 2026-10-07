@@ -7,6 +7,21 @@ from pathlib import Path
 import pytest
 
 from src.core.config import clear_config_cache
+from src.core.engine import reset_engine_state
+
+
+@pytest.fixture(autouse=True)
+def clean_engine_state():
+    """Drop the process-wide "engine is unusable" latch around every test.
+
+    One test that feeds the boundary a mismatched schema_version latches the
+    engine off for the whole process, so without this every test that runs after
+    it would silently get the pure-Python path. Same hazard, and same fix, as the
+    config cache below.
+    """
+    reset_engine_state()
+    yield
+    reset_engine_state()
 
 
 @pytest.fixture(autouse=True)
