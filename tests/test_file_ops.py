@@ -13,6 +13,7 @@ from src.core.file_ops import (
     _AUDIT_WARNINGS_EMITTED,
     CLEANED_PATHS,
     DeletionRejection,
+    _walk_recency_and_size,
     age_cutoff,
     clean_path_by_age,
     get_deletion_log_path,
@@ -1097,7 +1098,7 @@ def test_clean_path_by_age_uses_single_stats_scan_for_old_directory(test_env):
             "src.core.file_ops._get_path_stats",
             return_value={"total_size_bytes": 4, "newest_activity_secs": old_time},
         ) as stats,
-        patch("src.core.file_ops._has_recent_content") as recent,
+        patch("src.core.file_ops._walk_recency_and_size") as recent,
         patch("src.core.file_ops.get_size_fast") as size_scan,
         patch("src.core.file_ops.safe_remove", return_value=(True, "ok")) as remove,
     ):
@@ -1108,6 +1109,69 @@ def test_clean_path_by_age_uses_single_stats_scan_for_old_directory(test_env):
     recent.assert_not_called()
     size_scan.assert_not_called()
     assert remove.call_args.kwargs["known_size_bytes"] == 4
+
+
+def test_walk_recency_and_size_measures_an_idle_tree_in_one_pass(test_env):
+    # The engine-less path used to walk twice: once for recency, once for size.
+    tree = test_env / "idle"
+    (tree / "a" / "b").mkdir(parents=True)
+    (tree / "a" / "f1").write_bytes(b"0" * 10)
+    (tree / "a" / "b" / "f2").write_bytes(b"0" * 5)
+    old = time.time() - 30 * 86400
+    for path in (tree, tree / "a", tree / "a" / "b", tree / "a" / "f1", tree / "a" / "b" / "f2"):
+        os.utime(path, (old, old))
+
+    recent, size = _walk_recency_and_size(tree, age_cutoff(10))
+
+    assert recent is False
+    assert size == 15
+
+
+def test_walk_recency_and_size_stops_at_the_first_recent_entry(test_env):
+    # A tree still in use will not be deleted, so measuring it is wasted work:
+    # the walk reports "in use" and abandons the size.
+    tree = test_env / "busy"
+    tree.mkdir()
+    (tree / "fresh").write_bytes(b"0" * 10)
+
+    recent, size = _walk_recency_and_size(tree, age_cutoff(10))
+
+    assert recent is True
+    assert size == 0
+
+
+def test_walk_recency_and_size_handles_a_tree_deeper_than_the_recursion_limit(test_env):
+    """The recency half used to recurse, so a deep tree raised RecursionError.
+
+    RecursionError is not an OSError, so clean_path_by_age's handler did not
+    catch it: `topo clean` died where it should have skipped one directory.
+    """
+    chain_root = test_env / "deep"
+    chain_root.mkdir()
+    current = chain_root
+    # One level at a time; mkdir(parents=True) recurses and would hit the limit
+    # while building the fixture.
+    for _ in range(sys.getrecursionlimit() + 100):
+        current = current / "d"
+        current.mkdir()
+    leaf = current
+    (leaf / "payload").write_bytes(b"0" * 7)
+    old = time.time() - 30 * 86400
+    try:
+        # Only the leaf file's timestamps decide recency here; the directories
+        # were created now, so walk with a cutoff old enough to ignore them.
+        os.utime(leaf / "payload", (old, old))
+        recent, size = _walk_recency_and_size(leaf, age_cutoff(10))
+        assert recent is False
+        assert size == 7
+    finally:
+        (leaf / "payload").unlink(missing_ok=True)
+        current = leaf
+        while current != chain_root:
+            parent = current.parent
+            current.rmdir()
+            current = parent
+        chain_root.rmdir()
 
 
 def test_record_deletion_audit_escapes_control_chars(test_env):

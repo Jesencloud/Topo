@@ -617,24 +617,50 @@ def safe_remove(
         return False, str(e)
 
 
-def _has_recent_content(path: Path, cutoff: float) -> bool:
-    """Return True if any file under *path* has been touched after *cutoff*."""
-    try:
-        with os.scandir(path) as it:
-            for entry in it:
-                try:
-                    st = entry.stat(follow_symlinks=False)
-                except OSError:
-                    continue
-                if st.st_atime >= cutoff or st.st_mtime >= cutoff:
-                    return True
-                if entry.is_dir(follow_symlinks=False) and _has_recent_content(
-                    Path(entry.path), cutoff
-                ):
-                    return True
-    except OSError:
-        pass
-    return False
+def _walk_recency_and_size(path: Path, cutoff: float) -> tuple[bool, int]:
+    """One walk answering both questions about a deletion candidate.
+
+    Returns (still_in_use, total_size). *still_in_use* is True when anything
+    under *path* has an atime or mtime at or after *cutoff*, in which case the
+    size is not computed -- a tree that will not be touched does not need
+    measuring, so the walk stops at the first recent entry the way the old
+    recency check did.
+
+    This is the engine-less twin of the `--stats` mode, which answers both from a
+    single traversal. The fallback used to walk twice: once to decide whether the
+    directory was still in use, then again through get_size_fast() to measure it.
+    Two full passes over the same tree, on the one path that has no engine to
+    make them cheap.
+
+    An explicit stack, not recursion. The recency half used to call itself once
+    per directory level, so a tree deeper than sys.getrecursionlimit() raised
+    RecursionError -- which is not an OSError, so clean_path_by_age's handler did
+    not catch it and `topo clean` died where it should have skipped one
+    directory. get_size() has used an explicit stack for exactly this reason.
+
+    Sizes count regular files and symlinks (a symlink as its own bytes, which is
+    what unlinking it frees), matching _scandir_sizes; sockets, FIFOs and device
+    nodes hold nothing to reclaim.
+    """
+    total = 0
+    stack = [path]
+    while stack:
+        try:
+            with os.scandir(stack.pop()) as entries:
+                for entry in entries:
+                    try:
+                        st = entry.stat(follow_symlinks=False)
+                    except OSError:
+                        continue
+                    if st.st_atime >= cutoff or st.st_mtime >= cutoff:
+                        return True, 0
+                    if stat.S_ISDIR(st.st_mode):
+                        stack.append(Path(entry.path))
+                    elif stat.S_ISREG(st.st_mode) or stat.S_ISLNK(st.st_mode):
+                        total += st.st_size
+        except OSError:
+            continue
+    return False, total
 
 
 def _get_path_stats(path: Path) -> dict[str, Any] | None:
@@ -741,9 +767,9 @@ def clean_path_by_age(path: str | Path, days: int, dry_run: bool = False) -> tup
                             continue
                         size = _coerce_non_negative_size(stats.get("total_size_bytes")) or 0
                     else:
-                        if _has_recent_content(item, cutoff):
+                        recent, size = _walk_recency_and_size(item, cutoff)
+                        if recent:
                             continue
-                        size = get_size_fast(item)
                 else:
                     size = st.st_size
                 if dry_run:
