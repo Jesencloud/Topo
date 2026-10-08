@@ -17,6 +17,7 @@ from typing import TypeVar
 
 from .core import system
 from .core.browser_paths import BROWSER_PROFILE_TARGETS
+from .core.concurrency import workers
 from .core.config import get_use_trash
 from .core.constants import (
     BOLD,
@@ -1263,7 +1264,7 @@ def optimize_system(dry_run: bool = False) -> bool:
             )
             sys.stdout.flush()
 
-    worker_count = min(max(len(registered_tasks), 1), OPTIMIZATION_MAX_WORKERS)
+    worker_count = workers(len(registered_tasks), cap=OPTIMIZATION_MAX_WORKERS)
     failed = False
     try:
         with threaded_spinner(render_optimization_spinner):

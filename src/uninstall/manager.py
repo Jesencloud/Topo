@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from ..core import system
+from ..core.concurrency import PROBE_WORKER_CAP, workers
 from ..core.file_ops import (
     comm_pattern,
     get_size_fast,
@@ -152,7 +153,7 @@ class UninstallManager:
                 app["size_bytes"] += residue_size
                 app["size_str"] = bytes_to_human(app["size_bytes"])
 
-        with ThreadPoolExecutor(max_workers=8) as executor:
+        with ThreadPoolExecutor(max_workers=workers(len(apps), cap=PROBE_WORKER_CAP)) as executor:
             list(executor.map(_process_single_app, apps))
 
     def run_full_scan(self, *, use_cache: bool = False) -> list[AppRecord]:
@@ -220,7 +221,7 @@ class UninstallManager:
         # types that take nothing else with them cost a return, not a fork, so
         # they go through the same pool rather than being listed a second time.
         if apps:
-            with ThreadPoolExecutor(max_workers=8) as pool:
+            with ThreadPoolExecutor(max_workers=workers(len(apps), cap=PROBE_WORKER_CAP)) as pool:
                 for app, (collateral, unavailable) in zip(
                     apps, pool.map(_collateral_query, apps), strict=True
                 ):

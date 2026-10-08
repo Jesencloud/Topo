@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import TypedDict
 
 from ..core import system
+from ..core.concurrency import PROBE_WORKER_CAP, workers
 from ..core.constants import (
     RPM_QUERY_BATCH_SIZE,
     AppType,
@@ -1073,7 +1074,7 @@ def discover_installed_apps() -> tuple[list[AppRecord], list[str]]:
 
     apps: list[AppRecord] = []
     failed_sources: list[str] = []
-    with ThreadPoolExecutor(max_workers=len(scan_tasks)) as executor:
+    with ThreadPoolExecutor(max_workers=workers(len(scan_tasks), cap=PROBE_WORKER_CAP)) as executor:
         futures = {executor.submit(task): name for name, task in scan_tasks}
         for future in as_completed(futures):
             try:

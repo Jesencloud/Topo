@@ -11,6 +11,7 @@ from typing import Any
 
 from .core import system
 from .core.app_cache import find_cleanable_cache_dirs, get_cache_cleanable_reason
+from .core.concurrency import SCAN_WORKER_CAP, workers
 from .core.config import get_use_trash
 from .core.constants import (
     MAGENTA,
@@ -194,12 +195,12 @@ def parallel_scan_sizes(
 
     if roots:
         notify_scan_start()
-        with ThreadPoolExecutor(max_workers=min(2, len(roots))) as executor:
+        with ThreadPoolExecutor(max_workers=workers(len(roots), cap=SCAN_WORKER_CAP)) as executor:
             list(executor.map(scan_one, roots))
     missing = [path for path in unique if ScanCache.get(norm[path]) is None]
     if missing:
         notify_scan_start()
-        with ThreadPoolExecutor(max_workers=min(2, len(missing))) as executor:
+        with ThreadPoolExecutor(max_workers=workers(len(missing), cap=SCAN_WORKER_CAP)) as executor:
             list(executor.map(get_rust_scan_data, missing))
     for path in unique:
         data = ScanCache.get(norm[path])
