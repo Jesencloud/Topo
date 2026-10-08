@@ -102,6 +102,13 @@ def _print_cleanup_summary(
     with failures reads as "completed with errors", not "complete", so the
     headline matches the exit status run_clean returns -- the per-command ✗ lines
     are already above; this is the one-line account of them.
+
+    Every byte here is an apparent size (st_size), summed by file_ops.get_size()
+    and the engine alike -- see get_size() for what that means for sparse files
+    and hard links. So this total answers "how much did the files we removed
+    claim to be", which can sit above what `df` reports as reclaimed. The
+    `Free space now` line below is read from the filesystem itself and is the one
+    that cannot drift.
     """
     free_now = shutil.disk_usage(os.path.expanduser("~")).free
     print("\n" + "=" * SUMMARY_RULE_WIDTH)

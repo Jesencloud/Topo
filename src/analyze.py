@@ -520,27 +520,33 @@ DELETE_CANCELLED_PROBLEM = "Delete cancelled: admin access was declined."
 DELETE_UNAUTHORIZED_PROBLEM = "Delete cancelled: authorization failed."
 
 
-def _ensure_admin_for_delete(paths: list[Path]) -> str:
+def _ensure_admin_for_delete(paths: list[Path]) -> tuple[str, list[Path]]:
     """Prompt for sudo only if any path in the list requires admin privileges.
 
-    Returns "" when the batch may go ahead, otherwise the reason it may not. The
-    reason is returned rather than printed for the same repaint reason as the
+    Returns (reason, admin_paths): the reason is "" when the batch may go ahead,
+    otherwise why it may not, and admin_paths is the subset needing a privileged
+    removal. Handing that list back rather than letting the caller rebuild it
+    saves a second _needs_admin_for_deletion() pass over every path -- each one
+    resolves the path, lstats it and probes the parent with os.access().
+
+    The reason is returned rather than printed for the same repaint reason as the
     removals themselves; the password prompt still writes to the terminal,
     because the user is looking at it while typing.
     """
     admin_paths = [p for p in paths if _needs_admin_for_deletion(p)]
     if not admin_paths:
-        return ""
+        return "", admin_paths
 
     print()
     if not system.ensure_sudo_session(
         f"{MAGENTA}{MARK_PROMPT}{RESET} File deletion requires admin access\n"
         f"{MAGENTA}{MARK_PROMPT}{RESET} Password: "
     ):
-        return DELETE_CANCELLED_PROBLEM if system.SUDO_CANCELLED else DELETE_UNAUTHORIZED_PROBLEM
+        reason = DELETE_CANCELLED_PROBLEM if system.SUDO_CANCELLED else DELETE_UNAUTHORIZED_PROBLEM
+        return reason, admin_paths
 
     system.print_sudo_granted()
-    return ""
+    return "", admin_paths
 
 
 @dataclass(frozen=True)
@@ -568,11 +574,10 @@ def _delete_analyze_paths(
     paths: list[Path], *, ask_permanent: Callable[[str], bool] | None = None
 ) -> DeleteOutcome:
     """Delete Analyze targets, using sudo only for paths outside user control."""
-    problem = _ensure_admin_for_delete(paths)
+    problem, admin_paths = _ensure_admin_for_delete(paths)
     if problem:
         return DeleteOutcome(first_problem=problem)
 
-    admin_paths = [p for p in paths if _needs_admin_for_deletion(p)]
     consent = _permanent_fallback_consent(ask_permanent)
     deleted = 0
     failed = 0

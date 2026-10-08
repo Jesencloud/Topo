@@ -14,6 +14,7 @@ from typing import Any
 from .config import get_min_age_days
 from .constants import SECONDS_PER_DAY, WARN
 from .engine import (
+    SCAN_COMMAND_TIMEOUT,
     _unwrap_engine_payload,
     engine_unusable_reason,
     get_core_binary,
@@ -391,6 +392,16 @@ def get_size(path: str | Path) -> int:
     a removal can actually free are the link's own. Counting the target's tree
     would make a preview promise a deletion -- free a 10 GB directory -- that
     the run then does not perform.
+
+    Every size here is the *apparent* size (st_size), the same number
+    `du --apparent-size` reports and not the one plain `du` does. Two
+    consequences worth knowing before trusting a total against `df`: a sparse
+    file counts its full length rather than the blocks it occupies, so a 10 GB
+    disk image holding 2 GB is counted as 10 GB; and a hard-linked file is
+    counted once per link, because there is no inode bookkeeping here, while `du`
+    counts it once. Both overstate. Block rounding and filesystem compression
+    push the other way. analyze.percent_of() caps its ratio at 100% for exactly
+    this reason.
     """
     p = Path(path)
     # One lstat answers all three questions. is_symlink() / exists() / is_file()
@@ -671,7 +682,9 @@ def _get_path_stats(path: Path) -> dict[str, Any] | None:
     # Normalize the path the same way get_rust_scan_data and get_rust_tree_data
     # do, so all three entry points hand the engine one stable absolute argument.
     result = run_command(
-        [str(binary), "--stats", str(normalize_scan_path(path))], capture=True, timeout=300
+        [str(binary), "--stats", str(normalize_scan_path(path))],
+        capture=True,
+        timeout=SCAN_COMMAND_TIMEOUT,
     )
     if not result.ok:
         return None
@@ -838,6 +851,14 @@ def parse_size_to_bytes(text: str) -> int:
     clean/system.py). Fed a whole transcript it answers about whatever token
     happens to come first, which is not the same question as "how much was
     freed".
+
+    Every prefix is read as a power of 1024, including a lowercase "kB": the
+    pattern is case-insensitive and the unit is looked up by its first letter, so
+    "1 kB" is 1024 here. That is wrong for the tools which mean 1000 -- apt and
+    docker both do -- and they are deliberately not routed through this function:
+    they have anchored parsers that multiply with SI_MULTIPLIER instead. A new
+    caller pointed at a decimal-unit tool would over-report by 2.4% per prefix,
+    so check which convention the tool prints before reaching for this.
     """
     if not text or text == "N/A":
         return 0

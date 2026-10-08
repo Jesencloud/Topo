@@ -22,8 +22,12 @@ from .constants import WARN
 from .scan_cache import ScanCache, ScanResult
 from .system import run_command
 
-# How long a single topo-core invocation may take before it is abandoned.
-_SCAN_COMMAND_TIMEOUT = 300
+# How long a single topo-core invocation may take before it is abandoned. One
+# number for every mode, imported by file_ops for --stats rather than respelled
+# there: three copies of 300 had already accumulated, one of them a bare
+# literal. (analyze._SUDO_REMOVE_TIMEOUT is a different 300 -- it bounds an `rm`,
+# not a scan -- and stays where it is.)
+SCAN_COMMAND_TIMEOUT = 300
 
 # The stdout JSON contract this build speaks. topo-core wraps every mode's output
 # as {"schema_version": N, "data": <payload>}; we accept a payload only when N
@@ -47,6 +51,7 @@ ENGINE_SCHEMA_VERSION = 1
 # caller too.
 _engine_unusable_reason: str | None = None
 _engine_warning_emitted = False
+_engine_timeout_warning_emitted = False
 
 
 def engine_unusable_reason() -> str | None:
@@ -62,9 +67,10 @@ def reset_engine_state() -> None:
     it. conftest clears it around each test, the same way it clears the config
     cache.
     """
-    global _engine_unusable_reason, _engine_warning_emitted
+    global _engine_unusable_reason, _engine_warning_emitted, _engine_timeout_warning_emitted
     _engine_unusable_reason = None
     _engine_warning_emitted = False
+    _engine_timeout_warning_emitted = False
 
 
 def _mark_engine_unusable(reason: str) -> None:
@@ -158,6 +164,27 @@ def _unwrap_engine_payload(stdout: str) -> object | None:
     return envelope.get("data")
 
 
+def _warn_engine_timed_out(path: Path) -> None:
+    """Say once that a scan ran out of time and the slow path took over.
+
+    A timeout is not a latch: a smaller directory may well finish, so the engine
+    stays in use. But 300 seconds of a spinner followed by an even slower
+    pure-Python walk, with nothing said, leaves the user no way to tell a huge
+    tree from a stalled network mount. Said once per run, because a sweep over
+    several large roots would otherwise repeat it per root.
+    """
+    global _engine_timeout_warning_emitted
+    if _engine_timeout_warning_emitted:
+        return
+    _engine_timeout_warning_emitted = True
+    print(
+        f"{WARN} topo: the scan engine ran out of time on {path} after "
+        f"{SCAN_COMMAND_TIMEOUT}s; measuring it the slow way instead. A very "
+        "large tree or an unresponsive network mount will do this.",
+        file=sys.stderr,
+    )
+
+
 def get_rust_scan_data(path: Path, *, use_cache: bool = True) -> ScanResult | None:
     """Calls the architecture-specific topo-core binary and returns parsed JSON."""
     binary = get_core_binary()
@@ -175,7 +202,7 @@ def get_rust_scan_data(path: Path, *, use_cache: bool = True) -> ScanResult | No
     if _engine_unusable_reason is not None:
         return None
 
-    res = run_command([str(binary), str(path)], capture=True, timeout=_SCAN_COMMAND_TIMEOUT)
+    res = run_command([str(binary), str(path)], capture=True, timeout=SCAN_COMMAND_TIMEOUT)
     if res.ok:
         data = _unwrap_engine_payload(res.stdout)
         # A well-formed but non-object payload (a bare number, string, or array)
@@ -191,6 +218,8 @@ def get_rust_scan_data(path: Path, *, use_cache: bool = True) -> ScanResult | No
         result = cast(ScanResult, data)
         ScanCache.set(path, result)
         return result
+    if res.timed_out:
+        _warn_engine_timed_out(path)
     return None
 
 
@@ -201,12 +230,21 @@ def get_rust_tree_data(path: Path) -> ScanResult | None:
         return None
 
     path = normalize_scan_path(path)
+    # Checked here rather than left to each caller, so the two scan entry points
+    # answer a cache hit the same way. Both call sites did look first, so this
+    # changes nothing today -- it stops the next one from forking a whole-tree
+    # scan over a cache it forgot to ask.
+    cached = ScanCache.get(path)
+    if cached:
+        return cached
     res = run_command(
         [str(binary), "--tree", str(path)],
         capture=True,
-        timeout=_SCAN_COMMAND_TIMEOUT,
+        timeout=SCAN_COMMAND_TIMEOUT,
     )
     if not res.ok:
+        if res.timed_out:
+            _warn_engine_timed_out(path)
         return None
     tree = _unwrap_engine_payload(res.stdout)
     if not isinstance(tree, dict) or not isinstance(tree.get("."), dict):

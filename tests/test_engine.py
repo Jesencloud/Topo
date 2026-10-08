@@ -203,6 +203,33 @@ def test_install_sh_knows_the_same_architectures_by_the_same_names():
     assert answers == {**engine._ENGINE_BY_ARCH, "riscv64": "", "armv7l": "", "i686": ""}
 
 
+def test_a_scan_timeout_says_so_once_without_latching_the_engine_off(monkeypatch, tmp_path, capsys):
+    # A timeout is not a property of the binary -- a smaller directory may well
+    # finish -- so the engine stays in use. But a long wait followed by an even
+    # slower pure-Python walk, said nothing about, leaves no way to tell a huge
+    # tree from a stalled network mount.
+    monkeypatch.setattr(platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(engine, "__file__", str(tmp_path / "engine.py"))
+    (tmp_path / "bin").mkdir(exist_ok=True)
+    (tmp_path / "bin" / "topo-core-x86_64").write_bytes(b"\x7fELF")
+    monkeypatch.setattr(
+        engine,
+        "run_command",
+        lambda *a, **k: CommandResult(args=list(a[0]), returncode=124, timed_out=True),
+    )
+    engine.ScanCache.clear()
+    scan_path = engine.normalize_scan_path(tmp_path)
+
+    assert engine.get_rust_scan_data(scan_path, use_cache=False) is None
+    # Still usable: the next, smaller directory gets its chance.
+    assert engine.engine_unusable_reason() is None
+    assert "ran out of time" in capsys.readouterr().err
+
+    # Said once per run, not once per root in a multi-root sweep.
+    assert engine.get_rust_tree_data(scan_path) is None
+    assert "ran out of time" not in capsys.readouterr().err
+
+
 def test_a_schema_mismatch_latches_the_engine_off_for_the_rest_of_the_run(
     monkeypatch, tmp_path, capsys
 ):

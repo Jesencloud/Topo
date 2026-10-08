@@ -1003,7 +1003,7 @@ def test_analyze_delete_user_writable_path_without_admin(test_env):
 
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.analyze._ensure_admin_for_delete", return_value="") as mock_admin_check,
+        patch("src.analyze._ensure_admin_for_delete", return_value=("", [])) as mock_admin_check,
         patch("src.analyze.safe_remove", return_value=(True, "Moved to trash")) as mock_safe,
         patch("src.analyze._sudo_remove") as mock_sudo,
     ):
@@ -1041,7 +1041,7 @@ def test_analyze_delete_browser_profile_root_cleans_cache_children(test_env):
     firefox_login_db.write_text("{}")
 
     with (
-        patch("src.analyze._ensure_admin_for_delete", return_value=""),
+        patch("src.analyze._ensure_admin_for_delete", return_value=("", [])),
         # _which_cached() memoizes, so patching shutil.which alone is order-dependent.
         patch("src.core.file_ops._which_cached", return_value=None),
         # No trash backend here, so the permanent downgrade needs consent; this
@@ -1076,7 +1076,7 @@ def test_analyze_delete_keeps_data_when_permanent_fallback_is_declined(test_env)
     (target / "payload.bin").write_text("data")
 
     with (
-        patch("src.analyze._ensure_admin_for_delete", return_value=""),
+        patch("src.analyze._ensure_admin_for_delete", return_value=("", [])),
         # _which_cached() memoizes, so patching shutil.which alone is order-dependent.
         patch("src.core.file_ops._which_cached", return_value=None),
         patch("src.analyze.play_delete") as mock_play_delete,
@@ -1280,7 +1280,9 @@ def test_analyze_delete_system_path_requires_admin():
 
     with (
         patch("src.analyze.get_size_fast", return_value=4096),
-        patch("src.analyze._ensure_admin_for_delete", return_value="") as mock_admin_check,
+        patch(
+            "src.analyze._ensure_admin_for_delete", return_value=("", [target])
+        ) as mock_admin_check,
         patch("src.analyze.safe_remove") as mock_safe,
         patch("src.analyze._sudo_remove", return_value=(True, 4096, "")) as mock_sudo,
     ):
@@ -1428,7 +1430,7 @@ def test_a_delete_drops_the_cached_total_of_every_ancestor(test_env):
 
     with (
         patch("pathlib.Path.home", return_value=test_env),
-        patch("src.analyze._ensure_admin_for_delete", return_value=""),
+        patch("src.analyze._ensure_admin_for_delete", return_value=("", [])),
         patch("src.analyze.safe_remove", return_value=(True, "Moved to trash")),
     ):
         outcome = delete_and_refresh_cache([target], leaf)
