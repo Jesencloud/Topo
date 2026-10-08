@@ -1,5 +1,6 @@
 import os
 import threading
+import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,6 +48,7 @@ class _CacheEntry:
     data: ScanResult
     estimated_bytes: int
     signature: tuple[int, int, int] | None
+    stored_at: float
 
 
 class ScanCache:
@@ -62,6 +64,14 @@ class ScanCache:
 
     MAX_ENTRIES = 1024
     MAX_ESTIMATED_BYTES = 64 * 1024 * 1024
+    # How long a measurement may be served before it is re-taken. The signature
+    # below catches changes to the directory *itself*, but a directory's mtime
+    # does not move when a file deep inside it grows -- so an ancestor's total can
+    # be wrong while its signature still matches, and `--tree` caches every
+    # ancestor. This is the ceiling on how long that can go unnoticed: long
+    # enough that drilling in and back out of a tree stays instant, short enough
+    # that a build writing into it while the view is open shows up.
+    MAX_AGE_SECONDS = 120.0
     _data: OrderedDict[str, _CacheEntry] = OrderedDict()
     _estimated_bytes = 0
     _lock = threading.Lock()
@@ -121,6 +131,9 @@ class ScanCache:
             entry = cls._data.get(key)
             if entry is None:
                 return None
+            if time.monotonic() - entry.stored_at > cls.MAX_AGE_SECONDS:
+                cls._discard_locked(key)
+                return None
             if entry.signature is not None and current != entry.signature:
                 cls._discard_locked(key)
                 return None
@@ -150,7 +163,7 @@ class ScanCache:
         signature = cls._signature(path)
         with cls._lock:
             cls._discard_locked(key)
-            cls._data[key] = _CacheEntry(data, estimated, signature)
+            cls._data[key] = _CacheEntry(data, estimated, signature, time.monotonic())
             cls._estimated_bytes += estimated
             while (
                 len(cls._data) > cls.MAX_ENTRIES or cls._estimated_bytes > cls.MAX_ESTIMATED_BYTES
@@ -162,6 +175,26 @@ class ScanCache:
     def discard(cls, path: Path) -> None:
         with cls._lock:
             cls._discard_locked(os.fspath(path))
+
+    @classmethod
+    def discard_with_ancestors(cls, path: Path) -> None:
+        """Drop *path*'s entry and every cached directory above it.
+
+        A deletion changes the total of every ancestor, but only the directory
+        the entry sat in has its mtime moved by it -- so the signature check
+        invalidates that one and leaves every ancestor serving a total that still
+        counts the bytes just removed. That is what made Analyze show the
+        pre-delete size when the user stepped back out of a folder.
+
+        Walking to the filesystem root rather than to the scan root: the cache is
+        keyed by absolute path and holds only what was actually scanned, so a key
+        that was never cached costs one dict lookup, and path depth bounds the
+        loop. *path* must already be normalized the way the cache is keyed.
+        """
+        with cls._lock:
+            cls._discard_locked(os.fspath(path))
+            for parent in path.parents:
+                cls._discard_locked(os.fspath(parent))
 
     @classmethod
     def clear(cls) -> None:

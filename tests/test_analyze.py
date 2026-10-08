@@ -23,6 +23,7 @@ from src.analyze import (
     _sudo_remove,
     build_analysis_entry,
     build_linux_insights,
+    delete_and_refresh_cache,
     filesystem_used_bytes,
     get_fast_explore_data,
     get_old_items_info,
@@ -95,6 +96,47 @@ def test_scan_cache_invalidates_changed_directory(tmp_path):
     (directory / "new-file").write_text("changed")
 
     assert ScanCache.get(directory) is None
+
+
+def test_scan_cache_expires_an_entry_the_signature_cannot_catch(monkeypatch, tmp_path):
+    """The signature's blind spot: a change deep inside leaves ancestors matching.
+
+    A directory's mtime moves only when its own entries change, so a file growing
+    further down leaves every ancestor's signature intact while its total is
+    already wrong -- and `--tree` caches every ancestor. The age ceiling is what
+    bounds how long that can be served.
+    """
+    directory = tmp_path / "cached"
+    directory.mkdir()
+    ScanCache.clear()
+    ScanCache.set(directory, {"total_size_bytes": 1})
+    # Unchanged on disk, so the signature still matches: only age can drop this.
+    assert ScanCache.get(directory) is not None
+
+    monkeypatch.setattr(ScanCache, "MAX_AGE_SECONDS", -1.0)
+
+    assert ScanCache.get(directory) is None
+
+
+def test_discard_with_ancestors_drops_every_total_a_deletion_changed(tmp_path):
+    # The deleted entry's own directory has its mtime moved by the removal, but
+    # the directories above it do not -- they would keep serving a total that
+    # still counted the removed bytes.
+    leaf = tmp_path / "a" / "b" / "c"
+    leaf.mkdir(parents=True)
+    ScanCache.clear()
+    for directory in (tmp_path, tmp_path / "a", tmp_path / "a" / "b", leaf):
+        ScanCache.set(directory, {"total_size_bytes": 1})
+    unrelated = tmp_path / "elsewhere"
+    unrelated.mkdir()
+    ScanCache.set(unrelated, {"total_size_bytes": 1})
+
+    ScanCache.discard_with_ancestors(leaf)
+
+    for directory in (leaf, tmp_path / "a" / "b", tmp_path / "a", tmp_path):
+        assert ScanCache.get(directory) is None, directory
+    # A sibling never contributed to the deleted path's totals, so it stays.
+    assert ScanCache.get(unrelated) is not None
 
 
 def test_scan_cache_rejects_single_entry_over_memory_limit(monkeypatch, tmp_path):
@@ -966,7 +1008,6 @@ def test_analyze_delete_user_writable_path_without_admin(test_env):
         patch("src.analyze._sudo_remove") as mock_sudo,
     ):
         outcome = _delete_analyze_paths([target])
-
     # The batch reports numbers instead of printing: Analyze repaints its frame
     # as soon as this returns, so anything printed here would be overwritten.
     assert (outcome.deleted, outcome.failed, outcome.first_problem) == (1, 0, "")
@@ -1366,3 +1407,32 @@ def test_failed_root_scan_explains_itself_and_waits_for_a_keypress(
 
     wait.assert_called_once_with()
     assert ENGINE_SCAN_FAILED_NOTICE in ANSI_CSI_RE.sub("", capsys.readouterr().out)
+
+
+def test_a_delete_drops_the_cached_total_of_every_ancestor(test_env):
+    """Stepping back out of a folder must not show the pre-delete size.
+
+    delete_and_refresh_cache used to discard only the view's own target. The
+    removal moves that directory's mtime, so its signature invalidates anyway --
+    what stayed behind were the ancestors, each still serving a total that
+    counted the bytes just removed.
+    """
+    leaf = test_env / "a" / "b"
+    leaf.mkdir(parents=True)
+    target = leaf / "big-file"
+    target.write_text("remove me")
+
+    ScanCache.clear()
+    for directory in (test_env, test_env / "a", leaf):
+        ScanCache.set(normalize_scan_path(directory), {"total_size_bytes": 1})
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch("src.analyze._ensure_admin_for_delete", return_value=""),
+        patch("src.analyze.safe_remove", return_value=(True, "Moved to trash")),
+    ):
+        outcome = delete_and_refresh_cache([target], leaf)
+
+    assert outcome.deleted == 1
+    for directory in (leaf, test_env / "a", test_env):
+        assert ScanCache.get(normalize_scan_path(directory)) is None, directory

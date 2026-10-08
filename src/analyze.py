@@ -611,8 +611,16 @@ def delete_and_refresh_cache(
     outcome = _delete_analyze_paths(paths, ask_permanent=ask_permanent)
     if not outcome:
         return outcome
-    if current_target:
-        ScanCache.discard(current_target)
-    else:
+    if current_target is None:
         ScanCache.clear()
+        return outcome
+    # Every ancestor of a deleted path held a total that counted it. Only the
+    # directory it sat in has its mtime moved by the removal, so the signature
+    # check would invalidate that one and keep serving stale totals for the rest
+    # -- the view then showed the pre-delete size on the way back out. Discarding
+    # the ancestors of the deleted paths is exactly the affected set: a path that
+    # is not under some cached directory never contributed to its total.
+    # Normalized here because that is how the cache is keyed.
+    for path in paths:
+        ScanCache.discard_with_ancestors(normalize_scan_path(path))
     return outcome
