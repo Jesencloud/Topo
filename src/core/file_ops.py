@@ -376,7 +376,15 @@ def has_valid_cachedir_tag(path: str | Path) -> bool:
 
 
 def get_size(path: str | Path) -> int:
-    """Recursive size calculation in bytes (delegates directory walks to Rust engine when available).
+    """Recursive size of *path* in bytes, measured entirely in Python.
+
+    Deliberately engine-free. get_size_fast() owns the fast path and falls back
+    to this when the engine cannot answer -- so asking the engine again from here
+    would re-run, on the very same path, the scan that had just failed. With a
+    binary that cannot answer at all (one speaking another schema, or a root that
+    timed out) that doubled every fallback: a full engine scan, discarded, then a
+    second one. The split is also the honest one for the two names -- "fast" is
+    the one that reaches for the engine.
 
     A top-level symlink is sized as the link itself, not as what it points at:
     safe_remove() unlinks a symlink rather than following it, so the bytes that
@@ -385,48 +393,36 @@ def get_size(path: str | Path) -> int:
     the run then does not perform.
     """
     p = Path(path)
+    # One lstat answers all three questions. is_symlink() / exists() / is_file()
+    # / is_dir() are four separate stat calls on a path that pathlib does not
+    # cache, and this runs once per cleanup candidate and once per Analyze row.
     try:
-        if p.is_symlink():
-            return p.lstat().st_size
+        st = p.lstat()
     except OSError:
         return 0
-    if not p.exists():
+    if stat.S_ISLNK(st.st_mode) or stat.S_ISREG(st.st_mode):
+        return st.st_size
+    if not stat.S_ISDIR(st.st_mode):
+        # A socket, FIFO or device node holds no bytes a removal would reclaim.
         return 0
-    if p.is_file():
-        try:
-            return p.stat().st_size
-        except OSError:
-            return 0
 
-    if p.is_dir():
-        try:
-            fast_size = _get_fast_scan_data(p)
-            if fast_size is not None:
-                return _coerce_non_negative_size(fast_size.get("total_size_bytes")) or 0
-        except Exception:
-            pass
-
-    # Pure-Python fallback: the engine is unavailable (or declined this path), so
-    # walk it here by hand -- and only by hand.
+    # The walk. An explicit stack rather than get_size() calling itself once per
+    # directory level keeps a pathologically deep tree from exhausting the
+    # interpreter's recursion limit.
     #
     # This loop used to re-ask the engine about every descendant directory. That
     # is free when there is no binary at all, and pathological when there is one
-    # that cannot answer: a stale binary speaking another schema, or a root that
-    # timed out, made every directory fork a fresh engine which scanned its whole
-    # subtree and then had the result thrown away -- a linear walk turned into
-    # O(entries x depth). None of the reasons the root attempt can fail get better
+    # that cannot answer: every directory forked a fresh engine which scanned its
+    # whole subtree and then had the result thrown away -- a linear walk turned
+    # into O(entries x depth). None of the reasons an attempt can fail get better
     # one directory down: a missing or foreign binary stays missing or foreign
-    # (engine.py now latches that off after the first refusal), and a timeout
-    # costs another full timeout to rediscover. So this stops asking.
+    # (engine.py latches that off after the first refusal), and a timeout costs
+    # another full timeout to rediscover.
     #
-    # It also makes the measurement self-consistent. Mixing engine-measured and
-    # Python-measured subtrees inside one total meant contained symlinks were
-    # counted in some branches and not others (the engine sees only regular
-    # files); now every byte in this total was measured the same way.
-    #
-    # An explicit stack rather than get_size() calling itself once per directory
-    # level keeps a pathologically deep tree from exhausting the interpreter's
-    # recursion limit.
+    # Measuring every byte the same way is the other half of it. Mixing
+    # engine-measured and Python-measured subtrees inside one total meant
+    # contained symlinks were counted in some branches and not others (the engine
+    # sees only regular files); now one total is one method.
     total, stack = _scandir_sizes(p)
     while stack:
         size, children = _scandir_sizes(stack.pop())
@@ -487,18 +483,22 @@ def get_size_fast(path: str | Path) -> int:
     (sized as the link, below).
     """
     p = Path(path)
+    # One lstat decides the branch, and get_size() does its own single lstat if we
+    # hand off -- two stats on the fallback path, where asking is_symlink() and
+    # is_dir() here and then repeating both inside get_size() cost six.
     try:
-        if p.is_symlink():
-            # Same rule as get_size(): a symlink is sized as the link, not the target,
-            # because that is what a removal frees. The Rust engine would follow the
-            # link and report the whole target tree.
-            return get_size(p)
+        st = p.lstat()
     except OSError:
         return 0
-    if p.is_dir():
+    if stat.S_ISDIR(st.st_mode):
         data = _get_fast_scan_data(p)
         if data is not None:
             return _coerce_non_negative_size(data.get("total_size_bytes")) or 0
+    # Everything else, and a directory the engine declined, is get_size()'s to
+    # measure. A symlink reaches here by not being a directory to lstat, which is
+    # the point: the engine would follow it and report the whole target tree,
+    # while a removal frees only the link's own bytes. get_size() is engine-free,
+    # so this hand-off never re-asks about the path the engine just declined.
     return get_size(p)
 
 

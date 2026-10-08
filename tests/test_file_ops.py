@@ -611,32 +611,26 @@ def test_get_size_error_handling():
     # Non-existent path
     assert get_size(Path("/tmp/this_should_never_exist_12345")) == 0
 
-    # Mock OSError during stat AND scandir
-    with (
-        patch("pathlib.Path.exists", return_value=True),
-        patch("pathlib.Path.is_file", return_value=True),
-        patch("pathlib.Path.stat", side_effect=OSError),
-    ):
+    # An unreadable path: the single lstat that decides symlink/file/directory is
+    # the one probe that can fail, and it answers 0 rather than raising.
+    with patch("pathlib.Path.lstat", side_effect=OSError):
         assert get_size(Path("/tmp")) == 0
 
-    with (
-        patch("pathlib.Path.exists", return_value=True),
-        patch("pathlib.Path.is_file", return_value=False),
-        patch("pathlib.Path.is_symlink", return_value=False),
-        patch("src.core.file_ops._get_fast_scan_data", return_value=None),
-        patch("os.scandir", side_effect=OSError),
-    ):
+    # A directory it can stat but not read: the walk yields nothing, not an error.
+    with patch("os.scandir", side_effect=OSError):
         assert get_size(Path("/tmp")) == 0
 
 
 def test_get_size_asks_the_engine_once_not_once_per_directory(test_env):
-    """The fallback walk is pure Python; it must not re-fork the engine per level.
+    """One engine attempt per request, at the root, and never again.
 
-    It used to ask the engine about every descendant directory. With no binary
-    that is free, but with a binary that cannot answer -- one speaking another
-    schema, or a root that timed out -- every directory forked a fresh engine
-    which scanned its whole subtree and then had the result discarded, so a linear
-    walk cost O(entries x depth). One refusal for the root is the whole budget.
+    Two overlapping defects met here. The fallback walk asked the engine about
+    every descendant directory, so a binary that could not answer -- one speaking
+    another schema, or a root that timed out -- made every directory fork a fresh
+    engine which scanned its whole subtree before the result was discarded, so a
+    linear walk cost O(entries x depth). And get_size_fast() handed off to
+    get_size(), which asked again about the very same path, doubling it. The
+    engine now lives in get_size_fast() alone, and it asks once.
     """
     root = test_env / "tree"
     expected = 0
@@ -654,11 +648,26 @@ def test_get_size_asks_the_engine_once_not_once_per_directory(test_env):
         return None
 
     with patch("src.core.file_ops._get_fast_scan_data", side_effect=declining_engine):
-        assert get_size(root) == expected
+        assert get_size_fast(root) == expected
 
-    # 9 directories in this tree (root + 3 branches + 6 leaves); only the root is
-    # ever offered to the engine.
+    # 9 directories in this tree (root + 3 branches + 6 leaves); the engine is
+    # offered the root once, and the walk below it is pure Python.
     assert calls == [root]
+
+
+def test_get_size_never_reaches_the_engine(test_env):
+    # get_size() is the engine-free half of the pair: get_size_fast() falls back
+    # to it precisely because the engine could not answer, so a call from here
+    # would re-run the scan that just failed.
+    directory = test_env / "plain"
+    directory.mkdir()
+    (directory / "f").write_bytes(b"0" * 7)
+
+    with patch(
+        "src.core.file_ops._get_fast_scan_data",
+        side_effect=AssertionError("get_size must not ask the engine"),
+    ):
+        assert get_size(directory) == 7
 
 
 def test_get_size_survives_lstat_oserror(test_env):
