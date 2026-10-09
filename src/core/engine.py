@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 from typing import cast
 
+from .concurrency import engine_env
 from .constants import WARN
 from .scan_cache import ScanCache, ScanResult
 from .system import run_command
@@ -202,7 +203,12 @@ def get_rust_scan_data(path: Path, *, use_cache: bool = True) -> ScanResult | No
     if _engine_unusable_reason is not None:
         return None
 
-    res = run_command([str(binary), str(path)], capture=True, timeout=SCAN_COMMAND_TIMEOUT)
+    res = run_command(
+        [str(binary), str(path)],
+        capture=True,
+        timeout=SCAN_COMMAND_TIMEOUT,
+        env=engine_env(),
+    )
     if res.ok:
         data = _unwrap_engine_payload(res.stdout)
         # A well-formed but non-object payload (a bare number, string, or array)
@@ -241,6 +247,7 @@ def get_rust_tree_data(path: Path) -> ScanResult | None:
         [str(binary), "--tree", str(path)],
         capture=True,
         timeout=SCAN_COMMAND_TIMEOUT,
+        env=engine_env(),
     )
     if not res.ok:
         if res.timed_out:

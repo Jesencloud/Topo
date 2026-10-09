@@ -3,14 +3,14 @@
 //! `compute_single` / `compute_tree` / `compute_stats` do the work; the `run_*`
 //! wrappers serialize their results to stdout as JSON for the Python front end.
 
-use jwalk::WalkDir;
+use jwalk::{Parallelism, WalkDir};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
 use std::io::Write;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, UNIX_EPOCH};
 
 pub const DEFAULT_TREE_MIN_BYTES: u64 = 1_048_576; // 1 MiB
 /// Minimum size for a file to enter a `top_files` list.
@@ -248,6 +248,42 @@ fn skips_child(name: &str, devices: impl FnOnce() -> (Option<u64>, Option<u64>))
     }
 }
 
+/// Environment variable naming how many threads a walk may use.
+pub const SCAN_THREADS_ENV: &str = "TOPO_SCAN_THREADS";
+
+/// jwalk's own default when the pool is left unconfigured.
+const DEFAULT_BUSY_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// How wide a walk is allowed to be, from `TOPO_SCAN_THREADS`.
+///
+/// Unset keeps jwalk's default: rayon's global pool, one thread per logical CPU.
+/// That is the right answer for a local SSD and the wrong one for a network
+/// mount, where a few dozen concurrent `readdir` calls against one server queue
+/// behind each other and finish slower than a single thread would. Since the
+/// engine cannot tell what it is walking -- it is handed a path, not a mount
+/// table -- the caller decides, and `core/concurrency.py` is what sets this.
+///
+/// 0 and 1 both mean `Serial`: a one-thread rayon pool still hands the walk to
+/// another thread and waits, so saying "one thread" and meaning "no pool at all"
+/// is both faster and what the caller asking for 1 wants. An unparseable value
+/// falls back to the default rather than failing the scan -- a typo in an
+/// environment variable should not be the reason a cleanup cannot measure a
+/// directory.
+fn walk_parallelism() -> Parallelism {
+    match std::env::var(SCAN_THREADS_ENV) {
+        Ok(raw) => match raw.trim().parse::<usize>() {
+            Ok(0) | Ok(1) => Parallelism::Serial,
+            Ok(threads) => Parallelism::RayonNewPool(threads),
+            Err(_) => Parallelism::RayonDefaultPool {
+                busy_timeout: DEFAULT_BUSY_TIMEOUT,
+            },
+        },
+        Err(_) => Parallelism::RayonDefaultPool {
+            busy_timeout: DEFAULT_BUSY_TIMEOUT,
+        },
+    }
+}
+
 /// Walker used by every mode that reports *sizes*, so `--single` and `--tree`
 /// necessarily agree on the skip-list / symlink / hidden-file rules. Change the
 /// traversal policy here and both modes move together.
@@ -260,6 +296,7 @@ fn scan_walker(root_path: &Path) -> WalkDir {
     WalkDir::new(root_path)
         .skip_hidden(false)
         .follow_links(false)
+        .parallelism(walk_parallelism())
         .process_read_dir(|_depth, parent_path, _read_dir_state, children| {
             // Read on the first guarded name and reused for the rest of the
             // directory; most directories never hold one and never stat it.
@@ -480,7 +517,8 @@ pub fn compute_stats(root_path: &Path) -> PathStats {
     let mut stats = PathStats::default();
     let walker = WalkDir::new(root_path)
         .skip_hidden(false)
-        .follow_links(false);
+        .follow_links(false)
+        .parallelism(walk_parallelism());
     for entry in walker.into_iter().filter_map(|entry| entry.ok()) {
         if entry.path() == root_path {
             continue;
@@ -542,6 +580,55 @@ pub fn run_stats(root_path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::skips_child;
+
+    /// TOPO_SCAN_THREADS is process-global, so these assertions share one test
+    /// rather than racing each other across cargo's test threads.
+    #[test]
+    fn the_thread_count_comes_from_the_environment() {
+        use super::{Parallelism, SCAN_THREADS_ENV, walk_parallelism};
+
+        let restore = std::env::var(SCAN_THREADS_ENV).ok();
+        // SAFETY: single-threaded within this test, and the value is restored
+        // before it returns. set_var is unsafe from Rust 2024 onward.
+        unsafe {
+            // Unset: jwalk's own default, one thread per logical CPU.
+            std::env::remove_var(SCAN_THREADS_ENV);
+            assert!(matches!(
+                walk_parallelism(),
+                Parallelism::RayonDefaultPool { .. }
+            ));
+
+            // 0 and 1 both mean "no pool at all": a one-thread rayon pool still
+            // hands the walk to another thread and waits on it.
+            for serial in ["0", "1"] {
+                std::env::set_var(SCAN_THREADS_ENV, serial);
+                assert!(
+                    matches!(walk_parallelism(), Parallelism::Serial),
+                    "{serial}"
+                );
+            }
+
+            std::env::set_var(SCAN_THREADS_ENV, "4");
+            assert!(matches!(walk_parallelism(), Parallelism::RayonNewPool(4)));
+            // Surrounding whitespace is the shape an env var picks up easily.
+            std::env::set_var(SCAN_THREADS_ENV, "  3  ");
+            assert!(matches!(walk_parallelism(), Parallelism::RayonNewPool(3)));
+
+            // A typo must not be the reason a cleanup cannot measure a directory.
+            for junk in ["lots", "", "-2", "3.5"] {
+                std::env::set_var(SCAN_THREADS_ENV, junk);
+                assert!(
+                    matches!(walk_parallelism(), Parallelism::RayonDefaultPool { .. }),
+                    "{junk:?}"
+                );
+            }
+
+            match restore {
+                Some(value) => std::env::set_var(SCAN_THREADS_ENV, value),
+                None => std::env::remove_var(SCAN_THREADS_ENV),
+            }
+        }
+    }
 
     #[test]
     fn a_guarded_name_is_skipped_only_where_it_is_a_mount_point() {

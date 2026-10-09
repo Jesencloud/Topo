@@ -32,6 +32,10 @@ import os
 #: "use the built-in caps".
 MAX_WORKERS_ENV = "TOPO_IO_THREADS"
 
+#: Environment variable the Rust engine reads to size its own walk. Set by the
+#: user, or derived from MAX_WORKERS_ENV below; see engine_env().
+SCAN_THREADS_ENV = "TOPO_SCAN_THREADS"
+
 #: Scans fork the engine, which is itself parallel -- see the module docstring.
 SCAN_WORKER_CAP = 2
 
@@ -71,3 +75,26 @@ def workers(task_count: int, *, cap: int) -> int:
     if ceiling is not None:
         limit = min(limit, ceiling)
     return max(1, limit)
+
+
+def engine_env() -> dict[str, str]:
+    """Environment overlay for a topo-core invocation, usually empty.
+
+    The engine sizes its own walk from ``TOPO_SCAN_THREADS``. Three cases:
+
+    * the user set it -- nothing to do, the child inherits it as written, and
+      being explicit about the engine beats anything inferred here;
+    * the user set only ``TOPO_IO_THREADS`` -- that ceiling is passed along.
+      Someone pinning topo's concurrency to 1 because $HOME is on NFS means the
+      engine too, and the engine is where most of the concurrency actually lives:
+      every scan thread forks one, and each spreads its walk over all cores;
+    * neither is set -- an empty overlay, leaving jwalk's own default (one thread
+      per logical CPU). No default is invented here, because which width wins on
+      a given disk is a question for a benchmark, not for a guess.
+    """
+    if os.environ.get(SCAN_THREADS_ENV, "").strip():
+        return {}
+    ceiling = worker_ceiling()
+    if ceiling is None:
+        return {}
+    return {SCAN_THREADS_ENV: str(ceiling)}

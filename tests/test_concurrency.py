@@ -11,7 +11,9 @@ import pytest
 from src.core.concurrency import (
     MAX_WORKERS_ENV,
     PROBE_WORKER_CAP,
+    SCAN_THREADS_ENV,
     SCAN_WORKER_CAP,
+    engine_env,
     worker_ceiling,
     workers,
 )
@@ -84,3 +86,30 @@ def test_an_unknown_cpu_count_does_not_crash_the_pool(monkeypatch):
     monkeypatch.setattr("src.core.concurrency.os.cpu_count", lambda: None)
 
     assert workers(100, cap=PROBE_WORKER_CAP) == 1
+
+
+def test_the_engine_inherits_an_explicit_scan_thread_setting_untouched(monkeypatch):
+    # Being explicit about the engine beats anything inferred: the child already
+    # inherits os.environ, so the overlay has nothing to add.
+    monkeypatch.setenv(SCAN_THREADS_ENV, "6")
+    monkeypatch.setenv(MAX_WORKERS_ENV, "1")
+
+    assert engine_env() == {}
+
+
+def test_the_io_ceiling_reaches_the_engine(monkeypatch):
+    # Pinning topo to 1 because $HOME is on NFS has to mean the engine too --
+    # that is where most of the concurrency lives.
+    monkeypatch.delenv(SCAN_THREADS_ENV, raising=False)
+    monkeypatch.setenv(MAX_WORKERS_ENV, "2")
+
+    assert engine_env() == {SCAN_THREADS_ENV: "2"}
+
+
+def test_no_knobs_set_leaves_the_engine_default_alone(monkeypatch):
+    # Which width wins on a given disk is a question for a benchmark, so no
+    # default is invented here.
+    monkeypatch.delenv(SCAN_THREADS_ENV, raising=False)
+    monkeypatch.delenv(MAX_WORKERS_ENV, raising=False)
+
+    assert engine_env() == {}

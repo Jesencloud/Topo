@@ -11,6 +11,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from .concurrency import engine_env
 from .config import get_min_age_days
 from .constants import SECONDS_PER_DAY, WARN
 from .engine import (
@@ -685,6 +686,7 @@ def _get_path_stats(path: Path) -> dict[str, Any] | None:
         [str(binary), "--stats", str(normalize_scan_path(path))],
         capture=True,
         timeout=SCAN_COMMAND_TIMEOUT,
+        env=engine_env(),
     )
     if not result.ok:
         return None
