@@ -310,3 +310,38 @@ fn stats_counts_named_content_that_size_scans_intentionally_skip() {
     assert_eq!(tree["."].file_count, 1);
     assert!(!tree["."].subdirs.contains_key("lost+found"));
 }
+
+#[test]
+fn stats_stays_on_the_filesystem_it_was_pointed_at() {
+    // /dev is devtmpfs with /dev/shm (tmpfs) mounted inside it, so this needs no
+    // privileges to set up. Before the guard, measuring /dev silently folded in
+    // whatever lived on the other filesystem.
+    let dev = Path::new("/dev");
+    let shm = Path::new("/dev/shm");
+    let (Ok(dev_meta), Ok(shm_meta)) = (fs::metadata(dev), fs::metadata(shm)) else {
+        return; // no /dev/shm here; nothing to assert
+    };
+    use std::os::unix::fs::MetadataExt;
+    if dev_meta.dev() == shm_meta.dev() {
+        return; // not actually a separate filesystem on this box
+    }
+
+    // Something measurable has to exist on the other side, or the assertion
+    // below would pass for the wrong reason.
+    let probe = shm.join("topo-stats-crossdevice-probe");
+    if fs::write(&probe, vec![b'x'; 4096]).is_err() {
+        return; // /dev/shm not writable here
+    }
+    let shm_total = compute_stats(shm).total_size_bytes;
+    let dev_total = compute_stats(dev).total_size_bytes;
+    let _ = fs::remove_file(&probe);
+
+    assert!(
+        shm_total >= 4096,
+        "probe should be visible from /dev/shm itself"
+    );
+    assert_eq!(
+        dev_total, 0,
+        "measuring /dev must not reach across the /dev/shm mount"
+    );
+}

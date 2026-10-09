@@ -513,12 +513,38 @@ pub fn compute_tree(root_path: &Path) -> HashMap<String, DirAgg> {
 ///
 /// Uses a bare walker rather than [`scan_walker`] on purpose -- see that
 /// function's note on why the skip list does not apply to this mode.
+///
+/// It does stay on one filesystem, though. The skip list is what guards the
+/// size modes against wandering into `/proc`; this mode drops that list because
+/// the caller named a cache or residue directory where those names are content,
+/// and the old comment reasoned that virtual filesystems therefore "cannot
+/// appear". That is a property of today's call sites, not of the mode -- nothing
+/// stopped a future caller from pointing `--stats` at a path with a mount under
+/// it, and the answer would then have silently included another disk. Pruning by
+/// device makes the guarantee the mode's own, and matches the
+/// `rm -rf --one-file-system` discipline the delete path already keeps.
+///
+/// Only directories are tested: a directory is the only thing that can take the
+/// walk onto another filesystem, so this costs one `lstat` per subdirectory
+/// rather than one per entry -- the same reasoning `skips_child` uses to avoid
+/// stat'ing every child. A root whose device cannot be read prunes nothing,
+/// because a guess either way is worse than measuring what the caller asked for.
 pub fn compute_stats(root_path: &Path) -> PathStats {
     let mut stats = PathStats::default();
+    let root_device = device_id(root_path);
     let walker = WalkDir::new(root_path)
         .skip_hidden(false)
         .follow_links(false)
-        .parallelism(walk_parallelism());
+        .parallelism(walk_parallelism())
+        .process_read_dir(move |_depth, _parent_path, _read_dir_state, children| {
+            if root_device.is_none() {
+                return;
+            }
+            children.retain(|child| match child {
+                Ok(entry) => !entry.file_type.is_dir() || device_id(&entry.path()) == root_device,
+                Err(_) => false,
+            })
+        });
     for entry in walker.into_iter().filter_map(|entry| entry.ok()) {
         if entry.path() == root_path {
             continue;
