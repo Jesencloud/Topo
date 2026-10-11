@@ -1,9 +1,11 @@
 import atexit
+import contextlib
 import select
 import signal
 import sys
 import termios
 import tty
+from collections.abc import Callable
 from types import FrameType
 from typing import Any
 
@@ -22,6 +24,24 @@ _alternate_screen_depth = 0
 _cursor_hidden_depth = 0
 _cursor_hidden = False
 _mouse_tracking_enabled = False
+
+# Callbacks run at the very start of reset_terminal(), before any termios restore
+# or escape write. A background writer (the spinner's daemon thread) registers one
+# so a reset -- which on Ctrl-C runs from the signal handler, before the spinner's
+# own context-manager finally can stop it -- halts the writer first, instead of
+# letting it wake from its interval sleep and paint one more frame onto the screen
+# we just restored. Kept here, not imported from spinner, so the dependency points
+# the right way (spinner -> terminal_state).
+_pre_reset_hooks: list[Callable[[], None]] = []
+
+
+def register_reset_hook(hook: Callable[[], None]) -> None:
+    _pre_reset_hooks.append(hook)
+
+
+def unregister_reset_hook(hook: Callable[[], None]) -> None:
+    with contextlib.suppress(ValueError):
+        _pre_reset_hooks.remove(hook)
 
 
 def _write(sequence: str) -> None:
@@ -114,6 +134,13 @@ def disable_mouse_tracking() -> None:
 
 def reset_terminal(force: bool = False) -> None:
     global _alternate_screen_depth, _cursor_hidden, _cursor_hidden_depth, _mouse_tracking_enabled
+
+    # Stop any registered background writers first (see _pre_reset_hooks), so none
+    # repaints between the restore below and the caller's own cleanup. A hook must
+    # never break the reset itself.
+    for hook in list(_pre_reset_hooks):
+        with contextlib.suppress(Exception):
+            hook()
 
     active = (
         bool(_raw_states)

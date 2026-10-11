@@ -5,6 +5,8 @@ import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
+from . import terminal_state
+
 DEFAULT_SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 
 
@@ -60,12 +62,18 @@ def threaded_spinner(
             stop.wait(interval)
 
     thread = threading.Thread(target=animate, daemon=True)
-    thread.start()
+    # A real SIGINT resets the terminal from the signal handler, before this
+    # context's finally can stop us; register the stop so reset_terminal() halts
+    # the loop before it writes, instead of letting a sleeping frame repaint onto
+    # the just-restored screen.
+    terminal_state.register_reset_hook(stop.set)
     try:
+        thread.start()
         yield
     finally:
         stop.set()
         thread.join(timeout=max(interval * 2, 0.2))
+        terminal_state.unregister_reset_hook(stop.set)
         # Diagnosable, not fatal: one line to stderr (stdout is the animation's
         # own surface and may be mid-frame), and only when the body did not
         # itself raise -- an exception propagating out of the `yield` is the real

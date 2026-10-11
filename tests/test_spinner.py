@@ -84,3 +84,29 @@ def test_threaded_spinner_render_error_stays_quiet_when_the_body_raises(capsys):
         raise ValueError("body boom")
 
     assert "spinner render failed" not in capsys.readouterr().err
+
+
+def test_threaded_spinner_registers_a_reset_hook_while_active():
+    """While animating, the spinner registers a reset hook so a terminal reset
+    (e.g. the signal handler's on Ctrl-C) stops it before it can repaint."""
+    from src.core import terminal_state
+
+    before = list(terminal_state._pre_reset_hooks)
+    with (
+        patch("src.core.spinner.sys.stdout.isatty", return_value=True),
+        threaded_spinner(lambda frame: None, frames=("x",), interval=0.5),
+    ):
+        assert len(terminal_state._pre_reset_hooks) == len(before) + 1
+    # Cleaned up on exit -- no leaked hook.
+    assert list(terminal_state._pre_reset_hooks) == before
+
+
+def test_threaded_spinner_registers_no_hook_without_a_terminal():
+    from src.core import terminal_state
+
+    before = list(terminal_state._pre_reset_hooks)
+    with (
+        patch("src.core.spinner.sys.stdout.isatty", return_value=False),
+        threaded_spinner(lambda frame: None, frames=("x",), interval=0.5),
+    ):
+        assert list(terminal_state._pre_reset_hooks) == before

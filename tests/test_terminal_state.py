@@ -133,3 +133,38 @@ def test_nested_cursor_hide_does_not_flash_visible_between_views(monkeypatch):
 
     terminal_state.show_cursor()
     assert writes == [terminal_state.HIDE_CURSOR, terminal_state.SHOW_CURSOR]
+
+
+def test_reset_terminal_runs_registered_hooks_before_restoring():
+    """A background writer (the spinner) registers a hook so reset stops it first.
+
+    reset_terminal runs on the signal handler's thread before the spinner's own
+    context-manager finally can stop it, so without this the spinner could wake
+    from its interval sleep and paint one more frame onto the restored screen.
+    """
+    calls = []
+
+    def hook():
+        calls.append(1)
+
+    terminal_state.register_reset_hook(hook)
+    try:
+        terminal_state.reset_terminal(force=True)
+    finally:
+        terminal_state.unregister_reset_hook(hook)
+    assert calls == [1]
+
+    # Once unregistered, the hook is not run again.
+    terminal_state.reset_terminal(force=True)
+    assert calls == [1]
+
+
+def test_a_raising_reset_hook_does_not_break_reset():
+    def boom():
+        raise RuntimeError("hook boom")
+
+    terminal_state.register_reset_hook(boom)
+    try:
+        terminal_state.reset_terminal(force=True)  # must not raise
+    finally:
+        terminal_state.unregister_reset_hook(boom)
