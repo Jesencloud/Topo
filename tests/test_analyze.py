@@ -21,6 +21,7 @@ from src.analyze import (
     _needs_admin_for_deletion,
     _permanent_fallback_consent,
     _sudo_remove,
+    _sudo_remove_argv,
     build_analysis_entry,
     build_linux_insights,
     delete_and_refresh_cache,
@@ -1327,6 +1328,60 @@ def test_sudo_remove_unlinks_symlink_instead_of_deleting_its_target():
     # Validation follows the link, but rm receives the raw name and therefore
     # unlinks only the link. The target directory remains outside rm's reach.
     assert captured["cmd"] == ["rm", "-rf", "--one-file-system", "--", str(link)]
+
+
+def test_sudo_remove_argv_really_unlinks_a_symlink_without_following_it(tmp_path):
+    """P2-1: the privileged argv's *behavior*, not just its spelling.
+
+    The test above pins the command string; CI can never run the real `sudo rm`,
+    so on its own that only proves topo builds the right command, not that the
+    command does the right thing. Here the exact argv `_sudo_remove` would hand
+    to the runner is executed as the current user (no sudo), and the real GNU rm
+    is held to the semantics the code's comments promise: `--` then a symlink
+    name unlinks the link and leaves the tree it points at untouched. Drop the
+    `--`, or let rm follow the link, and this fails where the string check could
+    not.
+    """
+    target_dir = tmp_path / "target"
+    (target_dir / "inner").mkdir(parents=True)
+    kept = target_dir / "inner" / "keep.bin"
+    kept.write_bytes(b"x" * 64)
+    link = tmp_path / "link"
+    link.symlink_to(target_dir)
+
+    argv = _sudo_remove_argv(link)
+    # Bind the behavior test to the real command: if the flags ever change, this
+    # runs the changed command, and the assertions below judge the new behavior.
+    assert argv == ["rm", "-rf", "--one-file-system", "--", str(link)]
+
+    result = subprocess.run(argv, capture_output=True, text=True, timeout=30)
+
+    assert result.returncode == 0, result.stderr
+    assert not link.is_symlink() and not link.exists()  # the link itself is gone
+    assert target_dir.is_dir()  # its target tree was never entered
+    assert kept.read_bytes() == b"x" * 64
+
+
+def test_sudo_remove_argv_really_deletes_a_whole_subtree_and_nothing_else(tmp_path):
+    """The ordinary case: `rm -rf -- <dir>` removes the subtree, and the `--`
+    terminator does not break a normal (non-dash) path or stop the recursion."""
+    victim = tmp_path / "victim"
+    (victim / "a" / "b").mkdir(parents=True)
+    (victim / "a" / "b" / "f.bin").write_bytes(b"y" * 128)
+    (victim / "top.txt").write_text("gone")
+    sibling = tmp_path / "sibling.txt"
+    sibling.write_text("stays")
+
+    result = subprocess.run(_sudo_remove_argv(victim), capture_output=True, text=True, timeout=30)
+
+    assert result.returncode == 0, result.stderr
+    assert not victim.exists()  # whole tree removed
+    assert sibling.read_text() == "stays"  # only the named target went
+
+    # --one-file-system's cross-mount behavior is a GNU coreutils guarantee that
+    # cannot be exercised here: creating a mount point under the target needs
+    # root. The flag's presence is pinned by the argv assertion above; its runtime
+    # effect is left to coreutils, which is a hard dependency of topo anyway.
 
 
 def test_sudo_remove_rejects_user_writable_ancestor(test_env):

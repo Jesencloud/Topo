@@ -346,6 +346,21 @@ def _needs_admin_for_deletion(path: Path) -> bool:
     return stat.st_uid != os.getuid() or not os.access(parent, os.W_OK | os.X_OK)
 
 
+def _sudo_remove_argv(raw_path: Path) -> list[str]:
+    """The exact removal command `_sudo_remove` hands to the privileged runner.
+
+    Factored out of `_sudo_remove` so a non-sudo test can run the *same* argv
+    against a fixture and verify what the command does, not merely that the
+    string was spelled right -- CI can never execute the real `sudo rm`, so the
+    behavior of these flags would otherwise rest on trust alone. Two of them
+    carry safety meaning: `--` ends option parsing so the raw name that follows is
+    treated as an operand (and a direct symlink is unlinked, never followed into
+    the tree it points at), and `--one-file-system` keeps a stray mount under the
+    target from being crossed.
+    """
+    return ["rm", "-rf", "--one-file-system", "--", str(raw_path)]
+
+
 def _sudo_remove(path: Path) -> tuple[bool, int, str]:
     """Remove a validated Analyze target with sudo and record an audit event.
 
@@ -404,7 +419,7 @@ def _sudo_remove(path: Path) -> tuple[bool, int, str]:
             return False, 0, f"{safe_target}: untrusted ancestor directory ({safe_parent})"
 
     res = run_command(
-        ["rm", "-rf", "--one-file-system", "--", str(raw_path)],
+        _sudo_remove_argv(raw_path),
         use_sudo=True,
         capture=True,
         timeout=_SUDO_REMOVE_TIMEOUT,
