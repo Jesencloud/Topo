@@ -106,10 +106,15 @@ line-ending = "auto"
 [tool.coverage.run]
 branch = true
 source = ["src"]
-# Interactive terminal rendering and raw keyboard/mouse handling require a
-# pseudo-terminal integration suite. Keep that work explicitly out of the
-# current unit-test coverage target instead of scattering no-cover markers
-# throughout UI code. Remove this omission when PTY-based UI tests are added.
+# Interactive terminal rendering and raw keyboard/mouse handling are now driven
+# end to end by tests/test_pty_integration.py (real pty: alternate-screen round
+# trip, a cbreak ESC keypress, and SIGINT/SIGTERM -> 130/143 with the terminal
+# reset). That suite launches topo as a child process, though, so its execution
+# of src/ui does not register as line coverage here. The omit therefore stays
+# until a subprocess-coverage harness (COVERAGE_PROCESS_START) attributes the
+# child's lines back to this report; remove it then, not before -- dropping it
+# now would only expose the in-process navigator unit tests' coverage, which the
+# pty suite does not lift.
 omit = [
     "src/ui/**",
     "src/__init__.py",
