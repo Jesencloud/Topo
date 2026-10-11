@@ -447,6 +447,24 @@ def test_analyze_empty_view_waits_for_back():
     assert idx is None
 
 
+def test_analyze_space_on_an_empty_view_does_not_crash():
+    """Space must not select a row that does not exist.
+
+    A drilled-into empty directory opens the selector with can_select=True and
+    an empty item list. The Space branch used to toggle self.selected_index (0)
+    into selected_items without a length guard, so the next render -- which does
+    self.items[idx] over the selected set -- raised IndexError and escaped as a
+    raw traceback (main() catches only BrokenPipeError/KeyboardInterrupt). The
+    sibling selectors already gate Space on a non-empty list.
+    """
+    sel = AnalyzeSelector("t", [], can_select=True)
+    # Space (would crash the next render pre-fix), then LEFT to back out.
+    action, idx = drive(sel, [Navigator.SPACE, Navigator.LEFT])
+    assert action == "BACK"
+    assert idx is None
+    assert sel.selected_items == set()
+
+
 def test_analyze_render_keeps_space_between_icon_and_name():
     """A name starts in the same column whatever its icon's width.
 

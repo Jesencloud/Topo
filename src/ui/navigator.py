@@ -1062,7 +1062,7 @@ class AnalyzeSelector(_PagedSelector):
                         return "DRILL_DOWN", self.selected_index
                     elif self._total_pages() > 1:
                         self._flip_page(1)
-                elif key == Navigator.SPACE and self.can_select:
+                elif key == Navigator.SPACE and self.can_select and total_len > 0:
                     self._toggle_selection(self.selected_index)
                 elif key.isdigit() and self.can_select:
                     idx = self._index_from_typed_number(Navigator.read_number(fd, key))
