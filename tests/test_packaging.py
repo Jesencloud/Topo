@@ -216,9 +216,32 @@ def test_only_the_deb_bounds_python_at_310(tmp_path):
     # Both architectures, and the two package types differ in this one dependency.
     assert len(calls) == 4
     assert sorted({(call["type"], call["depends"]) for call in calls}) == [
-        ("deb", ("curl", "python3 (>= 3.10)", "python3-packaging")),
-        ("rpm", ("curl", "python3", "python3-packaging")),
+        ("deb", ("curl", "python3 (>= 3.10)", "python3-packaging", "gpg")),
+        ("rpm", ("curl", "python3", "python3-packaging", "/usr/bin/gpg")),
     ]
+
+
+def test_both_packages_pull_in_gpg_for_update_verification(tmp_path):
+    """`topo update` refuses to run without gpg, so the package must install it.
+
+    _verify_release_signature() returns False the moment `shutil.which("gpg")`
+    is empty (src/manage/update.py), so a package-installed topo whose distro
+    never pulled gpg in cannot update. curl and python3-packaging were declared;
+    gpg was the gap.
+
+    The two package types name it differently on purpose. The deb depends on the
+    package `gpg` (Debian/Ubuntu). The rpm cannot use a single package name --
+    Rocky/RHEL call it `gnupg2`, openSUSE Leap calls it `gpg2` -- so it depends on
+    the file the code probes, `/usr/bin/gpg`, which both ship. That is the same
+    binary name topo already assumes on every distro, openSUSE included.
+    """
+    calls = _fpm_calls(tmp_path)
+
+    for call in calls:
+        if call["type"] == "deb":
+            assert "gpg" in call["depends"]
+        else:
+            assert "/usr/bin/gpg" in call["depends"]
 
 
 def test_both_filenames_carry_the_revision_the_package_declares(tmp_path):

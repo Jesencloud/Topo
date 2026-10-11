@@ -155,8 +155,18 @@ build_one() {
     # `name (>= version)` form through untouched.
     if [[ "$package_type" == deb ]]; then
         python_depends='python3 (>= 3.10)'
+        # Debian and Ubuntu ship the gpg binary in a package named `gpg`.
+        gpg_depends='gpg'
     else
         python_depends='python3'
+        # `topo update` verifies the release signature with gpg and refuses the
+        # update when it is missing (src/manage/update.py), so the package must
+        # pull gpg in. The rpm legs install on both Rocky/RHEL (where the package
+        # is `gnupg2`) and openSUSE Leap (where it is `gpg2`) -- different names
+        # for the same thing. Depend on the file the code actually probes
+        # (`shutil.which("gpg")`), which every distro's gpg package owns, instead
+        # of guessing a package name that is wrong on one of them.
+        gpg_depends='/usr/bin/gpg'
     fi
 
     fpm_args=(
@@ -176,6 +186,7 @@ build_one() {
         --depends curl
         --depends "$python_depends"
         --depends python3-packaging
+        --depends "$gpg_depends"
         -C "$root"
     )
 

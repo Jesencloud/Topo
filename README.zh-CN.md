@@ -24,14 +24,15 @@
 
 ## 运行要求
 
-Topo 需要 Linux、Python 3.10 或更高版本、`curl`，以及 Python `packaging` 库。
+Topo 需要 Linux、Python 3.10 或更高版本、`curl`、`gpg`，以及 Python `packaging` 库。
+`gpg` 用于在脚本安装时以及每次 `topo update` 前校验已签名的发行版——缺少它时更新会拒绝执行。
 通过 DEB/RPM 安装时，系统包管理器会自动解析这些依赖。使用脚本安装或直接从源码目录运行前，
 如系统尚未安装相关依赖，请先执行对应命令：
 
 ```bash
-sudo apt install python3 curl python3-packaging       # Debian / Ubuntu
-sudo dnf install python3 curl python3-packaging       # Fedora / RHEL
-sudo pacman -S python curl python-packaging           # Arch / Manjaro
+sudo apt install python3 curl gpg python3-packaging        # Debian / Ubuntu
+sudo dnf install python3 curl gnupg2 python3-packaging      # Fedora / RHEL
+sudo pacman -S python curl gnupg python-packaging           # Arch / Manjaro
 ```
 
 脚本安装器会在安装 Topo 前检查这些运行要求。本项目目前不以 Python wheel 形式发布，

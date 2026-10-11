@@ -24,14 +24,16 @@
 
 ## Requirements
 
-Topo requires Linux, Python 3.10 or newer, `curl`, and the Python `packaging` library.
-DEB/RPM installations resolve these dependencies through the system package manager. For
-script installation or running directly from a source checkout, install them first if needed:
+Topo requires Linux, Python 3.10 or newer, `curl`, `gpg`, and the Python `packaging` library.
+`gpg` verifies the signed release during script installation and before every `topo update`, which
+refuses to run unverified without it. DEB/RPM installations resolve these dependencies through the
+system package manager. For script installation or running directly from a source checkout, install
+them first if needed:
 
 ```bash
-sudo apt install python3 curl python3-packaging       # Debian / Ubuntu
-sudo dnf install python3 curl python3-packaging       # Fedora / RHEL
-sudo pacman -S python curl python-packaging           # Arch / Manjaro
+sudo apt install python3 curl gpg python3-packaging        # Debian / Ubuntu
+sudo dnf install python3 curl gnupg2 python3-packaging      # Fedora / RHEL
+sudo pacman -S python curl gnupg python-packaging           # Arch / Manjaro
 ```
 
 The script installer checks these runtime requirements before installing Topo. This repository
