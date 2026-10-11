@@ -162,6 +162,18 @@ Deletion History
 
 文件里请保留 `"config_version": 2`。没有这个键的配置会被当成 topo ≤ 1.1.2 写下的旧文件——那时 `min_age_days` 与 `theme_color` 根本无人读取，所以其中这两个值会被丢弃而不是突然生效，升级才不会把现有安装从一直以来的阈值和标题色上挪走。
 
+## 保护与恢复你的文件
+
+把你自己的路径加入保护白名单，任何清理器乃至 `topo analyze` 都不会碰它：
+
+```bash
+topo whitelist add ~/Projects      # `list` 与 `remove` 用法相同
+```
+
+一次可恢复的删除（见 `use_trash`）会经 `gio` 或 `trash-cli` 进入桌面回收站；可从文件管理器恢复，或用 `gio trash --restore` / `trash-restore`。常规缓存清理与需管理员权限的 `topo analyze` 删除为永久删除。
+
+脚本化方面：`clean`/`optimize`/`remove` 接受 `--dry-run`，每条命令返回标准退出码（`0` 成功、`1` 失败/拒绝、`2` 参数错误、`130`/`143` 信号、`141` 管道关闭）；网络文件系统上可用 `TOPO_IO_THREADS=1` 限制扫描并发。详见 `topo --help`。
+
 ## 项目亮点
 
 - **安全第一**：内置全局白名单，保护系统二进制文件、用户凭据与 XDG 目录。

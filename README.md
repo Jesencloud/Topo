@@ -164,6 +164,18 @@ Optional. topo does not create `~/.config/topo/config.json` for you — write it
 
 Keep `"config_version": 2` in the file. A config without it is read as one written by topo ≤ 1.1.2, where `min_age_days` and `theme_color` had no effect at all: those two values are dropped rather than suddenly honoured, so upgrading never moves an existing install off the thresholds and title color it has always had.
 
+## Protecting and recovering your files
+
+Add your own paths to the protection whitelist and no cleaner — nor `topo analyze` — will touch them:
+
+```bash
+topo whitelist add ~/Projects      # `list` and `remove` take the same form
+```
+
+A recoverable deletion (see `use_trash`) goes to your desktop trash via `gio` or `trash-cli`; restore it from your file manager, or with `gio trash --restore` / `trash-restore`. Routine cache cleanup and admin-level `topo analyze` deletions are permanent.
+
+For scripting, `clean`/`optimize`/`remove` accept `--dry-run`, every command returns standard exit codes (`0` ok, `1` failure/refusal, `2` bad args, `130`/`143` signals, `141` closed pipe), and on networked filesystems scan concurrency can be capped with `TOPO_IO_THREADS=1`. See `topo --help` for the details.
+
 ## Highlights
 
 - **Safety First**: Built-in global whitelist protecting system binaries, user credentials, and XDG folders.
