@@ -120,10 +120,22 @@ Exploring: /home/users/.config/Cursor
 ```
 
 ### 4. Audit & History (`topo history`)
-Track deletion events and audit what changed after a cleanup or uninstall.
+Track deletion events and audit what changed after a cleanup or uninstall. Each session is shown
+newest first: a header line (`started -> ended  command`), a counts line (`removed` / `trashed` /
+`skipped` / `failed` and total size), and up to three of its paths.
 ```bash
 $ topo history --limit 5
-2026-06-04T18:17:03+08:00  uninstall wechat  size=820.4 MiB
+
+Deletion History
+
+2026-06-05T09:12:40+08:00 -> 2026-06-05T09:12:48+08:00  clean
+  ✓ removed=2  - trashed=0  ◎ skipped=1  - failed=0  size=508.0 MiB
+    ✓ removed              ~/.cache/pip
+    ✓ removed              ~/.cache/thumbnails
+    ◎ rejected-user-writable-ancestor /var/tmp/portage
+2026-06-04T18:17:01+08:00 -> 2026-06-04T18:17:03+08:00  uninstall wechat
+  - removed=0  ✓ trashed=1  - skipped=0  - failed=0  size=820.0 MiB
+    ✓ trashed              ~/.local/share/wechat
 ```
 
 ---

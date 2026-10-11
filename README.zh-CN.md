@@ -118,10 +118,22 @@ Exploring: /home/users/.config/Cursor
 ```
 
 ### 4. 审计与历史 (`topo history`)
-跟踪删除事件，审计清理或卸载后的变更记录。
+跟踪删除事件，审计清理或卸载后的变更记录。每个会话按时间从新到旧展示：一行会话头
+（`开始 -> 结束  命令`）、一行计数（`removed` / `trashed` / `skipped` / `failed` 与总大小），
+再加该会话最多三条路径。
 ```bash
 $ topo history --limit 5
-2026-06-04T18:17:03+08:00  uninstall wechat  size=820.4 MiB
+
+Deletion History
+
+2026-06-05T09:12:40+08:00 -> 2026-06-05T09:12:48+08:00  clean
+  ✓ removed=2  - trashed=0  ◎ skipped=1  - failed=0  size=508.0 MiB
+    ✓ removed              ~/.cache/pip
+    ✓ removed              ~/.cache/thumbnails
+    ◎ rejected-user-writable-ancestor /var/tmp/portage
+2026-06-04T18:17:01+08:00 -> 2026-06-04T18:17:03+08:00  uninstall wechat
+  - removed=0  ✓ trashed=1  - skipped=0  - failed=0  size=820.0 MiB
+    ✓ trashed              ~/.local/share/wechat
 ```
 
 ---
