@@ -25,6 +25,9 @@ REBUILD_HINT = "请重新构建并提交引擎"
 
 # readelf reads any architecture, but running one -- and standing /bin/true in
 # for a host build -- only works where the host is the architecture in question.
+# So on an aarch64 unit-test runner the x86_64 fresh-build comparison below is
+# skipped, and vice versa: the behavioural parity of the *other* arch's engine
+# is checked by the release workflow's `--compare` step under QEMU, not here.
 on_x86_64 = pytest.mark.skipif(
     platform.machine() != "x86_64", reason="needs an x86_64 host to run the x86_64 engine"
 )

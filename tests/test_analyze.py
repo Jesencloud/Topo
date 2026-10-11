@@ -223,6 +223,10 @@ def _dev_engine_binary() -> Path:
     Deliberately not ``get_core_binary()``: that returns the *packaged* binary
     under ``src/core/bin``, which is a release artifact and can predate the
     scanner source being tested here.
+
+    Every test that calls this must wear ``@needs_cargo``: without the Rust
+    toolchain the ``cargo build`` below raises FileNotFoundError, which turns a
+    Python-only contributor's run red (ERROR) when the honest outcome is SKIP.
     """
     project_root = Path(__file__).resolve().parent.parent
     manifest = project_root / "topo-core" / "Cargo.toml"
@@ -239,6 +243,18 @@ def _dev_engine_binary() -> Path:
     return binary
 
 
+# The cross-language estimator contract builds the engine from source, so it
+# depends on a Rust toolchain being installed. Without one the build is a
+# missing-tool failure, not a product defect: a contributor touching only Python
+# should see this skipped, not an ERROR. (The packaged-binary path -- the one
+# real users run -- is exercised separately and needs no cargo.)
+needs_cargo = pytest.mark.skipif(
+    shutil.which("cargo") is None,
+    reason="builds the dev engine from source; no Rust toolchain (cargo) on this machine",
+)
+
+
+@needs_cargo
 def test_rust_cache_hint_never_undercharges_the_generic_estimate(tmp_path):
     """Pin the two estimators together across the language boundary.
 
