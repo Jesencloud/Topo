@@ -148,14 +148,16 @@ def main_screen():
     alternate-screen action never flashes the shell prompt between the menu and the
     action). Report-style commands (clean/optimize/status) still want to print into
     the main buffer so their output survives in the scrollback after topo exits; this
-    steps back to the main buffer for the command's duration and restores the
-    alternate screen on the way out.
+    steps back to the main buffer for the command's duration.
+
+    Whether the alternate screen is restored on the way out is the caller's call:
+    re-entering it only to let the menu loop tear it down one statement later
+    flashes a blank alt buffer between the report/notice and the shell. So the
+    re-entry lives in _run_terminal_tui_command, which knows if the menu will loop
+    again (re-enter) or break (leave the main buffer alone).
     """
     terminal_state.exit_alternate_screen()
-    try:
-        yield
-    finally:
-        terminal_state.enter_alternate_screen()
+    yield
 
 
 def _clear_screen():
@@ -193,16 +195,24 @@ def _print_interrupted():
 
 
 def _run_terminal_tui_command(command, *args):
+    reenter = False
     with main_screen():
         try:
             _clear_screen()
             result = command(*args)
-            if result is False:
-                return True
-            return Navigator.wait_for_return()
+            proceed = True if result is False else Navigator.wait_for_return()
+            # Re-enter the alternate screen only when the menu is going to loop
+            # again. On the exit paths (ESC at wait_for_return, or Ctrl-C below)
+            # the menu is about to drop its alternate screen, so re-entering here
+            # would just flash a blank alt buffer between the output and the shell.
+            reenter = proceed
+            return proceed
         except KeyboardInterrupt:
             _print_interrupted()
             return False
+        finally:
+            if reenter:
+                terminal_state.enter_alternate_screen()
 
 
 def _run_alternate_tui(command, *args):

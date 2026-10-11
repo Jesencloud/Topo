@@ -66,6 +66,40 @@ def test_run_terminal_tui_command_keeps_its_output_on_interrupt():
     wait_for_return.assert_not_called()
 
 
+def test_run_terminal_tui_command_reenters_alt_screen_when_the_menu_loops():
+    """Enter at wait_for_return goes back to the menu, so the alt screen is restored."""
+    with (
+        patch("src.main._clear_screen"),
+        patch("src.main.Navigator.wait_for_return", return_value=True),
+        patch("src.main.terminal_state.enter_alternate_screen") as enter,
+        patch("src.main.terminal_state.exit_alternate_screen") as exit_screen,
+        patch("builtins.print"),
+    ):
+        assert topo_main._run_terminal_tui_command(lambda: None) is True
+    exit_screen.assert_called_once_with()
+    enter.assert_called_once_with()
+
+
+def test_run_terminal_tui_command_stays_on_main_buffer_when_interrupted():
+    """Ctrl-C breaks the menu loop, which drops the alt screen; re-entering it here
+    would only flash a blank alternate buffer before the shell returns (P3-4)."""
+
+    def interrupt():
+        raise KeyboardInterrupt
+
+    with (
+        patch("src.main._clear_screen"),
+        patch("src.main.Navigator.wait_for_return"),
+        patch("src.main.terminal_state.enter_alternate_screen") as enter,
+        patch("src.main.terminal_state.exit_alternate_screen") as exit_screen,
+        patch("src.main.terminal_state.reset_terminal"),
+        patch("builtins.print"),
+    ):
+        assert topo_main._run_terminal_tui_command(interrupt) is False
+    exit_screen.assert_called_once_with()
+    enter.assert_not_called()
+
+
 def test_alternate_screen_exits_on_exception():
     with (
         patch("src.main.terminal_state.enter_alternate_screen") as enter_screen,
@@ -475,7 +509,10 @@ def test_whitelist_argument_errors():
         assert exc.value.code == 2
 
 
-def test_main_screen_context_restores_alternate_screen():
+def test_main_screen_drops_to_main_buffer_without_re_entering():
+    # main_screen now only drops to the main buffer; re-entering the alternate
+    # screen is the caller's decision (see _run_terminal_tui_command), so the exit
+    # paths don't flash a blank alt buffer on the way to the shell (P3-4).
     with (
         patch("src.main.terminal_state.enter_alternate_screen") as enter,
         patch("src.main.terminal_state.exit_alternate_screen") as exit_screen,
@@ -483,7 +520,7 @@ def test_main_screen_context_restores_alternate_screen():
     ):
         pass
     exit_screen.assert_called_once_with()
-    enter.assert_called_once_with()
+    enter.assert_not_called()
 
 
 # --- Exit-code contract (see the comment above main() in src/main.py) ---
