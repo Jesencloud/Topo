@@ -622,6 +622,38 @@ def test_get_size_error_handling():
         assert get_size(Path("/tmp")) == 0
 
 
+@pytest.mark.skipif(
+    os.geteuid() == 0,
+    reason="root bypasses the permission bits, so a 0o000 directory stays readable and nothing is skipped",
+)
+def test_get_size_skips_a_real_unreadable_directory(test_env):
+    """A real chmod 0o000 subtree is stepped over and its siblings still counted.
+
+    test_get_size_error_handling injects the OSError with a mock, which fires
+    at whatever call it patches. A genuinely unreadable directory fails inside
+    _scandir_sizes at the os.scandir() that opens it -- a different point from a
+    mock on Path.lstat or on a per-entry stat -- so this pins the walk stepping
+    over the directory it cannot enter rather than aborting the whole total.
+    """
+    root = test_env / "mixed"
+    (root / "readable").mkdir(parents=True)
+    (root / "top.bin").write_bytes(b"x" * 100)
+    (root / "readable" / "f").write_bytes(b"y" * 40)
+    locked = root / "locked"
+    locked.mkdir()
+    (locked / "secret").write_bytes(b"z" * 999)
+    locked.chmod(0o000)
+    try:
+        assert get_size(root) == 140
+        # The engine and the pure-Python fallback must step over it the same way;
+        # otherwise a machine with an engine would count the 999 bytes it cannot
+        # legitimately read and an engine-less one would not.
+        assert get_size_fast(root) == 140
+    finally:
+        # Restore so test_env's rmtree teardown can delete the tree.
+        locked.chmod(0o755)
+
+
 def test_get_size_asks_the_engine_once_not_once_per_directory(test_env):
     """One engine attempt per request, at the root, and never again.
 
@@ -1064,6 +1096,45 @@ def test_clean_path_by_age(test_env):
         assert items == 0
 
 
+@pytest.mark.skipif(
+    os.geteuid() == 0,
+    reason="root bypasses the permission bits, so a 0o000 directory stays readable and is not kept",
+)
+def test_clean_path_by_age_keeps_a_real_unreadable_directory(test_env):
+    """A real EACCES directory is left intact while a stale sibling is reclaimed.
+
+    The whole-sweep counterpart to the two walks above: here a chmod 0o000
+    directory sits in a cleanup target, so os.scandir() raises for real when
+    the sweep reaches it. The correct outcome, pinned here against real
+    permission bits rather than an injected OSError, is that topo leaves the
+    directory it cannot read into untouched -- "a directory that cannot be read
+    is kept, deleting it blind is the one outcome that cannot be undone" -- and
+    still reclaims the stale readable file beside it, rather than aborting the
+    sweep (which an un-swallowed EACCES would do) or deleting the directory on a
+    guessed size.
+    """
+    cache_dir = test_env / "cache-perm"
+    cache_dir.mkdir()
+    stale = cache_dir / "old_file.txt"
+    stale.write_bytes(b"d" * 7)
+    locked = cache_dir / "locked"
+    locked.mkdir()
+    (locked / "secret").write_bytes(b"z" * 999)
+    old = time.time() - 30 * 86400
+    for p in (cache_dir, stale, locked):
+        os.utime(p, (old, old))
+    locked.chmod(0o000)
+    try:
+        size, items = clean_path_by_age(cache_dir, days=10)
+        # Only the readable stale file is reclaimed; the sweep is not aborted.
+        assert (size, items) == (7, 1)
+        assert not stale.exists()
+        # The directory topo could not read into is kept, not deleted blind.
+        assert locked.exists()
+    finally:
+        locked.chmod(0o755)
+
+
 def test_clean_path_by_age_dry_run_counts_only_what_validation_lets_through(test_env):
     """The preview must not promise a path the real run would reject.
 
@@ -1138,6 +1209,38 @@ def test_walk_recency_and_size_stops_at_the_first_recent_entry(test_env):
 
     assert recent is True
     assert size == 0
+
+
+@pytest.mark.skipif(
+    os.geteuid() == 0,
+    reason="root bypasses the permission bits, so a 0o000 directory stays readable and nothing is skipped",
+)
+def test_walk_recency_and_size_skips_a_real_unreadable_directory(test_env):
+    """The one-pass cleanup walk steps over a directory it cannot read.
+
+    The engine-less clean path answers recency and size from one scandir walk;
+    a real chmod 0o000 subtree makes os.scandir() raise when the walk tries to
+    enter it. The walk must swallow that OSError, skip the subtree, and keep
+    measuring -- not abort, and not mistake the unreadable branch for recent
+    activity. Mocking os.scandir to raise could not tell those apart.
+    """
+    root = test_env / "idle-mixed"
+    (root / "readable").mkdir(parents=True)
+    (root / "top.bin").write_bytes(b"x" * 100)
+    (root / "readable" / "f").write_bytes(b"y" * 40)
+    locked = root / "locked"
+    locked.mkdir()
+    (locked / "secret").write_bytes(b"z" * 999)
+    old = time.time() - 30 * 86400
+    for p in (root, root / "top.bin", root / "readable", root / "readable" / "f", locked):
+        os.utime(p, (old, old))
+    locked.chmod(0o000)
+    try:
+        recent, size = _walk_recency_and_size(root, age_cutoff(10))
+        assert recent is False
+        assert size == 140
+    finally:
+        locked.chmod(0o755)
 
 
 def test_walk_recency_and_size_handles_a_tree_deeper_than_the_recursion_limit(test_env):
