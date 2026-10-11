@@ -1213,6 +1213,37 @@ def test_uninstall_preview_space_cancels(test_env):
         assert drive(selector, [Navigator.SPACE]) is False
 
 
+def test_uninstall_preview_sanitizes_untrusted_names_and_paths(test_env):
+    """The delete-confirmation screen must not render a crafted name/path raw.
+
+    `app['name']` is a .desktop Name= field and a residue path is an on-disk
+    directory name, both attacker-influenceable. An embedded ESC/CSI used to
+    reach the terminal unescaped (the only two render sites that skipped
+    sanitize_for_display), letting a crafted entry spoof or rewrite the very
+    screen the user confirms a deletion on. Both are now sanitized, like every
+    other render site and like uninstall.py already does for the summary.
+    """
+    app = {"name": "Evil\x1b[31mApp", "size_bytes": 2048, "size_str": "2.0 KiB"}
+    targets = [(app, [Path("/opt/\x1b[2Jpwn")], False)]
+    selector = UninstallPreviewSelector(targets)
+
+    with (
+        patch("pathlib.Path.home", return_value=test_env),
+        patch(
+            "src.ui.navigator.shutil.get_terminal_size",
+            return_value=os.terminal_size((100, 30)),
+        ),
+    ):
+        _result, writes = drive_with_writes(selector, ["\r"])
+
+    output = "".join(call.args[0] for call in writes)
+    # The control bytes are replaced with U+FFFD, never passed through raw.
+    assert "Evil�[31mApp" in output
+    assert "�[2Jpwn" in output
+    assert "Evil\x1b[31m" not in output
+    assert "\x1b[2Jpwn" not in output
+
+
 def test_uninstall_preview_names_the_packages_that_leave_with_the_app(test_env):
     """`dnf remove` and friends take the reverse dependencies too, so ticking one
     small entry can drag out half a desktop; the preview now says so (O4)."""

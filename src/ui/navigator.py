@@ -1481,9 +1481,12 @@ class UninstallPreviewSelector:
     @staticmethod
     def _path_label(path):
         try:
-            return f"~/{path.relative_to(Path.home())}"
+            label = f"~/{path.relative_to(Path.home())}"
         except ValueError:
-            return str(path)
+            label = str(path)
+        # A residue path is an on-disk directory name, so an app can choose it:
+        # sanitize before it reaches the terminal, like every other render site.
+        return sanitize_for_display(label)
 
     @classmethod
     def _collateral_label(cls, names, width):
@@ -1513,7 +1516,9 @@ class UninstallPreviewSelector:
 
         for app, app_paths, is_running in self.targets:
             running_tag = f" {YELLOW}[Running]{RESET}" if is_running else ""
-            buf.append(f"  {GREEN}✓{RESET} {BOLD}{app['name']}{RESET}{running_tag}\033[K\n")
+            buf.append(
+                f"  {GREEN}✓{RESET} {BOLD}{sanitize_for_display(str(app['name']))}{RESET}{running_tag}\033[K\n"
+            )
             collateral = app.get("collateral_packages") or []
             if collateral:
                 label = self._collateral_label(collateral, collateral_width)
