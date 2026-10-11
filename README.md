@@ -33,6 +33,7 @@ them first if needed:
 ```bash
 sudo apt install python3 curl gpg python3-packaging        # Debian / Ubuntu
 sudo dnf install python3 curl gnupg2 python3-packaging      # Fedora / RHEL
+sudo zypper install python3 curl gpg2 python3-packaging     # openSUSE / SLES
 sudo pacman -S python curl gnupg python-packaging           # Arch / Manjaro
 ```
 
