@@ -244,6 +244,70 @@ def test_both_packages_pull_in_gpg_for_update_verification(tmp_path):
             assert "/usr/bin/gpg" in call["depends"]
 
 
+def test_the_staged_version_file_matches_the_declared_version(tmp_path):
+    """The runtime VERSION file carries the version the package declares.
+
+    copy_runtime_tree used to `install` the repo's VERSION verbatim, so
+    `--version X` stamped X into the package metadata and the filename while the
+    file TOPO_VERSION reads still held the checkout's value -- `topo --version`
+    then disagreed with what dpkg/rpm reported. The staged file must carry the
+    declared version instead.
+    """
+    argv_dir = tmp_path / "argv"
+    ver_dir = tmp_path / "ver"
+    bin_dir = tmp_path / "bin"
+    for directory in (argv_dir, ver_dir, bin_dir):
+        directory.mkdir()
+    # fpm runs while the staging tree still exists (the script removes it on exit),
+    # so the stub copies the staged runtime VERSION out, keyed by package type.
+    stub = bin_dir / "fpm"
+    stub.write_text(
+        r"""#!/usr/bin/env bash
+printf '%s\n' "$@" > "$(mktemp "$FPM_ARGV_DIR/argv.XXXXXX")"
+t=""; root=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -t) t="$2"; shift 2;;
+    -C) root="$2"; shift 2;;
+    *) shift;;
+  esac
+done
+if [ -n "$t" ] && [ -f "$root/usr/lib/topo/VERSION" ]; then
+  cp "$root/usr/lib/topo/VERSION" "$FPM_VERSION_DIR/$t"
+fi
+"""
+    )
+    stub.chmod(0o755)
+    engine = tmp_path / "topo-core-fake"
+    engine.write_bytes(b"")
+
+    subprocess.run(
+        [
+            "bash",
+            str(REPO_ROOT / "packaging/build-linux-packages.sh"),
+            "--version",
+            "9.9.9",
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--x86_64-engine",
+            str(engine),
+            "--aarch64-engine",
+            str(engine),
+        ],
+        check=True,
+        capture_output=True,
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "FPM_ARGV_DIR": str(argv_dir),
+            "FPM_VERSION_DIR": str(ver_dir),
+        },
+    )
+
+    staged = {path.name: path.read_text().strip() for path in ver_dir.iterdir()}
+    assert staged == {"deb": "9.9.9", "rpm": "9.9.9"}
+
+
 def test_both_filenames_carry_the_revision_the_package_declares(tmp_path):
     """The published filename has to spell out `--iteration`, and both ends of
     the download have to spell it the same way (D15).

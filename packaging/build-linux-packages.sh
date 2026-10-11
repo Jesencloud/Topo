@@ -101,7 +101,13 @@ copy_runtime_tree() {
     mkdir -p "$app_dir/src/core/bin" "$root/usr/bin" "$doc_dir"
 
     install -m 755 "$REPO_ROOT/topo" "$app_dir/topo"
-    install -m 644 "$REPO_ROOT/VERSION" "$app_dir/VERSION"
+    # Write the version this package actually declares, not a verbatim copy of the
+    # repo's VERSION file. With --version they can differ: fpm would stamp the
+    # override into the package metadata while the runtime file (which TOPO_VERSION
+    # reads) still held the checkout's value, so `topo --version` disagreed with
+    # dpkg/rpm. read_topo_version() strips, so the trailing newline is harmless.
+    printf '%s\n' "$VERSION" > "$app_dir/VERSION"
+    chmod 644 "$app_dir/VERSION"
     printf 'package\n' > "$app_dir/.topo-install-source"
     chmod 644 "$app_dir/.topo-install-source"
 
